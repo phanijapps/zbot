@@ -1,0 +1,35 @@
+// ============================================================================
+// APP ENTRY POINT
+// Main application with routing configuration
+// ============================================================================
+
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { AppShell } from "./core";
+
+import {
+  ConversationsPanel,
+  AgentsPanel,
+  ProvidersPanel,
+  MCPServersPanel,
+  SkillsPanel,
+  SettingsPanel,
+} from "./features";
+
+function App() {
+  return (
+    <BrowserRouter>
+      <AppShell>
+        <Routes>
+          <Route path="/" element={<ConversationsPanel />} />
+          <Route path="/agents" element={<AgentsPanel />} />
+          <Route path="/providers" element={<ProvidersPanel />} />
+          <Route path="/mcp" element={<MCPServersPanel />} />
+          <Route path="/skills" element={<SkillsPanel />} />
+          <Route path="/settings" element={<SettingsPanel />} />
+        </Routes>
+      </AppShell>
+    </BrowserRouter>
+  );
+}
+
+export default App;
