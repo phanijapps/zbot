@@ -27,5 +27,7 @@ dirs = "5"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 regex = "1"
+glob = "0.3"
 chrono = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
 

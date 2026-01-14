@@ -11,8 +11,7 @@ use std::path::PathBuf;
 /// Agent data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: String,
     pub name: String,
     #[serde(rename = "displayName")]
     pub display_name: String,
@@ -164,7 +163,7 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
 
     // Return the created agent
     Ok(Agent {
-        id: Some(agent.name.clone()),
+        id: agent.name.clone(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
         ..agent
     })
@@ -262,7 +261,7 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         .to_string();
 
     Ok(Agent {
-        id: Some(name.clone()),
+        id: name.clone(),
         name,
         display_name: config.display_name,
         description: config.description,

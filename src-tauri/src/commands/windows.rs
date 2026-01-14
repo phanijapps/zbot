@@ -3,7 +3,7 @@
 // Multi-window management commands
 // ============================================================================
 
-use tauri::{Emitter, Manager};
+use tauri::Emitter;
 
 /// Opens a new window for the skill editor
 #[tauri::command]
