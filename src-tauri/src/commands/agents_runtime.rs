@@ -4,9 +4,7 @@
 // ============================================================================
 
 use std::sync::Arc;
-use std::collections::HashMap;
 use serde_json::Value;
-use tokio::sync::RwLock;
 use tauri::{AppHandle, Emitter};
 use serde::Serialize;
 
@@ -16,16 +14,12 @@ use crate::domains::agent_runtime::{
     AgentExecutor, create_executor, ChatMessage, StreamEvent
 };
 
-// In-memory executor cache (could be improved with proper cache management)
-type ExecutorCache = Arc<RwLock<HashMap<String, Arc<AgentExecutor>>>>;
+// Note: Executor caching removed - each execution gets a fresh executor
+// with the correct conversation_id for scoped file operations
 
-lazy_static::lazy_static! {
-    static ref EXECUTOR_CACHE: ExecutorCache = Arc::new(RwLock::new(HashMap::new()));
-}
-
-/// Remove a specific agent from the executor cache
-pub async fn invalidate_executor_cache(agent_id: &str) {
-    EXECUTOR_CACHE.write().await.remove(agent_id);
+/// Remove a specific agent from the executor cache (no-op, kept for API compatibility)
+pub async fn invalidate_executor_cache(_agent_id: &str) {
+    // No-op: executors are now created per execution
 }
 
 /// Execute an agent with streaming support
@@ -55,18 +49,8 @@ pub async fn execute_agent_stream(
     }
 
     // Get or create executor
-    let executor = {
-        let cache = EXECUTOR_CACHE.read().await;
-        if let Some(exec) = cache.get(&agent_id) {
-            exec.clone()
-        } else {
-            drop(cache);
-            let new_exec = Arc::new(create_executor(&agent_id).await?);
-            let mut cache = EXECUTOR_CACHE.write().await;
-            cache.insert(agent_id.clone(), new_exec.clone());
-            new_exec
-        }
-    };
+    // Note: We create a new executor per execution to include conversation_id for scoped file operations
+    let executor = Arc::new(create_executor(&agent_id, Some(conversation_id.clone())).await?);
 
     // Load conversation history
     let messages = db.transaction(|conn| {
@@ -360,9 +344,9 @@ pub async fn get_or_create_conversation(
         .map_err(|e| format!("Failed to serialize: {}", e))
 }
 
-/// Clear executor cache (useful for testing or config changes)
+/// Clear executor cache (no-op, kept for API compatibility)
 #[tauri::command]
 pub async fn clear_executor_cache() -> Result<(), String> {
-    EXECUTOR_CACHE.write().await.clear();
+    // No-op: executors are now created per execution
     Ok(())
 }

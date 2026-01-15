@@ -25,6 +25,7 @@ pub struct ExecutorConfig {
     pub system_instruction: Option<String>,
     pub tools_enabled: bool,
     pub mcps: Vec<String>,
+    pub conversation_id: Option<String>,
 }
 
 // ============================================================================
@@ -341,7 +342,12 @@ impl AgentExecutor {
     async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<String, String> {
         // First try built-in tools
         if let Some(tool) = self.tool_registry.find(tool_name) {
-            let ctx = Arc::new(ToolContext::new());
+            // Create tool context with conversation ID if available
+            let ctx = if let Some(conv_id) = &self.config.conversation_id {
+                Arc::new(ToolContext::with_conversation(conv_id.clone()))
+            } else {
+                Arc::new(ToolContext::new())
+            };
             let result = tool.execute(ctx, arguments.clone()).await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
             return Ok(serde_json::to_string(&result)
@@ -444,7 +450,7 @@ impl AgentExecutor {
 // ============================================================================
 
 /// Create an agent executor from an agent ID
-pub async fn create_executor(agent_id: &str) -> Result<AgentExecutor, String> {
+pub async fn create_executor(agent_id: &str, conversation_id: Option<String>) -> Result<AgentExecutor, String> {
     // Load agent configuration
     let dirs = AppDirs::get().map_err(|e| e.to_string())?;
     let agent_dir = dirs.config_dir.join("agents").join(agent_id);
@@ -500,6 +506,7 @@ pub async fn create_executor(agent_id: &str) -> Result<AgentExecutor, String> {
         system_instruction,
         tools_enabled: true,
         mcps,
+        conversation_id,
     };
 
     AgentExecutor::new(config).await

@@ -32,11 +32,29 @@ impl std::error::Error for ToolError {}
 pub type ToolResult<T> = Result<T, ToolError>;
 
 /// Simple tool context for tool execution
-pub struct ToolContext;
+pub struct ToolContext {
+    /// Optional conversation ID for scoping file operations
+    pub conversation_id: Option<String>,
+}
 
 impl ToolContext {
     pub fn new() -> Self {
-        Self
+        Self {
+            conversation_id: None,
+        }
+    }
+
+    pub fn with_conversation(conversation_id: String) -> Self {
+        Self {
+            conversation_id: Some(conversation_id),
+        }
+    }
+
+    /// Get the conversation directory if conversation_id is set
+    pub fn conversation_dir(&self) -> Option<PathBuf> {
+        let dirs = AppDirs::get().ok()?;
+        let conv_id = self.conversation_id.as_ref()?;
+        Some(dirs.conversation_dir(conv_id))
     }
 }
 
@@ -235,7 +253,7 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file, creating parent directories if needed."
+        "Write content to a file, creating parent directories if needed. File operations are scoped to the conversation directory when available."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -257,7 +275,7 @@ impl Tool for WriteTool {
 
     async fn execute(
         &self,
-        _ctx: Arc<ToolContext>,
+        ctx: Arc<ToolContext>,
         args: Value,
     ) -> ToolResult<Value> {
         let path = args.get("path")
@@ -268,7 +286,14 @@ impl Tool for WriteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError("Missing 'content' parameter".to_string()))?;
 
-        let path_buf = PathBuf::from(path);
+        // Resolve the final path - use conversation directory if available
+        let path_buf = if let Some(conv_dir) = ctx.conversation_dir() {
+            // Write operations are scoped to conversation directory
+            conv_dir.join(path)
+        } else {
+            // No conversation context, use path as-is
+            PathBuf::from(path)
+        };
 
         // Create parent directories if needed
         if let Some(parent) = path_buf.parent() {
@@ -284,7 +309,7 @@ impl Tool for WriteTool {
 
         Ok(json!({
             "success": true,
-            "path": path,
+            "path": path_buf.display().to_string(),
             "bytes_written": content.len()
         }))
     }
@@ -306,7 +331,7 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Edit a file by replacing text. Supports multiple replacements."
+        "Edit a file by replacing text. Supports multiple replacements. File operations are scoped to the conversation directory when available."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -342,7 +367,7 @@ impl Tool for EditTool {
 
     async fn execute(
         &self,
-        _ctx: Arc<ToolContext>,
+        ctx: Arc<ToolContext>,
         args: Value,
     ) -> ToolResult<Value> {
         let path = args.get("path")
@@ -353,10 +378,17 @@ impl Tool for EditTool {
             .and_then(|v| v.as_array())
             .ok_or_else(|| ToolError("Missing 'replacements' parameter".to_string()))?;
 
-        let path_buf = PathBuf::from(path);
+        // Resolve the final path - use conversation directory if available
+        let path_buf = if let Some(conv_dir) = ctx.conversation_dir() {
+            // Edit operations are scoped to conversation directory
+            conv_dir.join(path)
+        } else {
+            // No conversation context, use path as-is
+            PathBuf::from(path)
+        };
 
         if !path_buf.exists() {
-            return Err(ToolError(format!("File not found: {}", path)));
+            return Err(ToolError(format!("File not found: {}", path_buf.display())));
         }
 
         let mut content = fs::read_to_string(&path_buf)
@@ -385,6 +417,7 @@ impl Tool for EditTool {
 
         Ok(json!({
             "success": true,
+            "path": path_buf.display().to_string(),
             "replacements_made": replacements_made
         }))
     }

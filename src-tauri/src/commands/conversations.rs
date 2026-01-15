@@ -5,6 +5,7 @@
 
 use serde_json::Value;
 use crate::domains::conversation_runtime::{get_database, repository};
+use crate::settings::AppDirs;
 
 /// Lists all conversations, optionally filtered by agent_id
 #[tauri::command]
@@ -62,13 +63,21 @@ pub async fn get_conversation(id: String) -> Result<Value, String> {
 pub async fn create_conversation(data: Value) -> Result<Value, String> {
     let db = get_database()?;
 
-    let req: repository::CreateConversation = serde_json::from_value(data)
+    let req: repository::CreateConversation = serde_json::from_value(data.clone())
         .map_err(|e| format!("Invalid conversation data: {}", e))?;
+
+    // Save conversation_id before moving req
+    let conversation_id = req.id.clone();
 
     let conv = db.transaction(|conn| {
         repository::create_conversation(conn, req)
     })
     .map_err(|e| format!("Failed to create conversation: {}", e))?;
+
+    // Create conversation directory structure
+    let dirs = AppDirs::get().map_err(|e| format!("Failed to get app dirs: {}", e))?;
+    dirs.create_conversation_dir(&conv.id)
+        .map_err(|e| format!("Failed to create conversation directory: {}", e))?;
 
     serde_json::to_value(&conv)
         .map_err(|e| format!("Failed to serialize conversation: {}", e))
@@ -105,6 +114,11 @@ pub async fn delete_conversation(id: String) -> Result<(), String> {
         repository::delete_conversation(conn, &id)
     })
     .map_err(|e| format!("Failed to delete conversation: {}", e))?;
+
+    // Delete conversation directory
+    let dirs = AppDirs::get().map_err(|e| format!("Failed to get app dirs: {}", e))?;
+    dirs.delete_conversation_dir(&id)
+        .map_err(|e| format!("Failed to delete conversation directory: {}", e))?;
 
     Ok(())
 }
