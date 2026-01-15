@@ -43,6 +43,7 @@ interface ConversationListProps {
   onSelect: (conversation: ConversationWithAgent) => void;
   onNewChat: (agentId?: string) => void;
   onDelete?: (conversationId: string) => void;
+  onDeleteAgent?: (agentId: string) => void;
   className?: string;
   agents?: AgentOption[];
 }
@@ -50,7 +51,7 @@ interface ConversationListProps {
 /**
  * Get agent icon name (Lucide icon or fallback emoji)
  */
-function getAgentIcon(agentName: string, _agentIcon?: string): string {
+export function getAgentIcon(agentName: string, _agentIcon?: string): string {
   if (!agentName) return "Bot";
 
   const icons: Record<string, string> = {
@@ -69,7 +70,7 @@ function getAgentIcon(agentName: string, _agentIcon?: string): string {
 /**
  * Render agent icon component
  */
-function AgentIcon({ iconName, className }: { iconName: string; className?: string }) {
+export function AgentIcon({ iconName, className }: { iconName: string; className?: string }) {
   // Map of icon names to actual Lucide components
   const icons: Record<string, React.ComponentType<{ className?: string }>> = {
     Bot,
@@ -269,6 +270,7 @@ export function GroupedConversationList({
   onSelect,
   onNewChat,
   onDelete,
+  onDeleteAgent,
   className,
   agents = [],
 }: ConversationListProps) {
@@ -330,12 +332,14 @@ export function GroupedConversationList({
         {groups.map((group) => (
           <AgentGroup
             key={group.agentId}
+            agentId={group.agentId}
             agentName={group.agentName}
             agentIcon={group.agentIcon}
             conversations={group.conversations}
             selectedId={selectedId}
             onSelect={onSelect}
             onDelete={onDelete}
+            onDeleteAgent={onDeleteAgent}
           />
         ))}
       </div>
@@ -411,19 +415,23 @@ export function GroupedConversationList({
 }
 
 function AgentGroup({
+  agentId,
   agentName,
   agentIcon,
   conversations,
   selectedId,
   onSelect,
   onDelete,
+  onDeleteAgent,
 }: {
+  agentId: string;
   agentName: string;
   agentIcon?: string;
   conversations: ConversationWithAgent[];
   selectedId?: string;
   onSelect: (conversation: ConversationWithAgent) => void;
   onDelete?: (conversationId: string) => void;
+  onDeleteAgent?: (agentId: string) => void;
 }) {
   const [isExpanded, setIsExpanded] = useState(true);
   const iconName = getAgentIcon(agentName, agentIcon);
@@ -431,24 +439,40 @@ function AgentGroup({
   return (
     <div className="space-y-2">
       {/* Agent Header */}
-      <button
-        onClick={() => setIsExpanded(!isExpanded)}
-        className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all"
-      >
-        <ChevronRight
-          className={cn(
-            "size-4 transition-transform",
-            isExpanded && "rotate-90"
-          )}
-        />
-        <div className="w-6 h-6 rounded bg-white/5 flex items-center justify-center">
-          <AgentIcon iconName={iconName} className="size-3.5 text-gray-400" />
-        </div>
-        <span className="font-medium">{agentName}</span>
-        <span className="ml-auto text-xs text-gray-600 bg-white/5 px-2 py-0.5 rounded-full">
-          {conversations.length}
-        </span>
-      </button>
+      <div className="group flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all">
+        <button
+          onClick={() => setIsExpanded(!isExpanded)}
+          className="flex-1 flex items-center gap-2 min-w-0"
+        >
+          <ChevronRight
+            className={cn(
+              "size-4 transition-transform shrink-0",
+              isExpanded && "rotate-90"
+            )}
+          />
+          <div className="w-6 h-6 rounded bg-white/5 flex items-center justify-center shrink-0">
+            <AgentIcon iconName={iconName} className="size-3.5 text-gray-400" />
+          </div>
+          <span className="font-medium truncate">{agentName}</span>
+          <span className="ml-auto text-xs text-gray-600 bg-white/5 px-2 py-0.5 rounded-full shrink-0">
+            {conversations.length}
+          </span>
+        </button>
+        {onDeleteAgent && conversations.length > 0 && (
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm(`Delete all ${conversations.length} conversation${conversations.length !== 1 ? "s" : ""} for ${agentName}?`)) {
+                onDeleteAgent(agentId);
+              }
+            }}
+            className="opacity-0 group-hover:opacity-100 p-1.5 rounded transition-all hover:bg-red-500/20 hover:text-red-400 text-gray-600 shrink-0"
+            title={`Delete all conversations for ${agentName}`}
+          >
+            <Trash2 className="size-3.5" />
+          </button>
+        )}
+      </div>
 
       {/* Conversations under this agent */}
       {isExpanded && (

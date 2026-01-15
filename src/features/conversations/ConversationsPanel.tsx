@@ -38,6 +38,10 @@ export function ConversationsPanel() {
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Agent selector state
+  const [showAgentSelector, setShowAgentSelector] = useState(false);
+  const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
+
   // State for showing historical tool calls from messages
   const [historicalToolCalls, setHistoricalToolCalls] = useState<any[] | null>(null);
 
@@ -160,14 +164,18 @@ export function ConversationsPanel() {
       let targetAgentId = agentId;
 
       if (!targetAgentId) {
-        const agents = await listAgents();
-        if (agents.length > 0) {
-          targetAgentId = agents[0].id;
-        } else {
+        // Use the already-loaded agents state
+        if (agents.length === 0) {
           setError("No agents available. Please create an agent first.");
           setTimeout(() => {
             window.location.href = "#/agents";
           }, 1500);
+          return;
+        } else if (agents.length === 1) {
+          targetAgentId = agents[0].id;
+        } else {
+          // Multiple agents - show selector dialog
+          setShowAgentSelector(true);
           return;
         }
       }
@@ -190,6 +198,17 @@ export function ConversationsPanel() {
       console.error("Failed to create conversation:", err);
       setError(errorMessage);
       setTimeout(() => setError(null), 5000);
+    }
+  };
+
+  /**
+   * Handle agent selection from the modal
+   */
+  const handleAgentSelected = async () => {
+    setShowAgentSelector(false);
+    if (pendingAgentId) {
+      await handleNewChat(pendingAgentId);
+      setPendingAgentId(null);
     }
   };
 
@@ -404,6 +423,32 @@ export function ConversationsPanel() {
   };
 
   /**
+   * Handle deleting all conversations for an agent
+   */
+  const handleDeleteAgentConversations = async (agentId: string) => {
+    try {
+      // Get all conversations for this agent
+      const agentConversations = conversations.filter(c => c.agentId === agentId);
+
+      // Delete each conversation
+      await Promise.all(agentConversations.map(conv => deleteConversation(conv.id)));
+
+      // Clear selected conversation if it was deleted
+      if (selectedConversation && agentConversations.some(c => c.id === selectedConversation.id)) {
+        setSelectedConversation(null);
+        setMessages([]);
+      }
+
+      // Reload conversations
+      await loadConversations();
+    } catch (error) {
+      console.error("Failed to delete agent conversations:", error);
+      setError(`Failed to delete conversations: ${error instanceof Error ? error.message : String(error)}`);
+      setTimeout(() => setError(null), 5000);
+    }
+  };
+
+  /**
    * Enrich conversation with agent details
    */
   const enrichConversation = async (
@@ -471,6 +516,7 @@ export function ConversationsPanel() {
         onSelect={handleSelectConversation}
         onNewChat={handleNewChat}
         onDelete={handleDeleteConversation}
+        onDeleteAgent={handleDeleteAgentConversations}
         agents={agents}
         className="w-80 border-r border-white/10 bg-black/20 shrink-0"
       />
@@ -638,6 +684,79 @@ export function ConversationsPanel() {
           )
         )}
       </div>
+
+      {/* Agent Selector Modal */}
+      {showAgentSelector && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
+          <div className="bg-zinc-900 border border-white/10 rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-white">Select an Agent</h3>
+              <button
+                onClick={() => {
+                  setShowAgentSelector(false);
+                  setPendingAgentId(null);
+                }}
+                className="text-gray-400 hover:text-white transition-colors"
+              >
+                <X className="size-5" />
+              </button>
+            </div>
+
+            <div className="space-y-2 mb-6">
+              {agents.map((agent) => (
+                <button
+                  key={agent.id}
+                  onClick={() => setPendingAgentId(agent.id)}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all",
+                    "border",
+                    pendingAgentId === agent.id
+                      ? "bg-purple-500/10 border-purple-500/30 text-white"
+                      : "bg-white/5 border-transparent hover:bg-white/10 hover:border-white/10 text-gray-300"
+                  )}
+                >
+                  <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
+                    <span className="text-xl">{getAgentIcon(agent.name)}</span>
+                  </div>
+                  <div>
+                    <div className="font-medium">{agent.displayName}</div>
+                    <div className="text-xs text-gray-500">{agent.name}</div>
+                  </div>
+                  {pendingAgentId === agent.id && (
+                    <div className="ml-auto">
+                      <div className="w-2 h-2 rounded-full bg-purple-500" />
+                    </div>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowAgentSelector(false);
+                  setPendingAgentId(null);
+                }}
+                className="flex-1 px-4 py-2 text-sm font-medium text-gray-300 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleAgentSelected}
+                disabled={!pendingAgentId}
+                className={cn(
+                  "flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all",
+                  pendingAgentId
+                    ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg shadow-purple-500/25"
+                    : "bg-white/5 text-gray-500 cursor-not-allowed"
+                )}
+              >
+                Start Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -16,6 +16,8 @@ export { ToolCallsSection, ToolCallDetail } from "./ToolCallsSection";
 export {
   ConversationList,
   GroupedConversationList,
+  getAgentIcon,
+  AgentIcon,
 } from "./ConversationList";
 export type { AgentOption } from "./ConversationList";
 export {
