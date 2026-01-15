@@ -20,9 +20,10 @@ import { Button } from "@/shared/ui/button";
 import { Textarea } from "@/shared/ui/textarea";
 import { ThinkingTab } from "./ThinkingTab";
 import { ThinkingPanel } from "./ThinkingPanel";
-import { ThinkingPanelMobile } from "./ThinkingPanel";
 import { useStreamEvents } from "./useStreamEvents";
-import type { MessageWithThinking, ConversationWithAgent } from "./types";
+import type { MessageWithThinking, ConversationWithAgent, ThinkingPanelState } from "./types";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 interface ConversationViewProps {
   conversation: ConversationWithAgent | null;
@@ -31,7 +32,10 @@ interface ConversationViewProps {
   onBack: () => void;
   onNewChat: () => void;
   isLoading?: boolean;
-  className?: string;
+  // Optional: Pass thinking state from parent
+  thinkingState?: ThinkingPanelState;
+  onThinkingClick?: () => void;
+  onShowHistoricalThinking?: (toolCalls: any[]) => void;
 }
 
 export function ConversationView({
@@ -41,19 +45,25 @@ export function ConversationView({
   onBack,
   onNewChat,
   isLoading = false,
-  className,
+  thinkingState: propThinkingState,
+  onThinkingClick: propOnThinkingClick,
+  onShowHistoricalThinking: propOnShowHistoricalThinking,
 }: ConversationViewProps) {
   const [input, setInput] = useState("");
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Stream events handling
-  const {
-    state: thinkingState,
-    togglePanel,
-    openPanel,
-    closePanel,
-  } = useStreamEvents(true, true);
+  // Stream events handling (only used if parent doesn't provide state)
+  const localStreamEvents = useStreamEvents(true, true);
+
+  // Use parent's thinking state if provided, otherwise use local
+  const thinkingState = propThinkingState ?? localStreamEvents.state;
+  const handleThinkingClick = propOnThinkingClick ?? localStreamEvents.togglePanel;
+
+  // Handle showing historical thinking - use parent's handler if provided
+  const handleShowHistoricalThinking = propOnShowHistoricalThinking
+    ? propOnShowHistoricalThinking
+    : useCallback(() => {}, []);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -90,7 +100,7 @@ export function ConversationView({
   const currentToolCount = messages[messages.length - 1]?.thinking?.toolCount || 0;
 
   return (
-    <div className={cn("flex h-full", className)}>
+    <div className="flex h-full">
       {/* Main Chat Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
@@ -99,7 +109,7 @@ export function ConversationView({
           onBack={onBack}
           onNewChat={onNewChat}
           thinkingState={thinkingState}
-          onThinkingClick={togglePanel}
+          onThinkingClick={handleThinkingClick}
           toolCount={currentToolCount}
         />
 
@@ -113,7 +123,7 @@ export function ConversationView({
                 <MessageBubble
                   key={message.id}
                   message={message}
-                  onShowThinking={openPanel}
+                  onShowThinking={() => message.thinking?.toolCalls && handleShowHistoricalThinking(message.thinking.toolCalls)}
                 />
               ))}
               {isLoading && <TypingIndicator />}
@@ -161,23 +171,12 @@ export function ConversationView({
         </div>
       </div>
 
-      {/* Thinking Panel - Desktop */}
-      <div className="hidden lg:block">
-        <ThinkingPanel
-          isOpen={thinkingState.isOpen}
-          onClose={closePanel}
-          state={thinkingState}
-        />
-      </div>
-
-      {/* Thinking Panel - Mobile (Modal) */}
-      <div className="lg:hidden">
-        <ThinkingPanelMobile
-          isOpen={thinkingState.isOpen}
-          onClose={closePanel}
-          state={thinkingState}
-        />
-      </div>
+      {/* Thinking Panel - Collapsible Right Pane (embedded in chat area) */}
+      <ThinkingPanel
+        isOpen={thinkingState.isOpen}
+        onClose={handleThinkingClick}
+        state={thinkingState}
+      />
     </div>
   );
 }
@@ -302,15 +301,57 @@ function MessageBubble({ message, onShowThinking }: MessageBubbleProps) {
         {/* Message Content */}
         <div
           className={cn(
-            "inline-block rounded-2xl px-4 py-3",
+            "inline-block rounded-2xl px-4 py-3 text-left",
             isUser
               ? "bg-blue-600 text-white"
               : "bg-white/5 text-gray-100"
           )}
         >
-          <p className="text-sm leading-relaxed whitespace-pre-wrap">
-            {message.content}
-          </p>
+          {isUser ? (
+            <p className="text-sm leading-relaxed whitespace-pre-wrap">
+              {message.content}
+            </p>
+          ) : (
+            <div className="prose prose-invert prose-sm max-w-none">
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                components={{
+                  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+                  ul: ({ children }) => <ul className="list-disc pl-4 mb-2">{children}</ul>,
+                  ol: ({ children }) => <ol className="list-decimal pl-4 mb-2">{children}</ol>,
+                  li: ({ children }) => <li className="mb-1">{children}</li>,
+                  code: ({ inline, className, children }: any) =>
+                    inline ? (
+                      <code className="bg-white/10 px-1.5 py-0.5 rounded text-sm">
+                        {children}
+                      </code>
+                    ) : (
+                      <code className={cn("block bg-black/30 p-3 rounded-lg text-sm overflow-x-auto", className)}>
+                        {children}
+                      </code>
+                    ),
+                  pre: ({ children }) => <pre className="bg-black/30 p-3 rounded-lg overflow-x-auto mb-2">{children}</pre>,
+                  h1: ({ children }) => <h1 className="text-xl font-bold mb-2">{children}</h1>,
+                  h2: ({ children }) => <h2 className="text-lg font-bold mb-2">{children}</h2>,
+                  h3: ({ children }) => <h3 className="text-base font-bold mb-2">{children}</h3>,
+                  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                  em: ({ children }) => <em className="italic">{children}</em>,
+                  a: ({ href, children }) => (
+                    <a href={href} className="text-purple-400 hover:text-purple-300 underline" target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                  blockquote: ({ children }) => (
+                    <blockquote className="border-l-4 border-purple-500/50 pl-4 italic text-gray-300 my-2">
+                      {children}
+                    </blockquote>
+                  ),
+                }}
+              >
+                {message.content}
+              </ReactMarkdown>
+            </div>
+          )}
         </div>
 
         {/* Thinking Indicator (for assistant messages) */}

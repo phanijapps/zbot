@@ -232,6 +232,10 @@ export function AgentsPanel() {
         <AgentIDEPage
           onClose={() => setShowFullPageEditor(false)}
           onSave={handleSaveAgent}
+          onAgentUpdated={(updatedAgent) => {
+            setEditingAgent(updatedAgent);
+            loadAgents();
+          }}
           initialAgent={editingAgent}
         />
       )}

@@ -24,22 +24,17 @@ export function ThinkingPanel({
   onClose,
   state,
 }: ThinkingPanelProps) {
-  if (!isOpen) {
-    return null;
-  }
-
   return (
     <aside
       className={cn(
-        "flex flex-col bg-black/40 border-l border-white/10",
-        // Desktop: fixed width right panel
-        "w-80 shrink-0",
-        // Animation
-        "animate-panel-slide-in"
+        "flex flex-col h-full bg-black/40",
+        // Desktop: collapsible right panel - always render but animate width
+        "transition-all duration-300 ease-in-out overflow-hidden",
+        isOpen ? "w-80 shrink-0 opacity-100" : "w-0 opacity-0"
       )}
     >
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
+      {/* Header - h-14 to match ConversationHeader */}
+      <div className="h-14 flex items-center justify-between px-4 border-b border-white/10 shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-lg">🧠</span>
           <span className="text-sm font-medium text-white">
@@ -71,18 +66,15 @@ export function ThinkingPanel({
           <ToolCallsSection toolCalls={state.toolCalls} />
         )}
 
-        {/* Empty State */}
-        {!state.hasPlan &&
-          state.planItems.length === 0 &&
-          state.toolCalls.length === 0 && (
-            <div className="text-center py-8">
-              <p className="text-sm text-gray-500">
-                {state.isActive
-                  ? "Agent is working..."
-                  : "No tools used in this response"}
-              </p>
+        {/* Empty State - only show when agent was active but produced no output */}
+        {state.isActive && !state.hasPlan && state.planItems.length === 0 && state.toolCalls.length === 0 && (
+          <div className="text-center py-8">
+            <div className="flex justify-center mb-3">
+              <div className="size-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin" />
             </div>
-          )}
+            <p className="text-sm text-gray-500">Agent is working...</p>
+          </div>
+        )}
 
         {/* Reasoning blocks (if available) */}
         {state.reasoning.length > 0 && (
@@ -107,16 +99,12 @@ export function ThinkingPanel({
 
       {/* Footer - Status info */}
       <div className="px-4 py-3 border-t border-white/10">
-        <div className="flex items-center justify-between text-xs text-gray-500">
-          <span>
-            {state.toolCalls.length} tool
-            {state.toolCalls.length !== 1 ? "s" : ""} used
-          </span>
-          {state.currentMessageId && (
-            <span className="truncate ml-2" title={state.currentMessageId}>
-              ID: {state.currentMessageId.slice(0, 8)}...
-            </span>
-          )}
+        <div className="text-xs text-gray-500 text-center">
+          {state.toolCalls.length > 0
+            ? `${state.toolCalls.length} tool${state.toolCalls.length !== 1 ? "s" : ""} used`
+            : state.isActive
+            ? "Agent is working..."
+            : "Ready"}
         </div>
       </div>
     </aside>

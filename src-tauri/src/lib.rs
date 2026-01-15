@@ -121,10 +121,10 @@ pub fn run() {
             commands::glob_files,
             // Agent Runtime commands
             commands::execute_agent_stream,
-            commands::save_stream_event,
             commands::get_agent_execution_config,
             commands::create_agent_conversation,
             commands::get_or_create_conversation,
+            commands::clear_executor_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

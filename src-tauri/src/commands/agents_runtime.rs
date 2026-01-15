@@ -3,100 +3,299 @@
 // Commands for executing AI agents with streaming support
 // ============================================================================
 
+use std::sync::Arc;
+use std::collections::HashMap;
 use serde_json::Value;
+use tokio::sync::RwLock;
+use tauri::{AppHandle, Emitter};
+use serde::Serialize;
+
 use crate::domains::conversation_runtime::{get_database, repository};
+use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall};
+use crate::domains::agent_runtime::{
+    AgentExecutor, create_executor, ChatMessage, StreamEvent
+};
+
+// In-memory executor cache (could be improved with proper cache management)
+type ExecutorCache = Arc<RwLock<HashMap<String, Arc<AgentExecutor>>>>;
+
+lazy_static::lazy_static! {
+    static ref EXECUTOR_CACHE: ExecutorCache = Arc::new(RwLock::new(HashMap::new()));
+}
+
+/// Remove a specific agent from the executor cache
+pub async fn invalidate_executor_cache(agent_id: &str) {
+    EXECUTOR_CACHE.write().await.remove(agent_id);
+}
 
 /// Execute an agent with streaming support
 ///
-/// This command handles:
-/// 1. Loading agent configuration and instructions
-/// 2. Managing conversation history
-/// 3. Streaming events back to the frontend
-///
-/// The actual LangChain execution happens in the frontend (renderer process)
-/// because LangChain runs in Node.js, not Rust.
+/// This command:
+/// 1. Loads agent configuration
+/// 2. Creates/reuses an executor
+/// 3. Executes the agent with tool calling
+/// 4. Emits events to frontend in real-time
+/// 5. Returns the final response
 #[tauri::command]
 pub async fn execute_agent_stream(
+    app: AppHandle,
     conversation_id: String,
     agent_id: String,
-    _message: String,
+    message: String,
 ) -> Result<Value, String> {
     // Verify conversation exists
     let db = get_database()?;
-
-    let conversation_exists = db.transaction(|conn| {
+    let conversation = db.transaction(|conn| {
         repository::get_conversation(conn, &conversation_id)
     })
     .map_err(|e| format!("Database error: {}", e))?;
 
-    if conversation_exists.is_none() {
+    if conversation.is_none() {
         return Err(format!("Conversation not found: {}", conversation_id));
     }
 
-    // Return configuration for frontend to execute agent
-    // This includes agent config and conversation history
-    let (messages, _agent) = db.transaction(|conn| {
-        let msgs = repository::list_messages(conn, &conversation_id, None, None)?;
-        let ag = repository::get_conversation(conn, &conversation_id)?;
-
-        // Load agent details
-        let agent_details = if let Some(conv) = ag {
-            Some(conv)
+    // Get or create executor
+    let executor = {
+        let cache = EXECUTOR_CACHE.read().await;
+        if let Some(exec) = cache.get(&agent_id) {
+            exec.clone()
         } else {
-            None
+            drop(cache);
+            let new_exec = Arc::new(create_executor(&agent_id).await?);
+            let mut cache = EXECUTOR_CACHE.write().await;
+            cache.insert(agent_id.clone(), new_exec.clone());
+            new_exec
+        }
+    };
+
+    // Load conversation history
+    let messages = db.transaction(|conn| {
+        repository::list_messages(conn, &conversation_id, None, None)
+    })
+    .map_err(|e| format!("Failed to load messages: {}", e))?;
+
+    // Convert to ChatMessage format
+    let history: Vec<ChatMessage> = messages.into_iter()
+        .filter(|msg| !matches!(msg.role, MessageRole::System)) // Skip system messages for history
+        .map(|msg| ChatMessage {
+            role: msg.role.as_str().to_string(),
+            content: msg.content,
+            tool_calls: None,
+            tool_call_id: None,
+        })
+        .collect();
+
+    // Save user message to database
+    let user_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_millis());
+    db.transaction(|conn| {
+        repository::create_message(conn, repository::CreateMessage {
+            id: user_msg_id.clone(),
+            conversation_id: conversation_id.clone(),
+            role: MessageRole::User,
+            content: message.clone(),
+            token_count: None,
+            tool_calls: None,
+            tool_results: None,
+        })
+    })
+    .map_err(|e| format!("Failed to save user message: {}", e))?;
+
+    // Execute agent
+    let mut final_response = String::new();
+    let mut current_tool_calls: Vec<ToolCall> = Vec::new();
+
+    // Convert StreamEvent to a serializable format for emitting
+    #[derive(Clone, Serialize)]
+    #[serde(tag = "type")]
+    enum FrontendEvent {
+        #[serde(rename = "metadata")]
+        Metadata {
+            timestamp: u64,
+            #[serde(rename = "agentId")]
+            agent_id: String,
+            model: String,
+            provider: String,
+        },
+        #[serde(rename = "token")]
+        Token { timestamp: u64, content: String },
+        #[serde(rename = "tool_call_start")]
+        ToolCallStart {
+            timestamp: u64,
+            #[serde(rename = "toolId")]
+            tool_id: String,
+            #[serde(rename = "toolName")]
+            tool_name: String,
+            args: Value,
+        },
+        #[serde(rename = "tool_call_end")]
+        ToolCallEnd {
+            timestamp: u64,
+            #[serde(rename = "toolId")]
+            tool_id: String,
+            #[serde(rename = "toolName")]
+            tool_name: String,
+            args: Value,
+        },
+        #[serde(rename = "tool_result")]
+        ToolResult {
+            timestamp: u64,
+            #[serde(rename = "toolId")]
+            tool_id: String,
+            result: String,
+            error: Option<String>,
+        },
+        #[serde(rename = "done")]
+        Done {
+            timestamp: u64,
+            #[serde(rename = "finalMessage")]
+            final_message: String,
+            #[serde(rename = "tokenCount")]
+            token_count: usize,
+        },
+        #[serde(rename = "error")]
+        Error { timestamp: u64, error: String, recoverable: bool },
+    }
+
+    executor.execute_stream(&message, &history, |event| {
+        let frontend_event = match event.clone() {
+            StreamEvent::Metadata { timestamp, agent_id, model, provider } => {
+                FrontendEvent::Metadata {
+                    timestamp,
+                    agent_id,
+                    model,
+                    provider,
+                }
+            }
+            StreamEvent::Token { timestamp, content } => {
+                final_response.push_str(&content);
+                FrontendEvent::Token {
+                    timestamp,
+                    content,
+                }
+            }
+            StreamEvent::ToolCallStart { timestamp, tool_id, tool_name, args } => {
+                // Track tool calls for saving later
+                current_tool_calls.push(ToolCall {
+                    id: tool_id.clone(),
+                    name: tool_name.clone(),
+                    arguments: args.clone(),
+                });
+                FrontendEvent::ToolCallStart {
+                    timestamp,
+                    tool_id,
+                    tool_name,
+                    args,
+                }
+            }
+            StreamEvent::ToolCallEnd { timestamp, tool_id, tool_name, args } => {
+                FrontendEvent::ToolCallEnd {
+                    timestamp,
+                    tool_id,
+                    tool_name,
+                    args,
+                }
+            }
+            StreamEvent::ToolResult { timestamp, tool_id, result, error } => {
+                FrontendEvent::ToolResult {
+                    timestamp,
+                    tool_id,
+                    result,
+                    error,
+                }
+            }
+            StreamEvent::Done { timestamp, final_message, token_count } => {
+                FrontendEvent::Done {
+                    timestamp,
+                    final_message,
+                    token_count,
+                }
+            }
+            StreamEvent::Error { timestamp, error, recoverable } => {
+                FrontendEvent::Error {
+                    timestamp,
+                    error,
+                    recoverable,
+                }
+            }
         };
 
-        Ok((msgs, agent_details))
-    })
-    .map_err(|e| format!("Failed to load data: {}", e))?;
+        // Emit event to frontend
+        let event_name = format!("agent-stream://{}", conversation_id);
+        if let Err(e) = app.emit(&event_name, frontend_event) {
+            eprintln!("Failed to emit event to frontend: {}", e);
+        }
+    }).await
+    .map_err(|e| format!("Agent execution failed: {}", e))?;
 
-    // Convert messages to frontend format
-    let history_json: Vec<Value> = messages.into_iter().map(|msg| {
-        serde_json::json!({
-            "id": msg.id,
-            "conversation_id": msg.conversation_id,
-            "role": msg.role.as_str(),
-            "content": msg.content,
-            "created_at": msg.created_at,
-            "tool_calls": msg.tool_calls,
-            "tool_results": msg.tool_results,
+    // Save assistant response to database
+    let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_millis());
+    let tool_calls_for_db = if current_tool_calls.is_empty() {
+        None
+    } else {
+        Some(current_tool_calls.clone())
+    };
+
+    db.transaction(|conn| {
+        repository::create_message(conn, repository::CreateMessage {
+            id: assistant_msg_id,
+            conversation_id: conversation_id.clone(),
+            role: MessageRole::Assistant,
+            content: final_response.clone(),
+            token_count: Some(final_response.len() as i64),
+            tool_calls: tool_calls_for_db,
+            tool_results: None,
         })
-    }).collect();
+    })
+    .map_err(|e| format!("Failed to save assistant message: {}", e))?;
 
     Ok(serde_json::json!({
         "conversation_id": conversation_id,
         "agent_id": agent_id,
-        "history": history_json,
-        "ready": true
+        "response": final_response,
+        "tool_calls": current_tool_calls,
+        "done": true
     }))
-}
-
-/// Save a streaming event to the conversation
-///
-/// Called by frontend as events arrive during agent execution
-#[tauri::command]
-pub async fn save_stream_event(
-    _conversation_id: String,
-    _event: Value,
-) -> Result<(), String> {
-    // Events are handled in frontend for real-time display
-    // This is just a placeholder for future logging/persistence
-    Ok(())
 }
 
 /// Get agent execution configuration
 ///
-/// Returns all necessary config for frontend to execute agent
+/// Returns agent config for display purposes
 #[tauri::command]
 pub async fn get_agent_execution_config(
     agent_id: String,
 ) -> Result<Value, String> {
-    // This would load from agents/{agent_id}/config.yaml
-    // For now, return a basic structure
+    // Load agent config
+    let dirs = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?;
+    let agent_dir = dirs.config_dir.join("agents").join(&agent_id);
+    let config_file = agent_dir.join("config.yaml");
+
+    if !config_file.exists() {
+        return Ok(serde_json::json!({
+            "agent_id": agent_id,
+            "config_loaded": false
+        }));
+    }
+
+    let config_content = std::fs::read_to_string(&config_file)
+        .map_err(|e| format!("Failed to read agent config: {}", e))?;
+
+    let agent_config: serde_yaml::Value = serde_yaml::from_str(&config_content)
+        .map_err(|e| format!("Failed to parse agent config: {}", e))?;
+
     Ok(serde_json::json!({
         "agent_id": agent_id,
-        "config_loaded": false
+        "config_loaded": true,
+        "provider_id": agent_config.get("providerId").and_then(|v| v.as_str()),
+        "model": agent_config.get("model").and_then(|v| v.as_str()),
+        "temperature": agent_config.get("temperature").and_then(|v| v.as_f64()),
+        "max_tokens": agent_config.get("maxTokens").and_then(|v| v.as_u64()),
+        "mcps": agent_config.get("mcps").and_then(|v| as_vec(v))
     }))
+}
+
+fn as_vec(value: &serde_yaml::Value) -> Option<Vec<String>> {
+    value.as_sequence()?.iter().map(|v| v.as_str().map(|s| s.to_string())).collect()
 }
 
 /// Create a new conversation for an agent
@@ -159,4 +358,11 @@ pub async fn get_or_create_conversation(
 
     serde_json::to_value(&conv)
         .map_err(|e| format!("Failed to serialize: {}", e))
+}
+
+/// Clear executor cache (useful for testing or config changes)
+#[tauri::command]
+pub async fn clear_executor_cache() -> Result<(), String> {
+    EXECUTOR_CACHE.write().await.clear();
+    Ok(())
 }

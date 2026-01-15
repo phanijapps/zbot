@@ -4,6 +4,7 @@
 // ============================================================================
 
 use crate::settings::AppDirs;
+use crate::commands::agents_runtime::invalidate_executor_cache;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -181,6 +182,8 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
 
     // If name changed, rename directory
     if agent.name != id {
+        // Invalidate cache for old agent ID
+        invalidate_executor_cache(&id).await;
         let new_dir = agents_dir.join(&agent.name);
         fs::rename(&agent_dir, &new_dir)
             .map_err(|e| format!("Failed to rename agent directory: {}", e))?;
@@ -210,6 +213,9 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
     let agents_md_content = format!("{}\n", agent.instructions);
     fs::write(target_dir.join("AGENTS.md"), agents_md_content)
         .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
+
+    // Invalidate the executor cache for this agent so it will reload with new config
+    invalidate_executor_cache(&agent.name).await;
 
     Ok(agent)
 }

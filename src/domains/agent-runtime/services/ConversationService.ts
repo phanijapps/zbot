@@ -1,9 +1,10 @@
 /**
  * Conversation Service
- * Manages agent conversations with message persistence and streaming
+ * Manages agent conversations using Rust backend
  */
 
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   Message,
   MessageHistory,
@@ -11,7 +12,6 @@ import type {
   ToolResult,
 } from "@/shared/types/agent";
 import { MessageRole } from "@/shared/types/agent";
-import { createAgentExecutor } from "../executor/AgentExecutor";
 
 // ============================================================================
 // CONVERSATION SERVICE
@@ -53,12 +53,12 @@ export class ConversationService {
     const message = await invoke<any>("create_message", {
       data: {
         id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        conversation_id: conversationId,
+        conversationId,
         role,
         content,
-        tool_calls: toolCalls,
-        tool_results: toolResults,
-        token_count: tokenCount || 0,
+        toolCalls,
+        toolResults,
+        tokenCount: tokenCount || 0,
       },
     });
 
@@ -66,8 +66,8 @@ export class ConversationService {
   }
 
   /**
-   * Execute agent with streaming
-   * Returns a callback that yields stream events
+   * Execute agent using Rust backend with real-time streaming
+   * The Rust backend emits events during execution via Tauri's event system
    */
   async executeAgentStream(
     conversationId: string,
@@ -75,73 +75,34 @@ export class ConversationService {
     userMessage: string,
     onEvent: (event: any) => void
   ): Promise<void> {
-    try {
-      // Save user message
-      await this.saveMessage(conversationId, MessageRole.User, userMessage);
+    console.log("[ConversationService] executeAgentStream starting (Rust backend with real-time streaming)", {
+      conversationId,
+      agentId,
+      userMessage,
+    });
 
-      // Get agent configuration
-      const agent = await invoke<any>("get_agent", { id: agentId });
-
-      // Create executor
-      const executor = await createAgentExecutor(
-        agentId,
-        agent.provider_id,
-        agent.model,
-        {
-          temperature: agent.temperature,
-          maxTokens: agent.max_tokens,
-        }
-      );
-
-      // Load history
-      const history = await this.loadHistory(conversationId);
-
-      let fullResponse = "";
-      let tokenCount = 0;
-      const activeToolCalls: ToolCall[] = [];
-      const toolResults: ToolResult[] = [];
-
-      // Execute and stream events
-      for await (const event of executor.executeStream(userMessage, history)) {
-        // Forward event to UI
-        onEvent(event);
-
-        // Collect data for saving
-        switch (event.type) {
-          case "token":
-            fullResponse += event.content;
-            tokenCount++;
-            break;
-
-          case "tool_call_end":
-            activeToolCalls.push({
-              id: event.toolId,
-              name: event.toolName,
-              arguments: event.args,
-            });
-            break;
-
-          case "tool_result":
-            toolResults.push({
-              toolCallId: event.toolId,
-              output: event.result,
-              error: event.error,
-            });
-            break;
-        }
+    // Set up event listener for real-time events from Rust backend
+    const unlisten = await listen<any>(
+      `agent-stream://${conversationId}`,
+      (event) => {
+        console.log("[ConversationService] Received event from Rust:", event.payload);
+        // Forward event to the caller's handler
+        onEvent(event.payload);
       }
+    );
 
-      // Save assistant message with all data
-      await this.saveMessage(
+    try {
+      // Call Rust backend command - this will start execution and emit events
+      await invoke<any>("execute_agent_stream", {
         conversationId,
-        MessageRole.Assistant,
-        fullResponse,
-        activeToolCalls,
-        toolResults,
-        tokenCount
-      );
+        agentId,
+        message: userMessage,
+      });
+
+      console.log("[ConversationService] Rust backend execution complete");
 
     } catch (error) {
+      console.error("[ConversationService] Error in executeAgentStream", error);
       // Emit error event
       onEvent({
         type: "error",
@@ -149,6 +110,9 @@ export class ConversationService {
         error: error instanceof Error ? error.message : String(error),
         recoverable: false,
       });
+    } finally {
+      // Clean up event listener
+      unlisten();
     }
   }
 
@@ -164,39 +128,23 @@ export class ConversationService {
     toolCalls?: ToolCall[];
     toolResults?: ToolResult[];
   }> {
-    // Save user message
-    await this.saveMessage(conversationId, MessageRole.User, userMessage);
-
-    // Get agent configuration
-    const agent = await invoke<any>("get_agent", { id: agentId });
-
-    // Create executor
-    const executor = await createAgentExecutor(
-      agentId,
-      agent.provider_id,
-      agent.model
-    );
-
-    // Load history
-    const history = await this.loadHistory(conversationId);
-
-    // Execute
-    const result = await executor.execute(userMessage, history);
-
-    // Save assistant message
-    await this.saveMessage(
+    console.log("[ConversationService] executeAgent (Rust backend)", {
       conversationId,
-      MessageRole.Assistant,
-      result.response,
-      result.toolCalls,
-      result.toolResults,
-      result.tokenCount
-    );
+      agentId,
+      userMessage,
+    });
+
+    // Call Rust backend command
+    const result = await invoke<any>("execute_agent_stream", {
+      conversationId,
+      agentId,
+      message: userMessage,
+    });
 
     return {
-      response: result.response,
-      toolCalls: result.toolCalls,
-      toolResults: result.toolResults,
+      response: result.response || "",
+      toolCalls: result.tool_calls || [],
+      toolResults: [], // Backend doesn't return these yet
     };
   }
 }

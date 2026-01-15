@@ -71,11 +71,15 @@ pub struct Message {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateMessage {
     pub id: String,
+    #[serde(rename = "conversationId")]
     pub conversation_id: String,
     pub role: MessageRole,
     pub content: String,
+    #[serde(rename = "tokenCount")]
     pub token_count: Option<i64>,
+    #[serde(rename = "toolCalls")]
     pub tool_calls: Option<Vec<ToolCall>>,
+    #[serde(rename = "toolResults")]
     pub tool_results: Option<Vec<ToolResult>>,
 }
 

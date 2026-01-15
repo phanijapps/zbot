@@ -103,7 +103,7 @@ export async function createMessage(
   conversationId: string,
   role: Message["role"],
   content: string,
-  metadata?: Record<string, unknown>
+  _metadata?: Record<string, unknown>
 ): Promise<Message> {
   return invoke("create_message", {
     data: {
@@ -111,8 +111,6 @@ export async function createMessage(
       conversationId,
       role,
       content,
-      timestamp: Date.now(),
-      metadata,
     },
   });
 }
@@ -232,6 +230,8 @@ export async function getConversationWithAgents(): Promise<ConversationWithAgent
       agentDisplayName: agent?.displayName,
       finalAgentName: agent?.displayName || agent?.name || "Unknown",
     });
+    // Convert ISO string to timestamp (milliseconds)
+    const timestamp = conv.updatedAt ? new Date(conv.updatedAt).getTime() : Date.now();
     return {
       id: conv.id,
       title: conv.title,
@@ -239,7 +239,7 @@ export async function getConversationWithAgents(): Promise<ConversationWithAgent
       agentName: agent?.displayName || agent?.name || "Unknown",
       agentIcon: getAgentIcon(agent?.name),
       lastMessage: conv.lastMessage,
-      lastMessageTime: conv.updatedAt,
+      lastMessageTime: timestamp,
       messageCount: conv.messageCount,
       model: agent?.model,
     };

@@ -6,11 +6,12 @@ Agent Zero is an Agent UI similar to Claude Desktop. The difference being, it ca
 
 | Library/Application | Version |
 |--------------------|---------|
-| Tauri               | 2.9.5   |
+| Tauri               | 2.x     |
 | React               | 19.x    |
-| LangChain           | 1.2.6   |
+| Rust                | 1.87+   |
 | TypeScript          | 5.x     |
-| @lancedb/lancedb    | 0.23.0 |
+| reqwest             | 0.12    |
+| async-trait         | 0.1     |
 
 ## Quick Start
 
@@ -70,28 +71,141 @@ The built application will be in `src-tauri/target/release/bundle/`.
 
 ```
 agentzero/
-├── src/                    # React frontend
-│   ├── core/              # Core shell, routing, layout
-│   ├── features/          # Feature modules
-│   │   ├── conversations/ # Chat conversations
-│   │   ├── agents/        # Agent management
-│   │   ├── providers/     # LLM provider config
-│   │   ├── mcp/           # MCP server management
-│   │   ├── skills/        # Skills and plugins
-│   │   └── settings/      # App settings
-│   ├── shared/            # Shared types, constants
-│   └── services/          # API services
-├── src-tauri/             # Rust backend
+├── src/                          # React frontend
+│   ├── core/                     # Core shell, routing, layout
+│   ├── features/                 # Feature modules
+│   │   ├── conversations/        # Chat conversations
+│   │   ├── agents/               # Agent management
+│   │   ├── providers/            # LLM provider config
+│   │   ├── mcp/                  # MCP server management
+│   │   ├── skills/               # Skills and plugins
+│   │   └── settings/             # App settings
+│   ├── shared/                   # Shared types, constants
+│   └── services/                 # API services
+├── src-tauri/                    # Rust backend
 │   ├── src/
-│   │   ├── commands/      # Tauri commands (by domain)
-│   │   ├── services/      # Business logic
-│   │   └── state/         # Managed state
+│   │   ├── commands/             # Tauri commands (by domain)
+│   │   │   └── agents_runtime.rs # Agent execution commands
+│   │   ├── domains/              # Business logic by domain
+│   │   │   ├── agent_runtime/    # Agent execution engine
+│   │   │   │   ├── executor.rs   # Main agent executor
+│   │   │   │   ├── tools.rs      # Built-in tools
+│   │   │   │   ├── llm.rs        # LLM client
+│   │   │   │   └── mcp_manager.rs# MCP integration
+│   │   │   └── conversation_runtime/ # Conversation persistence
+│   │   └── settings/             # App configuration
 │   └── Cargo.toml
-├── learnings.md           # Architecture decisions & learnings
-└── AGENTS.md              # This file
+└── AGENTS.md                     # This file
+```
+
+## Agent Runtime Architecture
+
+The agent execution system is now fully implemented in Rust:
+
+### Components
+
+1. **Tool Registry** (`tools.rs`)
+   - Custom `Tool` trait for async tool execution
+   - Built-in tools: Read, Write, Edit, Grep, Glob, Python
+   - Extensible design for adding new tools
+
+2. **LLM Client** (`llm.rs`)
+   - OpenAI-compatible API client
+   - Streaming support via Server-Sent Events
+   - Tool calling support
+
+3. **Agent Executor** (`executor.rs`)
+   - Conversation management
+   - Tool calling loop with max iterations
+   - Streaming event emission
+   - Error handling and recovery
+
+4. **MCP Manager** (`mcp_manager.rs`)
+   - Model Context Protocol server integration
+   - Dynamic tool discovery from MCP servers
+
+### Built-in Tools
+
+| Tool    | Description                              |
+|---------|------------------------------------------|
+| read    | Read file contents with offset/limit     |
+| write   | Write content to file                    |
+| edit    | Search and replace in files              |
+| grep    | Regex search with context lines          |
+| glob    | Pattern-based file finding               |
+| python  | Execute Python code in virtual env       |
+
+### Execution Flow
+
+```
+User Message → Tauri Command → AgentExecutor
+                                      ↓
+                               Load Conversation History
+                                      ↓
+                               Build LLM Request (with tools)
+                                      ↓
+                               Call LLM API
+                                      ↓
+                         ┌─────────────┴─────────────┐
+                         ↓                           ↓
+                    Tool Calls?                  No Tools
+                         ↓                           ↓
+                    Execute Tools              Return Response
+                         ↓                           ↓
+                    Get Results                  Save to DB
+                         ↓                           ↓
+                    Loop with Results            Emit Events
 ```
 
 ## Development Guidelines
+
+### Adding a New Tool
+
+1. Implement the `Tool` trait in `src-tauri/src/domains/agent_runtime/tools.rs`:
+
+```rust
+pub struct MyTool;
+
+#[async_trait]
+impl Tool for MyTool {
+    fn name(&self) -> &str {
+        "my_tool"
+    }
+
+    fn description(&self) -> &str {
+        "Description of what my_tool does"
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "param1": {
+                    "type": "string",
+                    "description": "Parameter description"
+                }
+            },
+            "required": ["param1"]
+        }))
+    }
+
+    async fn execute(&self, _ctx: Arc<ToolContext>, args: Value) -> ToolResult<Value> {
+        // Tool implementation
+        Ok(json!({"result": "success"}))
+    }
+}
+```
+
+2. Register the tool in `builtin_tools()`:
+
+```rust
+pub fn builtin_tools() -> Vec<Arc<dyn Tool>> {
+    vec![
+        // ... existing tools
+        Arc::new(MyTool::new()),
+    ]
+}
+```
 
 ### Adding a New Feature
 
@@ -111,15 +225,13 @@ agentzero/
 
 ## Resources
 
-- **Architecture Learnings:** See `learnings.md` for architectural decisions
 - **Context7 Docs:** Use `mcp__context7__query-docs` for latest library documentation
-- **LangChain Docs:** Use `mcp__langchain-docs__SearchDocsByLangChain` for LangChain help
 - **Figma Design:** Use `mcp__figma-remote-mcp__*` tools for design work
 
 ## Contributing
 
 When making changes:
-1. Update `learnings.md` with any architectural decisions
-2. Keep features modular and independent
-3. Test with `npm run tauri dev` before building
-4. Document new Tauri commands
+1. Keep features modular and independent
+2. Test with `npm run tauri dev` before building
+3. Document new Tauri commands
+4. Run `cargo check` in `src-tauri` to verify Rust code
