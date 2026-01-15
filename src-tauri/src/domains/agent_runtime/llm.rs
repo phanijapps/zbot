@@ -186,14 +186,32 @@ impl OpenAiClient {
     }
 
     fn build_request_body(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Value {
-        json!({
+        let body = json!({
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": false,
             "tools": tools
-        })
+        });
+
+        // Debug: log tools being sent
+        if let Some(tools_val) = &tools {
+            eprintln!("=== Sending tools to LLM API ===");
+            if let Some(tools_array) = tools_val.as_array() {
+                eprintln!("Tool count: {}", tools_array.len());
+                for tool in tools_array {
+                    if let Some(func) = tool.pointer("/function") {
+                        eprintln!("  - {}",
+                            func.get("name").and_then(|n| n.as_str()).unwrap_or("unknown"));
+                    }
+                }
+            }
+        } else {
+            eprintln!("=== No tools being sent to LLM ===");
+        }
+
+        body
     }
 
     async fn make_request(&self, body: Value) -> Result<Value, String> {
