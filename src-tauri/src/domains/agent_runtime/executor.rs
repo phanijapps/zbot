@@ -242,12 +242,14 @@ impl AgentExecutor {
                 full_response = response.content.clone();
                 eprintln!("No tool calls, final response: {}", full_response);
 
-                // Stream token events
+                // Stream token events with small delay for visual effect
                 for ch in response.content.chars() {
                     on_event(StreamEvent::Token {
                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         content: ch.to_string(),
                     });
+                    // Small delay to allow frontend to render each token
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
                 }
 
                 break;
