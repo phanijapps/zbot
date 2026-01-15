@@ -240,6 +240,9 @@ export function ConversationsPanel() {
     const eventHandler = (event: any) => {
       console.log("[ConversationsPanel] Event received:", event.type, event);
 
+      // Forward to thinking panel state manager FIRST
+      handleEvent(event);
+
       // Track tool calls
       if (event.type === "tool_call_start") {
         collectedToolCalls.push({
@@ -332,15 +335,17 @@ export function ConversationsPanel() {
 
       if (event.type === "token") {
         assistantResponse += event.content;
-        // Update or add assistant message
+        console.log("[ConversationsPanel] Token event:", event.content, "Total length:", assistantResponse.length);
+        // Update or add assistant message using functional update
         setMessages((prev) => {
-          const exists = prev.some((m) => m.id === assistantMessageId);
-          if (exists) {
+          const existingMsg = prev.find((m) => m.id === assistantMessageId);
+          if (existingMsg) {
+            // Append new content to existing message content
             return prev.map((m) =>
               m.id === assistantMessageId
                 ? {
                     ...m,
-                    content: assistantResponse,
+                    content: m.content + event.content,
                     thinking: {
                       toolCalls: [...collectedToolCalls],
                       toolCount: collectedToolCalls.length,
@@ -349,13 +354,14 @@ export function ConversationsPanel() {
                 : m
             );
           } else {
+            // Create new message with first token
             return [
               ...prev,
               {
                 id: assistantMessageId,
                 conversationId: selectedConversation!.id,
                 role: "assistant",
-                content: assistantResponse,
+                content: event.content,
                 timestamp: Date.now(),
                 thinking: {
                   toolCalls: [...collectedToolCalls],
@@ -366,8 +372,6 @@ export function ConversationsPanel() {
           }
         });
       }
-      // Also forward to the original handler for thinking panel
-      handleEvent(event);
     };
 
     try {

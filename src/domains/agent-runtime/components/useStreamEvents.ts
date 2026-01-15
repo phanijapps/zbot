@@ -72,19 +72,27 @@ export function useStreamEvents(
   const handleEvent = useCallback(
     (event: AgentStreamEvent) => {
       setState((prev) => {
+        console.log("[useStreamEvents] Processing event:", event.type, "Current state:", { isOpen: prev.isOpen, isActive: prev.isActive });
+
         switch (event.type) {
           case "metadata":
             // Agent started working - auto-open panel
+            console.log("[useStreamEvents] Metadata event, opening panel");
             return {
               ...prev,
               isActive: true,
-              isOpen: autoOpen ? true : prev.isOpen,
+              isOpen: true, // Always open on metadata
               currentMessageId: event.agentId,
             };
 
           case "token":
-            // Still active
-            return { ...prev, isActive: true };
+            // Still active - also ensure panel is open
+            console.log("[useStreamEvents] Token event, ensuring panel is open");
+            return {
+              ...prev,
+              isActive: true,
+              isOpen: true, // Keep panel open during streaming
+            };
 
           case "reasoning":
             // Add to reasoning blocks
@@ -94,7 +102,8 @@ export function useStreamEvents(
             };
 
           case "tool_call_start":
-            // New tool call starting
+            // New tool call starting - ensure panel is open
+            console.log("[useStreamEvents] Tool call start:", event.toolName);
             const newTool: ToolCallDisplay = {
               id: event.toolId,
               name: event.toolName,
@@ -102,6 +111,8 @@ export function useStreamEvents(
             };
             return {
               ...prev,
+              isActive: true,
+              isOpen: true, // Ensure panel is open when tools are running
               toolCalls: [...prev.toolCalls, newTool],
             };
 
