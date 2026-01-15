@@ -253,7 +253,7 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file, creating parent directories if needed. File operations are scoped to the conversation directory when available."
+        "Write content to a file. Use relative paths like 'attachments/report.md' or 'scratchpad/temp.txt'. Parent directories are created automatically. When in a conversation, files are written to the conversation's scoped directory (attachments/, scratchpad/, or memory.md)."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -331,7 +331,7 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Edit a file by replacing text. Supports multiple replacements. File operations are scoped to the conversation directory when available."
+        "Edit a file by replacing text. Use relative paths like 'attachments/report.md' or 'memory.md'. Supports multiple replacements. When in a conversation, files are scoped to the conversation's directory."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
