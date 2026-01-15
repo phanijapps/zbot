@@ -522,7 +522,7 @@ export function ConversationsPanel() {
         onDelete={handleDeleteConversation}
         onDeleteAgent={handleDeleteAgentConversations}
         agents={agents}
-        className="w-80 border-r border-white/10 bg-black/20 shrink-0"
+        className="w-80 bg-black/20 shrink-0"
       />
 
       {/* Right: Chat Area or Empty State */}
@@ -531,7 +531,7 @@ export function ConversationsPanel() {
           /* When conversation IS selected - show chat with embedded thought panel */
           <div className="flex-1 flex flex-col min-w-0">
             {/* Agent Info Header */}
-            <div className="h-14 px-6 border-b border-white/10 bg-white/5 flex items-center shrink-0">
+            <div className="h-14 px-6 bg-white/5 flex items-center shrink-0">
               <div className="flex items-center gap-3">
                 <span className="text-xl" role="img">
                   {selectedConversation.agentIcon || "🤖"}

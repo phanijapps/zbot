@@ -315,7 +315,7 @@ export function GroupedConversationList({
   return (
     <div className={cn("flex flex-col h-full", className)}>
       {/* Header - only show button when there are conversations */}
-      <div className="h-14 flex items-center justify-between px-4 border-b border-white/10 shrink-0">
+      <div className="h-14 flex items-center justify-between px-4 shrink-0">
         <h2 className="text-lg font-semibold text-white">Conversations</h2>
         {groups.length > 0 && (
           <button
