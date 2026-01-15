@@ -98,6 +98,7 @@ pub struct ToolResult {
 #[derive(Debug, Clone)]
 pub struct ChatResponse {
     pub content: String,
+    pub reasoning_content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
     pub finish_reason: Option<String>,
     pub tokens_used: Option<u32>,
@@ -245,6 +246,12 @@ impl OpenAiClient {
             .unwrap_or("")
             .to_string();
 
+        // Parse reasoning_content (for DeepSeek, GLM, etc.)
+        let reasoning_content = response
+            .pointer("/choices/0/message/reasoning_content")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
         let finish_reason = response
             .pointer("/choices/0/finish_reason")
             .and_then(|v| v.as_str())
@@ -280,6 +287,7 @@ impl OpenAiClient {
 
         ChatResponse {
             content,
+            reasoning_content,
             tool_calls,
             finish_reason,
             tokens_used,
@@ -424,6 +432,7 @@ impl LlmClient for OpenAiClient {
 
         Ok(ChatResponse {
             content: full_content,
+            reasoning_content: None,
             tool_calls,
             finish_reason,
             tokens_used,

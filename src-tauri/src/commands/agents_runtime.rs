@@ -102,6 +102,8 @@ pub async fn execute_agent_stream(
         },
         #[serde(rename = "token")]
         Token { timestamp: u64, content: String },
+        #[serde(rename = "reasoning")]
+        Reasoning { timestamp: u64, content: String },
         #[serde(rename = "tool_call_start")]
         ToolCallStart {
             timestamp: u64,
@@ -153,6 +155,12 @@ pub async fn execute_agent_stream(
             StreamEvent::Token { timestamp, content } => {
                 final_response.push_str(&content);
                 FrontendEvent::Token {
+                    timestamp,
+                    content,
+                }
+            }
+            StreamEvent::Reasoning { timestamp, content } => {
+                FrontendEvent::Reasoning {
                     timestamp,
                     content,
                 }

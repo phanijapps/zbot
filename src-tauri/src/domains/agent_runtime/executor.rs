@@ -47,6 +47,11 @@ pub enum StreamEvent {
         timestamp: u64,
         content: String,
     },
+    #[serde(rename = "reasoning")]
+    Reasoning {
+        timestamp: u64,
+        content: String,
+    },
     #[serde(rename = "tool_call_start")]
     ToolCallStart {
         timestamp: u64,
@@ -236,6 +241,15 @@ impl AgentExecutor {
             let response = self.llm_client.chat(current_messages.clone(), tools_schema.clone()).await?;
 
             eprintln!("LLM response - content: '{}', tool_calls: {}", response.content, response.tool_calls.len());
+
+            // Emit reasoning event if available (for DeepSeek, GLM, etc.)
+            if let Some(reasoning) = &response.reasoning_content {
+                eprintln!("Emitting reasoning event, length: {}", reasoning.len());
+                on_event(StreamEvent::Reasoning {
+                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    content: reasoning.clone(),
+                });
+            }
 
             // Check for tool calls
             if response.tool_calls.is_empty() {
