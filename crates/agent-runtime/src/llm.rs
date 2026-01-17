@@ -21,7 +21,7 @@ pub mod config;
 pub mod openai;
 
 pub use client::{
-    LlmClient, LlmModel, ChatResponse, StreamChunk, StreamCallback
+    LlmClient, LlmModel, ChatResponse, StreamChunk, StreamCallback, ToolCallChunk
 };
 pub use config::LlmConfig;
 pub use openai::OpenAiClient;

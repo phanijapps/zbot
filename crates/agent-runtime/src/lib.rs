@@ -87,7 +87,8 @@ pub use types::{
 };
 
 pub use llm::{
-    LlmClient, LlmConfig, LlmModel, OpenAiClient, StreamChunk, StreamCallback
+    LlmClient, LlmConfig, LlmModel, OpenAiClient, StreamChunk, StreamCallback,
+    ToolCallChunk,
 };
 
 pub use tools::{
