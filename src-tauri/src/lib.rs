@@ -9,6 +9,7 @@
 // Modules
 mod commands;
 mod settings;
+mod domains;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -39,6 +40,11 @@ pub fn run() {
                 }
             }
 
+            // Initialize conversation database
+            if let Err(e) = domains::conversation_runtime::init_database() {
+                eprintln!("Failed to initialize conversation database: {}", e);
+            }
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -51,6 +57,11 @@ pub fn run() {
             commands::create_conversation,
             commands::update_conversation,
             commands::delete_conversation,
+            commands::list_messages,
+            commands::create_message,
+            commands::get_message,
+            commands::delete_message,
+            commands::get_conversation_stats,
             // Agent commands
             commands::list_agents,
             commands::get_agent,
@@ -82,6 +93,7 @@ pub fn run() {
             // Skill commands
             commands::list_skills,
             commands::get_skill,
+            commands::get_skill_metadata,
             commands::create_skill,
             commands::update_skill,
             commands::delete_skill,
@@ -98,9 +110,30 @@ pub fn run() {
             commands::clear_all_data,
             commands::get_config_path,
             commands::initialize_directories,
+            // Python venv commands
+            commands::get_venv_info,
+            commands::read_requirements,
+            commands::save_requirements,
+            commands::install_requirements,
+            commands::list_installed_packages,
             // Window commands
             commands::open_skill_editor_window,
             commands::open_external,
+            // Tool commands
+            commands::read_file_lines,
+            commands::write_file_with_dirs,
+            commands::execute_shell_command,
+            commands::execute_python_code,
+            commands::grep_files,
+            commands::glob_files,
+            commands::write_attachment_file,
+            commands::read_attachment_file,
+            // Agent Runtime commands
+            commands::execute_agent_stream,
+            commands::get_agent_execution_config,
+            commands::create_agent_conversation,
+            commands::get_or_create_conversation,
+            commands::clear_executor_cache,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

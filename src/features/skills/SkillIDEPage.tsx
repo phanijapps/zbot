@@ -605,6 +605,56 @@ export function SkillIDEPage({ onSave, onClose, initialSkill }: SkillIDEPageProp
       <div className="flex-1 flex overflow-hidden">
         {/* Left Sidebar - Explorer */}
         <div className="w-72 border-r border-white/10 flex flex-col bg-[#0f0f0f] shrink-0">
+          {/* Metadata Section - for new skills */}
+          {!initialSkill && (
+            <div className="border-b border-white/10">
+              <div className="flex items-center justify-center gap-2 py-3 text-sm font-medium text-white bg-white/5">
+                <Sparkles className="size-4" />
+                Skill Details
+              </div>
+              <div className="p-3 space-y-3">
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Display Name *</label>
+                  <Input
+                    placeholder="My Awesome Skill"
+                    value={displayName}
+                    onChange={(e) => setDisplayName(e.target.value)}
+                    className="bg-white/5 border-white/10 text-white placeholder:text-gray-500 h-8"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Description *</label>
+                  <textarea
+                    placeholder="What does this skill do?"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    className="w-full min-h-[60px] bg-white/5 border-white/10 text-white placeholder:text-gray-500 rounded px-2 py-1.5 text-xs resize-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-gray-400 mb-1">Category</label>
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="w-full bg-white/5 border-white/10 text-white rounded px-2 py-1.5 text-xs"
+                  >
+                    <option value="utility">Utility</option>
+                    <option value="coding">Coding</option>
+                    <option value="analysis">Analysis</option>
+                    <option value="communication">Communication</option>
+                    <option value="creative">Creative</option>
+                    <option value="data">Data</option>
+                  </select>
+                </div>
+                {name && (
+                  <div className="pt-2 border-t border-white/10">
+                    <p className="text-xs text-gray-500">ID: <code className="text-gray-300">{name}</code></p>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Section Header */}
           <div className="flex border-b border-white/10">
             <div className="flex-1 flex items-center justify-center gap-2 py-3 text-sm font-medium text-white border-b-2 border-blue-500 bg-white/5">

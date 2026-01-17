@@ -1,30 +1,174 @@
 // ============================================================================
 // MCP COMMANDS
 // Model Context Protocol server management
+// Supports both stdio (command-based) and HTTP-based MCP servers
 // ============================================================================
 
 use crate::settings::AppDirs;
+use crate::domains::agent_runtime::mcp_manager::McpServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::collections::HashMap;
 use std::process::{Command, Stdio};
 
-/// MCP Server data structure
+/// MCP Server data structure (shared with frontend)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MCPServer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     pub name: String,
     pub description: String,
-    pub command: String,
-    pub args: Vec<String>,
+    #[serde(rename = "type")]
+    pub server_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub args: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub env: Option<HashMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub headers: Option<HashMap<String, String>>,
     pub enabled: bool,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub validated: Option<bool>,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+}
+
+impl MCPServer {
+    /// Convert from McpServerConfig to MCPServer
+    pub fn from_config(config: McpServerConfig) -> Self {
+        match config {
+            McpServerConfig::Stdio { id, name, description, command, args, env, enabled, validated } => {
+                MCPServer {
+                    id,
+                    name,
+                    description,
+                    server_type: "stdio".to_string(),
+                    command: Some(command),
+                    args: Some(args),
+                    env,
+                    url: None,
+                    headers: None,
+                    enabled,
+                    status: "stopped".to_string(),
+                    validated,
+                    created_at: None,
+                }
+            }
+            McpServerConfig::Http { id, name, description, url, headers, enabled, validated } => {
+                MCPServer {
+                    id,
+                    name,
+                    description,
+                    server_type: "http".to_string(),
+                    command: None,
+                    args: None,
+                    env: None,
+                    url: Some(url),
+                    headers,
+                    enabled,
+                    status: "stopped".to_string(),
+                    validated,
+                    created_at: None,
+                }
+            }
+            McpServerConfig::Sse { id, name, description, url, headers, enabled, validated } => {
+                MCPServer {
+                    id,
+                    name,
+                    description,
+                    server_type: "sse".to_string(),
+                    command: None,
+                    args: None,
+                    env: None,
+                    url: Some(url),
+                    headers,
+                    enabled,
+                    status: "stopped".to_string(),
+                    validated,
+                    created_at: None,
+                }
+            }
+            McpServerConfig::StreamableHttp { id, name, description, url, headers, enabled, validated } => {
+                MCPServer {
+                    id,
+                    name,
+                    description,
+                    server_type: "streamable-http".to_string(),
+                    command: None,
+                    args: None,
+                    env: None,
+                    url: Some(url),
+                    headers,
+                    enabled,
+                    status: "stopped".to_string(),
+                    validated,
+                    created_at: None,
+                }
+            }
+        }
+    }
+
+    /// Convert to McpServerConfig
+    pub fn to_config(&self) -> Result<McpServerConfig, String> {
+        match self.server_type.as_str() {
+            "stdio" => {
+                let command = self.command.clone().ok_or("Missing command")?;
+                let args = self.args.clone().ok_or("Missing args")?;
+                Ok(McpServerConfig::Stdio {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                    description: self.description.clone(),
+                    command,
+                    args,
+                    env: self.env.clone(),
+                    enabled: self.enabled,
+                    validated: self.validated,
+                })
+            }
+            "http" => {
+                let url = self.url.clone().ok_or("Missing url")?;
+                Ok(McpServerConfig::Http {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                    description: self.description.clone(),
+                    url,
+                    headers: self.headers.clone(),
+                    enabled: self.enabled,
+                    validated: self.validated,
+                })
+            }
+            "sse" => {
+                let url = self.url.clone().ok_or("Missing url")?;
+                Ok(McpServerConfig::Sse {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                    description: self.description.clone(),
+                    url,
+                    headers: self.headers.clone(),
+                    enabled: self.enabled,
+                    validated: self.validated,
+                })
+            }
+            "streamable-http" => {
+                let url = self.url.clone().ok_or("Missing url")?;
+                Ok(McpServerConfig::StreamableHttp {
+                    id: self.id.clone(),
+                    name: self.name.clone(),
+                    description: self.description.clone(),
+                    url,
+                    headers: self.headers.clone(),
+                    enabled: self.enabled,
+                    validated: self.validated,
+                })
+            }
+            _ => Err(format!("Unknown server type: {}", self.server_type)),
+        }
+    }
 }
 
 /// Test result for MCP server
@@ -43,7 +187,7 @@ fn get_mcp_config_path() -> Result<std::path::PathBuf, String> {
 }
 
 /// Read all MCP servers from config file
-fn read_mcp_servers() -> Result<Vec<MCPServer>, String> {
+fn read_mcp_configs() -> Result<Vec<McpServerConfig>, String> {
     let config_path = get_mcp_config_path()?;
 
     if !config_path.exists() {
@@ -53,12 +197,20 @@ fn read_mcp_servers() -> Result<Vec<MCPServer>, String> {
     let content = fs::read_to_string(&config_path)
         .map_err(|e| format!("Failed to read MCP config: {}", e))?;
 
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Failed to parse MCP config: {}", e))
+    // Support both array format and single object format
+    if content.trim().starts_with('[') {
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse MCP servers array: {}", e))
+    } else {
+        // Single object - wrap in array
+        let server: McpServerConfig = serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse MCP server: {}", e))?;
+        Ok(vec![server])
+    }
 }
 
-/// Write MCP servers to config file
-fn write_mcp_servers(servers: &[MCPServer]) -> Result<(), String> {
+/// Write MCP server configs to config file
+fn write_mcp_configs(servers: &[McpServerConfig]) -> Result<(), String> {
     let config_path = get_mcp_config_path()?;
 
     let content = serde_json::to_string_pretty(servers)
@@ -68,6 +220,21 @@ fn write_mcp_servers(servers: &[MCPServer]) -> Result<(), String> {
         .map_err(|e| format!("Failed to write MCP config: {}", e))?;
 
     Ok(())
+}
+
+/// Read all MCP servers (converted to MCPServer for frontend)
+fn read_mcp_servers() -> Result<Vec<MCPServer>, String> {
+    let configs = read_mcp_configs()?;
+    Ok(configs.into_iter().map(MCPServer::from_config).collect())
+}
+
+/// Write MCP servers from MCPServer (converts to McpServerConfig)
+fn write_mcp_servers(servers: &[MCPServer]) -> Result<(), String> {
+    let configs: Result<Vec<McpServerConfig>, String> = servers
+        .iter()
+        .map(|s| s.to_config())
+        .collect();
+    write_mcp_configs(&configs?)
 }
 
 /// Lists all MCP servers
@@ -143,7 +310,7 @@ pub async fn delete_mcp_server(id: String) -> Result<(), String> {
     Ok(())
 }
 
-/// Starts an MCP server (placeholder - actual implementation would spawn process)
+/// Starts an MCP server
 #[tauri::command]
 pub async fn start_mcp_server(id: String) -> Result<(), String> {
     let mut servers = read_mcp_servers()?;
@@ -180,85 +347,115 @@ pub async fn stop_mcp_server(id: String) -> Result<(), String> {
 /// Tests an MCP server configuration
 #[tauri::command]
 pub async fn test_mcp_server(server: MCPServer) -> Result<MCPTestResult, String> {
-    // Build the command
-    let command = server.command.clone();
-    let args = server.args.clone();
-    let env_vars = server.env.clone();
+    match server.server_type.as_str() {
+        "stdio" => {
+            // Test stdio server by running the command
+            let command = server.command.clone().ok_or("Missing command")?;
+            let args = server.args.clone().ok_or("Missing args")?;
+            let env_vars = server.env.clone();
 
-    let handle = tokio::task::spawn_blocking(move || {
-        let mut cmd = Command::new(&command);
-        cmd.args(&args);
-        if let Some(env) = &env_vars {
-            for (key, value) in env {
-                cmd.env(key, value);
+            let handle = tokio::task::spawn_blocking(move || {
+                let mut cmd = Command::new(&command);
+                cmd.args(&args);
+                if let Some(env) = &env_vars {
+                    for (key, value) in env {
+                        cmd.env(key, value);
+                    }
+                }
+                cmd.stdout(Stdio::piped());
+                cmd.stderr(Stdio::piped());
+                cmd.output()
+            });
+
+            let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+
+            match timeout_result {
+                Ok(inner) => match inner {
+                    Ok(io_result) => match io_result {
+                        Ok(output) => {
+                            if output.status.success() {
+                                Ok(MCPTestResult {
+                                    success: true,
+                                    message: "Server configuration validated successfully".to_string(),
+                                    tools: None,
+                                })
+                            } else {
+                                let stderr = String::from_utf8_lossy(&output.stderr);
+                                let stdout = String::from_utf8_lossy(&output.stdout);
+                                let error_msg = if !stderr.is_empty() {
+                                    stderr.to_string()
+                                } else if !stdout.is_empty() {
+                                    stdout.to_string()
+                                } else {
+                                    format!("Command exited with status: {}", output.status)
+                                };
+                                Ok(MCPTestResult {
+                                    success: false,
+                                    message: format!("Command failed: {}", error_msg.lines().next().unwrap_or(&error_msg)),
+                                    tools: None,
+                                })
+                            }
+                        }
+                        Err(e) => Ok(MCPTestResult {
+                            success: false,
+                            message: format!("Command execution failed: {}", e),
+                            tools: None,
+                        })
+                    },
+                    Err(e) => Ok(MCPTestResult {
+                        success: false,
+                        message: format!("Task failed: {}", e),
+                        tools: None,
+                    })
+                },
+                Err(_) => Ok(MCPTestResult {
+                    success: false,
+                    message: "Command timed out after 5 seconds. The server may be hanging or taking too long to start.".to_string(),
+                    tools: None,
+                })
             }
         }
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-        cmd.output()
-    });
+        "http" | "sse" | "streamable-http" => {
+            // Test HTTP/SSE server by making a request to the URL
+            let url = server.url.clone().ok_or("Missing url")?;
+            let headers = server.headers.clone().unwrap_or_default();
 
-    // Process the triple-nested Results with proper error messages:
-    // 1. Result from timeout (Elapsed vs ...)
-    // 2. Result from spawn_blocking (JoinError vs ...)
-    // 3. Result from Command::output (io::Error vs Output)
-    let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+            let result = async move {
+                let client = reqwest::Client::new();
+                let mut req = client.get(&url);
+                for (key, value) in &headers {
+                    req = req.header(key, value);
+                }
+                req.timeout(std::time::Duration::from_secs(5)).send().await
+            }.await;
 
-    let result = match timeout_result {
-        Ok(inner) => match inner {
-            Ok(io_result) => match io_result {
-                Ok(output) => {
-                    if output.status.success() {
+            match result {
+                Ok(response) => {
+                    if response.status().is_success() {
                         Ok(MCPTestResult {
                             success: true,
-                            message: "Server configuration validated successfully".to_string(),
+                            message: "Server endpoint is reachable".to_string(),
                             tools: None,
                         })
                     } else {
-                        // Command ran but returned non-zero exit code
-                        let stderr = String::from_utf8_lossy(&output.stderr);
-                        let stdout = String::from_utf8_lossy(&output.stdout);
-                        let error_msg = if !stderr.is_empty() {
-                            stderr.to_string()
-                        } else if !stdout.is_empty() {
-                            stdout.to_string()
-                        } else {
-                            format!("Command exited with status: {}", output.status)
-                        };
                         Ok(MCPTestResult {
                             success: false,
-                            message: format!("Command failed: {}", error_msg.lines().next().unwrap_or(&error_msg)),
+                            message: format!("Server returned status: {}", response.status()),
                             tools: None,
                         })
                     }
                 }
-                Err(e) => {
-                    // Command could not be executed (e.g., command not found)
-                    Ok(MCPTestResult {
-                        success: false,
-                        message: format!("Command execution failed: {}", e),
-                        tools: None,
-                    })
-                }
-            },
-            Err(e) => {
-                // Task spawn failed (JoinError)
-                Ok(MCPTestResult {
+                Err(e) => Ok(MCPTestResult {
                     success: false,
-                    message: format!("Task failed: {}", e),
+                    message: format!("HTTP request failed: {}", e),
                     tools: None,
                 })
             }
-        },
-        Err(_) => {
-            // Timeout elapsed
-            Ok(MCPTestResult {
-                success: false,
-                message: "Command timed out after 5 seconds. The server may be hanging or taking too long to start.".to_string(),
-                tools: None,
-            })
         }
-    };
-
-    result
+        _ => Ok(MCPTestResult {
+            success: false,
+            message: format!("Unknown server type: {}", server.server_type),
+            tools: None,
+        })
+    }
 }

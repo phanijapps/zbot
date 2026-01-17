@@ -27,5 +27,21 @@ dirs = "5"
 tokio = { version = "1", features = ["full"] }
 anyhow = "1"
 regex = "1"
+glob = "0.3"
 chrono = "0.4"
+rusqlite = { version = "0.32", features = ["bundled"] }
+base64 = "0.22"
+
+# HTTP client for LLM API calls
+reqwest = { version = "0.12", features = ["json", "stream"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+# Async support
+async-trait = "0.1"
+futures = "0.3"
+tokio-stream = "0.1"
+lazy_static = "1.5"
+
+# Template embedding
+rust-embed = { version = "8", features = ["debug-embed"] }
 

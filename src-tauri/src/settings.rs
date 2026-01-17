@@ -100,6 +100,10 @@ pub struct AppDirs {
     pub skills_dir: PathBuf,
     /// Python virtual environment directory
     pub venv_dir: PathBuf,
+    /// Conversation logs directory (logs/<conv-id>/)
+    pub conversation_logs_dir: PathBuf,
+    /// Outputs directory (~/Documents/ZeroAgent/outputs/)
+    pub outputs_dir: PathBuf,
 }
 
 impl AppDirs {
@@ -107,12 +111,19 @@ impl AppDirs {
     pub fn get() -> Result<Self> {
         let config_dir = Self::get_config_dir()?;
 
+        // Get documents directory for outputs
+        let documents_dir = dirs::document_dir()
+            .unwrap_or_else(|| config_dir.clone());
+        let outputs_dir = documents_dir.join("ZeroAgent").join("outputs");
+
         Ok(Self {
             settings_file: config_dir.join("settings.yaml"),
             database_path: config_dir.join("zero_lance.db"),
             agents_dir: config_dir.join("agents"),
             skills_dir: config_dir.join("skills"),
             venv_dir: config_dir.join("venv"),
+            conversation_logs_dir: config_dir.join("logs"),
+            outputs_dir,
             config_dir,
         })
     }
@@ -143,6 +154,14 @@ impl AppDirs {
         // Create venv directory
         fs::create_dir_all(&self.venv_dir)
             .context("Failed to create venv directory")?;
+
+        // Create conversation logs directory
+        fs::create_dir_all(&self.conversation_logs_dir)
+            .context("Failed to create conversation logs directory")?;
+
+        // Create outputs directory
+        fs::create_dir_all(&self.outputs_dir)
+            .context("Failed to create outputs directory")?;
 
         // Create LanceDB database file if it doesn't exist
         if !self.database_path.exists() {
@@ -351,6 +370,52 @@ impl AppDirs {
         Ok(fs::metadata(path)
             .context("Failed to get file metadata")?
             .len())
+    }
+
+    /// Get the directory path for a specific conversation
+    pub fn conversation_dir(&self, conversation_id: &str) -> PathBuf {
+        self.conversation_logs_dir.join(conversation_id)
+    }
+
+    /// Create the directory structure for a conversation
+    /// Creates: logs/<conv-id>/, logs/<conv-id>/scratchpad/, logs/<conv-id>/attachments/
+    pub fn create_conversation_dir(&self, conversation_id: &str) -> Result<()> {
+        let conv_dir = self.conversation_dir(conversation_id);
+
+        // Create main conversation directory
+        fs::create_dir_all(&conv_dir)
+            .context("Failed to create conversation directory")?;
+
+        // Create scratchpad directory
+        let scratchpad_dir = conv_dir.join("scratchpad");
+        fs::create_dir_all(&scratchpad_dir)
+            .context("Failed to create scratchpad directory")?;
+
+        // Create attachments directory
+        let attachments_dir = conv_dir.join("attachments");
+        fs::create_dir_all(&attachments_dir)
+            .context("Failed to create attachments directory")?;
+
+        // Create empty memory.md file
+        let memory_file = conv_dir.join("memory.md");
+        if !memory_file.exists() {
+            fs::write(&memory_file, "")
+                .context("Failed to create memory.md")?;
+        }
+
+        Ok(())
+    }
+
+    /// Delete the directory for a specific conversation
+    pub fn delete_conversation_dir(&self, conversation_id: &str) -> Result<()> {
+        let conv_dir = self.conversation_dir(conversation_id);
+
+        if conv_dir.exists() {
+            fs::remove_dir_all(&conv_dir)
+                .context("Failed to remove conversation directory")?;
+        }
+
+        Ok(())
     }
 }
 

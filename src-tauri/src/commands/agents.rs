@@ -4,6 +4,7 @@
 // ============================================================================
 
 use crate::settings::AppDirs;
+use crate::commands::agents_runtime::invalidate_executor_cache;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -11,8 +12,7 @@ use std::path::PathBuf;
 /// Agent data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
+    pub id: String,
     pub name: String,
     #[serde(rename = "displayName")]
     pub display_name: String,
@@ -23,6 +23,8 @@ pub struct Agent {
     pub temperature: f64,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: u32,
+    #[serde(rename = "thinkingEnabled", default)]
+    pub thinking_enabled: bool,
     pub instructions: String,
     pub mcps: Vec<String>,
     pub skills: Vec<String>,
@@ -48,6 +50,8 @@ struct AgentConfig {
     temperature: f64,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     max_tokens: u32,
+    #[serde(rename = "thinkingEnabled", default)]
+    thinking_enabled: bool,
     skills: Vec<String>,
     mcps: Vec<String>,
 }
@@ -138,6 +142,7 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
         model: agent.model.clone(),
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
+        thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
     };
@@ -164,7 +169,7 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
 
     // Return the created agent
     Ok(Agent {
-        id: Some(agent.name.clone()),
+        id: agent.name.clone(),
         created_at: Some(chrono::Utc::now().to_rfc3339()),
         ..agent
     })
@@ -182,6 +187,8 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
 
     // If name changed, rename directory
     if agent.name != id {
+        // Invalidate cache for old agent ID
+        invalidate_executor_cache(&id).await;
         let new_dir = agents_dir.join(&agent.name);
         fs::rename(&agent_dir, &new_dir)
             .map_err(|e| format!("Failed to rename agent directory: {}", e))?;
@@ -199,6 +206,7 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
         model: agent.model.clone(),
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
+        thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
     };
@@ -211,6 +219,9 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
     let agents_md_content = format!("{}\n", agent.instructions);
     fs::write(target_dir.join("AGENTS.md"), agents_md_content)
         .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
+
+    // Invalidate the executor cache for this agent so it will reload with new config
+    invalidate_executor_cache(&agent.name).await;
 
     Ok(agent)
 }
@@ -262,7 +273,7 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         .to_string();
 
     Ok(Agent {
-        id: Some(name.clone()),
+        id: name.clone(),
         name,
         display_name: config.display_name,
         description: config.description,
@@ -270,6 +281,7 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         model: config.model,
         temperature: config.temperature,
         max_tokens: config.max_tokens,
+        thinking_enabled: config.thinking_enabled,
         instructions,
         mcps: config.mcps,
         skills: config.skills,
@@ -389,6 +401,7 @@ pub async fn list_agent_files(agent_id: String) -> Result<Vec<AgentFile>, String
                 model: "".to_string(),
                 temperature: 0.7,
                 max_tokens: 2000,
+                thinking_enabled: false,
                 skills: vec![],
                 mcps: vec![],
             };

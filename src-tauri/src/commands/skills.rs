@@ -521,6 +521,54 @@ fn parse_skill_frontmatter(content: &str) -> Result<(SkillFrontmatter, String), 
     Ok((frontmatter, body))
 }
 
+/// Get skill metadata for system prompt generation
+#[tauri::command]
+pub async fn get_skill_metadata(id: String) -> Result<SkillMetadata, String> {
+    let skills_dir = get_skills_dir()?;
+    let skill_dir = skills_dir.join(&id);
+
+    if !skill_dir.exists() {
+        return Err(format!("Skill not found: {}", id));
+    }
+
+    let skill_md_path = skill_dir.join("SKILL.md");
+    if !skill_md_path.exists() {
+        return Err(format!("SKILL.md not found for skill: {}", id));
+    }
+
+    // Read SKILL.md
+    let content = fs::read_to_string(&skill_md_path)
+        .map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+
+    // Parse frontmatter
+    let (frontmatter, _body) = parse_skill_frontmatter(&content)?;
+
+    // Get the full path to SKILL.md
+    let skill_path = skill_md_path
+        .to_str()
+        .ok_or_else(|| "Failed to convert skill path to string".to_string())?
+        .to_string();
+
+    Ok(SkillMetadata {
+        name: frontmatter.name,
+        display_name: frontmatter.display_name,
+        description: frontmatter.description,
+        category: frontmatter.category,
+        location: skill_path,
+    })
+}
+
+/// Skill metadata for system prompt generation
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillMetadata {
+    pub name: String,
+    #[serde(rename = "displayName")]
+    pub display_name: String,
+    pub description: String,
+    pub category: String,
+    pub location: String,
+}
+
 /// Check if a file is binary based on its extension
 fn is_binary_file(filename: &str) -> bool {
     const BINARY_EXTENSIONS: &[&str] = &[

@@ -81,7 +81,13 @@ export function MCPServersPanel() {
         // Update validated status
         await mcpService.updateMCPServer(server.id, { ...server, validated: true });
         await loadServers();
-        alert(`✓ ${result.message}`);
+
+        // Show success message with tools if available
+        let message = `✓ ${result.message}`;
+        if (result.tools && result.tools.length > 0) {
+          message += `\n\nTools found:\n${result.tools.join("\n")}`;
+        }
+        alert(message);
       } else {
         alert(`✗ ${result.message}`);
       }
@@ -194,16 +200,25 @@ export function MCPServersPanel() {
 
                 <p className="text-gray-400 text-sm mb-3">{server.description}</p>
 
-                {/* Command */}
-                <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
-                  <p className="text-xs text-gray-500 mb-1">Command</p>
-                  <code className="text-xs text-gray-300 font-mono block truncate">
-                    {server.command} {server.args.join(" ")}
-                  </code>
-                </div>
+                {/* Command/URL display based on server type */}
+                {server.type === 'stdio' ? (
+                  <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
+                    <p className="text-xs text-gray-500 mb-1">Command</p>
+                    <code className="text-xs text-gray-300 font-mono block truncate">
+                      {server.command} {server.args?.join(" ")}
+                    </code>
+                  </div>
+                ) : (
+                  <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
+                    <p className="text-xs text-gray-500 mb-1">URL</p>
+                    <code className="text-xs text-gray-300 font-mono block truncate">
+                      {server.url}
+                    </code>
+                  </div>
+                )}
 
-                {/* Environment Variables */}
-                {server.env && Object.keys(server.env).length > 0 && (
+                {/* Environment Variables (stdio only) */}
+                {server.type === 'stdio' && server.env && Object.keys(server.env).length > 0 && (
                   <div className="flex flex-wrap gap-1.5">
                     {Object.entries(server.env).slice(0, 3).map(([key, _value]) => (
                       <span
@@ -235,7 +250,7 @@ export function MCPServersPanel() {
               </p>
               <p className="text-xs text-orange-300">
                 Model Context Protocol (MCP) servers provide AI models with access to external tools, APIs, and data sources.
-                They run as separate processes and communicate via stdio.
+                Supports command-based (stdio), HTTP, and SSE (Server-Sent Events) servers.
               </p>
               <p className="text-xs text-orange-300 mt-2">
                 💾 Configuration saved to: <code className="bg-white/10 px-1.5 py-0.5 rounded">~/.config/zeroagent/mcps.json</code>

@@ -54,6 +54,7 @@ function formatTimeAgo(date: Date): string {
 interface AgentIDEPageProps {
   onSave: (agent: Omit<Agent, "id" | "createdAt">) => void;
   onClose: () => void;
+  onAgentUpdated?: (agent: Agent) => void;
   initialAgent?: Agent | null;
 }
 
@@ -63,7 +64,7 @@ interface FileNode {
   level: number;
 }
 
-export function AgentIDEPage({ onSave, onClose, initialAgent }: AgentIDEPageProps) {
+export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: AgentIDEPageProps) {
   // Agent metadata state
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
@@ -72,6 +73,7 @@ export function AgentIDEPage({ onSave, onClose, initialAgent }: AgentIDEPageProp
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2000);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [instructions, setInstructions] = useState("");
@@ -171,6 +173,7 @@ export function AgentIDEPage({ onSave, onClose, initialAgent }: AgentIDEPageProp
       setModel(initialAgent.model);
       setTemperature(initialAgent.temperature);
       setMaxTokens(initialAgent.maxTokens || 2000);
+      setThinkingEnabled(initialAgent.thinkingEnabled || false);
       setInstructions(initialAgent.instructions);
       setSelectedMcpIds(initialAgent.mcps);
       setSelectedSkillIds(initialAgent.skills);
@@ -300,6 +303,7 @@ export function AgentIDEPage({ onSave, onClose, initialAgent }: AgentIDEPageProp
         model,
         temperature,
         maxTokens,
+        thinkingEnabled,
         instructions: finalInstructions,
         mcps: selectedMcpIds,
         skills: selectedSkillIds,
@@ -322,25 +326,27 @@ export function AgentIDEPage({ onSave, onClose, initialAgent }: AgentIDEPageProp
 
   const saveConfigYaml = async () => {
     if (savingConfig) return;
+    // Only save for existing agents (not new ones being created)
+    if (!initialAgent) return;
+
     setSavingConfig(true);
     try {
-      const configContent = `name: ${name}
-displayName: ${displayName}
-description: ${description}
-providerId: ${providerId}
-model: ${model}
-temperature: ${temperature}
-maxTokens: ${maxTokens}
-skills:
-${skills.map(s => `  - ${s}`).join('\n')}
-mcps:
-${mcps.map(m => `  - ${m}`).join('\n')}
-`;
-      await agentService.writeAgentFile(getAgentId(), "config.yaml", configContent);
-      // Update last saved time for existing agents
-      if (initialAgent) {
-        setLastSaved(new Date());
-      }
+      const updatedAgent = await agentService.updateAgent(initialAgent.id, {
+        name,
+        displayName,
+        description,
+        providerId,
+        model,
+        temperature,
+        maxTokens,
+        thinkingEnabled,
+        instructions,
+        skills: selectedSkillIds,
+        mcps: selectedMcpIds,
+      });
+      setLastSaved(new Date());
+      // Notify parent that agent was updated
+      onAgentUpdated?.(updatedAgent);
     } catch (error) {
       console.error("Failed to save config.yaml:", error);
     } finally {
@@ -887,6 +893,7 @@ ${mcps.map(m => `  - ${m}`).join('\n')}
                 model={model}
                 temperature={temperature}
                 maxTokens={maxTokens}
+                thinkingEnabled={thinkingEnabled}
                 mcps={selectedMcpIds}
                 skills={selectedSkillIds}
                 providers={providers}
@@ -898,6 +905,7 @@ ${mcps.map(m => `  - ${m}`).join('\n')}
                 onModelChange={setModel}
                 onTemperatureChange={setTemperature}
                 onMaxTokensChange={setMaxTokens}
+                onThinkingEnabledChange={setThinkingEnabled}
                 onMcpToggle={toggleMcp}
                 onSkillToggle={toggleSkill}
                 onSave={saveConfigYaml}
