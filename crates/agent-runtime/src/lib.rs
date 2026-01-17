@@ -92,7 +92,9 @@ pub use llm::{
 };
 
 pub use tools::{
-    Tool, ToolRegistry, ToolContext
+    Tool, ToolRegistry, ToolContext,
+    FileSystemContext, NoFileSystemContext,
+    builtin_tools_with_fs,
 };
 pub use tools::error::ToolError as ToolExecError;
 
