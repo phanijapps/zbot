@@ -9,6 +9,8 @@ use serde_json::{json, Value};
 use crate::domains::agent_runtime::llm::{LlmClient, ChatMessage, OpenAiClient};
 use crate::domains::agent_runtime::tools::{ToolRegistry, ToolContext};
 use crate::domains::agent_runtime::mcp_manager::{McpManager, McpTool};
+use crate::domains::agent_runtime::middleware::{MiddlewarePipeline, MiddlewareContext};
+use crate::domains::agent_runtime::middleware::token_counter::estimate_total_tokens;
 use crate::settings::AppDirs;
 
 // Template embedding
@@ -129,6 +131,7 @@ pub struct AgentExecutor {
     llm_client: Arc<dyn LlmClient>,
     tool_registry: Arc<ToolRegistry>,
     mcp_manager: Arc<McpManager>,
+    middleware_pipeline: Arc<MiddlewarePipeline>,
 }
 
 impl AgentExecutor {
@@ -155,7 +158,18 @@ impl AgentExecutor {
             llm_client,
             tool_registry,
             mcp_manager,
+            middleware_pipeline: Arc::new(MiddlewarePipeline::new()),
         })
+    }
+
+    /// Set the middleware pipeline for this executor
+    pub fn set_middleware_pipeline(&mut self, pipeline: Arc<MiddlewarePipeline>) {
+        self.middleware_pipeline = pipeline;
+    }
+
+    /// Get a reference to the middleware pipeline
+    pub fn middleware_pipeline(&self) -> &Arc<MiddlewarePipeline> {
+        &self.middleware_pipeline
     }
 
     async fn create_llm_client(config: &ExecutorConfig) -> Result<Arc<dyn LlmClient>, String> {
@@ -235,6 +249,22 @@ impl AgentExecutor {
             tool_call_id: None,
         });
 
+        // Create middleware context
+        let message_count = messages.len();
+        let estimated_tokens = estimate_total_tokens(&messages);
+        let middleware_context = MiddlewareContext::new(
+            self.config.agent_id.clone(),
+            self.config.conversation_id.clone(),
+            self.config.provider_id.clone(),
+            self.config.model.clone(),
+        )
+        .with_counts(message_count, estimated_tokens);
+
+        // Process messages through middleware pipeline
+        let processed_messages = self.middleware_pipeline
+            .process_messages(messages, &middleware_context, &mut on_event)
+            .await?;
+
         // Get tools schema if enabled
         let tools_schema = if self.config.tools_enabled {
             Some(self.build_tools_schema().await?)
@@ -244,7 +274,7 @@ impl AgentExecutor {
 
         eprintln!("About to call execute_with_tools_loop");
         // Execute with tool calling loop
-        let result = self.execute_with_tools_loop(messages, tools_schema, &mut on_event).await;
+        let result = self.execute_with_tools_loop(processed_messages, tools_schema, &mut on_event).await;
         eprintln!("execute_with_tools_loop returned: {:?}", result);
         result
     }
@@ -770,5 +800,99 @@ pub async fn create_executor(agent_id: &str, conversation_id: Option<String>) ->
         conversation_id,
     };
 
-    AgentExecutor::new(config).await
+    // Create executor
+    let mut executor = AgentExecutor::new(config).await?;
+
+    // Parse and create middleware if configured
+    if let Some(middleware_value) = agent_config.get("middleware") {
+        // Middleware is stored as a YAML string, extract and parse it
+        let middleware_yaml = middleware_value
+            .as_str()
+            .ok_or_else(|| format!("Middleware config must be a string, found: {:?}", middleware_value))?;
+
+        let middleware_config: crate::domains::agent_runtime::middleware::MiddlewareConfig =
+            serde_yaml::from_str(middleware_yaml)
+                .map_err(|e| format!("Failed to parse middleware config: {}", e))?;
+
+        // Build middleware pipeline
+        let mut pipeline = MiddlewarePipeline::new();
+
+        // Add summarization middleware if configured and enabled
+        if let Some(summarization_config) = middleware_config.summarization {
+            if summarization_config.enabled {
+                // Use agent's provider/model if not specified in config
+                let agent_provider_id = agent_config.get("providerId")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("Agent missing providerId"))?;
+
+                let summary_provider_id = summarization_config.provider
+                    .clone()
+                    .unwrap_or_else(|| agent_provider_id.to_string());
+
+                let agent_model = agent_config.get("model")
+                    .and_then(|v| v.as_str())
+                    .ok_or_else(|| format!("Agent missing model"))?;
+
+                // If model not specified, use agent's model (can be overridden in config)
+                let summary_model = summarization_config.model.clone();
+
+                let (api_key, base_url) = load_provider_credentials(&summary_provider_id).await?;
+
+                let middleware = crate::domains::agent_runtime::middleware::SummarizationMiddleware::from_config(
+                    summarization_config,
+                    &summary_provider_id,
+                    summary_model,
+                    agent_model,
+                    api_key,
+                    base_url,
+                ).await?;
+
+                pipeline = pipeline.add_pre_processor(Box::new(middleware));
+            }
+        }
+
+        // Add context editing middleware if configured and enabled
+        if let Some(context_editing_config) = middleware_config.context_editing {
+            if context_editing_config.enabled {
+                let middleware = crate::domains::agent_runtime::middleware::ContextEditingMiddleware::new(
+                    context_editing_config,
+                );
+                pipeline = pipeline.add_pre_processor(Box::new(middleware));
+            }
+        }
+
+        // Set the middleware pipeline on the executor
+        executor.set_middleware_pipeline(Arc::new(pipeline));
+    }
+
+    Ok(executor)
+}
+
+/// Load provider credentials for middleware LLM clients
+async fn load_provider_credentials(provider_id: &str) -> Result<(String, String), String> {
+    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
+    let providers_file = dirs.config_dir.join("providers.json");
+
+    let content = std::fs::read_to_string(&providers_file)
+        .map_err(|e| format!("Failed to read providers file: {}", e))?;
+
+    let providers: Vec<Value> = serde_json::from_str(&content)
+        .map_err(|e| format!("Failed to parse providers: {}", e))?;
+
+    let provider = providers
+        .into_iter()
+        .find(|p| p.get("id").and_then(|i| i.as_str()) == Some(provider_id))
+        .ok_or_else(|| format!("Provider not found: {}", provider_id))?;
+
+    let api_key = provider.get("apiKey")
+        .and_then(|k| k.as_str())
+        .ok_or_else(|| format!("Provider missing apiKey"))?
+        .to_string();
+
+    let base_url = provider.get("baseUrl")
+        .and_then(|u| u.as_str())
+        .ok_or_else(|| format!("Provider missing baseUrl"))?
+        .to_string();
+
+    Ok((api_key, base_url))
 }

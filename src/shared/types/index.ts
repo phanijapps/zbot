@@ -63,6 +63,8 @@ export interface Agent {
   instructions: string;
   mcps: string[];
   skills: string[];
+  /** Middleware configuration (YAML string) */
+  middleware?: string;
   createdAt: string;
 }
 

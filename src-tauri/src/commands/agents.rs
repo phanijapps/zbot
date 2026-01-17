@@ -28,6 +28,9 @@ pub struct Agent {
     pub instructions: String,
     pub mcps: Vec<String>,
     pub skills: Vec<String>,
+    /// Middleware configuration (YAML string)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub middleware: Option<String>,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
@@ -54,6 +57,9 @@ struct AgentConfig {
     thinking_enabled: bool,
     skills: Vec<String>,
     mcps: Vec<String>,
+    /// Middleware configuration (YAML string)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    middleware: Option<String>,
 }
 
 /// Gets the agents directory path
@@ -145,6 +151,7 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
         thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
+        middleware: agent.middleware.clone(),
     };
     let config_yaml = serde_yaml::to_string(&config)
         .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;
@@ -209,6 +216,7 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
         thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
+        middleware: agent.middleware.clone(),
     };
     let config_yaml = serde_yaml::to_string(&config)
         .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;
@@ -285,6 +293,7 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         instructions,
         mcps: config.mcps,
         skills: config.skills,
+        middleware: config.middleware,
         created_at: Some("1970-01-01T00:00:00Z".to_string()), // TODO: get from file metadata
     })
 }
@@ -404,6 +413,7 @@ pub async fn list_agent_files(agent_id: String) -> Result<Vec<AgentFile>, String
                 thinking_enabled: false,
                 skills: vec![],
                 mcps: vec![],
+                middleware: None,
             };
             let config_yaml = serde_yaml::to_string(&default_config)
                 .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;

@@ -6,7 +6,7 @@
 import { useState, useEffect } from "react";
 import {
   X, Save, FolderOpen, File, FileText, FolderPlus,
-  Upload, RefreshCw, Bot, Brain, ChevronRight, ChevronDown
+  Upload, RefreshCw, Bot, Brain, ChevronRight, ChevronDown, Settings
 } from "lucide-react";
 import { Dialog, DialogContent } from "@/shared/ui/dialog";
 import { Input } from "@/shared/ui/input";
@@ -14,6 +14,7 @@ import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import { Textarea } from "@/shared/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
 import type { Agent } from "@/shared/types";
 import type { Provider } from "@/shared/types";
 import type { MCPServer } from "@/features/mcp/types";
@@ -23,6 +24,50 @@ import * as agentService from "@/services/agent";
 import * as providerService from "@/services/provider";
 import * as mcpService from "@/services/mcp";
 import * as skillsService from "@/services/skills";
+
+// Default middleware configuration
+const DEFAULT_MIDDLEWARE = `# Middleware Configuration
+# Configure how the agent processes conversations
+
+middleware:
+  # Summarization - Compress conversation history when approaching token limits
+  summarization:
+    enabled: true
+    # Model to use for summarization (null = use agent's model)
+    model: null
+    # Provider for summarization (null = use agent's provider)
+    provider: null
+    trigger:
+      # Trigger when token count reaches this value
+      tokens: 60000
+      # Trigger when message count reaches this value
+      messages: null
+      # Trigger when fraction of context window is reached (0.0-1.0)
+      fraction: null
+    keep:
+      # Number of messages to keep after summarization
+      messages: 6
+      # Number of tokens to keep
+      tokens: null
+      # Fraction of context window to keep (0.0-1.0)
+      fraction: null
+    summary_prefix: "[Previous conversation summary:]"
+    summary_prompt: null
+
+  # Context Editing - Clear older tool call outputs while keeping recent ones
+  context_editing:
+    enabled: true
+    trigger_tokens: 60000
+    # Number of tool results to keep (most recent)
+    keep_tool_results: 10
+    # Minimum tokens to reclaim before clearing
+    min_reclaim: 1000
+    # Clear tool call inputs (arguments) as well
+    clear_tool_inputs: false
+    # Tools to exclude from clearing (e.g., "search", "database")
+    exclude_tools: []
+    placeholder: "[Result cleared due to context limits]"
+`;
 
 interface AgentIDEDialogProps {
   open: boolean;
@@ -43,6 +88,7 @@ export function AgentIDEDialog({ open, onClose, onSave, editingAgent }: AgentIDE
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [instructions, setInstructions] = useState("");
+  const [middleware, setMiddleware] = useState(DEFAULT_MIDDLEWARE);
 
   // File explorer state
   const [files, setFiles] = useState<AgentFile[]>([]);
@@ -53,6 +99,7 @@ export function AgentIDEDialog({ open, onClose, onSave, editingAgent }: AgentIDE
   const [isEditingAgentsMd, setIsEditingAgentsMd] = useState(false);
   const [newFolderName, setNewFolderName] = useState("");
   const [showNewFolderInput, setShowNewFolderInput] = useState(false);
+  const [activeTab, setActiveTab] = useState<"config" | "middleware">("config");
 
   // Options state
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -118,6 +165,7 @@ export function AgentIDEDialog({ open, onClose, onSave, editingAgent }: AgentIDE
       setInstructions(editingAgent.instructions);
       setSelectedMcpIds(editingAgent.mcps);
       setSelectedSkillIds(editingAgent.skills);
+      setMiddleware(editingAgent.middleware || DEFAULT_MIDDLEWARE);
     } else {
       setName("");
       setDisplayName("");
@@ -129,6 +177,7 @@ export function AgentIDEDialog({ open, onClose, onSave, editingAgent }: AgentIDE
       setInstructions("");
       setSelectedMcpIds([]);
       setSelectedSkillIds([]);
+      setMiddleware(DEFAULT_MIDDLEWARE);
     }
   }, [editingAgent, open]);
 
@@ -158,6 +207,7 @@ export function AgentIDEDialog({ open, onClose, onSave, editingAgent }: AgentIDE
         instructions,
         mcps: selectedMcpIds,
         skills: selectedSkillIds,
+        middleware: middleware.trim() || undefined,
       };
 
       // First save the agent
@@ -487,194 +537,250 @@ export function AgentIDEDialog({ open, onClose, onSave, editingAgent }: AgentIDE
 
           {/* Main Content Area */}
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Top metadata section - 2 rows */}
-            <div className="p-4 border-b border-white/10 bg-black/20">
-              <div className="grid grid-cols-4 gap-3 mb-3">
-                {/* Row 1 */}
-                <div>
-                  <Label className="text-gray-400 text-xs mb-1 block">Name (ID)</Label>
-                  <Input
-                    placeholder="my-agent"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    className="bg-white/5 border-white/10 text-white text-sm h-8"
-                  />
-                </div>
-                <div>
-                  <Label className="text-gray-400 text-xs mb-1 block">Display Name</Label>
-                  <Input
-                    placeholder="My Agent"
-                    value={displayName}
-                    onChange={(e) => setDisplayName(e.target.value)}
-                    className="bg-white/5 border-white/10 text-white text-sm h-8"
-                  />
-                </div>
-                <div className="col-span-2">
-                  <Label className="text-gray-400 text-xs mb-1 block">Description</Label>
-                  <Input
-                    placeholder="What does this agent do?"
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    className="bg-white/5 border-white/10 text-white text-sm h-8"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-4 gap-3">
-                {/* Row 2 */}
-                <div>
-                  <Label className="text-gray-400 text-xs mb-1 block flex items-center gap-1">
-                    <Brain className="size-3 text-purple-400" />
-                    Provider
-                  </Label>
-                  <Select value={providerId} onValueChange={setProviderId} disabled={loadingOptions}>
-                    <SelectTrigger className="bg-white/5 border-white/10 text-white h-8">
-                      <SelectValue placeholder="Select" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {providers.map(p => (
-                        <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-gray-400 text-xs mb-1 block">Model</Label>
-                  <Select value={model} onValueChange={setModel} disabled={!selectedProvider || loadingOptions}>
-                    <SelectTrigger className="bg-white/5 border-white/10 text-white h-8">
-                      <SelectValue placeholder="Select" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {selectedProvider?.models.map(m => (
-                        <SelectItem key={m} value={m}>
-                          {m.length > 25 ? m.substring(0, 25) + '...' : m}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div>
-                  <Label className="text-gray-400 text-xs mb-1 block">Temperature</Label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={temperature}
-                      onChange={(e) => setTemperature(parseFloat(e.target.value))}
-                      className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-500"
-                    />
-                    <span className="text-xs text-purple-400 w-8 text-right">{temperature.toFixed(1)}</span>
-                  </div>
-                </div>
-                <div>
-                  <Label className="text-gray-400 text-xs mb-1 block">MCPs</Label>
-                  <div className="flex flex-wrap gap-1">
-                    {selectedMcpIds.slice(0, 2).map(id => {
-                      const mcp = mcps.find(m => m.id === id);
-                      return mcp ? (
-                        <span key={id} className="px-1.5 py-0.5 bg-green-500/20 rounded text-xs text-green-300">
-                          {mcp.name}
-                        </span>
-                      ) : null;
-                    })}
-                    {selectedMcpIds.length > 2 && (
-                      <span className="px-1.5 py-0.5 bg-gray-500/20 rounded text-xs text-gray-300">
-                        +{selectedMcpIds.length - 2}
-                      </span>
-                    )}
-                  </div>
-                </div>
+            {/* Tab Navigation */}
+            <div className="border-b border-white/10 bg-black/20">
+              <div className="flex items-center justify-between px-4 py-2">
+                <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "config" | "middleware")} className="w-full">
+                  <TabsList className="bg-black/40 border border-white/10">
+                    <TabsTrigger value="config" className="data-[state=active]:bg-blue-600/30 data-[state=active]:text-blue-300">
+                      <Bot className="size-4 mr-2" />
+                      Configuration
+                    </TabsTrigger>
+                    <TabsTrigger value="middleware" className="data-[state=active]:bg-blue-600/30 data-[state=active]:text-blue-300">
+                      <Settings className="size-4 mr-2" />
+                      Middleware
+                    </TabsTrigger>
+                  </TabsList>
+                </Tabs>
               </div>
             </div>
 
-            {/* Editor/Viewer Area */}
+            {/* Tab Content */}
             <div className="flex-1 overflow-hidden flex flex-col">
-              {isEditingAgentsMd ? (
-                /* AGENTS.md Special Editor - Show instructions with frontmatter context */
-                <div className="flex-1 flex flex-col p-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-sm text-gray-400">
-                      AGENTS.md <span className="text-gray-600">— Instructions (metadata managed above)</span>
-                    </span>
-                  </div>
-                  <Textarea
-                    value={instructions}
-                    onChange={(e) => setInstructions(e.target.value)}
-                    placeholder="You are a helpful AI assistant..."
-                    className="flex-1 bg-white/5 border-white/10 text-white font-mono text-sm resize-none min-h-[200px]"
-                  />
-                  <div className="mt-3 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
-                    <p className="text-xs text-purple-300">
-                      The frontmatter (metadata) is managed via the form above. This area is for the agent's instructions only.
-                    </p>
-                  </div>
-                </div>
-              ) : selectedFile ? (
-                fileContent?.isBinary ? (
-                  /* Binary file indicator */
-                  <div className="flex-1 flex items-center justify-center">
-                    <div className="text-center">
-                      <File className="size-16 text-gray-600 mx-auto mb-4" />
-                      <h3 className="text-lg font-medium text-white mb-2">Binary File</h3>
-                      <p className="text-gray-400 text-sm mb-4">
-                        This file type cannot be displayed or edited
-                      </p>
-                      <p className="text-xs text-gray-500">{selectedFile.name}</p>
+              {activeTab === "config" ? (
+                <>
+                  {/* Top metadata section - 2 rows */}
+                  <div className="p-4 border-b border-white/10 bg-black/20">
+                    <div className="grid grid-cols-4 gap-3 mb-3">
+                      {/* Row 1 */}
+                      <div>
+                        <Label className="text-gray-400 text-xs mb-1 block">Name (ID)</Label>
+                        <Input
+                          placeholder="my-agent"
+                          value={name}
+                          onChange={(e) => setName(e.target.value)}
+                          className="bg-white/5 border-white/10 text-white text-sm h-8"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-gray-400 text-xs mb-1 block">Display Name</Label>
+                        <Input
+                          placeholder="My Agent"
+                          value={displayName}
+                          onChange={(e) => setDisplayName(e.target.value)}
+                          className="bg-white/5 border-white/10 text-white text-sm h-8"
+                        />
+                      </div>
+                      <div className="col-span-2">
+                        <Label className="text-gray-400 text-xs mb-1 block">Description</Label>
+                        <Input
+                          placeholder="What does this agent do?"
+                          value={description}
+                          onChange={(e) => setDescription(e.target.value)}
+                          className="bg-white/5 border-white/10 text-white text-sm h-8"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-4 gap-3">
+                      {/* Row 2 */}
+                      <div>
+                        <Label className="text-gray-400 text-xs mb-1 block flex items-center gap-1">
+                          <Brain className="size-3 text-purple-400" />
+                          Provider
+                        </Label>
+                        <Select value={providerId} onValueChange={setProviderId} disabled={loadingOptions}>
+                          <SelectTrigger className="bg-white/5 border-white/10 text-white h-8">
+                            <SelectValue placeholder="Select" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {providers.map(p => (
+                              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-gray-400 text-xs mb-1 block">Model</Label>
+                        <Select value={model} onValueChange={setModel} disabled={!selectedProvider || loadingOptions}>
+                          <SelectTrigger className="bg-white/5 border-white/10 text-white h-8">
+                            <SelectValue placeholder="Select" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {selectedProvider?.models.map(m => (
+                              <SelectItem key={m} value={m}>
+                                {m.length > 25 ? m.substring(0, 25) + '...' : m}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div>
+                        <Label className="text-gray-400 text-xs mb-1 block">Temperature</Label>
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="range"
+                            min="0"
+                            max="2"
+                            step="0.1"
+                            value={temperature}
+                            onChange={(e) => setTemperature(parseFloat(e.target.value))}
+                            className="flex-1 h-1 bg-white/10 rounded-lg appearance-none cursor-pointer accent-purple-500"
+                          />
+                          <span className="text-xs text-purple-400 w-8 text-right">{temperature.toFixed(1)}</span>
+                        </div>
+                      </div>
+                      <div>
+                        <Label className="text-gray-400 text-xs mb-1 block">MCPs</Label>
+                        <div className="flex flex-wrap gap-1">
+                          {selectedMcpIds.slice(0, 2).map(id => {
+                            const mcp = mcps.find(m => m.id === id);
+                            return mcp ? (
+                              <span key={id} className="px-1.5 py-0.5 bg-green-500/20 rounded text-xs text-green-300">
+                                {mcp.name}
+                              </span>
+                            ) : null;
+                          })}
+                          {selectedMcpIds.length > 2 && (
+                            <span className="px-1.5 py-0.5 bg-gray-500/20 rounded text-xs text-gray-300">
+                              +{selectedMcpIds.length - 2}
+                            </span>
+                          )}
+                        </div>
+                      </div>
                     </div>
                   </div>
-                ) : (
-                  /* Text file editor */
-                  <div className="flex-1 flex flex-col">
-                    <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
-                      <span className="text-sm text-gray-400">{selectedFile.name}</span>
-                      <Button
-                        size="sm"
-                        onClick={handleSaveFile}
-                        className="bg-blue-600 hover:bg-blue-700 text-xs h-7"
-                      >
-                        <Save className="size-3 mr-1" />
-                        Save File
-                      </Button>
-                    </div>
-                    <Textarea
-                      value={editingContent}
-                      onChange={(e) => setEditingContent(e.target.value)}
-                      className="flex-1 bg-[#0a0a0a] border-0 text-white font-mono text-sm resize-none p-4"
-                      spellCheck={false}
-                    />
+
+                  {/* Editor/Viewer Area */}
+                  <div className="flex-1 overflow-hidden flex flex-col">
+                    {isEditingAgentsMd ? (
+                      /* AGENTS.md Special Editor - Show instructions with frontmatter context */
+                      <div className="flex-1 flex flex-col p-4">
+                        <div className="flex items-center justify-between mb-3">
+                          <span className="text-sm text-gray-400">
+                            AGENTS.md <span className="text-gray-600">— Instructions (metadata managed above)</span>
+                          </span>
+                        </div>
+                        <Textarea
+                          value={instructions}
+                          onChange={(e) => setInstructions(e.target.value)}
+                          placeholder="You are a helpful AI assistant..."
+                          className="flex-1 bg-white/5 border-white/10 text-white font-mono text-sm resize-none min-h-[200px]"
+                        />
+                        <div className="mt-3 p-3 bg-purple-500/10 border border-purple-500/20 rounded-lg">
+                          <p className="text-xs text-purple-300">
+                            The frontmatter (metadata) is managed via the form above. This area is for the agent's instructions only.
+                          </p>
+                        </div>
+                      </div>
+                    ) : selectedFile ? (
+                      fileContent?.isBinary ? (
+                        /* Binary file indicator */
+                        <div className="flex-1 flex items-center justify-center">
+                          <div className="text-center">
+                            <File className="size-16 text-gray-600 mx-auto mb-4" />
+                            <h3 className="text-lg font-medium text-white mb-2">Binary File</h3>
+                            <p className="text-gray-400 text-sm mb-4">
+                              This file type cannot be displayed or edited
+                            </p>
+                            <p className="text-xs text-gray-500">{selectedFile.name}</p>
+                          </div>
+                        </div>
+                      ) : (
+                        /* Text file editor */
+                        <div className="flex-1 flex flex-col">
+                          <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
+                            <span className="text-sm text-gray-400">{selectedFile.name}</span>
+                            <Button
+                              size="sm"
+                              onClick={handleSaveFile}
+                              className="bg-blue-600 hover:bg-blue-700 text-xs h-7"
+                            >
+                              <Save className="size-3 mr-1" />
+                              Save File
+                            </Button>
+                          </div>
+                          <Textarea
+                            value={editingContent}
+                            onChange={(e) => setEditingContent(e.target.value)}
+                            className="flex-1 bg-[#0a0a0a] border-0 text-white font-mono text-sm resize-none p-4"
+                            spellCheck={false}
+                          />
+                        </div>
+                      )
+                    ) : (
+                      /* Empty state */
+                      <div className="flex-1 flex items-center justify-center">
+                        <div className="text-center">
+                          <FileText className="size-16 text-gray-600 mx-auto mb-4" />
+                          <h3 className="text-lg font-medium text-white mb-2">No File Selected</h3>
+                          <p className="text-gray-400 text-sm mb-4">
+                            Select a file from the explorer to view or edit
+                          </p>
+                          <div className="flex justify-center gap-2">
+                            <Button
+                              size="sm"
+                              onClick={() => setShowNewFolderInput(!showNewFolderInput)}
+                              className="bg-white/5 hover:bg-white/10 border-white/10"
+                            >
+                              <FolderPlus className="size-4 mr-2" />
+                              New Folder
+                            </Button>
+                            <Button
+                              size="sm"
+                              onClick={handleFileUpload}
+                              className="bg-white/5 hover:bg-white/10 border-white/10"
+                            >
+                              <Upload className="size-4 mr-2" />
+                              Upload Files
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
-                )
+                </>
               ) : (
-                /* Empty state */
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center">
-                    <FileText className="size-16 text-gray-600 mx-auto mb-4" />
-                    <h3 className="text-lg font-medium text-white mb-2">No File Selected</h3>
-                    <p className="text-gray-400 text-sm mb-4">
-                      Select a file from the explorer to view or edit
-                    </p>
-                    <div className="flex justify-center gap-2">
-                      <Button
-                        size="sm"
-                        onClick={() => setShowNewFolderInput(!showNewFolderInput)}
-                        className="bg-white/5 hover:bg-white/10 border-white/10"
-                      >
-                        <FolderPlus className="size-4 mr-2" />
-                        New Folder
-                      </Button>
-                      <Button
-                        size="sm"
-                        onClick={handleFileUpload}
-                        className="bg-white/5 hover:bg-white/10 border-white/10"
-                      >
-                        <Upload className="size-4 mr-2" />
-                        Upload Files
-                      </Button>
+                <>
+                  {/* Middleware Configuration Tab */}
+                  <div className="flex-1 flex flex-col p-4 overflow-hidden">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h3 className="text-sm font-semibold text-white flex items-center gap-2">
+                          <Settings className="size-4 text-blue-400" />
+                          Middleware Configuration
+                        </h3>
+                        <p className="text-xs text-gray-400 mt-1">
+                          Configure middleware for conversation management (YAML format)
+                        </p>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <Textarea
+                        value={middleware}
+                        onChange={(e) => setMiddleware(e.target.value)}
+                        placeholder={DEFAULT_MIDDLEWARE}
+                        className="flex-1 bg-[#0a0a0a] border-white/10 text-white font-mono text-sm resize-none p-4"
+                        spellCheck={false}
+                      />
+                    </div>
+                    <div className="mt-3 p-3 bg-blue-500/10 border border-blue-500/20 rounded-lg">
+                      <p className="text-xs text-blue-300">
+                        <strong>Middlewares:</strong> Summarization - compresses conversation history when approaching token limits. Context Editing - clears older tool call outputs while keeping recent ones.
+                      </p>
                     </div>
                   </div>
-                </div>
+                </>
               )}
             </div>
 
