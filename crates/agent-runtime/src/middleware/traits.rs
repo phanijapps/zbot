@@ -3,9 +3,13 @@
 // Core traits for middleware implementation
 // ============================================================================
 
-use crate::domains::agent_runtime::llm::ChatMessage;
-use crate::domains::agent_runtime::executor::StreamEvent;
+//! # Middleware Traits
+//!
+//! Core traits for middleware implementation.
+
+use async_trait::async_trait;
 use serde_json::Value;
+use crate::types::{ChatMessage, StreamEvent};
 
 /// Context passed to middleware during execution
 #[derive(Clone, Debug)]
@@ -79,7 +83,7 @@ pub enum MiddlewareEffect {
 ///
 /// Note: This trait uses a different approach to avoid dyn-compatibility issues.
 /// Middleware returns events in the effect rather than calling callbacks.
-#[async_trait::async_trait]
+#[async_trait]
 pub trait PreProcessMiddleware: Send + Sync {
     /// Get the unique name of this middleware
     fn name(&self) -> &'static str;
@@ -118,7 +122,7 @@ pub trait PreProcessMiddleware: Send + Sync {
 ///
 /// Note: This trait is NOT dyn-compatible due to async trait bounds.
 /// Middleware must be stored as concrete types, not trait objects.
-#[async_trait::async_trait]
+#[async_trait]
 pub trait EventMiddleware: Send + Sync {
     /// Get the unique name of this middleware
     fn name(&self) -> &'static str;

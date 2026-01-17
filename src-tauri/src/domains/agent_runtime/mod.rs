@@ -1,29 +1,44 @@
 // ============================================================================
 // AGENT RUNTIME DOMAIN
-// Rust-based agent execution
+// Re-exports agent-runtime library with Tauri-specific adaptations
 // ============================================================================
 
-pub mod executor;
-pub mod tools;
-pub mod llm;
-pub mod mcp_manager;
-pub mod middleware;
+// Re-export everything from agent-runtime library
+// Note: executor module is provided locally (Tauri-specific config loading)
+pub use agent_runtime::{
+    // Types
+    ChatMessage, StreamEvent, ToolCall, ToolResult, ToolError,
 
-// Re-exports
-pub use executor::{AgentExecutor, ExecutorConfig, StreamEvent, create_executor};
-pub use tools::{ToolRegistry, Tool, ToolContext, ToolError, ToolResult, builtin_tools};
-pub use llm::{LlmClient, LlmModel, LlmConfig, ChatMessage, ChatResponse, ToolCall, OpenAiClient};
-pub use mcp_manager::{McpManager, McpClient, McpServerConfig, McpTool};
-pub use middleware::{
-    MiddlewarePipeline,
-    PreProcessMiddleware,
-    EventMiddleware,
-    MiddlewareContext,
-    MiddlewareConfig,
-    SummarizationMiddleware,
-    ContextEditingMiddleware,
-    SummarizationConfig,
-    ContextEditingConfig,
-    TriggerCondition,
-    KeepPolicy,
+    // LLM
+    LlmClient, LlmConfig, OpenAiClient, ChatResponse, StreamChunk, StreamCallback, TokenUsage,
+
+    // Tools
+    Tool, ToolRegistry, ToolContext,
+    FileSystemContext, NoFileSystemContext,
+
+    // MCP
+    McpManager, McpServerConfig, McpClient, McpTool, McpError,
+
+    // Middleware
+    MiddlewarePipeline, PreProcessMiddleware, EventMiddleware, MiddlewareContext, MiddlewareEffect,
+    MiddlewareConfig, SummarizationMiddleware, ContextEditingMiddleware,
+    SummarizationConfig, ContextEditingConfig, TriggerCondition, KeepPolicy,
+
+    // Executor (types only, not the factory function)
+    ExecutorConfig, ExecutorError,
+
+    // Logging
+    init_logging, LogLevel,
 };
+
+// Re-export builtin_tools_with_fs from zerotools
+pub use zerotools::builtin_tools_with_fs;
+
+// Tauri-specific modules
+pub mod filesystem;
+
+// Tauri-specific executor factory (uses agent-runtime types)
+pub mod executor;
+
+// Re-export AgentExecutor from executor module
+pub use self::executor::AgentExecutor;

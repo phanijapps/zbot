@@ -50,10 +50,16 @@ base64 = { workspace = true }
 [dev-dependencies]
 tokio-test = "0.4"
 
+# NOTE: ADK-Rust evaluation completed - decision: DO NOT MIGRATE
+# See: tests/adk_evaluation.rs and adkrust-migration.md for details
+# adk-core = "0.2"  # Uncomment only if re-evaluating in future
+
 [features]
 default = []
 # Enable Tauri-specific integrations (only when used from Tauri app)
 tauri = []
+# ADK-Rust evaluation feature - uncomment adk-core in dev-dependencies to use
+adk-eval = []
 
 [lib]
 name = "agent_runtime"

@@ -72,22 +72,11 @@ impl OpenAiClient {
             }
         }
 
-        // Debug: log tools being sent
+        // Debug: log tools being sent (only count, no verbose logging)
         if let Some(tools_val) = &tools {
-            tracing::debug!("Sending tools to LLM API");
             if let Some(tools_array) = tools_val.as_array() {
-                tracing::debug!("Tool count: {}", tools_array.len());
-                for tool in tools_array {
-                    if let Some(func) = tool.pointer("/function") {
-                        tracing::debug!(
-                            "  - {}",
-                            func.get("name").and_then(|n| n.as_str()).unwrap_or("unknown")
-                        );
-                    }
-                }
+                tracing::info!("Sending {} tools to LLM", tools_array.len());
             }
-        } else {
-            tracing::debug!("No tools being sent to LLM");
         }
 
         if self.config.thinking_enabled {
@@ -191,10 +180,10 @@ impl LlmClient for OpenAiClient {
         &self.config.provider_id
     }
 
-    async fn chat(&self, messages: Vec<ChatMessage>) -> Result<ChatResponse, LlmError> {
+    async fn chat(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Result<ChatResponse, LlmError> {
         tracing::info!("Starting chat with {} messages", messages.len());
 
-        let body = self.build_request_body(messages, None);
+        let body = self.build_request_body(messages, tools);
         let response = self.make_request(body).await?;
         let parsed = self.parse_response(response);
 
@@ -388,9 +377,7 @@ mod tests {
             json!({"query": "test"}),
         );
 
-        assert!(tool_call.is_ok());
-        let tc = tool_call.unwrap();
-        assert_eq!(tc.id, "call_123");
-        assert_eq!(tc.name, "search");
+        assert_eq!(tool_call.id, "call_123");
+        assert_eq!(tool_call.name, "search");
     }
 }

@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use serde::Serializer;
 
 /// A chat message in the conversation
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -71,7 +72,7 @@ impl ChatMessage {
 }
 
 /// A tool call made by the LLM
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct ToolCall {
     /// Unique identifier for this tool call
     pub id: String,
@@ -81,6 +82,36 @@ pub struct ToolCall {
 
     /// Arguments to pass to the tool (JSON object)
     pub arguments: Value,
+}
+
+// Custom serialization to match OpenAI's format
+impl Serialize for ToolCall {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        // OpenAI format: { id, type: "function", function: { name, arguments: "..." } }
+        let arguments_str = serde_json::to_string(&self.arguments)
+            .map_err(serde::ser::Error::custom)?;
+
+        let mut s = serializer.serialize_struct("ToolCall", 3)?;
+        s.serialize_field("id", &self.id)?;
+        s.serialize_field("type", "function")?;
+        s.serialize_field("function", &ToolCallFunctionSerialization {
+            name: &self.name,
+            arguments: &arguments_str,
+        })?;
+        s.end()
+    }
+}
+
+/// Helper struct for serializing the function part of a tool call
+#[derive(Serialize)]
+struct ToolCallFunctionSerialization<'a> {
+    name: &'a str,
+    arguments: &'a str,
 }
 
 impl ToolCall {

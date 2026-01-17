@@ -42,7 +42,15 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 # File system
 dirs = "5"
+base64 = "0.22"
 
 # Internal agent-runtime library
 agent-runtime = { path = "../crates/agent-runtime" }
+
+# Internal zerotools library (built-in tools)
+zerotools = { path = "../crates/zerotools" }
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 

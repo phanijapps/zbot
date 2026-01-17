@@ -23,7 +23,7 @@ pub mod context;
 pub mod error;
 
 pub use registry::ToolRegistry;
-pub use builtin::{builtin_tools_with_fs, FileSystemContext, NoFileSystemContext};
+pub use builtin::{FileSystemContext, NoFileSystemContext};
 pub use context::ToolContext;
 pub use error::{ToolError as ToolExecError, ToolResult as ToolExecResult};
 

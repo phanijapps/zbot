@@ -10,8 +10,9 @@ use serde::Serialize;
 
 use crate::domains::conversation_runtime::{get_database, repository};
 use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall, ToolResult};
+use crate::domains::agent_runtime::executor::create_executor;
 use crate::domains::agent_runtime::{
-    AgentExecutor, create_executor, ChatMessage, StreamEvent
+    AgentExecutor, ChatMessage, StreamEvent
 };
 
 // Note: Executor caching removed - each execution gets a fresh executor

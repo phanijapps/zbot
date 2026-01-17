@@ -87,19 +87,18 @@ pub use types::{
 };
 
 pub use llm::{
-    LlmClient, LlmConfig, LlmModel, OpenAiClient, StreamChunk, StreamCallback,
-    ToolCallChunk,
+    LlmClient, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
+    ToolCallChunk, ChatResponse, TokenUsage,
 };
 
 pub use tools::{
     Tool, ToolRegistry, ToolContext,
     FileSystemContext, NoFileSystemContext,
-    builtin_tools_with_fs,
 };
 pub use tools::error::ToolError as ToolExecError;
 
 pub use mcp::{
-    McpManager, McpClient, McpServerConfig, McpTool
+    McpManager, McpClient, McpServerConfig, McpTool, McpError
 };
 
 pub use middleware::{
@@ -107,13 +106,18 @@ pub use middleware::{
     PreProcessMiddleware,
     EventMiddleware,
     MiddlewareContext,
+    MiddlewareEffect,
     MiddlewareConfig,
     SummarizationMiddleware,
     ContextEditingMiddleware,
+    SummarizationConfig,
+    ContextEditingConfig,
+    TriggerCondition,
+    KeepPolicy,
 };
 
 pub use executor::{
-    AgentExecutor, ExecutorConfig, create_executor
+    AgentExecutor, ExecutorConfig, ExecutorError, create_executor
 };
 
 pub use logging::{

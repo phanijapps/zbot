@@ -3,9 +3,11 @@
 // Orchestrates middleware execution
 // ============================================================================
 
-use std::sync::Arc;
-use crate::domains::agent_runtime::llm::ChatMessage;
-use crate::domains::agent_runtime::executor::StreamEvent;
+//! # Middleware Pipeline
+//!
+//! Pipeline that orchestrates middleware execution.
+
+use crate::types::{ChatMessage, StreamEvent};
 use super::traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext};
 
 /// Middleware pipeline that orchestrates preprocessing and event handling
@@ -117,7 +119,7 @@ impl MiddlewarePipeline {
 
             // Continue processing even if one handler fails
             if let Err(e) = handler.on_event(event, context).await {
-                eprintln!("Middleware {} failed to handle event: {}", handler.name(), e);
+                tracing::warn!("Middleware {} failed to handle event: {}", handler.name(), e);
             }
         }
 
@@ -184,8 +186,8 @@ mod tests {
             &self,
             messages: Vec<ChatMessage>,
             _context: &MiddlewareContext,
-        ) -> Result<super::traits::MiddlewareEffect, String> {
-            Ok(super::traits::MiddlewareEffect::ModifiedMessages(messages))
+        ) -> Result<super::super::traits::MiddlewareEffect, String> {
+            Ok(super::super::traits::MiddlewareEffect::ModifiedMessages(messages))
         }
     }
 

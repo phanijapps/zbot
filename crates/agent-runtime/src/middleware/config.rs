@@ -3,6 +3,10 @@
 // Configuration structures for middleware
 // ============================================================================
 
+//! # Middleware Configuration
+//!
+//! Configuration types for middleware components.
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -90,7 +94,7 @@ pub struct KeepPolicy {
 
 impl KeepPolicy {
     /// Get the number of items to keep based on policy
-    pub fn to_keep_count(&self, total_items: usize, context_window: usize) -> usize {
+    pub fn to_keep_count(&self, total_items: usize, _context_window: usize) -> usize {
         if let Some(keep_messages) = self.messages {
             return keep_messages.min(total_items);
         }

@@ -39,33 +39,39 @@ pub fn needs_summarization(config: &MemoryConfig, current_tokens: i64) -> bool {
 
 /// Filter messages to fit within token budget
 pub fn filter_messages_by_tokens(messages: Vec<Message>, max_tokens: i64) -> Vec<Message> {
-    let mut result = Vec::new();
-    let mut current_tokens = 0i64;
+    let mut system_messages = Vec::new();
+    let mut recent_messages = Vec::new();
+    let mut system_tokens = 0i64;
+    let mut recent_tokens = 0i64;
 
-    // Keep system messages at the beginning
-    for msg in messages.iter() {
+    // Separate system messages from other messages
+    for msg in &messages {
         if matches!(msg.role, MessageRole::System) {
-            result.push(msg.clone());
-            current_tokens += msg.token_count;
+            system_messages.push(msg.clone());
+            system_tokens += msg.token_count;
         }
     }
 
-    // Add recent messages until we hit the limit
+    // Add recent messages (in reverse) until we hit the limit
     for msg in messages.into_iter().rev() {
         if matches!(msg.role, MessageRole::System) {
             continue;
         }
 
-        if current_tokens + msg.token_count > max_tokens && !result.is_empty() {
+        if system_tokens + recent_tokens + msg.token_count > max_tokens && !recent_messages.is_empty() {
             break;
         }
 
-        current_tokens += msg.token_count;
-        result.push(msg);
+        recent_tokens += msg.token_count;
+        recent_messages.push(msg);
     }
 
-    // Reverse to maintain chronological order
-    result.reverse();
+    // Reverse recent messages to get chronological order
+    recent_messages.reverse();
+
+    // Combine: system messages first, then recent messages
+    let mut result = system_messages;
+    result.extend(recent_messages);
     result
 }
 

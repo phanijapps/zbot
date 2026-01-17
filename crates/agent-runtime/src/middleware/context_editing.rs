@@ -6,11 +6,15 @@
 // https://docs.langchain.com/oss/javascript/langchain/middleware/built-in#context-editing
 // ============================================================================
 
-use crate::domains::agent_runtime::llm::ChatMessage;
-use crate::domains::agent_runtime::executor::StreamEvent;
-use crate::domains::agent_runtime::middleware::traits::{PreProcessMiddleware, MiddlewareContext, MiddlewareEffect};
-use crate::domains::agent_runtime::middleware::config::ContextEditingConfig;
-use crate::domains::agent_runtime::middleware::token_counter::estimate_total_tokens;
+//! # Context Editing Middleware
+//!
+//! Manage conversation context by clearing older tool call outputs.
+
+use crate::types::{ChatMessage, StreamEvent, ToolCall};
+use crate::middleware::traits::{PreProcessMiddleware, MiddlewareContext, MiddlewareEffect};
+use crate::middleware::config::ContextEditingConfig;
+use crate::middleware::token_counter::estimate_total_tokens;
+use serde_json::json;
 
 /// Context editing middleware
 ///
@@ -76,7 +80,7 @@ impl ContextEditingMiddleware {
             if let Some(tool_calls) = &message.tool_calls {
                 for tool_call in tool_calls {
                     if tool_call.id == *tool_call_id {
-                        return Some(tool_call.name().to_string());
+                        return Some(tool_call.name.clone());
                     }
                 }
             }
@@ -114,13 +118,11 @@ impl ContextEditingMiddleware {
                     for i in 0..tool_calls.len() {
                         if tool_calls[i].id == tool_call_id {
                             // Replace with a new tool call with empty arguments
-                            if let Ok(new_call) = crate::domains::agent_runtime::llm::ToolCall::new(
+                            tool_calls[i] = ToolCall::new(
                                 tool_calls[i].id.clone(),
-                                tool_calls[i].name().to_string(),
-                                serde_json::json!({})
-                            ) {
-                                tool_calls[i] = new_call;
-                            }
+                                tool_calls[i].name.clone(),
+                                json!( {})
+                            );
                             break;
                         }
                     }
@@ -212,20 +214,19 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn create_test_messages_with_tool_calls() -> Vec<ChatMessage> {
         let tool1 = ToolCall::new(
             "call_1".to_string(),
             "search".to_string(),
             json!({"query": "test"}),
-        ).unwrap();
+        );
 
         let tool2 = ToolCall::new(
             "call_2".to_string(),
             "calculator".to_string(),
             json!({"expression": "1+1"}),
-        ).unwrap();
+        );
 
         vec![
             ChatMessage {

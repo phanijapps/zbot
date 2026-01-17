@@ -6,6 +6,7 @@
 use std::boxed::Box;
 
 use async_trait::async_trait;
+use serde_json::Value;
 
 use crate::types::{ChatMessage, ToolCall};
 
@@ -54,7 +55,7 @@ pub trait LlmClient: Send + Sync {
     fn provider(&self) -> &str;
 
     /// Send a chat completion request
-    async fn chat(&self, messages: Vec<ChatMessage>) -> Result<ChatResponse, LlmError>;
+    async fn chat(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Result<ChatResponse, LlmError>;
 
     /// Send a chat completion request with streaming
     ///

@@ -3,7 +3,11 @@
 // Estimate token counts for messages
 // ============================================================================
 
-use crate::domains::agent_runtime::llm::ChatMessage;
+//! # Token Counter
+//!
+//! Token estimation utilities for middleware.
+
+use crate::types::ChatMessage;
 
 /// Estimate token count for a string
 ///
@@ -26,10 +30,8 @@ pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
     if let Some(tool_calls) = &message.tool_calls {
         for tool_call in tool_calls {
             // Tool name + arguments
-            tokens += estimate_tokens(&tool_call.name());
-            if let Ok(args) = tool_call.arguments() {
-                tokens += estimate_tokens(&args.to_string());
-            }
+            tokens += estimate_tokens(&tool_call.name);
+            tokens += estimate_tokens(&tool_call.arguments.to_string());
         }
     }
 
@@ -99,7 +101,7 @@ mod tests {
         assert_eq!(estimate_tokens(""), 0);
         assert_eq!(estimate_tokens("hello"), 1); // 5 chars / 4 = 1.25 -> 1
         assert_eq!(estimate_tokens("hello world"), 2); // 11 chars / 4 = 2.75 -> 2
-        assert_eq!(estimate_tokens("a".repeat(100).as_str()), 25);
+        assert_eq!(estimate_tokens(&"a".repeat(100)), 25);
     }
 
     #[test]
