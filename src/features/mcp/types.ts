@@ -1,7 +1,30 @@
 // ============================================================================
 // MCP SERVERS FEATURE - Types
 // TypeScript types for Model Context Protocol servers
+// Supports both stdio (command-based) and HTTP-based MCP servers
 // ============================================================================
+
+/** MCP Server type */
+export type MCPServerType = 'stdio' | 'http' | 'sse' | 'streamable-http';
+
+/** Stdio configuration (command-based MCP server) */
+export interface StdioConfig {
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+}
+
+/** HTTP configuration (HTTP-based MCP server) */
+export interface HttpConfig {
+  url: string;
+  headers?: Record<string, string>;
+}
+
+/** SSE configuration (Server-Sent Events MCP server) */
+export interface SseConfig {
+  url: string;
+  headers?: Record<string, string>;
+}
 
 /** MCP Server configuration */
 export interface MCPServer {
@@ -11,12 +34,18 @@ export interface MCPServer {
   name: string;
   /** Description of what the server does */
   description: string;
-  /** Command to run (e.g., "npx", "node", "python") */
-  command: string;
-  /** Arguments to pass to the command */
-  args: string[];
-  /** Optional environment variables */
+  /** Server type (stdio, http, sse, or streamable-http) */
+  type: MCPServerType;
+  /** Stdio configuration (for type='stdio') */
+  command?: string;
+  /** Arguments for stdio command */
+  args?: string[];
+  /** Environment variables for stdio */
   env?: Record<string, string>;
+  /** HTTP URL (for type='http', 'sse', or 'streamable-http') */
+  url?: string;
+  /** HTTP headers (for type='http', 'sse', or 'streamable-http') */
+  headers?: Record<string, string>;
   /** Whether the server is enabled */
   enabled: boolean;
   /** Current status of the server */
@@ -29,6 +58,54 @@ export interface MCPServer {
 
 /** MCP Server status */
 export type MCPServerStatus = 'running' | 'stopped' | 'error';
+
+/** Raw MCP configuration from backend */
+export type MCPServerConfig = StdioMcpConfig | HttpMcpConfig | SseMcpConfig | StreamableHttpMcpConfig;
+
+/** Stdio MCP config (backend format) */
+export interface StdioMcpConfig {
+  type: 'stdio';
+  id?: string;
+  name: string;
+  description: string;
+  command: string;
+  args: string[];
+  env?: Record<string, string>;
+  enabled?: boolean;
+}
+
+/** HTTP MCP config (backend format) */
+export interface HttpMcpConfig {
+  type: 'http';
+  id?: string;
+  name: string;
+  description: string;
+  url: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+/** SSE MCP config (backend format) */
+export interface SseMcpConfig {
+  type: 'sse';
+  id?: string;
+  name: string;
+  description: string;
+  url: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+/** StreamableHttp MCP config (backend format) */
+export interface StreamableHttpMcpConfig {
+  type: 'streamable-http';
+  id?: string;
+  name: string;
+  description: string;
+  url: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
 
 /** Preset MCP server template */
 export interface MCPServerPreset {
@@ -80,6 +157,36 @@ export const MCP_SERVER_PRESETS: MCPServerPreset[] = [
     description: 'Web automation and scraping with Puppeteer',
     command: 'npx',
     args: '-y @modelcontextprotocol/server-puppeteer',
+  },
+];
+
+/** HTTP Preset MCP servers */
+export const MCP_HTTP_PRESETS: MCPServerPreset[] = [
+  {
+    name: 'Web Search (Z.ai)',
+    description: 'Web search via Z.ai HTTP MCP',
+    command: '',
+    args: 'https://api.z.ai/api/mcp/web_search_prime/mcp',
+  },
+];
+
+/** SSE Preset MCP servers */
+export const MCP_SSE_PRESETS: MCPServerPreset[] = [
+  {
+    name: 'Web Search (Z.ai SSE)',
+    description: 'Web search via Z.ai SSE MCP',
+    command: '',
+    args: 'https://api.z.ai/api/mcp/web_search_prime/sse',
+  },
+];
+
+/** StreamableHttp Preset MCP servers */
+export const MCP_STREAMABLE_HTTP_PRESETS: MCPServerPreset[] = [
+  {
+    name: 'Web Search (Z.ai)',
+    description: 'Web search via Z.ai streamable-http MCP',
+    command: '',
+    args: 'https://api.z.ai/api/mcp/web_search_prime/mcp',
   },
 ];
 

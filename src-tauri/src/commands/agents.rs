@@ -23,6 +23,8 @@ pub struct Agent {
     pub temperature: f64,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     pub max_tokens: u32,
+    #[serde(rename = "thinkingEnabled", default)]
+    pub thinking_enabled: bool,
     pub instructions: String,
     pub mcps: Vec<String>,
     pub skills: Vec<String>,
@@ -48,6 +50,8 @@ struct AgentConfig {
     temperature: f64,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
     max_tokens: u32,
+    #[serde(rename = "thinkingEnabled", default)]
+    thinking_enabled: bool,
     skills: Vec<String>,
     mcps: Vec<String>,
 }
@@ -138,6 +142,7 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
         model: agent.model.clone(),
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
+        thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
     };
@@ -201,6 +206,7 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
         model: agent.model.clone(),
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
+        thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
     };
@@ -275,6 +281,7 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         model: config.model,
         temperature: config.temperature,
         max_tokens: config.max_tokens,
+        thinking_enabled: config.thinking_enabled,
         instructions,
         mcps: config.mcps,
         skills: config.skills,
@@ -394,6 +401,7 @@ pub async fn list_agent_files(agent_id: String) -> Result<Vec<AgentFile>, String
                 model: "".to_string(),
                 temperature: 0.7,
                 max_tokens: 2000,
+                thinking_enabled: false,
                 skills: vec![],
                 mcps: vec![],
             };

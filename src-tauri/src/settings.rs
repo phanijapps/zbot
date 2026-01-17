@@ -102,12 +102,19 @@ pub struct AppDirs {
     pub venv_dir: PathBuf,
     /// Conversation logs directory (logs/<conv-id>/)
     pub conversation_logs_dir: PathBuf,
+    /// Outputs directory (~/Documents/ZeroAgent/outputs/)
+    pub outputs_dir: PathBuf,
 }
 
 impl AppDirs {
     /// Get the application directories for the current platform
     pub fn get() -> Result<Self> {
         let config_dir = Self::get_config_dir()?;
+
+        // Get documents directory for outputs
+        let documents_dir = dirs::document_dir()
+            .unwrap_or_else(|| config_dir.clone());
+        let outputs_dir = documents_dir.join("ZeroAgent").join("outputs");
 
         Ok(Self {
             settings_file: config_dir.join("settings.yaml"),
@@ -116,6 +123,7 @@ impl AppDirs {
             skills_dir: config_dir.join("skills"),
             venv_dir: config_dir.join("venv"),
             conversation_logs_dir: config_dir.join("logs"),
+            outputs_dir,
             config_dir,
         })
     }
@@ -150,6 +158,10 @@ impl AppDirs {
         // Create conversation logs directory
         fs::create_dir_all(&self.conversation_logs_dir)
             .context("Failed to create conversation logs directory")?;
+
+        // Create outputs directory
+        fs::create_dir_all(&self.outputs_dir)
+            .context("Failed to create outputs directory")?;
 
         // Create LanceDB database file if it doesn't exist
         if !self.database_path.exists() {

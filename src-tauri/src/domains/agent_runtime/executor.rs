@@ -8,8 +8,15 @@ use serde_json::{json, Value};
 
 use crate::domains::agent_runtime::llm::{LlmClient, ChatMessage, OpenAiClient};
 use crate::domains::agent_runtime::tools::{ToolRegistry, ToolContext};
-use crate::domains::agent_runtime::mcp_manager::McpManager;
+use crate::domains::agent_runtime::mcp_manager::{McpManager, McpTool};
 use crate::settings::AppDirs;
+
+// Template embedding
+use rust_embed::RustEmbed;
+
+#[derive(RustEmbed)]
+#[folder = "templates/"]
+struct Assets;
 
 // ============================================================================
 // AGENT EXECOR CONFIGURATION
@@ -22,9 +29,11 @@ pub struct ExecutorConfig {
     pub model: String,
     pub temperature: f64,
     pub max_tokens: u32,
+    pub thinking_enabled: bool,
     pub system_instruction: Option<String>,
     pub tools_enabled: bool,
     pub mcps: Vec<String>,
+    pub skills: Vec<String>,
     pub conversation_id: Option<String>,
 }
 
@@ -84,6 +93,30 @@ pub enum StreamEvent {
         timestamp: u64,
         error: String,
         recoverable: bool,
+    },
+    // ========================================================================
+    // GENERATIVE UI EVENTS
+    // ========================================================================
+    #[serde(rename = "show_content")]
+    ShowContent {
+        timestamp: u64,
+        content_type: String,  // "pdf", "ppt", "html", "image", "text"
+        title: String,
+        content: String,       // Filename or Base64 encoded data (for backwards compatibility)
+        metadata: Option<Value>,
+        file_path: Option<String>,  // Path to attachment file (e.g., "conv_id/attachments/filename")
+        is_attachment: Option<bool>,  // true if content is saved to attachments
+        base64: Option<bool>,   // true if content is base64 encoded
+    },
+    #[serde(rename = "request_input")]
+    RequestInput {
+        timestamp: u64,
+        form_id: String,
+        form_type: String,     // "json_schema", "dynamic_form"
+        title: String,
+        description: Option<String>,
+        schema: Value,         // JSON Schema for form
+        submit_button: Option<String>,
     },
 }
 
@@ -157,6 +190,7 @@ impl AgentExecutor {
             model: config.model.clone(),
             temperature: config.temperature,
             max_tokens: config.max_tokens,
+            thinking_enabled: config.thinking_enabled,
         };
 
         Ok(Arc::new(OpenAiClient::new(llm_config)))
@@ -226,7 +260,7 @@ impl AgentExecutor {
         eprintln!("Tools schema: {}", tools_schema.is_some());
 
         let mut current_messages = messages;
-        let mut max_iterations = 10; // Prevent infinite loops
+        let mut max_iterations = 50; // Increased from 10 to allow more complex tool workflows
         let mut full_response = String::new();
 
         loop {
@@ -300,6 +334,66 @@ impl AgentExecutor {
                 match result {
                     Ok(output) => {
                         eprintln!("Tool result: {}", output);
+
+                        // Check for generative UI markers
+                        if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
+                            // Check for show_content marker
+                            if parsed.get("__show_content").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let content_type = parsed.get("content_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("text").to_string();
+                                let title = parsed.get("title")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Content").to_string();
+                                let content = parsed.get("content")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("").to_string();
+                                let metadata = parsed.get("metadata").cloned();
+                                let file_path = parsed.get("file_path").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                let is_attachment = parsed.get("is_attachment").and_then(|v| v.as_bool());
+                                let base64 = parsed.get("base64").and_then(|v| v.as_bool());
+
+                                eprintln!("Emitting ShowContent event: {} (attachment: {})", title, is_attachment.unwrap_or(false));
+                                on_event(StreamEvent::ShowContent {
+                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                    content_type,
+                                    title,
+                                    content,
+                                    metadata,
+                                    file_path,
+                                    is_attachment,
+                                    base64,
+                                });
+                            }
+
+                            // Check for request_input marker (for future RequestInput tool)
+                            if parsed.get("__request_input").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let form_id = parsed.get("form_id")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or(&format!("form_{}", chrono::Utc::now().timestamp())).to_string();
+                                let form_type = parsed.get("form_type")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("json_schema").to_string();
+                                let title = parsed.get("title")
+                                    .and_then(|v| v.as_str())
+                                    .unwrap_or("Input Required").to_string();
+                                let description = parsed.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                let schema = parsed.get("schema").cloned().unwrap_or_else(|| json!({}));
+                                let submit_button = parsed.get("submit_button").and_then(|v| v.as_str()).map(|s| s.to_string());
+
+                                eprintln!("Emitting RequestInput event: {}", title);
+                                on_event(StreamEvent::RequestInput {
+                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                    form_id,
+                                    form_type,
+                                    title,
+                                    description,
+                                    schema,
+                                    submit_button,
+                                });
+                            }
+                        }
+
                         on_event(StreamEvent::ToolResult {
                             timestamp: chrono::Utc::now().timestamp_millis() as u64,
                             tool_id: tool_call.id.clone(),
@@ -356,11 +450,15 @@ impl AgentExecutor {
     async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<String, String> {
         // First try built-in tools
         if let Some(tool) = self.tool_registry.find(tool_name) {
-            // Create tool context with conversation ID if available
-            let ctx = if let Some(conv_id) = &self.config.conversation_id {
-                Arc::new(ToolContext::with_conversation(conv_id.clone()))
-            } else {
-                Arc::new(ToolContext::new())
+            // Create tool context with conversation ID and skills if available
+            let ctx = match (&self.config.conversation_id, !self.config.skills.is_empty()) {
+                (Some(conv_id), true) => Arc::new(ToolContext::with_conversation_and_skills(
+                    conv_id.clone(),
+                    self.config.skills.clone(),
+                )),
+                (Some(conv_id), false) => Arc::new(ToolContext::with_conversation(conv_id.clone())),
+                (None, true) => Arc::new(ToolContext::with_skills(self.config.skills.clone())),
+                (None, false) => Arc::new(ToolContext::new()),
             };
             let result = tool.execute(ctx, arguments.clone()).await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
@@ -460,6 +558,147 @@ impl AgentExecutor {
 }
 
 // ============================================================================
+// SYSTEM PROMPT BUILDER
+// ============================================================================
+
+/// Build the system prompt from template with skills, tools, and MCPs
+async fn build_system_prompt(
+    agent_id: &str,
+    skills: &[String],
+    mcps: &[String],
+    conversation_id: &Option<String>,
+) -> Result<Option<String>, String> {
+    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
+    let agent_dir = dirs.config_dir.join("agents").join(agent_id);
+
+    // Read base instructions from AGENTS.md
+    let agents_md_path = agent_dir.join("AGENTS.md");
+    let base_instructions = if agents_md_path.exists() {
+        std::fs::read_to_string(&agents_md_path)
+            .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?
+    } else {
+        String::new()
+    };
+
+    // Build available_skills XML
+    let available_skills_xml = if skills.is_empty() {
+        "<!-- No skills configured -->".to_string()
+    } else {
+        let mut skills_xml = String::from("<available_skills>\n");
+        for skill_id in skills {
+            let skill_dir = dirs.skills_dir.join(skill_id);
+            let skill_md_path = skill_dir.join("SKILL.md");
+            if skill_md_path.exists() {
+                let content = std::fs::read_to_string(&skill_md_path)
+                    .map_err(|e| format!("Failed to read SKILL.md for {}: {}", skill_id, e))?;
+
+                // Parse frontmatter to get metadata
+                if let Ok((frontmatter, _body)) = parse_skill_frontmatter_for_prompt(&content) {
+                    let location = skill_md_path
+                        .to_str()
+                        .unwrap_or(&skill_dir.join("SKILL.md").to_string_lossy())
+                        .to_string();
+                    skills_xml.push_str(&format!(
+                        "  <skill>\n    <name>{}</name>\n    <description>{}</description>\n    <location>{}</location>\n  </skill>\n",
+                        frontmatter.name, frontmatter.description, location
+                    ));
+                }
+            }
+        }
+        skills_xml.push_str("</available_skills>");
+        skills_xml
+    };
+
+    // Build available_tools XML (built-in tools)
+    let tool_registry = ToolRegistry::default();
+    let available_tools_xml = {
+        let mut tools_xml = String::from("<available_tools>\n");
+        for tool in tool_registry.get_all() {
+            tools_xml.push_str(&format!(
+                "  <tool>\n    <name>{}</name>\n    <description>{}</description>\n  </tool>\n",
+                tool.name(),
+                tool.description()
+            ));
+        }
+        tools_xml.push_str("</available_tools>");
+        tools_xml
+    };
+
+    // Build available_mcp_tools XML
+    let available_mcp_tools_xml = if mcps.is_empty() {
+        "<!-- No MCP servers configured -->".to_string()
+    } else {
+        let mut mcp_manager = McpManager::default();
+        let _ = mcp_manager.load_servers(mcps).await;
+
+        let mut mcp_tools_xml = String::from("<available_mcp_tools>\n");
+        for mcp_id in mcps {
+            if let Some(client) = mcp_manager.get_client(mcp_id).await {
+                if let Ok(mcp_tools) = client.list_tools().await {
+                    for mcp_tool in mcp_tools {
+                        mcp_tools_xml.push_str(&format!(
+                            "  <tool>\n    <name>{}__{}</name>\n    <description>{}</description>\n  </tool>\n",
+                            mcp_id.replace('-', "_"),
+                            mcp_tool.name,
+                            mcp_tool.description
+                        ));
+                    }
+                }
+            }
+        }
+        mcp_tools_xml.push_str("</available_mcp_tools>");
+        mcp_tools_xml
+    };
+
+    // Replace {CONV_ID} in template
+    let conv_id = conversation_id.as_ref().map(|s| s.as_str()).unwrap_or("current");
+
+    // Load template
+    let template = Assets::get("system_prompt.md")
+        .and_then(|f| String::from_utf8(f.data.into()).ok())
+        .unwrap_or_else(||
+            // Fallback template if embedded file not found
+            "{BASE_INSTRUCTIONS}\n\n---\n\n## Available Skills\n\n{AVAILABLE_SKILLS_XML}\n\n---\n\n## Available Tools\n\n{AVAILABLE_TOOLS_XML}\n\n---\n\n## Available MCP Tools\n\n{AVAILABLE_MCP_TOOLS_XML}".to_string()
+        );
+
+    // Build final system prompt
+    let system_prompt = template
+        .replace("{BASE_INSTRUCTIONS}", &base_instructions)
+        .replace("{AVAILABLE_SKILLS_XML}", &available_skills_xml)
+        .replace("{AVAILABLE_TOOLS_XML}", &available_tools_xml)
+        .replace("{AVAILABLE_MCP_TOOLS_XML}", &available_mcp_tools_xml)
+        .replace("{CONV_ID}", conv_id);
+
+    Ok(Some(system_prompt))
+}
+
+/// Parse skill frontmatter (simplified version for system prompt building)
+fn parse_skill_frontmatter_for_prompt(content: &str) -> Result<(SkillFrontmatterSimple, String), String> {
+    use regex::Regex;
+
+    let frontmatter_regex = Regex::new(r"^---\n([\s\S]*?)\n---\n([\s\S]*)$")
+        .map_err(|e| format!("Failed to create regex: {}", e))?;
+
+    let captures = frontmatter_regex.captures(content)
+        .ok_or_else(|| "Invalid SKILL.md format: missing frontmatter".to_string())?;
+
+    let yaml_content = captures.get(1).unwrap().as_str();
+    let body = captures.get(2).unwrap().as_str();
+
+    let frontmatter: SkillFrontmatterSimple = serde_yaml::from_str(yaml_content)
+        .map_err(|e| format!("Failed to parse frontmatter: {}", e))?;
+
+    Ok((frontmatter, body.to_string()))
+}
+
+/// Simplified skill frontmatter for system prompt generation
+#[derive(Debug, Clone, serde::Deserialize)]
+struct SkillFrontmatterSimple {
+    name: String,
+    description: String,
+}
+
+// ============================================================================
 // FACTORY FUNCTIONS
 // ============================================================================
 
@@ -480,16 +719,6 @@ pub async fn create_executor(agent_id: &str, conversation_id: Option<String>) ->
     let agent_config: serde_yaml::Value = serde_yaml::from_str(&config_content)
         .map_err(|e| format!("Failed to parse agent config: {}", e))?;
 
-    // Read AGENTS.md for instructions
-    let agents_md = agent_dir.join("AGENTS.md");
-    let system_instruction = if agents_md.exists() {
-        let content = std::fs::read_to_string(&agents_md)
-            .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?;
-        Some(content)
-    } else {
-        None
-    };
-
     // Get MCPs
     let mcps = agent_config.get("mcps")
         .and_then(|v| v.as_sequence())
@@ -500,6 +729,20 @@ pub async fn create_executor(agent_id: &str, conversation_id: Option<String>) ->
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
+
+    // Get skills
+    let skills = agent_config.get("skills")
+        .and_then(|v| v.as_sequence())
+        .map(|seq| {
+            seq.iter()
+                .filter_map(|v| v.as_str())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    // Build system prompt with skills, tools, and MCPs
+    let system_instruction = build_system_prompt(agent_id, &skills, &mcps, &conversation_id).await?;
 
     let config = ExecutorConfig {
         agent_id: agent_id.to_string(),
@@ -516,10 +759,14 @@ pub async fn create_executor(agent_id: &str, conversation_id: Option<String>) ->
             .unwrap_or(0.7),
         max_tokens: agent_config.get("maxTokens")
             .and_then(|v| v.as_u64())
-            .unwrap_or(2000) as u32,
+            .unwrap_or(16000) as u32,  // Default 16K, DeepSeek supports up to 128K
+        thinking_enabled: agent_config.get("thinkingEnabled")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
         system_instruction,
         tools_enabled: true,
         mcps,
+        skills,
         conversation_id,
     };
 

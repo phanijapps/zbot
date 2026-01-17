@@ -93,6 +93,7 @@ pub fn run() {
             // Skill commands
             commands::list_skills,
             commands::get_skill,
+            commands::get_skill_metadata,
             commands::create_skill,
             commands::update_skill,
             commands::delete_skill,
@@ -109,6 +110,12 @@ pub fn run() {
             commands::clear_all_data,
             commands::get_config_path,
             commands::initialize_directories,
+            // Python venv commands
+            commands::get_venv_info,
+            commands::read_requirements,
+            commands::save_requirements,
+            commands::install_requirements,
+            commands::list_installed_packages,
             // Window commands
             commands::open_skill_editor_window,
             commands::open_external,
@@ -119,6 +126,8 @@ pub fn run() {
             commands::execute_python_code,
             commands::grep_files,
             commands::glob_files,
+            commands::write_attachment_file,
+            commands::read_attachment_file,
             // Agent Runtime commands
             commands::execute_agent_stream,
             commands::get_agent_execution_config,

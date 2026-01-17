@@ -78,3 +78,60 @@ export function formatBytes(bytes: number): string {
 export function getStoragePercentage(used: number, total: number = 10 * 1024 * 1024 * 1024): number {
   return Math.round((used / total) * 100);
 }
+
+// ============================================================================
+// PYTHON VENV REQUIREMENTS
+// ============================================================================
+
+/**
+ * Information about the Python venv
+ */
+export interface VenvInfo {
+  venv_path: string;
+  venv_exists: boolean;
+  requirements_exists: boolean;
+  installed_packages: string | null;  // JSON string
+}
+
+/**
+ * Information about an installed package
+ */
+export interface PackageInfo {
+  name: string;
+  version: string;
+}
+
+/**
+ * Get venv information
+ */
+export async function getVenvInfo(): Promise<VenvInfo> {
+  return invoke("get_venv_info");
+}
+
+/**
+ * Read requirements.txt content
+ */
+export async function readRequirements(): Promise<string> {
+  return invoke("read_requirements");
+}
+
+/**
+ * Save requirements.txt content
+ */
+export async function saveRequirements(content: string): Promise<void> {
+  return invoke("save_requirements", { content });
+}
+
+/**
+ * Install requirements from requirements.txt
+ */
+export async function installRequirements(): Promise<string> {
+  return invoke("install_requirements");
+}
+
+/**
+ * List installed packages in the venv
+ */
+export async function listInstalledPackages(): Promise<PackageInfo[]> {
+  return invoke("list_installed_packages");
+}

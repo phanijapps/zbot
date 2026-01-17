@@ -653,3 +653,303 @@ let is_protected = name == "config.yaml" || name == "AGENTS.md";
 2. **Debouncing**: 1 second debounce for auto-save prevents excessive IPC calls.
 3. **Recursive Scanning**: Keep directory structure reasonably shallow to avoid performance issues.
 4. **State Management**: Use `Set<string>` for expanded folders - O(1) lookup vs O(n) array search.
+
+---
+
+## Recent Session Learnings (2025-01-15)
+
+### Agent Executor with Tool Calling Loop
+
+**Overview**: Implemented a complete agent execution system with tool calling, streaming events, and conversation-scoped file operations.
+
+**Key Architecture**:
+
+1. **Executor Configuration**:
+```rust
+pub struct ExecutorConfig {
+    pub agent_id: String,
+    pub provider_id: String,
+    pub model: String,
+    pub temperature: f64,
+    pub max_tokens: u32,
+    pub system_instruction: Option<String>,
+    pub tools_enabled: bool,
+    pub mcps: Vec<String>,
+    pub conversation_id: Option<String>,  // For scoped file operations
+}
+```
+
+2. **Tool Calling Loop Pattern**:
+```rust
+async fn execute_with_tools_loop(
+    &self,
+    messages: Vec<ChatMessage>,
+    tools_schema: Option<Value>,
+    on_event: &mut impl FnMut(StreamEvent),
+) -> Result<(), String> {
+    let mut current_messages = messages;
+    let mut max_iterations = 10;
+
+    loop {
+        let response = self.llm_client.chat(current_messages.clone(), tools_schema.clone()).await?;
+
+        // Emit reasoning if available (DeepSeek, GLM)
+        if let Some(reasoning) = &response.reasoning_content {
+            on_event(StreamEvent::Reasoning { content: reasoning.clone() });
+        }
+
+        if response.tool_calls.is_empty() {
+            // Final response - stream tokens
+            for ch in response.content.chars() {
+                on_event(StreamEvent::Token { content: ch.to_string() });
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            break;
+        }
+
+        // Add assistant message with tool calls
+        current_messages.push(ChatMessage {
+            role: "assistant",
+            content: response.content.clone(),
+            tool_calls: Some(response.tool_calls.clone()),
+            tool_call_id: None,
+        });
+
+        // Execute each tool and add results
+        for tool_call in &response.tool_calls {
+            let result = self.execute_tool(&tool_call.name(), &tool_call.arguments()).await?;
+            current_messages.push(ChatMessage {
+                role: "tool",
+                content: result,
+                tool_calls: None,
+                tool_call_id: Some(tool_call.id.clone()),
+            });
+        }
+    }
+}
+```
+
+**Learnings**:
+- **Max iterations prevents infinite loops** when LLM keeps calling tools
+- **Tool results added as messages** enables multi-turn conversations
+- **Reasoning content** parsed from `/choices/0/message/reasoning_content` for DeepSeek/GLM
+- **5ms delay per token** creates visual streaming effect without real-time API complexity
+
+### Streaming Event Architecture
+
+**Overview**: Event-driven streaming system for real-time agent progress updates.
+
+**StreamEvent Types**:
+```rust
+pub enum StreamEvent {
+    Metadata { timestamp, agent_id, model, provider },
+    Token { timestamp, content },
+    Reasoning { timestamp, content },  // NEW
+    ToolCallStart { timestamp, tool_id, tool_name, args },
+    ToolCallEnd { timestamp, tool_id, tool_name, args },
+    ToolResult { timestamp, tool_id, result, error },
+    Done { timestamp, final_message, token_count },
+    Error { timestamp, error, recoverable },
+}
+```
+
+**Frontend Event Handling**:
+```typescript
+useEffect(() => {
+    const unlisten = listen(`agent-stream://${conversationId}`, (event) => {
+        switch (event.type) {
+            case 'metadata':
+            case 'token':
+            case 'reasoning':
+            case 'tool_call_start':
+            case 'tool_call_end':
+            case 'tool_result':
+            case 'done':
+            case 'error':
+        }
+    });
+    return unlisten;
+}, [conversationId]);
+```
+
+**Learnings**:
+- **Tauri events use format** `event-name://id` for targeted listeners
+- **Frontend events require `#[serde(rename = "...")]`** for camelCase conversion
+- **`FnMut` callback pattern** works for event emission during async execution
+- **No executor caching** - each execution creates fresh executor with correct conversation_id
+
+### Conversation-Scoped File Storage
+
+**Overview**: Agent file operations are scoped to conversation directories for isolation and cleanup.
+
+**Directory Structure**:
+```
+~/.config/zeroagent/logs/<conv-id>/
+├── scratchpad/          # Staging files
+├── attachments/         # Generated reports, images
+└── memory.md            # Summarized context
+```
+
+**Implementation**:
+
+1. **AppDirs Extension**:
+```rust
+pub struct AppDirs {
+    pub conversation_logs_dir: PathBuf,  // NEW
+}
+
+impl AppDirs {
+    pub fn conversation_dir(&self, conversation_id: &str) -> PathBuf {
+        self.conversation_logs_dir.join(conversation_id)
+    }
+
+    pub fn create_conversation_dir(&self, conversation_id: &str) -> Result<()> {
+        let conv_dir = self.conversation_dir(conversation_id);
+        fs::create_dir_all(conv_dir.join("scratchpad"))?;
+        fs::create_dir_all(conv_dir.join("attachments"))?;
+        fs::write(conv_dir.join("memory.md"), "")?;
+        Ok(())
+    }
+}
+```
+
+2. **Tool Context with Conversation**:
+```rust
+pub struct ToolContext {
+    pub conversation_id: Option<String>,
+}
+
+impl ToolContext {
+    pub fn conversation_dir(&self) -> Option<PathBuf> {
+        let dirs = AppDirs::get().ok()?;
+        let conv_id = self.conversation_id.as_ref()?;
+        Some(dirs.conversation_dir(conv_id))
+    }
+}
+```
+
+3. **Write/Edit Tool Scoping**:
+```rust
+async fn execute(&self, ctx: Arc<ToolContext>, args: Value) -> ToolResult<Value> {
+    let path = args.get("path")?.as_str().ok_or("Missing path")?;
+    let path_buf = if let Some(conv_dir) = ctx.conversation_dir() {
+        conv_dir.join(path)  // Scope to conversation directory
+    } else {
+        PathBuf::from(path)
+    };
+    fs::write(&path_buf, content)?;
+}
+```
+
+**Learnings**:
+- **Read/grep/glob can access entire filesystem** - only write/edit are scoped
+- **Tool descriptions must be explicit** - "Use paths like `attachments/report.md`"
+- **Conversation creation/deletion hooks** create/remove directories
+- **Existing conversations need manual directory creation** for backward compatibility
+
+### Model Configuration Impact on Tool Calling
+
+**Critical Discovery**: High temperature causes models to ignore tool-calling instructions.
+
+**Problem Example**:
+```yaml
+# BROKEN - temperature too high
+temperature: 1.4
+maxTokens: 150
+```
+**Result**: Model says "I'll write a report" but doesn't call the write tool.
+
+**Fix**:
+```yaml
+# WORKING
+temperature: 0.7
+maxTokens: 2000
+```
+
+**Learnings**:
+- **Temperature 1.4** = too creative, ignores instructions
+- **Temperature 0.7** = follows tool-calling instructions reliably
+- **maxTokens 150** = too small for reports, causes tool failure
+- **maxTokens 2000** = adequate for most responses
+- **DeepSeek-chat** supports `reasoning_content` in API response
+- **Tool descriptions matter** - be explicit about "MUST call tool" vs "should call tool"
+
+### AGENTS.md Best Practices
+
+**Template for Tool-Using Agents**:
+```markdown
+# AGENTS.md
+You are a [description] agent.
+
+## IMPORTANT - Tool Calling Rules
+- When the user asks you to write/create/save something, you MUST call the `write` tool
+- ALWAYS use tools for actions - never just describe what you would do
+- When asked to write a report, call `write` with path="attachments/report.md"
+
+## Available Tools
+- `tool_name` - Description (use paths like `attachments/file.ext`)
+- ...
+
+## Examples
+User: "Write a report" → Call `write` tool with path="attachments/report.md"
+```
+
+**Learnings**:
+- **Explicit instructions work better** than hints
+- **Examples in AGENTS.md** guide model behavior
+- **AGENTS.md is read fresh every execution** - no caching issues
+- **Temperature affects instruction following** more than system prompt
+
+### MCP Tool Naming Convention
+
+**Pattern**: `{normalized_server_id}__{tool_name}`
+
+```rust
+// MCP server with hyphens becomes underscore
+let mcp_id_normalized = mcp_id.replace('-', "_");
+let tool_name = format!("{}__{}", mcp_id_normalized, mcp_tool.name);
+
+// time-server → time_server__get_current_time
+// filesystem-server → filesystem_server__read_file
+```
+
+**Execution**:
+```rust
+// Parse tool name back to server + tool
+if tool_name.contains("__") {
+    let parts: Vec<&str> = tool_name.splitn(2, "__").collect();
+    let server_id = parts[0].replace('_', "-");  // Convert back
+    let actual_tool = parts[1];
+    self.mcp_manager.execute_tool(&server_id, actual_tool, args).await
+}
+```
+
+### Pending Items & Future Work
+
+See `pending.md` for blocked tasks with detailed notes on:
+- Real-time streaming from LLM API (blocked by callback architecture)
+- Alternative approaches considered
+
+### Debug Logging Patterns
+
+**API Request Logging**:
+```rust
+// Log tools being sent to LLM
+if let Some(tools_val) = &tools {
+    eprintln!("=== Sending tools to LLM API ===");
+    if let Some(tools_array) = tools_val.as_array() {
+        eprintln!("Tool count: {}", tools_array.len());
+        for tool in tools_array {
+            if let Some(func) = tool.pointer("/function") {
+                eprintln!("  - {}", func.get("name")?.as_str().unwrap_or("unknown"));
+            }
+        }
+    }
+}
+```
+
+**Learnings**:
+- **eprintln!** output visible in terminal during development
+- **Log tool count** to verify tools are being sent
+- **Log reasoning emission** to debug model thinking
+- **Structured logs with ===** make console output easier to scan

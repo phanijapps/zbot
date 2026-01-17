@@ -15,7 +15,7 @@ use crate::settings::AppDirs;
 // CONFIGURATION
 // ============================================================================
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LlmConfig {
     pub provider_id: String,
     pub api_key: String,
@@ -23,6 +23,7 @@ pub struct LlmConfig {
     pub model: String,
     pub temperature: f64,
     pub max_tokens: u32,
+    pub thinking_enabled: bool,  // Enable chain-of-thought reasoning (DeepSeek, GLM, etc.)
 }
 
 /// Message in the conversation
@@ -181,20 +182,37 @@ impl OpenAiClient {
             model: model.to_string(),
             temperature: 0.7,
             max_tokens: 2000,
+            thinking_enabled: false,
         };
 
         Ok(Self::new(config))
     }
 
     fn build_request_body(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Value {
-        let body = json!({
+        let mut body_obj = json!({
             "model": self.config.model,
             "messages": messages,
             "temperature": self.config.temperature,
             "max_tokens": self.config.max_tokens,
             "stream": false,
-            "tools": tools
         });
+
+        // Add tools if present
+        if let Some(tools_val) = &tools {
+            if let Some(body_map) = body_obj.as_object_mut() {
+                body_map.insert("tools".to_string(), tools_val.clone());
+            }
+        }
+
+        // Add thinking parameter if enabled (for DeepSeek, GLM, etc.)
+        if self.config.thinking_enabled {
+            if let Some(body_map) = body_obj.as_object_mut() {
+                body_map.insert(
+                    "thinking".to_string(),
+                    json!({"type": "enabled"})
+                );
+            }
+        }
 
         // Debug: log tools being sent
         if let Some(tools_val) = &tools {
@@ -212,7 +230,11 @@ impl OpenAiClient {
             eprintln!("=== No tools being sent to LLM ===");
         }
 
-        body
+        if self.config.thinking_enabled {
+            eprintln!("=== Thinking mode enabled ===");
+        }
+
+        body_obj
     }
 
     async fn make_request(&self, body: Value) -> Result<Value, String> {

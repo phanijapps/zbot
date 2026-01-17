@@ -25,6 +25,7 @@ export {
   ConversationViewTablet,
   ConversationViewMobile,
 } from "./ConversationView";
+export { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 
 // Hooks
 export { useStreamEvents, usePlanItems } from "./useStreamEvents";
@@ -36,6 +37,7 @@ export type {
   ThinkingPanelState,
   PlanItem,
   ToolCallDisplay,
+  AttachmentInfo,
   MessageWithThinking,
   ConversationWithAgent,
   UseStreamEventsReturn,

@@ -17,8 +17,67 @@ import type {
   ThinkingPanelState,
   PlanItem,
   ToolCallDisplay,
+  AttachmentInfo,
   UseStreamEventsReturn,
 } from "./types";
+
+/**
+ * Detect content type from file extension
+ */
+function detectContentType(filename: string): string {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  switch (ext) {
+    case "html": case "htm": return "html";
+    case "pdf": return "pdf";
+    case "md": case "markdown": return "markdown";
+    case "png": case "jpg": case "jpeg": case "gif": case "svg": case "webp": return "image";
+    case "txt": return "text";
+    default: return "text";
+  }
+}
+
+/**
+ * Parse write tool result to extract attachment info
+ */
+function parseWriteAttachment(toolName: string, result: string): AttachmentInfo | null {
+  if (toolName !== "write") return null;
+
+  try {
+    const parsed = JSON.parse(result);
+    if (!parsed.success || !parsed.path) return null;
+
+    const fullPath = parsed.path;
+    const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
+    const isOutput = fullPath.includes("/outputs/") || fullPath.includes("\\outputs\\");
+
+    // Build relative path
+    let relativePath: string;
+    if (isOutput) {
+      relativePath = `outputs/${filename}`;
+    } else {
+      // Extract conv_id/attachments/filename from full path
+      const parts = fullPath.split('/');
+      const attachmentsIdx = parts.indexOf('attachments');
+      if (attachmentsIdx > 0 && attachmentsIdx + 1 < parts.length) {
+        const convId = parts[attachmentsIdx - 1];
+        relativePath = `${convId}/attachments/${filename}`;
+      } else {
+        relativePath = filename;
+      }
+    }
+
+    return {
+      filename,
+      fullPath,
+      relativePath,
+      contentType: detectContentType(filename),
+      size: parsed.bytes_written || 0,
+      isOutput,
+    };
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Hook for managing thinking panel state from stream events
@@ -34,6 +93,7 @@ export function useStreamEvents(
     planItems: [],
     toolCalls: [],
     reasoning: [],
+    attachments: [],
     currentMessageId: null,
   });
 
@@ -48,6 +108,7 @@ export function useStreamEvents(
       planItems: [],
       toolCalls: [],
       reasoning: [],
+      attachments: [],
       currentMessageId: null,
     });
   }, []);
@@ -63,6 +124,7 @@ export function useStreamEvents(
       planItems: [],
       toolCalls: [],
       reasoning: [],
+      attachments: [],
     }));
   }, []);
 
@@ -143,7 +205,12 @@ export function useStreamEvents(
             };
 
           case "tool_result":
-            // Tool execution finished
+            // Tool execution finished - check if it's a write tool that created an attachment
+            const toolCall = prev.toolCalls.find(t => t.id === event.toolId);
+            const attachment = toolCall && !event.error
+              ? parseWriteAttachment(toolCall.name, event.result)
+              : null;
+
             return {
               ...prev,
               toolCalls: prev.toolCalls.map((t) =>
@@ -156,6 +223,7 @@ export function useStreamEvents(
                     }
                   : t
               ),
+              ...(attachment ? { attachments: [...prev.attachments, attachment] } : {}),
             };
 
           case "done":
@@ -173,6 +241,18 @@ export function useStreamEvents(
               isActive: false,
               isOpen: true, // Keep open to show error
             };
+
+          case "show_content":
+            // Show content in canvas - this is handled at a higher level
+            // Just log it for now
+            console.log("[useStreamEvents] Show content event:", event.contentType, event.title);
+            return prev;
+
+          case "request_input":
+            // Request input via form - this is handled at a higher level
+            // Just log it for now
+            console.log("[useStreamEvents] Request input event:", event.formId, event.title);
+            return prev;
 
           default:
             return prev;

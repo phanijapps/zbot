@@ -430,3 +430,94 @@ pub async fn glob_files(
     results.sort();
     Ok(results.join("\n"))
 }
+
+/// Write content to the attachments directory for a conversation
+/// Supports both text and base64-encoded binary content
+#[tauri::command]
+pub async fn write_attachment_file(
+    conversation_id: String,
+    filename: String,
+    content: String,
+    is_base64: bool,
+) -> Result<String, String> {
+    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
+    let attachments_dir = dirs.conversation_dir(&conversation_id).join("attachments");
+
+    // Create attachments directory if it doesn't exist
+    if !attachments_dir.exists() {
+        fs::create_dir_all(&attachments_dir)
+            .map_err(|e| format!("Failed to create attachments directory: {}", e))?;
+    }
+
+    let file_path = attachments_dir.join(&filename);
+
+    // Decode base64 if needed
+    let final_content = if is_base64 {
+        use base64::prelude::*;
+        BASE64_STANDARD.decode(&content)
+            .map_err(|e| format!("Failed to decode base64 content: {}", e))?
+    } else {
+        content.into_bytes()
+    };
+
+    // Write the file
+    fs::write(&file_path, final_content)
+        .map_err(|e| format!("Failed to write attachment file: {}", e))?;
+
+    // Set permissions to 644 (rw-r--r--) so other users on the machine can read
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&file_path)
+            .map_err(|e| format!("Failed to get file metadata: {}", e))?
+            .permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&file_path, perms)
+            .map_err(|e| format!("Failed to set file permissions: {}", e))?;
+    }
+
+    // Return the relative path (conversation_id/attachments/filename)
+    Ok(format!("{}/attachments/{}", conversation_id, filename))
+}
+
+/// Read content from an attachment file
+/// Returns base64-encoded content for binary files, plain text for text files
+#[tauri::command]
+pub async fn read_attachment_file(
+    conversation_id: String,
+    filename: String,
+) -> Result<String, String> {
+    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
+    let attachments_dir = dirs.conversation_dir(&conversation_id).join("attachments");
+    let file_path = attachments_dir.join(&filename);
+
+    eprintln!("=== read_attachment_file ===");
+    eprintln!("conversation_id: {}", conversation_id);
+    eprintln!("filename: {}", filename);
+    eprintln!("attachments_dir: {}", attachments_dir.display());
+    eprintln!("file_path: {}", file_path.display());
+    eprintln!("file exists: {}", file_path.exists());
+
+    if !file_path.exists() {
+        return Err(format!("Attachment file not found: {}", file_path.display()));
+    }
+
+    // Read the file
+    let content = fs::read(&file_path)
+        .map_err(|e| format!("Failed to read attachment file: {}", e))?;
+
+    // Check if it's binary or text
+    let is_text = content.iter().take(1024).all(|&b| {
+        b >= 32 && b <= 126 || b == b'\n' || b == b'\r' || b == b'\t'
+    });
+
+    if is_text {
+        // Return as plain text
+        String::from_utf8(content)
+            .map_err(|e| format!("Attachment file contains invalid UTF-8: {}", e))
+    } else {
+        // Return as base64
+        use base64::prelude::*;
+        Ok(BASE64_STANDARD.encode(&content))
+    }
+}

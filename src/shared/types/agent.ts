@@ -27,7 +27,9 @@ export type StreamEventType =
   | "tool_result"     // Tool execution result
   | "error"           // Error occurred
   | "done"            // Agent execution complete
-  | "metadata";       // Agent metadata
+  | "metadata"        // Agent metadata
+  | "show_content"    // Show content in generative UI canvas
+  | "request_input";  // Request input via form
 
 /**
  * Text token event
@@ -114,6 +116,33 @@ export interface MetadataEvent extends StreamEvent {
 }
 
 /**
+ * Show content event - display content in generative UI canvas
+ */
+export interface ShowContentEvent extends StreamEvent {
+  type: "show_content";
+  contentType: "pdf" | "ppt" | "html" | "image" | "text" | "markdown";
+  title: string;
+  content: string; // Filename (if isAttachment=true) or Base64/raw content (backwards compatibility)
+  metadata?: Record<string, unknown>;
+  filePath?: string; // Path to attachment file (e.g., "conv_id/attachments/filename")
+  isAttachment?: boolean; // true if content is saved to attachments directory
+  base64?: boolean; // true if content is base64 encoded
+}
+
+/**
+ * Request input event - request user input via JSON Schema form
+ */
+export interface RequestInputEvent extends StreamEvent {
+  type: "request_input";
+  formId: string;
+  formType: "json_schema" | "dynamic_form";
+  title: string;
+  description?: string;
+  schema: Record<string, unknown>;
+  submitButton?: string;
+}
+
+/**
  * Union type of all stream events
  */
 export type AgentStreamEvent =
@@ -125,7 +154,9 @@ export type AgentStreamEvent =
   | ToolResultEvent
   | ErrorEvent
   | DoneEvent
-  | MetadataEvent;
+  | MetadataEvent
+  | ShowContentEvent
+  | RequestInputEvent;
 
 // ============================================================================
 // MESSAGE TYPES (matching Rust repository)

@@ -9,7 +9,7 @@ use tauri::{AppHandle, Emitter};
 use serde::Serialize;
 
 use crate::domains::conversation_runtime::{get_database, repository};
-use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall};
+use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall, ToolResult};
 use crate::domains::agent_runtime::{
     AgentExecutor, create_executor, ChatMessage, StreamEvent
 };
@@ -87,6 +87,7 @@ pub async fn execute_agent_stream(
     // Execute agent
     let mut final_response = String::new();
     let mut current_tool_calls: Vec<ToolCall> = Vec::new();
+    let mut current_tool_results: Vec<ToolResult> = Vec::new();
 
     // Convert StreamEvent to a serializable format for emitting
     #[derive(Clone, Serialize)]
@@ -140,6 +141,34 @@ pub async fn execute_agent_stream(
         },
         #[serde(rename = "error")]
         Error { timestamp: u64, error: String, recoverable: bool },
+        #[serde(rename = "show_content")]
+        ShowContent {
+            timestamp: u64,
+            #[serde(rename = "contentType")]
+            content_type: String,
+            title: String,
+            content: String,
+            metadata: Option<Value>,
+            #[serde(rename = "filePath")]
+            file_path: Option<String>,
+            #[serde(rename = "isAttachment")]
+            is_attachment: Option<bool>,
+            #[serde(rename = "base64")]
+            base64: Option<bool>,
+        },
+        #[serde(rename = "request_input")]
+        RequestInput {
+            timestamp: u64,
+            #[serde(rename = "formId")]
+            form_id: String,
+            #[serde(rename = "formType")]
+            form_type: String,
+            title: String,
+            description: Option<String>,
+            schema: Value,
+            #[serde(rename = "submitButton")]
+            submit_button: Option<String>,
+        },
     }
 
     executor.execute_stream(&message, &history, |event| {
@@ -188,6 +217,13 @@ pub async fn execute_agent_stream(
                 }
             }
             StreamEvent::ToolResult { timestamp, tool_id, result, error } => {
+                // Collect tool result for database storage
+                current_tool_results.push(ToolResult {
+                    tool_call_id: tool_id.clone(),
+                    output: result.clone(),
+                    error: error.clone(),
+                });
+
                 FrontendEvent::ToolResult {
                     timestamp,
                     tool_id,
@@ -209,6 +245,29 @@ pub async fn execute_agent_stream(
                     recoverable,
                 }
             }
+            StreamEvent::ShowContent { timestamp, content_type, title, content, metadata, file_path, is_attachment, base64 } => {
+                FrontendEvent::ShowContent {
+                    timestamp,
+                    content_type,
+                    title,
+                    content,
+                    metadata,
+                    file_path,
+                    is_attachment,
+                    base64,
+                }
+            }
+            StreamEvent::RequestInput { timestamp, form_id, form_type, title, description, schema, submit_button } => {
+                FrontendEvent::RequestInput {
+                    timestamp,
+                    form_id,
+                    form_type,
+                    title,
+                    description,
+                    schema,
+                    submit_button,
+                }
+            }
         };
 
         // Emit event to frontend
@@ -226,6 +285,11 @@ pub async fn execute_agent_stream(
     } else {
         Some(current_tool_calls.clone())
     };
+    let tool_results_for_db = if current_tool_results.is_empty() {
+        None
+    } else {
+        Some(current_tool_results.clone())
+    };
 
     db.transaction(|conn| {
         repository::create_message(conn, repository::CreateMessage {
@@ -235,7 +299,7 @@ pub async fn execute_agent_stream(
             content: final_response.clone(),
             token_count: Some(final_response.len() as i64),
             tool_calls: tool_calls_for_db,
-            tool_results: None,
+            tool_results: tool_results_for_db,
         })
     })
     .map_err(|e| format!("Failed to save assistant message: {}", e))?;

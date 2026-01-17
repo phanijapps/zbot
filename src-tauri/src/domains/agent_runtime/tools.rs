@@ -35,18 +35,36 @@ pub type ToolResult<T> = Result<T, ToolError>;
 pub struct ToolContext {
     /// Optional conversation ID for scoping file operations
     pub conversation_id: Option<String>,
+    /// Skills available to the current agent (for load_skill tool)
+    pub available_skills: Vec<String>,
 }
 
 impl ToolContext {
     pub fn new() -> Self {
         Self {
             conversation_id: None,
+            available_skills: Vec::new(),
         }
     }
 
     pub fn with_conversation(conversation_id: String) -> Self {
         Self {
             conversation_id: Some(conversation_id),
+            available_skills: Vec::new(),
+        }
+    }
+
+    pub fn with_skills(available_skills: Vec<String>) -> Self {
+        Self {
+            conversation_id: None,
+            available_skills,
+        }
+    }
+
+    pub fn with_conversation_and_skills(conversation_id: String, available_skills: Vec<String>) -> Self {
+        Self {
+            conversation_id: Some(conversation_id),
+            available_skills,
         }
     }
 
@@ -137,6 +155,9 @@ pub fn builtin_tools() -> Vec<Arc<dyn Tool>> {
         Arc::new(GrepTool::new()),
         Arc::new(GlobTool::new()),
         Arc::new(PythonTool::new()),
+        Arc::new(LoadSkillTool::new()),
+        Arc::new(RequestInputTool::new()),
+        Arc::new(ShowContentTool::new()),
     ]
 }
 
@@ -253,7 +274,7 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file. Use relative paths like 'attachments/report.md' or 'scratchpad/temp.txt'. Parent directories are created automatically. When in a conversation, files are written to the conversation's scoped directory (attachments/, scratchpad/, or memory.md)."
+        "Write content to a file. Use relative paths like 'attachments/report.md', 'outputs/report.html', or 'scratchpad/temp.txt'. Parent directories are created automatically. When in a conversation, files are written to the conversation's scoped directory (attachments/, scratchpad/). Use 'outputs/' prefix to save to ~/Documents/ZeroAgent/outputs/ for easy browser access."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -286,8 +307,15 @@ impl Tool for WriteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ToolError("Missing 'content' parameter".to_string()))?;
 
-        // Resolve the final path - use conversation directory if available
-        let path_buf = if let Some(conv_dir) = ctx.conversation_dir() {
+        // Check if this is an outputs/ path - save to accessible outputs directory
+        let path_buf = if path.starts_with("outputs/") {
+            let dirs = crate::settings::AppDirs::get()
+                .map_err(|e| ToolError(format!("Failed to get app directories: {}", e)))?;
+
+            // Extract the path after "outputs/"
+            let relative_path = path.trim_start_matches("outputs/");
+            dirs.outputs_dir.join(relative_path)
+        } else if let Some(conv_dir) = ctx.conversation_dir() {
             // Write operations are scoped to conversation directory
             conv_dir.join(path)
         } else {
@@ -306,6 +334,20 @@ impl Tool for WriteTool {
         // Write the file
         fs::write(&path_buf, content)
             .map_err(|e| ToolError(format!("Failed to write file: {}", e)))?;
+
+        // Set permissions to 644 for outputs directory files so browser can access them
+        if path.starts_with("outputs/") {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&path_buf)
+                    .map_err(|e| ToolError(format!("Failed to get file metadata: {}", e)))?
+                    .permissions();
+                perms.set_mode(0o644);
+                fs::set_permissions(&path_buf, perms)
+                    .map_err(|e| ToolError(format!("Failed to set file permissions: {}", e)))?;
+            }
+        }
 
         Ok(json!({
             "success": true,
@@ -851,6 +893,422 @@ finally:
 
         Ok(json!({
             "output": stdout
+        }))
+    }
+}
+
+/// Load skill tool - loads a skill from the skill registry
+pub struct LoadSkillTool;
+
+impl LoadSkillTool {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Parse SKILL.md file with YAML frontmatter
+    fn parse_skill_file(content: &str) -> Result<(Value, String), String> {
+        // Look for YAML frontmatter between --- markers
+        // Use [\s\S]+? instead of .+? to match across newlines
+        let frontmatter_regex = regex::Regex::new(r"^---\n([\s\S]+?)\n---\n([\s\S]+)$")
+            .map_err(|e| format!("Failed to create regex: {}", e))?;
+
+        let captures = frontmatter_regex.captures(content)
+            .ok_or_else(|| "Invalid SKILL.md format. Expected YAML frontmatter between --- markers.".to_string())?;
+
+        let frontmatter = captures.get(1)
+            .map(|m| m.as_str())
+            .unwrap_or("");
+
+        let body = captures.get(2)
+            .map(|m| m.as_str())
+            .unwrap_or("")
+            .to_string();
+
+        // Parse YAML frontmatter
+        let metadata: Value = serde_yaml::from_str(frontmatter)
+            .map_err(|e| format!("Failed to parse skill metadata: {}", e))?;
+
+        Ok((metadata, body))
+    }
+}
+
+#[async_trait]
+impl Tool for LoadSkillTool {
+    fn name(&self) -> &str {
+        "load_skill"
+    }
+
+    fn description(&self) -> &str {
+        "Load a skill from the skill registry. Returns the skill's instructions and metadata. Only skills associated with the current agent can be loaded."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "skill_name": {
+                    "type": "string",
+                    "description": "Name of the skill to load (e.g., 'code-review', 'agile-planning')"
+                }
+            },
+            "required": ["skill_name"]
+        }))
+    }
+
+    async fn execute(
+        &self,
+        ctx: Arc<ToolContext>,
+        args: Value,
+    ) -> ToolResult<Value> {
+        let skill_name = args.get("skill_name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError("Missing 'skill_name' parameter".to_string()))?;
+
+        // Check if the skill is available to this agent
+        if !ctx.available_skills.contains(&skill_name.to_string()) {
+            return Err(ToolError(format!(
+                "Skill '{}' is not associated with this agent. Available skills: {}",
+                skill_name,
+                ctx.available_skills.join(", ")
+            )));
+        }
+
+        // Get the skills directory
+        let dirs = AppDirs::get().map_err(|e| ToolError(e.to_string()))?;
+        let skill_dir = dirs.skills_dir.join(skill_name);
+        let skill_file = skill_dir.join("SKILL.md");
+
+        if !skill_dir.exists() {
+            return Err(ToolError(format!(
+                "Skill directory not found: {}",
+                skill_dir.display()
+            )));
+        }
+
+        if !skill_file.exists() {
+            return Err(ToolError(format!(
+                "SKILL.md not found in skill directory: {}",
+                skill_file.display()
+            )));
+        }
+
+        // Read the skill file
+        let content = fs::read_to_string(&skill_file)
+            .map_err(|e| ToolError(format!("Failed to read skill file: {}", e)))?;
+
+        // Parse the skill file
+        let (metadata, body) = Self::parse_skill_file(&content)
+            .map_err(|e| ToolError(format!("Failed to parse skill file: {}", e)))?;
+
+        // Extract useful metadata
+        let name = metadata.get("name")
+            .and_then(|v| v.as_str())
+            .unwrap_or(skill_name);
+
+        let display_name = metadata.get("displayName")
+            .and_then(|v| v.as_str())
+            .unwrap_or(name);
+
+        let description = metadata.get("description")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let category = metadata.get("category")
+            .and_then(|v| v.as_str())
+            .unwrap_or("general");
+
+        // Return the skill content
+        Ok(json!({
+            "name": name,
+            "displayName": display_name,
+            "description": description,
+            "category": category,
+            "instructions": body.trim(),
+            "loaded": true
+        }))
+    }
+}
+
+/// Request input tool - requests user input via JSON Schema form
+pub struct RequestInputTool;
+
+impl RequestInputTool {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+#[async_trait]
+impl Tool for RequestInputTool {
+    fn name(&self) -> &str {
+        "request_input"
+    }
+
+    fn description(&self) -> &str {
+        r#"IMPORTANT: Use this tool PROACTIVELY whenever you need to collect structured information from the user.
+
+You MUST use request_input instead of asking questions in plain text when:
+- You need to collect 2 or more related pieces of information
+- The user needs to provide specific details (names, dates, options, etc.)
+- You need structured data rather than freeform text
+- Gathering information would benefit from a form interface
+
+The user will see a form based on your schema and their response will be sent as JSON. This provides a MUCH better user experience than asking multiple questions in chat.
+
+Example: If you need a project name, description, and deadline - use request_input ONCE with a schema containing those 3 fields, instead of asking 3 separate questions in chat."#
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Title for the form"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional description or instructions for the user"
+                },
+                "schema": {
+                    "type": "object",
+                    "description": "JSON Schema for the form. Should define the structure of data to collect."
+                },
+                "submit_button": {
+                    "type": "string",
+                    "description": "Optional custom text for the submit button (default: 'Submit')"
+                }
+            },
+            "required": ["title", "schema"]
+        }))
+    }
+
+    async fn execute(
+        &self,
+        _ctx: Arc<ToolContext>,
+        args: Value,
+    ) -> ToolResult<Value> {
+        let title = args.get("title")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError("Missing 'title' parameter".to_string()))?;
+
+        let description = args.get("description").and_then(|v| v.as_str());
+
+        let schema = args.get("schema")
+            .and_then(|v| v.as_object())
+            .ok_or_else(|| ToolError("Missing 'schema' parameter".to_string()))?
+            .clone();
+
+        let submit_button = args.get("submit_button").and_then(|v| v.as_str());
+
+        // Generate a unique form ID
+        let form_id = format!("form_{}", chrono::Utc::now().timestamp_millis());
+
+        Ok(json!({
+            "__request_input": true,
+            "form_id": form_id,
+            "form_type": "json_schema",
+            "title": title,
+            "description": description,
+            "schema": schema,
+            "submit_button": submit_button
+        }))
+    }
+}
+
+/// Show content tool - displays content in the generative UI canvas
+pub struct ShowContentTool;
+
+impl ShowContentTool {
+    pub fn new() -> Self {
+        Self
+    }
+
+    /// Read file and encode to base64
+    fn read_and_encode(path: &PathBuf) -> Result<String, String> {
+        let content = fs::read(path)
+            .map_err(|e| format!("Failed to read file: {}", e))?;
+
+        // Check if it's binary or text
+        let is_text = content.iter().take(1024).all(|&b| b >= 32 && b <= 126 || b == b'\n' || b == b'\r' || b == b'\t');
+
+        if is_text {
+            // Return as plain text
+            String::from_utf8(content)
+                .map_err(|e| format!("File contains invalid UTF-8: {}", e))
+        } else {
+            // Return as base64
+            use base64::prelude::*;
+            Ok(BASE64_STANDARD.encode(&content))
+        }
+    }
+}
+
+#[async_trait]
+impl Tool for ShowContentTool {
+    fn name(&self) -> &str {
+        "show_content"
+    }
+
+    fn description(&self) -> &str {
+        r#"CRITICAL: ALWAYS use this tool AFTER saving a file with write_file.
+
+## MANDATORY TWO-STEP WORKFLOW:
+
+When you generate HTML, PDF, reports, or any structured content, you MUST:
+
+**STEP 1: First save the file**
+write_file({ path: "attachments/report.html", content: "<html>...</html>" })
+
+**STEP 2: Then display it**
+show_content({
+  content_type: "html",
+  title: "Monthly Report",
+  content: { path: "attachments/report.html" }
+})
+
+## NEVER skip step 1 - ALWAYS save files before displaying!
+
+For attachments: Use content: { path: "attachments/filename.ext" }
+For simple inline content only: Use content: "string"
+
+SUPPORTED TYPES: pdf, ppt, html, image, text, markdown"#
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "content_type": {
+                    "type": "string",
+                    "enum": ["pdf", "ppt", "html", "image", "text", "markdown"],
+                    "description": "Type of content to display"
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Title for the content viewer"
+                },
+                "content": {
+                    "oneOf": [
+                        {
+                            "type": "string",
+                            "description": "Raw content (for HTML, text, markdown)"
+                        },
+                        {
+                            "type": "object",
+                            "properties": {
+                                "path": {
+                                    "type": "string",
+                                    "description": "Path to the file to read"
+                                },
+                                "base64": {
+                                    "type": "boolean",
+                                    "description": "Whether content is base64 encoded (default: false for file paths)"
+                                }
+                            },
+                            "required": ["path"]
+                        }
+                    ],
+                    "description": "Content to display - either raw string or file path object"
+                },
+                "metadata": {
+                    "type": "object",
+                    "description": "Optional metadata (page numbers for PDF, slide info for PPT, etc.)"
+                }
+            },
+            "required": ["content_type", "title", "content"]
+        }))
+    }
+
+    async fn execute(
+        &self,
+        ctx: Arc<ToolContext>,
+        args: Value,
+    ) -> ToolResult<Value> {
+        let content_type = args.get("content_type")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError("Missing 'content_type' parameter".to_string()))?;
+
+        let title = args.get("title")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ToolError("Missing 'title' parameter".to_string()))?;
+
+        let content_arg = args.get("content")
+            .ok_or_else(|| ToolError("Missing 'content' parameter".to_string()))?;
+
+        let metadata = args.get("metadata").cloned();
+
+        // Get conversation ID
+        let conversation_id = ctx.conversation_id.clone()
+            .ok_or_else(|| ToolError("This tool requires a conversation context".to_string()))?;
+
+        // Resolve content based on type
+        let (content_value, file_path, is_attachment) = if let Some(content_obj) = content_arg.as_object() {
+            // Content is a file path reference
+            let path_str = content_obj.get("path")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| ToolError("Missing 'path' in content object".to_string()))?;
+
+            let mut path_buf = PathBuf::from(path_str);
+
+            // If path is relative, resolve against conversation directory
+            if path_buf.is_relative() {
+                if let Some(conv_dir) = ctx.conversation_dir() {
+                    path_buf = conv_dir.join(path_str);
+                }
+            }
+
+            // Check if this is an attachment file (in the attachments directory)
+            let is_attachment = path_buf.to_string_lossy().contains("/attachments/") ||
+                               path_buf.to_string_lossy().contains("\\attachments\\");
+
+            // For attachment files, we don't read the content here - just return the filename
+            // The frontend will load it via read_attachment_file command
+            if is_attachment {
+                let filename = path_buf.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("file");
+
+                let relative_path = format!("{}/attachments/{}", conversation_id, filename);
+
+                // Return filename as content (not the actual file content)
+                (filename.to_string(), Some(relative_path), Some(true))
+            } else {
+                // For non-attachment files, read and encode the content
+                let data = Self::read_and_encode(&path_buf)
+                    .map_err(|e| ToolError(format!("Failed to read file: {}", e)))?;
+
+                // Auto-detect if we need to base64 encode binary files
+                let should_base64 = matches!(content_type, "pdf" | "ppt" | "image");
+
+                (data, None, if should_base64 { Some(true) } else { Some(false) })
+            }
+        } else {
+            // Content is raw string - for backwards compatibility
+            let raw_content = content_arg.as_str()
+                .ok_or_else(|| ToolError("Content must be string or object".to_string()))?
+                .to_string();
+
+            // For binary content types, base64 encode
+            let final_content = if matches!(content_type, "pdf" | "ppt" | "image") {
+                use base64::prelude::*;
+                BASE64_STANDARD.encode(raw_content.as_bytes())
+            } else {
+                raw_content
+            };
+
+            (final_content, None, Some(matches!(content_type, "pdf" | "ppt" | "image")))
+        };
+
+        Ok(json!({
+            "__show_content": true,
+            "content_type": content_type,
+            "title": title,
+            "content": content_value,
+            "metadata": metadata,
+            "file_path": file_path,
+            "is_attachment": is_attachment,
+            "base64": is_attachment.unwrap_or(false) && matches!(content_type, "pdf" | "ppt" | "image")
         }))
     }
 }

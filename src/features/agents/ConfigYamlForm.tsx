@@ -8,6 +8,7 @@ import { Bot, Brain, Server as ServerIcon, Sparkles, Lock } from "lucide-react";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
+import { Switch } from "@/shared/ui/switch";
 import type { Provider } from "@/shared/types";
 import type { MCPServer } from "@/features/mcp/types";
 import type { Skill } from "@/shared/types";
@@ -24,6 +25,7 @@ interface ConfigYamlFormProps {
   model: string;
   temperature: number;
   maxTokens: number;
+  thinkingEnabled: boolean;
   mcps: string[];
   skills: string[];
 
@@ -39,6 +41,7 @@ interface ConfigYamlFormProps {
   onModelChange: (value: string) => void;
   onTemperatureChange: (value: number) => void;
   onMaxTokensChange: (value: number) => void;
+  onThinkingEnabledChange: (value: boolean) => void;
   onMcpToggle: (mcpId: string) => void;
   onSkillToggle: (skillId: string) => void;
   onSave: () => void;
@@ -53,6 +56,7 @@ export function ConfigYamlForm({
   model,
   temperature,
   maxTokens,
+  thinkingEnabled,
   mcps,
   skills,
   providers,
@@ -64,6 +68,7 @@ export function ConfigYamlForm({
   onModelChange,
   onTemperatureChange,
   onMaxTokensChange,
+  onThinkingEnabledChange,
   onMcpToggle,
   onSkillToggle,
   onSave,
@@ -76,7 +81,7 @@ export function ConfigYamlForm({
       onSave();
     }, 500);
     return () => clearTimeout(timer);
-  }, [displayName, description, providerId, model, temperature, maxTokens, mcps, skills]);
+  }, [displayName, description, providerId, model, temperature, maxTokens, thinkingEnabled, mcps, skills]);
 
   return (
     <div className="flex-1 overflow-y-auto p-6">
@@ -206,6 +211,21 @@ export function ConfigYamlForm({
               className="bg-white/5 border-white/10 text-white h-9 text-sm"
             />
           </div>
+        </div>
+
+        {/* Thinking Enabled */}
+        <div className="flex items-center justify-between py-2 px-3 bg-white/5 rounded-lg border border-white/10">
+          <div className="flex items-center gap-2">
+            <Brain className="size-4 text-purple-400" />
+            <div>
+              <Label className="text-white text-sm cursor-pointer">Thinking Mode</Label>
+              <p className="text-xs text-gray-400">Enable chain-of-thought reasoning (DeepSeek, GLM)</p>
+            </div>
+          </div>
+          <Switch
+            checked={thinkingEnabled}
+            onCheckedChange={onThinkingEnabledChange}
+          />
         </div>
 
         {/* MCP Servers and Skills - compact lists side by side */}

@@ -35,6 +35,18 @@ export interface ToolCallDisplay {
   error?: string;
 }
 
+/**
+ * Attachment info for files created during message execution
+ */
+export interface AttachmentInfo {
+  filename: string;
+  fullPath: string;
+  relativePath: string; // "outputs/report.html" or "conv_id/attachments/filename"
+  contentType: string; // html, pdf, md, txt, etc.
+  size: number;
+  isOutput: boolean; // true = outputs/ (Chrome accessible), false = attachments/
+}
+
 // ============================================================================
 // THINKING PANEL STATE
 // ============================================================================
@@ -49,6 +61,7 @@ export interface ThinkingPanelState {
   planItems: PlanItem[];
   toolCalls: ToolCallDisplay[];
   reasoning: string[]; // Accumulated reasoning blocks
+  attachments: AttachmentInfo[]; // Files created during this message
   currentMessageId: string | null; // Message this panel is for
 }
 
@@ -90,6 +103,7 @@ export interface MessageWithThinking {
     planItems?: PlanItem[];
     toolCalls?: ToolCallDisplay[];
     reasoning?: string[];
+    attachments?: AttachmentInfo[];
     toolCount: number;
   };
 }

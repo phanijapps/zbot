@@ -59,6 +59,7 @@ export interface Agent {
   model: string;
   temperature: number;
   maxTokens: number;
+  thinkingEnabled?: boolean;
   instructions: string;
   mcps: string[];
   skills: string[];

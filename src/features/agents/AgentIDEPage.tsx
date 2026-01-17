@@ -73,6 +73,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(2000);
+  const [thinkingEnabled, setThinkingEnabled] = useState(false);
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [instructions, setInstructions] = useState("");
@@ -172,6 +173,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
       setModel(initialAgent.model);
       setTemperature(initialAgent.temperature);
       setMaxTokens(initialAgent.maxTokens || 2000);
+      setThinkingEnabled(initialAgent.thinkingEnabled || false);
       setInstructions(initialAgent.instructions);
       setSelectedMcpIds(initialAgent.mcps);
       setSelectedSkillIds(initialAgent.skills);
@@ -301,6 +303,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         model,
         temperature,
         maxTokens,
+        thinkingEnabled,
         instructions: finalInstructions,
         mcps: selectedMcpIds,
         skills: selectedSkillIds,
@@ -336,6 +339,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         model,
         temperature,
         maxTokens,
+        thinkingEnabled,
         instructions,
         skills: selectedSkillIds,
         mcps: selectedMcpIds,
@@ -889,6 +893,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 model={model}
                 temperature={temperature}
                 maxTokens={maxTokens}
+                thinkingEnabled={thinkingEnabled}
                 mcps={selectedMcpIds}
                 skills={selectedSkillIds}
                 providers={providers}
@@ -900,6 +905,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 onModelChange={setModel}
                 onTemperatureChange={setTemperature}
                 onMaxTokensChange={setMaxTokens}
+                onThinkingEnabledChange={setThinkingEnabled}
                 onMcpToggle={toggleMcp}
                 onSkillToggle={toggleSkill}
                 onSave={saveConfigYaml}

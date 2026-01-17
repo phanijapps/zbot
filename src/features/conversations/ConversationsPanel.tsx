@@ -10,12 +10,16 @@ import { Textarea } from "@/shared/ui/textarea";
 import {
   GroupedConversationList,
   useStreamEvents,
+  GenerativeCanvas,
+  type ContentState,
+  type AttachmentInfo,
 } from "@/domains/agent-runtime/components";
 import type {
   ConversationWithAgent,
   MessageWithThinking,
   AgentOption,
 } from "@/domains/agent-runtime/components";
+import type { ShowContentEvent, RequestInputEvent } from "@/shared/types/agent";
 import {
   getConversationWithAgents,
   getOrCreateAgentConversation,
@@ -37,13 +41,19 @@ export function ConversationsPanel() {
   const [loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
 
   // Agent selector state
   const [showAgentSelector, setShowAgentSelector] = useState(false);
   const [pendingAgentId, setPendingAgentId] = useState<string | null>(null);
 
-  // State for showing historical tool calls from messages
+  // State for showing historical tool calls and reasoning from messages
   const [historicalToolCalls, setHistoricalToolCalls] = useState<any[] | null>(null);
+  const [historicalReasoning, setHistoricalReasoning] = useState<string[] | null>(null);
+
+  // Generative Canvas state
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasContent, setCanvasContent] = useState<ContentState>(null);
 
   // Stream events handling
   const {
@@ -53,19 +63,41 @@ export function ConversationsPanel() {
     openPanel,
   } = useStreamEvents(true, false);
 
-  // Combine current state with historical tool calls
-  const displayThinkingState = historicalToolCalls !== null
+  // Combine current state with historical tool calls and reasoning
+  const displayThinkingState = historicalToolCalls !== null || historicalReasoning !== null
     ? {
         ...thinkingState,
-        toolCalls: historicalToolCalls,
+        toolCalls: historicalToolCalls ?? [],
+        reasoning: historicalReasoning ?? [],
         isOpen: true,
       }
     : thinkingState;
 
-  // Show historical tool calls when clicking on a message
-  const handleShowHistoricalThinking = (toolCalls: any[]) => {
+  // Show historical tool calls and reasoning when clicking on a message
+  const handleShowHistoricalThinking = (toolCalls: any[], reasoning?: string[]) => {
     setHistoricalToolCalls(toolCalls);
+    setHistoricalReasoning(reasoning || null);
     openPanel();
+  };
+
+  // Open attachment in canvas
+  const handleOpenAttachment = (attachment: AttachmentInfo) => {
+    console.log("[ConversationsPanel] Opening attachment:", attachment);
+    // For output files, we could open directly in browser, but for now use canvas
+    setCanvasContent({
+      type: "show_content",
+      event: {
+        type: "show_content",
+        contentType: attachment.contentType as any,
+        title: attachment.filename,
+        content: attachment.filename,  // Will be loaded via Tauri based on isAttachment
+        timestamp: Date.now(),
+        isAttachment: true,
+        filePath: attachment.relativePath,
+        base64: attachment.contentType === "image" || attachment.contentType === "pdf",
+      }
+    });
+    setCanvasOpen(true);
   };
 
   // Load conversations and agents on mount
@@ -127,20 +159,126 @@ export function ConversationsPanel() {
   };
 
   /**
+   * Reconstruct attachment info from tool_calls and tool_results
+   */
+  const reconstructAttachments = (toolCalls: any[], toolResults: any[]): AttachmentInfo[] => {
+    const attachments: AttachmentInfo[] = [];
+
+    console.log("[reconstructAttachments] toolCalls:", toolCalls);
+    console.log("[reconstructAttachments] toolResults:", toolResults);
+
+    toolResults.forEach((result: any) => {
+      console.log("[reconstructAttachments] Processing result:", result);
+      const toolCall = toolCalls.find((tc: any) => tc.id === result.tool_call_id);
+      console.log("[reconstructAttachments] Found toolCall:", toolCall, "for tool_call_id:", result.tool_call_id);
+      if (!toolCall || !result.output) {
+        console.log("[reconstructAttachments] Skipping - no toolCall or output");
+        return;
+      }
+
+      // Check if this is a successful write tool result
+      if (toolCall.name === "write" && !result.error) {
+        console.log("[reconstructAttachments] This is a write tool, parsing output:", result.output);
+        try {
+          const parsed = JSON.parse(result.output);
+          console.log("[reconstructAttachments] Parsed result:", parsed);
+          if (parsed.success && parsed.path) {
+            const fullPath = parsed.path;
+            const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
+            const isOutput = fullPath.includes("/outputs/") || fullPath.includes("\\outputs\\");
+
+            // Detect content type from extension
+            const ext = filename.split('.').pop()?.toLowerCase();
+            let contentType = "text";
+            if (ext === "html" || ext === "htm") contentType = "html";
+            else if (ext === "pdf") contentType = "pdf";
+            else if (ext === "md" || ext === "markdown") contentType = "markdown";
+            else if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext || "")) contentType = "image";
+
+            // Build relative path
+            let relativePath: string;
+            if (isOutput) {
+              relativePath = `outputs/${filename}`;
+            } else {
+              // Extract conv_id/attachments/filename from full path
+              const parts = fullPath.split('/');
+              const attachmentsIdx = parts.indexOf('attachments');
+              if (attachmentsIdx > 0 && attachmentsIdx + 1 < parts.length) {
+                const convId = parts[attachmentsIdx - 1];
+                relativePath = `${convId}/attachments/${filename}`;
+              } else {
+                relativePath = filename;
+              }
+            }
+
+            const attachment = {
+              filename,
+              fullPath,
+              relativePath,
+              contentType,
+              size: parsed.bytes_written || 0,
+              isOutput,
+            };
+            console.log("[reconstructAttachments] Adding attachment:", attachment);
+            attachments.push(attachment);
+          }
+        } catch (e) {
+          console.log("[reconstructAttachments] Failed to parse result:", e);
+          // Skip invalid results
+        }
+      }
+    });
+
+    console.log("[reconstructAttachments] Final attachments:", attachments);
+    return attachments;
+  };
+
+  /**
    * Load messages for a conversation
    */
   const loadMessages = async (conversationId: string) => {
     try {
       const msgs = await listMessages(conversationId);
+      console.log("[loadMessages] Raw messages from backend:", msgs);
       setMessages(
-        msgs.map((msg: any) => ({
-          id: msg.id,
-          conversationId,
-          role: msg.role,
-          content: msg.content,
-          // Convert created_at (ISO string) to timestamp (number)
-          timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
-        }))
+        msgs.map((msg: any) => {
+          // Reconstruct thinking data from tool_calls and tool_results
+          const hasTools = msg.tool_calls && msg.tool_calls.length > 0;
+          const hasResults = msg.tool_results && msg.tool_results.length > 0;
+
+          console.log("[loadMessages] Message", msg.id, "hasTools:", hasTools, "hasResults:", hasResults);
+          if (hasTools) {
+            console.log("[loadMessages] tool_calls:", msg.tool_calls);
+          }
+          if (hasResults) {
+            console.log("[loadMessages] tool_results:", msg.tool_results);
+          }
+
+          let thinking = undefined;
+          if (hasTools) {
+            // Reconstruct attachments from tool results
+            const attachments = hasResults
+              ? reconstructAttachments(msg.tool_calls, msg.tool_results)
+              : [];
+
+            console.log("[loadMessages] Reconstructed attachments:", attachments);
+
+            thinking = {
+              toolCalls: msg.tool_calls,
+              toolCount: msg.tool_calls.length,
+              attachments,
+            };
+          }
+
+          return {
+            id: msg.id,
+            conversationId,
+            role: msg.role,
+            content: msg.content,
+            timestamp: msg.created_at ? new Date(msg.created_at).getTime() : Date.now(),
+            thinking,
+          };
+        })
       );
     } catch (error) {
       console.error("Failed to load messages:", error);
@@ -235,6 +373,7 @@ export function ConversationsPanel() {
     let assistantResponse = "";
     let assistantMessageId = crypto.randomUUID();
     let collectedToolCalls: any[] = [];
+    let collectedAttachments: AttachmentInfo[] = [];
 
     // Collect streaming events to build assistant message
     const eventHandler = (event: any) => {
@@ -267,6 +406,7 @@ export function ConversationsPanel() {
                 thinking: {
                   toolCalls: [...collectedToolCalls],
                   toolCount: collectedToolCalls.length,
+                  attachments: [...collectedAttachments],
                 },
               },
             ];
@@ -279,6 +419,7 @@ export function ConversationsPanel() {
                     thinking: {
                       toolCalls: [...collectedToolCalls],
                       toolCount: collectedToolCalls.length,
+                      attachments: [...collectedAttachments],
                     }
                   }
                 : m
@@ -293,7 +434,56 @@ export function ConversationsPanel() {
           toolCall.error = event.error;
         }
         console.log("[ConversationsPanel] Tool result:", event.toolId);
-        // Update message with tool result
+
+        // Parse write tool results to extract attachment info
+        if (toolCall && toolCall.name === "write" && !event.error) {
+          try {
+            const parsed = JSON.parse(event.result);
+            if (parsed.success && parsed.path) {
+              const fullPath = parsed.path;
+              const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
+              const isOutput = fullPath.includes("/outputs/") || fullPath.includes("\\outputs\\");
+
+              // Detect content type from extension
+              const ext = filename.split('.').pop()?.toLowerCase();
+              let contentType = "text";
+              if (ext === "html" || ext === "htm") contentType = "html";
+              else if (ext === "pdf") contentType = "pdf";
+              else if (ext === "md" || ext === "markdown") contentType = "markdown";
+              else if (["png", "jpg", "jpeg", "gif", "svg", "webp"].includes(ext || "")) contentType = "image";
+
+              // Build relative path
+              let relativePath: string;
+              if (isOutput) {
+                relativePath = `outputs/${filename}`;
+              } else {
+                // Extract conv_id/attachments/filename from full path
+                const parts = fullPath.split('/');
+                const attachmentsIdx = parts.indexOf('attachments');
+                if (attachmentsIdx > 0 && attachmentsIdx + 1 < parts.length) {
+                  const convId = parts[attachmentsIdx - 1];
+                  relativePath = `${convId}/attachments/${filename}`;
+                } else {
+                  relativePath = filename;
+                }
+              }
+
+              collectedAttachments.push({
+                filename,
+                fullPath,
+                relativePath,
+                contentType,
+                size: parsed.bytes_written || 0,
+                isOutput,
+              });
+              console.log("[ConversationsPanel] Attachment tracked:", filename);
+            }
+          } catch (e) {
+            console.error("[ConversationsPanel] Failed to parse write result:", e);
+          }
+        }
+
+        // Update message with tool result and attachments
         setMessages((prev) => {
           const exists = prev.some((m) => m.id === assistantMessageId);
           if (exists) {
@@ -304,6 +494,7 @@ export function ConversationsPanel() {
                     thinking: {
                       toolCalls: [...collectedToolCalls],
                       toolCount: collectedToolCalls.length,
+                      attachments: [...collectedAttachments],
                     }
                   }
                 : m
@@ -324,6 +515,7 @@ export function ConversationsPanel() {
                     thinking: {
                       toolCalls: [...collectedToolCalls],
                       toolCount: collectedToolCalls.length,
+                      attachments: [...collectedAttachments],
                     }
                   }
                 : m
@@ -349,6 +541,7 @@ export function ConversationsPanel() {
                     thinking: {
                       toolCalls: [...collectedToolCalls],
                       toolCount: collectedToolCalls.length,
+                      attachments: [...collectedAttachments],
                     }
                   }
                 : m
@@ -366,11 +559,63 @@ export function ConversationsPanel() {
                 thinking: {
                   toolCalls: [...collectedToolCalls],
                   toolCount: collectedToolCalls.length,
+                  attachments: [...collectedAttachments],
                 },
               },
             ];
           }
         });
+      } else if (event.type === "reasoning") {
+        console.log("[ConversationsPanel] Reasoning event:", event.content?.substring(0, 100), "...");
+        // Update or add assistant message with reasoning content
+        setMessages((prev) => {
+          const existingMsg = prev.find((m) => m.id === assistantMessageId);
+          if (existingMsg) {
+            // Append reasoning to existing message
+            return prev.map((m) =>
+              m.id === assistantMessageId
+                ? {
+                    ...m,
+                    thinking: {
+                      ...m.thinking,
+                      reasoning: (m.thinking?.reasoning || "") + event.content,
+                      toolCalls: [...collectedToolCalls],
+                      toolCount: collectedToolCalls.length,
+                      attachments: [...collectedAttachments],
+                    }
+                  }
+                : m
+            );
+          } else {
+            // Create new message with reasoning first
+            return [
+              ...prev,
+              {
+                id: assistantMessageId,
+                conversationId: selectedConversation!.id,
+                role: "assistant",
+                content: "",
+                timestamp: Date.now(),
+                thinking: {
+                  reasoning: event.content,
+                  toolCalls: [...collectedToolCalls],
+                  toolCount: collectedToolCalls.length,
+                  attachments: [...collectedAttachments],
+                },
+              },
+            ];
+          }
+        });
+      } else if (event.type === "show_content") {
+        // Show content in generative canvas
+        console.log("[ConversationsPanel] Show content event:", event);
+        setCanvasContent({ type: "show_content", event: event as ShowContentEvent });
+        setCanvasOpen(true);
+      } else if (event.type === "request_input") {
+        // Request input via generative form
+        console.log("[ConversationsPanel] Request input event:", event);
+        setCanvasContent({ type: "request_input", event: event as RequestInputEvent });
+        setCanvasOpen(true);
       }
     };
 
@@ -559,7 +804,11 @@ export function ConversationsPanel() {
                       <MessageBubble
                         key={message.id}
                         message={message}
-                        onShowThinking={() => message.thinking?.toolCalls && handleShowHistoricalThinking(message.thinking.toolCalls)}
+                        onShowThinking={() => message.thinking && handleShowHistoricalThinking(
+                          message.thinking.toolCalls || [],
+                          message.thinking.reasoning
+                        )}
+                        onOpenAttachment={handleOpenAttachment}
                       />
                     ))}
                     {isLoading && <TypingIndicator />}
@@ -571,6 +820,11 @@ export function ConversationsPanel() {
               {/* Thought Panel - next to messages area */}
               {displayThinkingState.isOpen && (
                 <div className="w-80 border-l border-white/10 flex flex-col bg-black/30 overflow-y-auto">
+                  {/* Reasoning / Chain of Thought */}
+                  {displayThinkingState.reasoning.length > 0 && (
+                    <ThinkingContent reasoning={displayThinkingState.reasoning.join("")} />
+                  )}
+
                   {/* Tool Calls */}
                   {displayThinkingState.toolCalls.length > 0 && (
                     <div className="p-4 space-y-3">
@@ -598,7 +852,9 @@ export function ConversationsPanel() {
                   )}
 
                   {/* Empty State */}
-                  {displayThinkingState.toolCalls.length === 0 && displayThinkingState.isActive && (
+                  {displayThinkingState.toolCalls.length === 0 &&
+                   displayThinkingState.reasoning.length === 0 &&
+                   displayThinkingState.isActive && (
                     <div className="p-4 text-center">
                       <div className="flex justify-center mb-3">
                         <div className="size-8 border-2 border-purple-500/30 border-t-purple-500 rounded-full animate-spin" />
@@ -612,6 +868,8 @@ export function ConversationsPanel() {
                     <div className="text-xs text-gray-500 text-center">
                       {displayThinkingState.toolCalls.length > 0
                         ? `${displayThinkingState.toolCalls.length} tool${displayThinkingState.toolCalls.length !== 1 ? "s" : ""} used`
+                        : displayThinkingState.reasoning.length > 0
+                        ? "Thinking..."
                         : displayThinkingState.isActive
                         ? "Agent is working..."
                         : "Ready"}
@@ -626,6 +884,7 @@ export function ConversationsPanel() {
               <div className="max-w-3xl mx-auto">
                 <div className="relative bg-white/5 rounded-2xl border border-white/10 focus-within:border-purple-500/50 transition-colors">
                   <Textarea
+                    ref={inputRef}
                     value={input}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyDown={(e) => {
@@ -761,6 +1020,23 @@ export function ConversationsPanel() {
           </div>
         </div>
       )}
+
+      {/* Generative Canvas - Slides in for content display and input forms */}
+      <GenerativeCanvas
+        isOpen={canvasOpen}
+        onClose={() => setCanvasOpen(false)}
+        content={canvasContent}
+        conversationId={selectedConversation?.id}
+        onFormSubmit={async (data) => {
+          // Format form data as JSON string and send as user message
+          const jsonMessage = JSON.stringify(data, null, 2);
+          await handleSendMessage(jsonMessage);
+        }}
+        onCanvasCancel={() => {
+          // Focus the text input when canvas is cancelled
+          inputRef.current?.focus();
+        }}
+      />
     </div>
   );
 }
@@ -813,12 +1089,51 @@ function PlaceholderState() {
 // MESSAGE COMPONENTS
 // ============================================================================
 
+// Attachment Pill Component
+interface AttachmentPillProps {
+  attachment: AttachmentInfo;
+  onClick: () => void;
+}
+
+function AttachmentPill({ attachment, onClick }: AttachmentPillProps) {
+  const getIcon = () => {
+    switch (attachment.contentType) {
+      case "html": return "🌐";
+      case "pdf": return "📄";
+      case "image": return "🖼️";
+      case "markdown": return "📝";
+      default: return "📎";
+    }
+  };
+
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes}B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`;
+  };
+
+  return (
+    <button
+      onClick={onClick}
+      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-white/5 hover:bg-white/10 border border-white/10 transition-colors text-xs"
+      title={`${attachment.filename} (${formatSize(attachment.size)})${attachment.isOutput ? " - Chrome accessible" : ""}`}
+    >
+      <span>{getIcon()}</span>
+      <span className="text-gray-300 max-w-[150px] truncate">{attachment.filename}</span>
+      {attachment.isOutput && (
+        <span className="text-[10px] text-green-400 bg-green-400/10 px-1 rounded">Chrome</span>
+      )}
+    </button>
+  );
+}
+
 interface MessageBubbleProps {
   message: MessageWithThinking;
   onShowThinking: () => void;
+  onOpenAttachment: (attachment: AttachmentInfo) => void;
 }
 
-function MessageBubble({ message, onShowThinking }: MessageBubbleProps) {
+function MessageBubble({ message, onShowThinking, onOpenAttachment }: MessageBubbleProps) {
   const isUser = message.role === "user";
 
   return (
@@ -859,15 +1174,35 @@ function MessageBubble({ message, onShowThinking }: MessageBubbleProps) {
           )}
         </div>
 
-        {/* Thinking Indicator (for assistant messages) */}
-        {!isUser && message.thinking && message.thinking.toolCount > 0 && (
-          <button
-            onClick={onShowThinking}
-            className="mt-2 text-xs text-gray-500 hover:text-purple-400 transition-colors flex items-center gap-1.5"
-          >
-            <span>🧠</span>
-            <span>Used {message.thinking.toolCount} tools</span>
-          </button>
+        {/* Thinking Indicator + Attachment Pills (for assistant messages) */}
+        {!isUser && (
+          <div className="mt-2 flex items-center gap-2 flex-wrap">
+            {/* Tools/Thinking indicator */}
+            {message.thinking && (message.thinking.toolCount > 0 || (message.thinking.reasoning && message.thinking.reasoning.length > 0)) && (
+              <button
+                onClick={onShowThinking}
+                className="text-xs text-gray-500 hover:text-purple-400 transition-colors flex items-center gap-1.5"
+              >
+                <span>🧠</span>
+                <span>
+                  {message.thinking.toolCount > 0
+                    ? `Used ${message.thinking.toolCount} tool${message.thinking.toolCount !== 1 ? "s" : ""}`
+                    : "Thinking"}
+                </span>
+              </button>
+            )}
+
+            {/* Attachment Pills */}
+            {message.thinking?.attachments && message.thinking.attachments.length > 0 &&
+              message.thinking.attachments.map((att) => (
+                <AttachmentPill
+                  key={att.fullPath}
+                  attachment={att}
+                  onClick={() => onOpenAttachment(att)}
+                />
+              ))
+            }
+          </div>
         )}
 
         {/* Timestamp */}
@@ -891,6 +1226,40 @@ function TypingIndicator() {
           <span className="size-2 bg-gray-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
           <span className="size-2 bg-gray-500 rounded-full animate-bounce" />
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Truncated reasoning component with expand toggle
+function ThinkingContent({ reasoning }: { reasoning: string }) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const truncateAt = 50;
+  const shouldTruncate = reasoning.length > truncateAt;
+  const displayContent = shouldTruncate && !isExpanded
+    ? reasoning.substring(0, truncateAt) + "..."
+    : reasoning;
+
+  return (
+    <div className="p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-sm font-medium text-gray-300">
+          <span>🧠</span>
+          <span>Thinking</span>
+        </div>
+        {shouldTruncate && (
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="text-xs text-purple-400 hover:text-purple-300 transition-colors"
+          >
+            {isExpanded ? "Show less" : "Show more"}
+          </button>
+        )}
+      </div>
+      <div className="bg-white/5 rounded-md p-3 max-h-60 overflow-y-auto">
+        <p className="text-sm text-gray-400 whitespace-pre-wrap font-mono break-words">
+          {displayContent}
+        </p>
       </div>
     </div>
   );
