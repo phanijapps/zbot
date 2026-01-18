@@ -4,22 +4,47 @@
 // ============================================================================
 
 use std::sync::Arc;
+use std::collections::HashMap;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use serde::Serialize;
+use tokio::sync::RwLock;
 
 use crate::domains::conversation_runtime::{get_database, repository};
 use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall, ToolResult};
+use crate::domains::agent_runtime::executor::create_executor;
 use crate::domains::agent_runtime::{
-    AgentExecutor, create_executor, ChatMessage, StreamEvent
+    AgentExecutor, ChatMessage, StreamEvent
 };
 
-// Note: Executor caching removed - each execution gets a fresh executor
-// with the correct conversation_id for scoped file operations
+// ============================================================================
+// EXECUTOR CACHE
+// ============================================================================
 
-/// Remove a specific agent from the executor cache (no-op, kept for API compatibility)
-pub async fn invalidate_executor_cache(_agent_id: &str) {
-    // No-op: executors are now created per execution
+/// Cache key for executors (agent_id, conversation_id)
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+struct CacheKey {
+    agent_id: String,
+    conversation_id: String,
+}
+
+/// Global executor cache
+lazy_static::lazy_static! {
+    static ref EXECUTOR_CACHE: Arc<RwLock<HashMap<CacheKey, Arc<crate::domains::agent_runtime::executor_v2::ZeroAppExecutor>>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+}
+
+/// Remove a specific agent from the executor cache
+pub async fn invalidate_executor_cache(agent_id: &str) {
+    let mut cache = EXECUTOR_CACHE.write().await;
+    // Remove all cached executors for this agent
+    cache.retain(|key, _| key.agent_id != agent_id);
+}
+
+/// Clear the entire executor cache
+pub async fn clear_executor_cache_internal() {
+    let mut cache = EXECUTOR_CACHE.write().await;
+    cache.clear();
 }
 
 /// Execute an agent with streaming support
@@ -416,9 +441,200 @@ pub async fn get_or_create_conversation(
         .map_err(|e| format!("Failed to serialize: {}", e))
 }
 
-/// Clear executor cache (no-op, kept for API compatibility)
+/// Clear executor cache (for testing/debugging)
 #[tauri::command]
 pub async fn clear_executor_cache() -> Result<(), String> {
-    // No-op: executors are now created per execution
+    clear_executor_cache_internal().await;
     Ok(())
+}
+
+// ============================================================================
+// ZERO-APP FRAMEWORK INTEGRATION
+// ============================================================================
+
+/// Execute agent using the zero-app framework
+///
+/// This is the new command that uses the modular zero-* crates
+#[tauri::command]
+pub async fn execute_agent_zero_stream(
+    app: AppHandle,
+    conversation_id: String,
+    agent_id: String,
+    message: String,
+) -> Result<Value, String> {
+    use crate::domains::agent_runtime::executor_v2::{
+        create_zero_executor,
+        ZeroAppStreamEvent,
+    };
+
+    // Verify conversation exists
+    let db = get_database()?;
+    let conversation = db.transaction(|conn| {
+        repository::get_conversation(conn, &conversation_id)
+    })
+    .map_err(|e| format!("Database error: {}", e))?;
+
+    if conversation.is_none() {
+        return Err(format!("Conversation not found: {}", conversation_id));
+    }
+
+    // Save user message to database
+    let user_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_millis());
+    db.transaction(|conn| {
+        repository::create_message(conn, repository::CreateMessage {
+            id: user_msg_id.clone(),
+            conversation_id: conversation_id.clone(),
+            role: MessageRole::User,
+            content: message.clone(),
+            token_count: None,
+            tool_calls: None,
+            tool_results: None,
+        })
+    })
+    .map_err(|e| format!("Failed to save user message: {}", e))?;
+
+    // Get or create zero-app executor from cache
+    let cache_key = CacheKey {
+        agent_id: agent_id.clone(),
+        conversation_id: conversation_id.clone(),
+    };
+
+    // Check cache first
+    {
+        let cache_read = EXECUTOR_CACHE.read().await;
+        if let Some(executor) = cache_read.get(&cache_key) {
+            tracing::info!("Using cached executor for agent: {} (conversation: {})", agent_id, conversation_id);
+        }
+    }
+
+    // Try to get from cache, or create new executor
+    let executor = {
+        let cache_read = EXECUTOR_CACHE.read().await;
+        cache_read.get(&cache_key).cloned()
+    };
+
+    let executor = if let Some(exec) = executor {
+        exec
+    } else {
+        // Create new executor (cache miss)
+        tracing::info!("Creating new executor for agent: {} (conversation: {})", agent_id, conversation_id);
+        let exec = Arc::new(create_zero_executor(&agent_id, Some(conversation_id.clone())).await?);
+
+        // Add to cache
+        let mut cache_write = EXECUTOR_CACHE.write().await;
+        cache_write.insert(cache_key, exec.clone());
+
+        exec
+    };
+
+    // Execute with streaming
+    let mut final_response = String::new();
+    let mut current_tool_calls: Vec<ToolCall> = Vec::new();
+    let mut current_tool_results: Vec<ToolResult> = Vec::new();
+
+    executor.run_stream(message, |stream_event| {
+        let event_name = format!("agent-stream://{}", conversation_id);
+
+        match stream_event {
+            ZeroAppStreamEvent::Content { delta } => {
+                final_response.push_str(&delta);
+
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "token",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "content": delta
+                })) {
+                    eprintln!("Failed to emit event to frontend: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::ToolCall { id, name, arguments } => {
+                current_tool_calls.push(ToolCall {
+                    id: id.clone(),
+                    name: name.clone(),
+                    arguments: serde_json::from_str(&arguments).unwrap_or_default(),
+                });
+
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "tool_call_start",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "toolId": id,
+                    "toolName": name,
+                    "args": arguments
+                })) {
+                    eprintln!("Failed to emit event to frontend: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::ToolResponse { id, response } => {
+                current_tool_results.push(ToolResult {
+                    tool_call_id: id.clone(),
+                    output: response.clone(),
+                    error: None,
+                });
+
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "tool_result",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "toolId": id,
+                    "result": response
+                })) {
+                    eprintln!("Failed to emit event to frontend: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::Complete { turn_complete } => {
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "done",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "finalMessage": final_response,
+                    "tokenCount": final_response.len(),
+                    "turnComplete": turn_complete
+                })) {
+                    eprintln!("Failed to emit event to frontend: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::Error { message } => {
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "error",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "error": message,
+                    "recoverable": false
+                })) {
+                    eprintln!("Failed to emit event to frontend: {}", e);
+                }
+            }
+        }
+    }).await.map_err(|e| format!("Agent execution failed: {}", e))?;
+
+    // Save assistant response to database
+    let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_millis());
+    let tool_calls_for_db = if current_tool_calls.is_empty() {
+        None
+    } else {
+        Some(current_tool_calls.clone())
+    };
+    let tool_results_for_db = if current_tool_results.is_empty() {
+        None
+    } else {
+        Some(current_tool_results.clone())
+    };
+
+    db.transaction(|conn| {
+        repository::create_message(conn, repository::CreateMessage {
+            id: assistant_msg_id,
+            conversation_id: conversation_id.clone(),
+            role: MessageRole::Assistant,
+            content: final_response.clone(),
+            token_count: Some(final_response.len() as i64),
+            tool_calls: tool_calls_for_db,
+            tool_results: tool_results_for_db,
+        })
+    })
+    .map_err(|e| format!("Failed to save assistant message: {}", e))?;
+
+    Ok(serde_json::json!({
+        "conversation_id": conversation_id,
+        "agent_id": agent_id,
+        "response": final_response,
+        "tool_calls": current_tool_calls,
+        "done": true
+    }))
 }

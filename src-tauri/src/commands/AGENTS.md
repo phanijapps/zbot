@@ -9,7 +9,7 @@ This module handles all agent-related operations in the Tauri backend. Agents ar
 ```
 ~/.config/zeroagent/agents/
 ├── agent-1/
-│   ├── config.yaml       # Agent metadata (name, provider, model, etc.)
+│   ├── config.yaml       # Agent metadata (name, provider, model, middleware, etc.)
 │   ├── AGENTS.md         # Agent instructions (markdown)
 │   └── [user files]      # Additional files in subfolders
 └── agent-2/
@@ -17,6 +17,33 @@ This module handles all agent-related operations in the Tauri backend. Agents ar
     ├── AGENTS.md
     └── assets/
         └── image.png
+```
+
+**config.yaml format**:
+```yaml
+name: my-agent
+displayName: My Agent
+description: A helpful AI assistant
+providerId: openai
+model: gpt-4o
+temperature: 0.7
+maxTokens: 2000
+thinkingEnabled: false
+skills: []
+mcps: []
+# Optional: Middleware configuration (YAML string)
+middleware: |
+  middleware:
+    summarization:
+      enabled: true
+      trigger:
+        tokens: 60000
+      keep:
+        messages: 6
+    context_editing:
+      enabled: true
+      trigger_tokens: 60000
+      keep_tool_results: 10
 ```
 
 ## Key Data Structures
@@ -35,6 +62,7 @@ pub struct Agent {
     pub instructions: String,         // System instructions
     pub mcps: Vec<String>,            // MCP server IDs
     pub skills: Vec<String>,          // Skill IDs
+    pub middleware: Option<String>,   // Middleware config (YAML string)
     pub created_at: Option<String>,   // ISO timestamp
 }
 ```

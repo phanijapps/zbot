@@ -5,7 +5,7 @@
 // ============================================================================
 
 use crate::settings::AppDirs;
-use crate::domains::agent_runtime::mcp_manager::McpServerConfig;
+use agent_runtime::McpServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::collections::HashMap;

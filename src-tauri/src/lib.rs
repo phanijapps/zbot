@@ -13,6 +13,10 @@ mod domains;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Initialize structured logging with controlled output
+    // Logs are written to file and stderr based on RUST_LOG environment variable
+    agent_runtime::init_logging(agent_runtime::LogLevel::Info, true);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
@@ -22,27 +26,27 @@ pub fn run() {
             match AppDirs::get() {
                 Ok(dirs) => {
                     if let Err(e) = dirs.initialize() {
-                        eprintln!("Failed to initialize directories: {}", e);
+                        tracing::error!("Failed to initialize directories: {}", e);
                     }
 
                     // Create default settings file if it doesn't exist
                     if !dirs.settings_file.exists() {
                         if let Err(e) = dirs.save_settings(&settings::Settings::default()) {
-                            eprintln!("Failed to create default settings: {}", e);
+                            tracing::error!("Failed to create default settings: {}", e);
                         }
                     }
 
                     // Log the config directory for debugging
-                    println!("Agent Zero config directory: {:?}", dirs.config_dir);
+                    tracing::info!("Agent Zero config directory: {:?}", dirs.config_dir);
                 }
                 Err(e) => {
-                    eprintln!("Failed to get app directories: {}", e);
+                    tracing::error!("Failed to get app directories: {}", e);
                 }
             }
 
             // Initialize conversation database
             if let Err(e) = domains::conversation_runtime::init_database() {
-                eprintln!("Failed to initialize conversation database: {}", e);
+                tracing::error!("Failed to initialize conversation database: {}", e);
             }
 
             Ok(())
@@ -130,6 +134,7 @@ pub fn run() {
             commands::read_attachment_file,
             // Agent Runtime commands
             commands::execute_agent_stream,
+            commands::execute_agent_zero_stream,
             commands::get_agent_execution_config,
             commands::create_agent_conversation,
             commands::get_or_create_conversation,

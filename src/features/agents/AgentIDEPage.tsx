@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 import {
   X, Save, File, FileText, FolderPlus, Trash2, Folder,
   Upload, RefreshCw, Bot, ChevronRight, ChevronDown, Loader2,
-  Plus, Lock, AlertTriangle
+  Plus, Lock, AlertTriangle, Settings
 } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
@@ -51,6 +51,50 @@ function formatTimeAgo(date: Date): string {
   return `${days}d ago`;
 }
 
+// Default middleware configuration
+const DEFAULT_MIDDLEWARE = `# Middleware Configuration
+# Configure how the agent processes conversations
+
+middleware:
+  # Summarization - Compress conversation history when approaching token limits
+  summarization:
+    enabled: true
+    # Model to use for summarization (null = use agent's model)
+    model: null
+    # Provider for summarization (null = use agent's provider)
+    provider: null
+    trigger:
+      # Trigger when token count reaches this value
+      tokens: 60000
+      # Trigger when message count reaches this value
+      messages: null
+      # Trigger when fraction of context window is reached (0.0-1.0)
+      fraction: null
+    keep:
+      # Number of messages to keep after summarization
+      messages: 6
+      # Number of tokens to keep
+      tokens: null
+      # Fraction of context window to keep (0.0-1.0)
+      fraction: null
+    summary_prefix: "[Previous conversation summary:]"
+    summary_prompt: null
+
+  # Context Editing - Clear older tool call outputs while keeping recent ones
+  context_editing:
+    enabled: true
+    trigger_tokens: 60000
+    # Number of tool results to keep (most recent)
+    keep_tool_results: 10
+    # Minimum tokens to reclaim before clearing
+    min_reclaim: 1000
+    # Clear tool call inputs (arguments) as well
+    clear_tool_inputs: false
+    # Tools to exclude from clearing (e.g., "search", "database")
+    exclude_tools: []
+    placeholder: "[Result cleared due to context limits]"
+`;
+
 interface AgentIDEPageProps {
   onSave: (agent: Omit<Agent, "id" | "createdAt">) => void;
   onClose: () => void;
@@ -69,6 +113,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [agentType, setAgentType] = useState<"llm" | "sequential" | "parallel" | "loop" | "conditional" | "llm_conditional" | "custom">("llm");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.7);
@@ -77,6 +122,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
   const [selectedMcpIds, setSelectedMcpIds] = useState<string[]>([]);
   const [selectedSkillIds, setSelectedSkillIds] = useState<string[]>([]);
   const [instructions, setInstructions] = useState("");
+  const [middleware, setMiddleware] = useState(DEFAULT_MIDDLEWARE);
 
   // File explorer state
   const [files, setFiles] = useState<AgentFile[]>([]);
@@ -169,6 +215,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
       setName(initialAgent.name);
       setDisplayName(initialAgent.displayName);
       setDescription(initialAgent.description);
+      setAgentType(initialAgent.agentType || "llm");
       setProviderId(initialAgent.providerId);
       setModel(initialAgent.model);
       setTemperature(initialAgent.temperature);
@@ -177,6 +224,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
       setInstructions(initialAgent.instructions);
       setSelectedMcpIds(initialAgent.mcps);
       setSelectedSkillIds(initialAgent.skills);
+      setMiddleware(initialAgent.middleware || DEFAULT_MIDDLEWARE);
     }
   }, [initialAgent]);
 
@@ -299,6 +347,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         name: name.toLowerCase().replace(/\s+/g, "-"),
         displayName,
         description,
+        agentType,
         providerId,
         model,
         temperature,
@@ -307,6 +356,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         instructions: finalInstructions,
         mcps: selectedMcpIds,
         skills: selectedSkillIds,
+        middleware: middleware.trim() || undefined,
       };
 
       // First save the agent (this writes config.yaml and AGENTS.md)
@@ -335,6 +385,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         name,
         displayName,
         description,
+        agentType,
         providerId,
         model,
         temperature,
@@ -343,6 +394,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         instructions,
         skills: selectedSkillIds,
         mcps: selectedMcpIds,
+        middleware: middleware.trim() || undefined,
       });
       setLastSaved(new Date());
       // Notify parent that agent was updated
@@ -889,6 +941,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 isNewAgent={!initialAgent}
                 displayName={displayName}
                 description={description}
+                agentType={agentType}
                 providerId={providerId}
                 model={model}
                 temperature={temperature}
@@ -896,11 +949,14 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 thinkingEnabled={thinkingEnabled}
                 mcps={selectedMcpIds}
                 skills={selectedSkillIds}
+                middleware={middleware}
+                instructions={instructions}
                 providers={providers}
                 availableMcps={mcps}
                 availableSkills={skills}
                 onDisplayNameChange={setDisplayName}
                 onDescriptionChange={setDescription}
+                onAgentTypeChange={setAgentType}
                 onProviderIdChange={setProviderId}
                 onModelChange={setModel}
                 onTemperatureChange={setTemperature}
@@ -908,6 +964,8 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 onThinkingEnabledChange={setThinkingEnabled}
                 onMcpToggle={toggleMcp}
                 onSkillToggle={toggleSkill}
+                onMiddlewareChange={setMiddleware}
+                onInstructionsChange={setInstructions}
                 onSave={saveConfigYaml}
               />
             ) : selectedFile?.name === "AGENTS.md" ? (

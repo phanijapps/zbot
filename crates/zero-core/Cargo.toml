@@ -1,0 +1,24 @@
+[package]
+name = "zero-core"
+version.workspace = true
+edition.workspace = true
+authors = ["agentzero"]
+license = "MIT"
+
+[dependencies]
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+async-stream = "0.3"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }

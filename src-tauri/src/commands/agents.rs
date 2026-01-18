@@ -17,6 +17,8 @@ pub struct Agent {
     #[serde(rename = "displayName")]
     pub display_name: String,
     pub description: String,
+    #[serde(rename = "agentType", default)]
+    pub agent_type: Option<String>,
     #[serde(rename = "providerId")]
     pub provider_id: String,
     pub model: String,
@@ -25,9 +27,14 @@ pub struct Agent {
     pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled", default)]
     pub thinking_enabled: bool,
+    #[serde(rename = "systemInstruction", default, skip_serializing_if = "Option::is_none")]
+    pub system_instruction: Option<String>,
     pub instructions: String,
     pub mcps: Vec<String>,
     pub skills: Vec<String>,
+    /// Middleware configuration (YAML string)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub middleware: Option<String>,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
@@ -44,6 +51,8 @@ struct AgentConfig {
     #[serde(rename = "displayName")]
     display_name: String,
     description: String,
+    #[serde(rename = "agentType", default)]
+    agent_type: Option<String>,
     #[serde(rename = "providerId")]
     provider_id: String,
     model: String,
@@ -54,6 +63,8 @@ struct AgentConfig {
     thinking_enabled: bool,
     skills: Vec<String>,
     mcps: Vec<String>,
+    #[serde(rename = "systemInstruction", default, skip_serializing_if = "Option::is_none")]
+    system_instruction: Option<String>,
 }
 
 /// Gets the agents directory path
@@ -145,10 +156,20 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
         thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
+        agent_type: agent.agent_type.clone(),
+        system_instruction: agent.system_instruction.clone(),
     };
     let config_yaml = serde_yaml::to_string(&config)
         .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;
-    fs::write(agent_dir.join("config.yaml"), config_yaml)
+
+    // Append middleware YAML if provided
+    let final_yaml = if let Some(middleware_yaml) = &agent.middleware {
+        format!("{}\n{}", config_yaml.trim_end(), middleware_yaml.trim_end())
+    } else {
+        config_yaml
+    };
+
+    fs::write(agent_dir.join("config.yaml"), final_yaml)
         .map_err(|e| format!("Failed to write config.yaml: {}", e))?;
 
     // Write AGENTS.md (just the instructions, no frontmatter)
@@ -209,10 +230,20 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
         thinking_enabled: agent.thinking_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
+        agent_type: agent.agent_type.clone(),
+        system_instruction: agent.system_instruction.clone(),
     };
     let config_yaml = serde_yaml::to_string(&config)
         .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;
-    fs::write(target_dir.join("config.yaml"), config_yaml)
+
+    // Append middleware YAML if provided
+    let final_yaml = if let Some(middleware_yaml) = &agent.middleware {
+        format!("{}\n{}", config_yaml.trim_end(), middleware_yaml.trim_end())
+    } else {
+        config_yaml
+    };
+
+    fs::write(target_dir.join("config.yaml"), final_yaml)
         .map_err(|e| format!("Failed to write config.yaml: {}", e))?;
 
     // Write AGENTS.md (just the instructions, no frontmatter)
@@ -277,14 +308,17 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         name,
         display_name: config.display_name,
         description: config.description,
+        agent_type: config.agent_type,
         provider_id: config.provider_id,
         model: config.model,
         temperature: config.temperature,
         max_tokens: config.max_tokens,
         thinking_enabled: config.thinking_enabled,
+        system_instruction: config.system_instruction,
         instructions,
         mcps: config.mcps,
         skills: config.skills,
+        middleware: None, // Middleware is embedded in config.yaml and read by executor
         created_at: Some("1970-01-01T00:00:00Z".to_string()), // TODO: get from file metadata
     })
 }
@@ -397,6 +431,7 @@ pub async fn list_agent_files(agent_id: String) -> Result<Vec<AgentFile>, String
                 name: "my-agent".to_string(),
                 display_name: "My Agent".to_string(),
                 description: "A helpful AI assistant".to_string(),
+                agent_type: None,
                 provider_id: "".to_string(),
                 model: "".to_string(),
                 temperature: 0.7,
@@ -404,6 +439,7 @@ pub async fn list_agent_files(agent_id: String) -> Result<Vec<AgentFile>, String
                 thinking_enabled: false,
                 skills: vec![],
                 mcps: vec![],
+                system_instruction: None,
             };
             let config_yaml = serde_yaml::to_string(&default_config)
                 .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;
