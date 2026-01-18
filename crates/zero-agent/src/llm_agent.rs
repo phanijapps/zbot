@@ -65,6 +65,7 @@ impl LlmAgent {
 
         // Build tool definitions
         let tools = self.tools.tools().await.unwrap_or_default();
+        debug!("Available tools for {}: {}", self.name, tools.iter().map(|t| t.name().to_string()).collect::<Vec<_>>().join(", "));
         let tool_definitions: Vec<ToolDefinition> = tools
             .iter()
             .map(|tool| ToolDefinition {
@@ -73,6 +74,7 @@ impl LlmAgent {
                 parameters: tool.parameters_schema(),
             })
             .collect();
+        debug!("Tool definitions sent to LLM: {}", tool_definitions.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
 
         let mut request = LlmRequest::new();
         request.contents = all_contents;
@@ -158,8 +160,10 @@ impl LlmAgent {
                 .collect();
 
             if !tool_calls.is_empty() {
+                info!("LLM returned {} tool calls: {}", tool_calls.len(), tool_calls.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
                 Some(self.process_tool_calls(ctx, tool_calls).await?)
             } else {
+                info!("LLM returned text response instead of tool calls (should have used request_input for multi-field queries)");
                 None
             }
         } else {

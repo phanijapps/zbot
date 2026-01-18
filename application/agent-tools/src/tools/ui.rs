@@ -24,7 +24,10 @@ impl Tool for RequestInputTool {
     }
 
     fn description(&self) -> &str {
-        "IMPORTANT: Use this tool whenever you need to collect 2+ pieces of related information from the user. Instead of asking multiple separate questions in plain text, use this tool to request all information at once via a form. This provides a better user experience."
+        "CRITICAL: MUST use this tool whenever you need to collect 2+ pieces of related information from the user. \
+        NEVER ask multiple separate questions in plain text - ALWAYS use this tool to request all information at once via a form. \
+        This is REQUIRED for better user experience. \
+        Examples: collecting input details (name, age, address), form data, configuration details, etc."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
