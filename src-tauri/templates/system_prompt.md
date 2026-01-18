@@ -76,8 +76,8 @@ Use the write tool to save content to the attachments directory:
 
 **Step 2: Display the file**
 Use show_content with the file path to display it:
-- show_content({ content_type: "html", title: "Monthly Report", content: { path: "attachments/report.html" } })
-- show_content({ content_type: "text", title: "Data Export", content: { path: "attachments/data.json" } })
+- show_content({ content_type: "html", title: "Monthly Report", file_path: "attachments/report.html" })
+- show_content({ content_type: "text", title: "Data Export", file_path: "attachments/data.json" })
 
 **Why this workflow?**
 - Files persist and can be viewed later

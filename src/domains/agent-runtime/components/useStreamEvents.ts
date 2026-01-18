@@ -44,7 +44,11 @@ function parseWriteAttachment(toolName: string, result: string): AttachmentInfo 
 
   try {
     const parsed = JSON.parse(result);
-    if (!parsed.success || !parsed.path) return null;
+    // WriteTool returns {path, bytes_written} - no success field needed
+    if (!parsed.path) {
+      console.warn("[parseWriteAttachment] No path in result:", result);
+      return null;
+    }
 
     const fullPath = parsed.path;
     const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
@@ -165,7 +169,7 @@ export function useStreamEvents(
 
           case "tool_call_start":
             // New tool call starting - ensure panel is open
-            console.log("[useStreamEvents] Tool call start:", event.toolName);
+            console.log("🔧 Tool call:", event.toolName);
             const newTool: ToolCallDisplay = {
               id: event.toolId,
               name: event.toolName,
@@ -204,12 +208,16 @@ export function useStreamEvents(
               ),
             };
 
-          case "tool_result":
+          case "tool_result": {
             // Tool execution finished - check if it's a write tool that created an attachment
             const toolCall = prev.toolCalls.find(t => t.id === event.toolId);
             const attachment = toolCall && !event.error
               ? parseWriteAttachment(toolCall.name, event.result)
               : null;
+
+            if (attachment) {
+              console.log("📎 Attachment created:", attachment.filename);
+            }
 
             return {
               ...prev,
@@ -225,6 +233,7 @@ export function useStreamEvents(
               ),
               ...(attachment ? { attachments: [...prev.attachments, attachment] } : {}),
             };
+          }
 
           case "done":
             // Agent finished - auto-collapse if enabled

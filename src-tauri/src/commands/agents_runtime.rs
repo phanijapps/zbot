@@ -156,12 +156,63 @@ pub async fn execute_agent_stream(
                 }
             }
             ZeroAppStreamEvent::ToolResponse { id, response } => {
+                tracing::info!("ToolResponse: toolId={}, response.len={}", id, response.len());
+
+                // Add to tool results for database
                 current_tool_results.push(ToolResult {
                     tool_call_id: id.clone(),
                     output: response.clone(),
                     error: None,
                 });
 
+                // Check for special UI markers in the response
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+                    tracing::info!("ToolResponse parsed: toolId={}, has___show_content={}, has___request_input={}",
+                        id,
+                        parsed.get("__show_content").is_some(),
+                        parsed.get("__request_input").is_some());
+
+                    // Check for show_content marker
+                    if parsed.get("__show_content").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        tracing::info!("Detected show_content marker, emitting show_content event");
+                        if let Err(e) = app.emit(&event_name, serde_json::json!({
+                            "type": "show_content",
+                            "timestamp": chrono::Utc::now().timestamp_millis(),
+                            "contentType": parsed.get("content_type").and_then(|v| v.as_str()),
+                            "title": parsed.get("title").and_then(|v| v.as_str()),
+                            "content": parsed.get("content").and_then(|v| v.as_str()),
+                            "filePath": parsed.get("file_path").and_then(|v| v.as_str()),
+                            "isAttachment": parsed.get("is_attachment").and_then(|v| v.as_bool()),
+                            "base64": parsed.get("base64").and_then(|v| v.as_bool()),
+                        })) {
+                            eprintln!("Failed to emit show_content event to frontend: {}", e);
+                        }
+                        return;
+                    }
+
+                    // Check for request_input marker
+                    if parsed.get("__request_input").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        tracing::info!("Detected request_input marker, emitting request_input event");
+                        if let Err(e) = app.emit(&event_name, serde_json::json!({
+                            "type": "request_input",
+                            "timestamp": chrono::Utc::now().timestamp_millis(),
+                            "formId": parsed.get("form_id").and_then(|v| v.as_str()),
+                            "title": parsed.get("title").and_then(|v| v.as_str()),
+                            "description": parsed.get("description").and_then(|v| v.as_str()),
+                            "schema": parsed.get("schema"),
+                            "submitButton": parsed.get("submit_button").and_then(|v| v.as_str()),
+                        })) {
+                            eprintln!("Failed to emit request_input event to frontend: {}", e);
+                        }
+                        return;
+                    }
+                } else {
+                    tracing::warn!("Failed to parse tool response as JSON: {}", response.chars().take(200).collect::<String>());
+                }
+
+                // Regular tool result - emit tool_result event
+                tracing::info!("Emitting regular tool_result: toolId={}, result.preview={}",
+                    id, response.chars().take(200).collect::<String>());
                 if let Err(e) = app.emit(&event_name, serde_json::json!({
                     "type": "tool_result",
                     "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -169,6 +220,8 @@ pub async fn execute_agent_stream(
                     "result": response
                 })) {
                     eprintln!("Failed to emit event to frontend: {}", e);
+                } else {
+                    tracing::info!("Successfully emitted tool_result event");
                 }
             }
             ZeroAppStreamEvent::Complete { turn_complete } => {

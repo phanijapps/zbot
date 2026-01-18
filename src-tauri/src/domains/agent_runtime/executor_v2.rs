@@ -562,7 +562,7 @@ pub enum ZeroAppStreamEvent {
 impl ZeroAppStreamEvent {
     fn from_event(event: &Event) -> Self {
         if let Some(content) = &event.content {
-            tracing::info!("from_event: content.role={}, parts.len()={}", content.role, content.parts.len());
+            tracing::info!("from_event: content.role={}, parts.len()={}, turn_complete={}", content.role, content.parts.len(), event.turn_complete);
 
             for (idx, part) in content.parts.iter().enumerate() {
                 tracing::info!("from_event: part #{} = {:?}", idx, std::mem::discriminant(part));
@@ -585,13 +585,12 @@ impl ZeroAppStreamEvent {
                         }
                     }
                     Part::FunctionResponse { id, response } => {
-                        if let Ok(response_str) = serde_json::to_string(response) {
-                            tracing::info!("from_event: FunctionResponse id={}", id);
-                            return Self::ToolResponse {
-                                id: id.clone(),
-                                response: response_str,
-                            };
-                        }
+                        // response is already a JSON string from the tool, no need to serialize again
+                        tracing::info!("from_event: FunctionResponse id={}, response.len={}", id, response.len());
+                        return Self::ToolResponse {
+                            id: id.clone(),
+                            response: response.clone(),
+                        };
                     }
                     // Binary parts are not yet supported in stream events
                     Part::Binary { .. } => {

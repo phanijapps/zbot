@@ -491,12 +491,20 @@ pub async fn read_attachment_file(
     let attachments_dir = dirs.conversation_dir(&conversation_id).join("attachments");
     let file_path = attachments_dir.join(&filename);
 
-    eprintln!("=== read_attachment_file ===");
-    eprintln!("conversation_id: {}", conversation_id);
-    eprintln!("filename: {}", filename);
-    eprintln!("attachments_dir: {}", attachments_dir.display());
-    eprintln!("file_path: {}", file_path.display());
-    eprintln!("file exists: {}", file_path.exists());
+    tracing::info!("=== read_attachment_file ===");
+    tracing::info!("conversation_id: {}", conversation_id);
+    tracing::info!("filename: {}", filename);
+    tracing::info!("attachments_dir: {}", attachments_dir.display());
+    tracing::info!("file_path: {}", file_path.display());
+    tracing::info!("file exists: {}", file_path.exists());
+
+    // List files in attachments dir for debugging
+    if let Ok(entries) = std::fs::read_dir(&attachments_dir) {
+        let files: Vec<_> = entries.filter_map(|e| e.ok()).map(|e| e.file_name().into_string().ok()).flatten().collect();
+        tracing::info!("files in attachments_dir: {:?}", files);
+    } else {
+        tracing::info!("attachments_dir doesn't exist or can't be read");
+    }
 
     if !file_path.exists() {
         return Err(format!("Attachment file not found: {}", file_path.display()));
@@ -506,17 +514,17 @@ pub async fn read_attachment_file(
     let content = fs::read(&file_path)
         .map_err(|e| format!("Failed to read attachment file: {}", e))?;
 
-    // Check if it's binary or text
-    let is_text = content.iter().take(1024).all(|&b| {
-        b >= 32 && b <= 126 || b == b'\n' || b == b'\r' || b == b'\t'
-    });
+    // Check if content is valid UTF-8 (text) or binary
+    // For text files (HTML, markdown, etc.), return as string
+    // For binary files (images, PDFs), return as base64
+    let is_text = String::from_utf8(content.clone()).is_ok();
 
     if is_text {
         // Return as plain text
         String::from_utf8(content)
             .map_err(|e| format!("Attachment file contains invalid UTF-8: {}", e))
     } else {
-        // Return as base64
+        // Return as base64 for binary content
         use base64::prelude::*;
         Ok(BASE64_STANDARD.encode(&content))
     }

@@ -182,7 +182,8 @@ export function ConversationsPanel() {
         try {
           const parsed = JSON.parse(result.output);
           console.log("[reconstructAttachments] Parsed result:", parsed);
-          if (parsed.success && parsed.path) {
+          // WriteTool returns {path, bytes_written} - no success field needed
+          if (parsed.path) {
             const fullPath = parsed.path;
             const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
             const isOutput = fullPath.includes("/outputs/") || fullPath.includes("\\outputs\\");
@@ -377,8 +378,6 @@ export function ConversationsPanel() {
 
     // Collect streaming events to build assistant message
     const eventHandler = (event: any) => {
-      console.log("[ConversationsPanel] Event received:", event.type, event);
-
       // Forward to thinking panel state manager FIRST
       handleEvent(event);
 
@@ -389,7 +388,6 @@ export function ConversationsPanel() {
           name: event.toolName,
           status: "running" as const,
         });
-        console.log("[ConversationsPanel] Tool call started:", event.toolName, "Total:", collectedToolCalls.length);
 
         // Create assistant message immediately if it doesn't exist yet
         setMessages((prev) => {
@@ -433,16 +431,16 @@ export function ConversationsPanel() {
           toolCall.result = event.result;
           toolCall.error = event.error;
         }
-        console.log("[ConversationsPanel] Tool result:", event.toolId);
 
         // Parse write tool results to extract attachment info
         if (toolCall && toolCall.name === "write" && !event.error) {
           try {
             const parsed = JSON.parse(event.result);
-            if (parsed.success && parsed.path) {
+            // WriteTool returns {path, bytes_written} - no success field needed
+            if (parsed.path) {
               const fullPath = parsed.path;
               const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
-              const isOutput = fullPath.includes("/outputs/") || fullPath.includes("\\outputs\\");
+              const isOutput = fullPath.includes("/outputs/") || fullPath.includes("\\\\");
 
               // Detect content type from extension
               const ext = filename.split('.').pop()?.toLowerCase();
@@ -476,7 +474,6 @@ export function ConversationsPanel() {
                 size: parsed.bytes_written || 0,
                 isOutput,
               });
-              console.log("[ConversationsPanel] Attachment tracked:", filename);
             }
           } catch (e) {
             console.error("[ConversationsPanel] Failed to parse write result:", e);
@@ -503,7 +500,6 @@ export function ConversationsPanel() {
           return prev;
         });
       } else if (event.type === "done") {
-        console.log("[ConversationsPanel] Stream done, final tool count:", collectedToolCalls.length);
         // Final update to ensure thinking data is saved
         setMessages((prev) => {
           const exists = prev.some((m) => m.id === assistantMessageId);
@@ -527,7 +523,6 @@ export function ConversationsPanel() {
 
       if (event.type === "token") {
         assistantResponse += event.content;
-        console.log("[ConversationsPanel] Token event:", event.content, "Total length:", assistantResponse.length);
         // Update or add assistant message using functional update
         setMessages((prev) => {
           const existingMsg = prev.find((m) => m.id === assistantMessageId);
@@ -566,7 +561,6 @@ export function ConversationsPanel() {
           }
         });
       } else if (event.type === "reasoning") {
-        console.log("[ConversationsPanel] Reasoning event:", event.content?.substring(0, 100), "...");
         // Update or add assistant message with reasoning content
         setMessages((prev) => {
           const existingMsg = prev.find((m) => m.id === assistantMessageId);
@@ -608,12 +602,12 @@ export function ConversationsPanel() {
         });
       } else if (event.type === "show_content") {
         // Show content in generative canvas
-        console.log("[ConversationsPanel] Show content event:", event);
+        console.log("🎨 Opening content viewer:", event.title || event.contentType);
         setCanvasContent({ type: "show_content", event: event as ShowContentEvent });
         setCanvasOpen(true);
       } else if (event.type === "request_input") {
         // Request input via generative form
-        console.log("[ConversationsPanel] Request input event:", event);
+        console.log("📝 Opening input form:", event.title);
         setCanvasContent({ type: "request_input", event: event as RequestInputEvent });
         setCanvasOpen(true);
       }

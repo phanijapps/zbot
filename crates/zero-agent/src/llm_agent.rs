@@ -210,11 +210,11 @@ impl Agent for LlmAgent {
         let agent = self.clone();
         let ctx_clone = ctx.clone();
 
-        let stream = stream! {
-            let max_iterations = ctx.run_config().max_iterations.unwrap_or(50);
+        let stream = async_stream::try_stream! {
+            let max_iterations = ctx_clone.run_config().max_iterations.unwrap_or(50);
 
             for iteration in 0..max_iterations {
-                if ctx.ended() {
+                if ctx_clone.ended() {
                     debug!("Invocation ended, stopping");
                     break;
                 }
@@ -232,12 +232,32 @@ impl Agent for LlmAgent {
 
                 // Emit assistant response event
                 let event = agent.create_event(&ctx_clone, &response);
-                yield Ok(event);
+                yield event;
 
                 // If turn is complete, we're done
                 if response.turn_complete {
                     debug!("Turn complete after {} iterations", iteration + 1);
                     break;
+                }
+
+                // Emit separate events for tool results (for streaming to frontend)
+                // Clone into a separate vector to avoid lifetime issues in stream
+                let tool_responses_for_events: Vec<Content> = tool_responses.iter().cloned().collect();
+                for tool_response in tool_responses_for_events {
+                    let tool_result_event = Event {
+                        id: Uuid::new_v4().to_string(),
+                        timestamp: chrono::Utc::now(),
+                        invocation_id: ctx_clone.invocation_id().to_string(),
+                        branch: ctx_clone.branch().to_string(),
+                        author: agent.name.clone(),
+                        content: Some(tool_response),
+                        actions: EventActions::default(),
+                        turn_complete: false,
+                        long_running_tool_ids: Vec::new(),
+                        metadata: Default::default(),
+                    };
+                    debug!("Emitting tool result event");
+                    yield tool_result_event;
                 }
 
                 // Add tool responses to session history for the next iteration
