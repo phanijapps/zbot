@@ -335,6 +335,43 @@ const buttonVariants = cva(
 
 ## Recent Session Learnings
 
+### State-Based Conversation ID Propagation
+
+**Problem**: Tools (`WriteTool`, `EditTool`) needed `conversation_id` to resolve file paths, but storing it in tool instances created tight coupling and made tools non-idempotent.
+
+**Solution**: Use session state for runtime context instead of baking it into tools.
+
+**Before** (Baked-in conversation_id):
+```rust
+// Tool creation
+let write_tool = WriteTool::with_conversation(fs, Some(conv_id.clone()));
+
+// Tool execution
+let conv_id = self.conversation_id.lock().unwrap().clone();
+let conv_dir = self.fs.conversation_dir(conv_id);
+```
+
+**After** (State-based):
+```rust
+// Application layer defines state keys
+pub const CONVERSATION_ID: &str = "app:conversation_id";
+
+// Executor sets state during initialization
+session.state_mut().set("app:conversation_id", json!(conversation_id));
+
+// Tool reads from context during execution
+let conv_id = ctx.get_state("app:conversation_id")
+    .and_then(|v| v.as_str().map(|s| s.to_string()));
+```
+
+**Benefits**:
+1. **Stateless Tools**: Same tool instance works for any conversation
+2. **Single Source of Truth**: conversation_id lives in session state only
+3. **Scalable**: Migrating to persistent state (FS/SQLite/Parquet) only requires changing the `State` implementation
+4. **Clean Separation**: Framework (`zero-*`) provides infrastructure, application defines state keys
+
+**Key Design Principle**: Runtime state (conversation_id, user_id, agent_id) should flow through the `ToolContext`'s state mechanism, not be baked into tool instances.
+
 ### Agent Executor with Tool Calling Loop
 
 **Tool Calling Loop Pattern**:

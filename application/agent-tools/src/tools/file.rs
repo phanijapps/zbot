@@ -93,26 +93,13 @@ impl Tool for ReadTool {
 pub struct WriteTool {
     /// File system context
     fs: Arc<dyn FileSystemContext>,
-    /// Conversation ID for path resolution (using Arc for shared access)
-    conversation_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl WriteTool {
     /// Create a new write tool with file system context
     #[must_use]
     pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs, conversation_id: std::sync::Arc::new(std::sync::Mutex::new(None)) }
-    }
-
-    /// Create a new write tool with file system context and conversation ID
-    #[must_use]
-    pub fn with_conversation(fs: Arc<dyn FileSystemContext>, conversation_id: Option<String>) -> Self {
-        Self { fs, conversation_id: std::sync::Arc::new(std::sync::Mutex::new(conversation_id)) }
-    }
-
-    /// Set the conversation ID (thread-safe, can be called even when wrapped in Arc)
-    pub fn set_conversation_id(&self, conversation_id: Option<String>) {
-        *self.conversation_id.lock().unwrap() = conversation_id;
+        Self { fs }
     }
 }
 
@@ -143,7 +130,19 @@ impl Tool for WriteTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Check for error markers from truncated tool calls
+        if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
+            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            let truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
+            return Err(zero_core::ZeroError::Tool(format!(
+                "Tool call failed ({}): {}{}",
+                error_type,
+                message,
+                if truncated { " - The LLM response was truncated. Try increasing max_tokens or reducing content size." } else { "" }
+            )));
+        }
+
         let path = args.get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
@@ -166,7 +165,9 @@ impl Tool for WriteTool {
             ));
         }
 
-        let conv_id = self.conversation_id.lock().unwrap().clone();
+        // Get conversation_id from session state
+        let conv_id = ctx.get_state("app:conversation_id")
+            .and_then(|v| v.as_str().map(|s| s.to_string()));
         tracing::info!("Writing file: path='{}' ({} bytes), conversation_id={:?}", path, content.len(), conv_id);
 
         // Handle outputs/ prefix
@@ -228,40 +229,17 @@ impl Tool for WriteTool {
 /// Tool for editing files with search and replace
 ///
 /// Note: This tool requires conversation context to resolve paths.
-/// Use EditTool::with_context() to create with the proper filesystem
-/// and conversation ID, or use the setter methods before use.
+/// The conversation_id is read from the ToolContext's state during execution.
 pub struct EditTool {
     /// File system context for resolving conversation paths
     fs: Arc<dyn FileSystemContext>,
-    /// Conversation ID for path resolution (using Arc for shared access)
-    conversation_id: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
 impl EditTool {
     /// Create a new edit tool with file system context
     #[must_use]
     pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs, conversation_id: std::sync::Arc::new(std::sync::Mutex::new(None)) }
-    }
-
-    /// Create a new edit tool with file system context and conversation ID
-    #[must_use]
-    pub fn with_context(fs: Arc<dyn FileSystemContext>, conversation_id: Option<String>) -> Self {
-        Self { fs, conversation_id: std::sync::Arc::new(std::sync::Mutex::new(conversation_id)) }
-    }
-
-    /// Set the conversation ID (thread-safe, can be called even when wrapped in Arc)
-    pub fn set_conversation_id(&self, conversation_id: Option<String>) {
-        *self.conversation_id.lock().unwrap() = conversation_id;
-    }
-
-    /// Get the conversation directory for this tool
-    fn conversation_dir(&self) -> Result<PathBuf> {
-        let conv_id = self.conversation_id.lock().unwrap();
-        let conv_id = conv_id.as_deref().ok_or_else(||
-            zero_core::ZeroError::Tool("Conversation ID not set. Use set_conversation_id() before using this tool.".to_string()))?;
-        self.fs.conversation_dir(conv_id)
-            .ok_or_else(|| zero_core::ZeroError::Tool("Conversation directory not found".to_string()))
+        Self { fs }
     }
 }
 
@@ -300,7 +278,19 @@ impl Tool for EditTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Check for error markers from truncated tool calls
+        if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
+            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            let truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
+            return Err(zero_core::ZeroError::Tool(format!(
+                "Tool call failed ({}): {}{}",
+                error_type,
+                message,
+                if truncated { " - The LLM response was truncated. Try increasing max_tokens or reducing content size." } else { "" }
+            )));
+        }
+
         let path = args.get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
@@ -323,8 +313,16 @@ impl Tool for EditTool {
             ));
         }
 
+        // Get conversation_id from session state
+        let conv_id = ctx.get_state("app:conversation_id")
+            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .ok_or_else(|| zero_core::ZeroError::Tool(
+                "Conversation ID not found in state. Cannot resolve file path.".to_string()
+            ))?;
+
         // Resolve path in conversation context
-        let conv_dir = self.conversation_dir()?;
+        let conv_dir = self.fs.conversation_dir(&conv_id)
+            .ok_or_else(|| zero_core::ZeroError::Tool("Conversation directory not found".to_string()))?;
         let final_path = conv_dir.join(path);
 
         let mut content = std::fs::read_to_string(&final_path)

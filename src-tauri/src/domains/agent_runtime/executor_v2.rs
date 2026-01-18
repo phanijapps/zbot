@@ -18,8 +18,10 @@ use crate::domains::agent_runtime::{
     middleware_integration::{MiddlewareFactory, MiddlewareExecutor, convert_middleware_config},
     filesystem::TauriFileSystemContext,
     McpManager,
+    state_keys,
 };
 use agent_tools::builtin_tools_with_fs;
+use serde_json::json;
 
 // Type alias for Result with String error type (for Tauri compatibility)
 type TResult<T> = std::result::Result<T, String>;
@@ -224,7 +226,7 @@ impl ZeroAppExecutor {
         let llm = Self::create_llm(&config.llm_config)?;
 
         // Create tool registry with builtin tools (mutable)
-        let mut tool_registry = Self::create_tool_registry(dirs.clone(), &config.conversation_id)?;
+        let mut tool_registry = Self::create_tool_registry(dirs.clone())?;
 
         // Create MCP manager
         let mcp_manager = Arc::new(McpManager::default());
@@ -253,11 +255,32 @@ impl ZeroAppExecutor {
         let agent = adapter.build_agent(&config.agent_config)?;
 
         // Create session using MutexSession for shared access
+        let conversation_id = config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let session = Arc::new(MutexSession::with_params(
-            config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            conversation_id.clone(),
             "agentzero".to_string(),
             "user".to_string(),
         ));
+
+        // Set conversation_id in session state so tools can access it
+        {
+            let mut session = session.lock().map_err(|e| format!("Session lock error: {}", e))?;
+            session.state_mut().set(
+                state_keys::state_keys::CONVERSATION_ID.to_string(),
+                json!(conversation_id),
+            );
+            // Also set agent_id and provider_id for tool access
+            session.state_mut().set(
+                state_keys::state_keys::AGENT_ID.to_string(),
+                json!(config.agent_id),
+            );
+            session.state_mut().set(
+                state_keys::state_keys::PROVIDER_ID.to_string(),
+                json!(config.provider_id),
+            );
+            tracing::info!("Set session state: conversation_id={}, agent_id={}, provider_id={}",
+                conversation_id, config.agent_id, config.provider_id);
+        }
 
         // Create middleware executor with minimal pipeline
         let middleware_executor = Arc::new(MiddlewareExecutor::new(
@@ -419,19 +442,15 @@ impl ZeroAppExecutor {
     }
 
     /// Create tool registry with builtin tools (returns non-Arc for mutation)
-    fn create_tool_registry(_dirs: Arc<AppDirs>, conversation_id: &Option<String>) -> TResult<ToolRegistry> {
+    fn create_tool_registry(_dirs: Arc<AppDirs>) -> TResult<ToolRegistry> {
         // Get a fresh AppDirs instance since we can't clone from Arc
         let app_dirs = AppDirs::get().map_err(|e| e.to_string())?;
 
-        // Create file system context
-        let fs_context = if let Some(conv_id) = conversation_id {
-            TauriFileSystemContext::new(app_dirs).with_conversation(conv_id.clone())
-        } else {
-            TauriFileSystemContext::new(app_dirs)
-        };
+        // Create file system context (no conversation_id needed - tools read from state)
+        let fs_context = TauriFileSystemContext::new(app_dirs);
 
-        // Get tools from zerotools (now using zero_core::Tool)
-        let tools = builtin_tools_with_fs(Arc::new(fs_context), conversation_id.clone());
+        // Get tools from agent-tools (conversation_id now read from session state by tools)
+        let tools = builtin_tools_with_fs(Arc::new(fs_context));
 
         // Register tools
         let mut tool_registry = ToolRegistry::new();

@@ -2,55 +2,66 @@
 
 This document tracks known issues that need to be addressed.
 
-## Write Tool Path Resolution Issue
+## ~~Write Tool Path Resolution Issue~~ ✅ RESOLVED
 
-**Status:** Open
+**Status:** Resolved
 **Priority:** High
 **Component:** `agent-tools` / `WriteTool`
+**Resolution Date:** 2025-01-18
 
 ### Description
 
-When the agent attempts to write files using the `write` tool, the operation fails with error:
+When the agent attempted to write files using the `write` tool, the operation failed with error:
 ```
 Tool execution error: Tool error: Missing 'path' parameter
 ```
 
-This error occurs even when the LLM is correctly providing the `path` parameter in the tool call.
+This error occurred even when the LLM was correctly providing the `path` parameter in the tool call.
 
-### Current Behavior
+### Root Cause
 
-1. LLM generates tool call with arguments: `{"path": "attachments/time-report.html", "content": "..."}`
-2. OpenAI LLM client parses the response using `serde_json::from_str`
-3. Tool receives the arguments but cannot find the `path` parameter
-4. Execution fails with "Missing 'path' parameter" error
+The issue was a **state management problem**, not a parameter parsing issue. The `conversation_id` was being:
+1. Baked into tool instances during creation (`WriteTool::with_conversation()`)
+2. Stored in multiple places (tool struct + filesystem context)
+3. Not properly propagated through the execution context
 
-### Root Cause Analysis (In Progress)
+This created tight coupling and made tools non-idempotent.
 
-The issue appears to be related to:
-- JSON parsing of tool arguments from OpenAI API responses
-- Possible truncation due to `finish_reason: "length"` when content is large
-- Conversation ID not being properly propagated to WriteTool
+### Solution
 
-### Attempted Fixes
+Implemented **state-based conversation ID propagation**:
 
-1. **Conversation ID Propagation** - Updated `builtin_tools_with_fs` to accept and pass conversation_id to WriteTool/EditTool
-2. **Debug Logging** - Added detailed logging in OpenAI client to track argument parsing
-3. **Owned vs Borrowed** - Fixed ownership issues with conversation_id parameter
+1. **Application layer defines state keys** (`src-tauri/src/domains/agent_runtime/state_keys.rs`):
+   ```rust
+   pub const CONVERSATION_ID: &str = "app:conversation_id";
+   ```
 
-### Next Steps
+2. **Executor sets state during initialization** (`executor_v2.rs`):
+   ```rust
+   session.state_mut().set("app:conversation_id", json!(conversation_id));
+   ```
 
-1. Check if arguments JSON is malformed or truncated
-2. Verify WriteTool is receiving correct arguments structure
-3. Test with smaller content to rule out truncation
-4. Consider using `outputs/` prefix pattern which has different code path
+3. **Tools read from context during execution** (`file.rs`):
+   ```rust
+   let conv_id = ctx.get_state("app:conversation_id")
+       .and_then(|v| v.as_str().map(|s| s.to_string()));
+   ```
 
-### Related Files
+4. **Simplified filesystem context** - Removed `conversation_id` storage from `TauriFileSystemContext`
 
-- `crates/zero-llm/src/openai.rs` - OpenAI LLM client implementation
-- `application/agent-tools/src/tools/file.rs` - WriteTool implementation
-- `application/agent-tools/src/tools/mod.rs` - builtin_tools_with_fs function
-- `src-tauri/src/domains/agent_runtime/executor_v2.rs` - Executor that creates tools
+### Changes Made
 
-### Workaround
+- `src-tauri/src/domains/agent_runtime/state_keys.rs` - New file with state key constants
+- `src-tauri/src/domains/agent_runtime/executor_v2.rs` - Sets conversation_id in session state
+- `application/agent-tools/src/tools/file.rs` - WriteTool/EditTool now stateless, read from context
+- `application/agent-tools/src/tools/mod.rs` - Removed conversation_id from `builtin_tools_with_fs()`
+- `src-tauri/src/domains/agent_runtime/filesystem.rs` - Simplified TauriFileSystemContext
+- `src-tauri/src/commands/agents_runtime.rs` - Unified to use new `run_stream` API
+- `memory-bank/learnings.md` - Added "State-Based Conversation ID Propagation" section
 
-None currently available. Files cannot be written through the agent tool interface.
+### Benefits
+
+1. **Stateless Tools**: Same tool instance works for any conversation
+2. **Single Source of Truth**: conversation_id lives in session state only
+3. **Scalable**: Future migration to persistent state (FS/SQLite/Parquet) only requires changing the `State` implementation
+4. **Clean Separation**: Framework (`zero-*`) provides infrastructure, application defines state keys

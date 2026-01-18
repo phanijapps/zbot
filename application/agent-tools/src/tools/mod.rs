@@ -30,27 +30,17 @@ pub use ui::{RequestInputTool, ShowContentTool};
 ///
 /// # Arguments
 /// * `fs` - File system context
-/// * `conversation_id` - Optional conversation ID for tools that need it
+///
+/// # Note
+/// Conversation ID is no longer passed to tools. Tools that need it
+/// (like WriteTool, EditTool) will read it from the ToolContext's state
+/// using the state key "app:conversation_id".
 #[must_use]
-pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>, conversation_id: Option<String>) -> Vec<Arc<dyn Tool>> {
-    // Create WriteTool with conversation_id if provided
-    let write_tool = if let Some(ref conv_id) = conversation_id {
-        Arc::new(WriteTool::with_conversation(fs.clone(), Some(conv_id.clone())))
-    } else {
-        Arc::new(WriteTool::new(fs.clone()))
-    };
-
-    // Create EditTool with conversation_id if provided
-    let edit_tool = if let Some(ref conv_id) = conversation_id {
-        Arc::new(EditTool::with_context(fs.clone(), Some(conv_id.clone())))
-    } else {
-        Arc::new(EditTool::new(fs.clone()))
-    };
-
+pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(ReadTool),
-        write_tool,
-        edit_tool,
+        Arc::new(WriteTool::new(fs.clone())),
+        Arc::new(EditTool::new(fs.clone())),
         Arc::new(GrepTool),
         Arc::new(GlobTool),
         Arc::new(PythonTool::new(fs.clone())),

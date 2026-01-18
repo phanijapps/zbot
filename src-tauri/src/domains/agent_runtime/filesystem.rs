@@ -12,9 +12,11 @@ use zero_app::FileSystemContext;
 use crate::settings::AppDirs;
 
 /// Tauri-specific file system context
+///
+/// Note: conversation_id is no longer stored here. It is passed directly
+/// to conversation_dir() by tools that read it from session state.
 pub struct TauriFileSystemContext {
     dirs: Arc<AppDirs>,
-    conversation_id: Option<String>,
 }
 
 impl TauriFileSystemContext {
@@ -22,14 +24,7 @@ impl TauriFileSystemContext {
     pub fn new(dirs: AppDirs) -> Self {
         Self {
             dirs: Arc::new(dirs),
-            conversation_id: None,
         }
-    }
-
-    /// Set the conversation ID
-    pub fn with_conversation(mut self, id: String) -> Self {
-        self.conversation_id = Some(id);
-        self
     }
 
     /// Get a reference to the AppDirs
@@ -45,13 +40,8 @@ impl TauriFileSystemContext {
 
 impl FileSystemContext for TauriFileSystemContext {
     fn conversation_dir(&self, conversation_id: &str) -> Option<PathBuf> {
-        let conv_id = if let Some(id) = &self.conversation_id {
-            id.as_str()
-        } else {
-            conversation_id
-        };
         // Use conversation_logs_dir for scoped conversation files
-        Some(self.dirs.conversation_logs_dir.join(conv_id))
+        Some(self.dirs.conversation_logs_dir.join(conversation_id))
     }
 
     fn outputs_dir(&self) -> Option<PathBuf> {
@@ -78,11 +68,6 @@ impl FileSystemContext for TauriFileSystemContext {
 }
 
 /// Create Tauri file system context from AppDirs
-pub fn create_fs_context(dirs: AppDirs, conversation_id: Option<String>) -> TauriFileSystemContext {
-    let ctx = TauriFileSystemContext::new(dirs);
-    if let Some(id) = conversation_id {
-        ctx.with_conversation(id)
-    } else {
-        ctx
-    }
+pub fn create_fs_context(dirs: AppDirs) -> TauriFileSystemContext {
+    TauriFileSystemContext::new(dirs)
 }

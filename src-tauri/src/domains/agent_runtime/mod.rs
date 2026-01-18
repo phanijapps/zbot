@@ -5,7 +5,6 @@
 // ============================================================================
 
 // Re-export everything from agent-runtime library
-// Note: executor module is provided locally (Tauri-specific config loading)
 pub use agent_runtime::{
     // Types
     ChatMessage, StreamEvent, ToolCall, ToolResult, ToolError,
@@ -32,10 +31,6 @@ pub use agent_runtime::{
     init_logging, LogLevel,
 };
 
-// Note: builtin_tools_with_fs now returns zero_core::Tool (via zerotools)
-// Import directly from zerotools for the new system
-// Old executor.rs should not use this - it's deprecated
-
 // Zero framework integration
 pub use zero_app::prelude::*;
 
@@ -45,13 +40,7 @@ pub mod config_adapter;
 pub mod types;
 pub mod middleware_integration;
 pub mod executor_v2;
-
-// Tauri-specific executor factory (uses agent-runtime types)
-// DEPRECATED: Will be removed once migration to zero-app is complete
-pub mod executor;
-
-// Re-export AgentExecutor from executor module
-pub use self::executor::AgentExecutor;
+pub mod state_keys;
 
 // Re-export zero-app executor
 pub use self::executor_v2::{

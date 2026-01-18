@@ -145,12 +145,43 @@ impl OpenAiLlm {
         if let Some(tool_calls) = tool_calls {
             tracing::info!("from_openai_response: Response has tool_calls, count={}", tool_calls.len());
 
+            // Check if response was truncated (finish_reason: "length")
+            let is_truncated = response.choices.first()
+                .and_then(|c| c.finish_reason.as_ref())
+                .map(|r| r == "length")
+                .unwrap_or(false);
+
+            if is_truncated {
+                tracing::warn!("Response was truncated (finish_reason: length). Tool calls may be incomplete.");
+            }
+
             let our_tool_calls: Vec<ToolCall> = tool_calls
                 .iter()
                 .map(|tc| {
                     tracing::info!("Parsing tool call: name={}, arguments.len={}",
                         tc.function.name, tc.function.arguments.len());
-                    let arguments = match serde_json::from_str::<serde_json::Value>(&tc.function.arguments) {
+
+                    // Validate JSON completeness before parsing
+                    let args_str = &tc.function.arguments;
+                    let is_complete_json = Self::is_json_complete(args_str);
+
+                    if !is_complete_json {
+                        tracing::error!("Tool '{}' arguments JSON is incomplete (truncated). Cannot execute tool. Arguments (first 200 chars): '{}...'",
+                            tc.function.name, &args_str[..args_str.len().min(200)]);
+
+                        return ToolCall {
+                            id: tc.id.clone(),
+                            name: tc.function.name.clone(),
+                            arguments: serde_json::json!({
+                                "__error__": "TRUNCATED_ARGUMENTS",
+                                "__message__": format!("Tool call arguments were truncated due to max_tokens limit. Increase max_tokens or reduce content size."),
+                                "__original_length__": args_str.len(),
+                                "__truncated__": true
+                            }),
+                        };
+                    }
+
+                    let arguments = match serde_json::from_str::<serde_json::Value>(args_str) {
                         Ok(args) => {
                             tracing::info!("Successfully parsed arguments for tool '{}', keys: {:?}",
                                 tc.function.name, args.as_object().map(|o| o.keys().collect::<Vec<_>>()));
@@ -158,8 +189,12 @@ impl OpenAiLlm {
                         }
                         Err(e) => {
                             tracing::warn!("Failed to parse arguments for tool '{}': {}. Arguments were: '{}'",
-                                tc.function.name, e, tc.function.arguments);
-                            serde_json::json!({})
+                                tc.function.name, e, args_str);
+                            serde_json::json!({
+                                "__error__": "PARSE_ERROR",
+                                "__message__": format!("JSON parse error: {}", e),
+                                "__truncated__": is_complete_json // false if we got here but JSON was invalid
+                            })
                         }
                     };
                     ToolCall {
@@ -198,6 +233,57 @@ impl OpenAiLlm {
             turn_complete: true,
             usage,
         }
+    }
+
+    /// Check if a JSON string is complete (has balanced braces and strings)
+    ///
+    /// This is used to detect truncated tool call arguments when the LLM
+    /// hits max_tokens limit.
+    fn is_json_complete(json_str: &str) -> bool {
+        let mut brace_count = 0i32;
+        let mut bracket_count = 0i32;
+        let mut in_string = false;
+        let mut escape_next = false;
+
+        for ch in json_str.chars() {
+            if escape_next {
+                escape_next = false;
+                continue;
+            }
+
+            match ch {
+                '\\' if in_string => {
+                    escape_next = true;
+                }
+                '"' => {
+                    in_string = !in_string;
+                }
+                '{' if !in_string => {
+                    brace_count += 1;
+                }
+                '}' if !in_string => {
+                    brace_count -= 1;
+                }
+                '[' if !in_string => {
+                    bracket_count += 1;
+                }
+                ']' if !in_string => {
+                    bracket_count -= 1;
+                }
+                _ => {}
+            }
+
+            // Early exit if counts go negative (more closing than opening)
+            if brace_count < 0 || bracket_count < 0 {
+                return false;
+            }
+        }
+
+        // JSON is complete if:
+        // 1. Not in a string
+        // 2. All braces are balanced
+        // 3. All brackets are balanced
+        !in_string && brace_count == 0 && bracket_count == 0
     }
 }
 
