@@ -113,6 +113,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
   const [name, setName] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [description, setDescription] = useState("");
+  const [agentType, setAgentType] = useState<"llm" | "sequential" | "parallel" | "loop" | "conditional" | "llm_conditional" | "custom">("llm");
   const [providerId, setProviderId] = useState("");
   const [model, setModel] = useState("");
   const [temperature, setTemperature] = useState(0.7);
@@ -214,6 +215,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
       setName(initialAgent.name);
       setDisplayName(initialAgent.displayName);
       setDescription(initialAgent.description);
+      setAgentType(initialAgent.agentType || "llm");
       setProviderId(initialAgent.providerId);
       setModel(initialAgent.model);
       setTemperature(initialAgent.temperature);
@@ -345,6 +347,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         name: name.toLowerCase().replace(/\s+/g, "-"),
         displayName,
         description,
+        agentType,
         providerId,
         model,
         temperature,
@@ -382,6 +385,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
         name,
         displayName,
         description,
+        agentType,
         providerId,
         model,
         temperature,
@@ -937,6 +941,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 isNewAgent={!initialAgent}
                 displayName={displayName}
                 description={description}
+                agentType={agentType}
                 providerId={providerId}
                 model={model}
                 temperature={temperature}
@@ -945,11 +950,13 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 mcps={selectedMcpIds}
                 skills={selectedSkillIds}
                 middleware={middleware}
+                instructions={instructions}
                 providers={providers}
                 availableMcps={mcps}
                 availableSkills={skills}
                 onDisplayNameChange={setDisplayName}
                 onDescriptionChange={setDescription}
+                onAgentTypeChange={setAgentType}
                 onProviderIdChange={setProviderId}
                 onModelChange={setModel}
                 onTemperatureChange={setTemperature}
@@ -958,6 +965,7 @@ export function AgentIDEPage({ onSave, onClose, onAgentUpdated, initialAgent }: 
                 onMcpToggle={toggleMcp}
                 onSkillToggle={toggleSkill}
                 onMiddlewareChange={setMiddleware}
+                onInstructionsChange={setInstructions}
                 onSave={saveConfigYaml}
               />
             ) : selectedFile?.name === "AGENTS.md" ? (

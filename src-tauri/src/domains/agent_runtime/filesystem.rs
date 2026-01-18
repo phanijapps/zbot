@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use agent_runtime::FileSystemContext;
+use zero_app::FileSystemContext;
 
 use crate::settings::AppDirs;
 

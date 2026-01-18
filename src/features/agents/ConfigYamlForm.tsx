@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { Bot, Brain, Server as ServerIcon, Sparkles, Lock, Settings } from "lucide-react";
+import { Bot, Brain, Server as ServerIcon, Sparkles, Lock, Settings, GitBranch, GitMerge, Repeat, ArrowRight, Network } from "lucide-react";
 import { Input } from "@/shared/ui/input";
 import { Label } from "@/shared/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
@@ -13,7 +13,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/shared/ui/tabs";
 import { Textarea } from "@/shared/ui/textarea";
 import type { Provider } from "@/shared/types";
 import type { MCPServer } from "@/features/mcp/types";
-import type { Skill } from "@/shared/types";
+import type { Skill, AgentType } from "@/shared/types";
 
 // Default middleware configuration
 const DEFAULT_MIDDLEWARE = `# Middleware Configuration
@@ -67,6 +67,7 @@ interface ConfigYamlFormProps {
   // Editable fields
   displayName: string;
   description: string;
+  agentType: AgentType;
   providerId: string;
   model: string;
   temperature: number;
@@ -75,6 +76,7 @@ interface ConfigYamlFormProps {
   mcps: string[];
   skills: string[];
   middleware: string;
+  instructions: string; // From AGENTS.md
 
   // Options
   providers: Provider[];
@@ -84,6 +86,7 @@ interface ConfigYamlFormProps {
   // Callbacks
   onDisplayNameChange: (value: string) => void;
   onDescriptionChange: (value: string) => void;
+  onAgentTypeChange: (value: AgentType) => void;
   onProviderIdChange: (value: string) => void;
   onModelChange: (value: string) => void;
   onTemperatureChange: (value: number) => void;
@@ -92,6 +95,7 @@ interface ConfigYamlFormProps {
   onMcpToggle: (mcpId: string) => void;
   onSkillToggle: (skillId: string) => void;
   onMiddlewareChange: (value: string) => void;
+  onInstructionsChange: (value: string) => void;
   onSave: () => void;
 }
 
@@ -100,6 +104,7 @@ export function ConfigYamlForm({
   isNewAgent,
   displayName,
   description,
+  agentType,
   providerId,
   model,
   temperature,
@@ -108,11 +113,13 @@ export function ConfigYamlForm({
   mcps,
   skills,
   middleware,
+  instructions,
   providers,
   availableMcps,
   availableSkills,
   onDisplayNameChange,
   onDescriptionChange,
+  onAgentTypeChange,
   onProviderIdChange,
   onModelChange,
   onTemperatureChange,
@@ -121,6 +128,7 @@ export function ConfigYamlForm({
   onMcpToggle,
   onSkillToggle,
   onMiddlewareChange,
+  onInstructionsChange,
   onSave,
 }: ConfigYamlFormProps) {
   const [activeTab, setActiveTab] = useState<"config" | "middleware">("config");
@@ -132,7 +140,7 @@ export function ConfigYamlForm({
       onSave();
     }, 500);
     return () => clearTimeout(timer);
-  }, [displayName, description, providerId, model, temperature, maxTokens, thinkingEnabled, mcps, skills]);
+  }, [displayName, description, agentType, providerId, model, temperature, maxTokens, thinkingEnabled, mcps, skills, instructions]);
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
@@ -204,6 +212,80 @@ export function ConfigYamlForm({
               />
             </div>
 
+            {/* Agent Type */}
+            <div>
+              <Label className="text-gray-400 text-xs mb-1.5 flex items-center gap-2">
+                <Network className="size-3.5 text-blue-400" />
+                Agent Type
+              </Label>
+              <Select value={agentType} onValueChange={onAgentTypeChange}>
+                <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+                  <SelectValue placeholder="Select agent type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="llm">
+                    <div className="flex items-center gap-2">
+                      <Bot className="size-3.5" />
+                      <span>LLM Agent</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="sequential">
+                    <div className="flex items-center gap-2">
+                      <ArrowRight className="size-3.5" />
+                      <span>Sequential (workflow)</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="parallel">
+                    <div className="flex items-center gap-2">
+                      <GitMerge className="size-3.5" />
+                      <span>Parallel (workflow)</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="loop">
+                    <div className="flex items-center gap-2">
+                      <Repeat className="size-3.5" />
+                      <span>Loop (workflow)</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="conditional">
+                    <div className="flex items-center gap-2">
+                      <GitBranch className="size-3.5" />
+                      <span>Conditional (workflow)</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="llm_conditional">
+                    <div className="flex items-center gap-2">
+                      <Brain className="size-3.5" />
+                      <span>LLM Conditional (workflow)</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="custom">
+                    <div className="flex items-center gap-2">
+                      <Sparkles className="size-3.5" />
+                      <span>Custom (workflow)</span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            {/* System Instruction - only for LLM and custom agents */}
+            {(agentType === "llm" || agentType === "custom") && (
+              <div>
+                <Label className="text-gray-400 text-xs mb-1.5 block">System Instruction (from AGENTS.md)</Label>
+                <Textarea
+                  placeholder="You are a helpful assistant..."
+                  value={instructions}
+                  onChange={(e) => onInstructionsChange(e.target.value)}
+                  className="bg-white/5 border-white/10 text-white text-sm resize-none min-h-[80px] p-3"
+                  spellCheck={false}
+                />
+              </div>
+            )}
+
+            {/* Provider and Model - only for LLM and custom agents */}
+            {(agentType === "llm" || agentType === "custom") && (
+              <>
             {/* Provider and Model - side by side */}
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -282,8 +364,11 @@ export function ConfigYamlForm({
                 />
               </div>
             </div>
+              </>
+            )}
 
-            {/* Thinking Enabled */}
+            {/* Thinking Enabled - only for LLM and custom agents */}
+            {(agentType === "llm" || agentType === "custom") && (
             <div className="flex items-center justify-between py-2 px-3 bg-white/5 rounded-lg border border-white/10">
               <div className="flex items-center gap-2">
                 <Brain className="size-4 text-purple-400" />
@@ -297,6 +382,7 @@ export function ConfigYamlForm({
                 onCheckedChange={onThinkingEnabledChange}
               />
             </div>
+            )}
 
             {/* MCP Servers and Skills - compact lists side by side */}
             <div className="grid grid-cols-2 gap-4">
@@ -364,6 +450,21 @@ export function ConfigYamlForm({
                 </div>
               </div>
             </div>
+
+            {/* Workflow Agent Notice */}
+            {agentType !== "llm" && (
+              <div className="bg-yellow-500/10 border border-yellow-500/20 rounded-lg p-3">
+                <p className="text-xs text-yellow-300">
+                  <strong>Workflow Agent:</strong> {agentType === "sequential" && "Executes sub-agents in sequence."}
+                  {agentType === "parallel" && "Executes sub-agents concurrently."}
+                  {agentType === "loop" && "Iterates sub-agents with exit conditions."}
+                  {agentType === "conditional" && "Routes to sub-agents based on conditions."}
+                  {agentType === "llm_conditional" && "Uses LLM to classify and route to sub-agents."}
+                  {agentType === "custom" && "Custom agent logic with system instruction."}
+                  {" "}Sub-agents and workflow-specific configuration must be set up in <strong>config.yaml</strong> directly.
+                </p>
+              </div>
+            )}
 
             {/* Info Box */}
             <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3">

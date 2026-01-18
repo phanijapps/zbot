@@ -1,402 +1,542 @@
-# Agent Zero - Architecture Documentation
+# AgentZero Architecture
 
-## Solution Architecture
+## Overview
 
-### High-Level Overview
+AgentZero is a Tauri-based desktop application for managing AI agents with MCP (Model Context Protocol) server integration, skills, and modular middleware support.
 
-Agent Zero follows a **modular desktop architecture** with clear separation between the Rust backend (system access, file I/O, process management) and React frontend (UI, state management, user interactions).
+The project is structured as a **Cargo workspace** with a modular framework design. The core framework is split into multiple reusable crates (`zero-*`), each with a specific responsibility, plus application-specific crates (`agent-runtime`, `agent-tools`) and the Tauri application.
 
-```mermaid
-graph TB
-    subgraph "Desktop Application"
-        subgraph "Frontend - React 19"
-            UI[UI Layer]
-            Core[Core Shell]
-            Features[Feature Modules]
-            Services[Service Layer]
-        end
+## Technology Stack
 
-        subgraph "Backend - Rust"
-            Commands[Tauri Commands]
-            FileIO[File System]
-            Proc[Process Manager]
-        end
-    end
+### Frontend
+- **Framework**: React 19 (via Vite)
+- **Language**: TypeScript
+- **UI Components**: Radix UI primitives with Tailwind CSS styling
+- **Editor**: `@uiw/react-md-editor` for markdown editing
+- **State Management**: React hooks (useState, useEffect)
+- **Routing**: react-router-dom v7
+- **Icons**: lucide-react
+- **Validation**: zod
+- **Build Tool**: Vite
 
-    subgraph "Storage - File System"
-        Agents[~/.config/zeroagent/agents/]
-        Skills[~/.config/zeroagent/skills/]
-        Config[providers.json, mcps.json]
-    end
+### Backend
+- **Framework**: Tauri 2.x
+- **Language**: Rust (Cargo workspace)
+- **Async Runtime**: tokio
+- **Serialization**: serde (JSON, YAML)
 
-    subgraph "External"
-        Providers[LLM Providers APIs]
-        MCP[MCP Servers - stdio]
-    end
+### Key Dependencies
+- `tokio` - Async runtime
+- `serde` / `serde_yaml` - Serialization
+- `tauri` - Desktop framework
+- `async-trait` - Async trait support
+- `thiserror` - Error handling
+- `tracing` - Structured logging
+- `reqwest` - HTTP client for LLM APIs
 
-    UI --> Core
-    Core --> Features
-    Features --> Services
-    Services --> Commands
-    Commands --> FileIO
-    Commands --> Proc
-    FileIO --> Agents
-    FileIO --> Skills
-    FileIO --> Config
-    Proc --> MCP
-    Services --> Providers
+## Workspace Structure
+
+```
+agentzero/
+├── Cargo.toml                 # Workspace root
+├── src/                       # Frontend (React + TypeScript)
+│   ├── core/                  # Core UI infrastructure
+│   │   ├── layout/            # AppShell, Sidebar, StatusBar
+│   │   └── utils/             # Utilities (cn classnames)
+│   ├── shared/                # Shared code
+│   │   ├── ui/                # Radix UI components (button, dialog, etc.)
+│   │   ├── types/             # TypeScript types (agent, etc.)
+│   │   └── constants/         # Routes, constants
+│   ├── features/              # Feature-based modules
+│   │   ├── agents/            # Agent management UI (IDE, panels)
+│   │   ├── providers/         # LLM provider management
+│   │   ├── mcp/               # MCP server management
+│   │   ├── skills/            # Skill editor and management
+│   │   ├── conversations/     # Chat conversations
+│   │   └── settings/          # App settings
+│   ├── domains/               # Domain-specific logic
+│   │   └── agent-runtime/     # Agent execution components (ConversationView, etc.)
+│   └── services/              # Tauri IPC wrappers (agent.ts, provider.ts, etc.)
+├── crates/                    # Zero Framework crates
+│   ├── zero-core/             # Core traits, types, errors
+│   ├── zero-llm/              # LLM abstractions & OpenAI client
+│   ├── zero-agent/            # Agent implementations (LlmAgent, workflows)
+│   ├── zero-tool/             # Tool definitions & abstractions
+│   ├── zero-session/          # Session management
+│   ├── zero-mcp/              # MCP protocol integration
+│   ├── zero-prompt/           # Prompt templates
+│   ├── zero-middleware/       # Middleware system
+│   └── zero-app/              # Meta-package (all zero-* crates)
+├── application/               # Application-specific crates
+│   ├── agent-runtime/         # Agent executor with config, MCP, skills
+│   └── agent-tools/           # Built-in tools (read, write, grep, python, etc.)
+├── memory-bank/               # Project documentation
+│   ├── architecture.md        # This file
+│   ├── learnings.md           # Architecture learnings
+│   ├── known_issues.md        # Known issues tracking
+│   └── product.md             # Product definition
+└── src-tauri/                 # Tauri application
+    └── src/
+        ├── commands/          # Tauri IPC commands
+        └── domains/           # Domain layer (agent_runtime, conversation_runtime)
 ```
 
-## Technical Architecture
+## Framework Crate Overview
 
-### Frontend Structure
+### Zero Framework (`crates/`)
 
-```mermaid
-graph LR
-    subgraph "Entry Point"
-        Main[main.tsx] --> App[App.tsx]
-    end
+The **zero-* crates** form the reusable framework - independent of the Tauri application.
 
-    subgraph "Core Layer - Routing & Layout"
-        App --> Router[BrowserRouter]
-        Router --> Shell[AppShell]
-        Shell --> Sidebar[Sidebar]
-        Shell --> Outlet[Route Outlet]
-    end
+| Crate | Purpose |
+|-------|---------|
+| `zero-core` | Core traits: `Agent`, `Tool`, `Session`, `Event`, `Content`, errors |
+| `zero-llm` | LLM trait, OpenAI client, request/response types |
+| `zero-agent` | Agent implementations: `LlmAgent`, workflow agents |
+| `zero-tool` | Tool trait and abstractions |
+| `zero-session` | Session trait and in-memory implementation |
+| `zero-mcp` | MCP client and tool bridging |
+| `zero-prompt` | Prompt template system |
+| `zero-middleware` | Middleware pipeline for request/response processing |
+| `zero-app` | Convenience meta-package importing all zero-* crates |
 
-    subgraph "Feature Modules"
-        Outlet --> Agents[Agents Feature]
-        Outlet --> Skills[Skills Feature]
-        Outlet --> Providers[Providers Feature]
-        Outlet --> MCP[MCP Feature]
-        Outlet --> Settings[Settings Feature]
-        Outlet --> Conv[Conversations Feature]
-    end
+### Application Crates (`application/`)
 
-    subgraph "Shared Layer"
-        UI[UI Components]
-        Types[Type Definitions]
-        Utils[Utilities]
-    end
+The **application crates** are tightly coupled to the Tauri app and its specific needs.
 
-    Agents --> UI
-    Skills --> UI
-    Providers --> UI
-    MCP --> UI
+| Crate | Purpose |
+|-------|---------|
+| `agent-runtime` | YAML config, executor, MCP managers, skill loading |
+| `agent-tools` | Built-in tools: Read, Write, Edit, Grep, Glob, Python, etc. |
+
+## Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Frontend (React)                         │
+│                                                                   │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │
+│  │   Agent      │  │  Provider    │  │     MCP      │         │
+│  │  Management  │  │  Management  │  │  Management  │         │
+│  └──────────────┘  └──────────────┘  └──────────────┘         │
+│                                                                   │
+│  ┌────────────────────────────────────────────────────────┐    │
+│  │                    Agent IDE Page                       │    │
+│  └────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                       Tauri IPC Layer                           │
+│                   (Commands & Events)                            │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                          Backend (Rust)                          │
+│                                                                   │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    Commands Layer                        │   │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │   │
+│  │  │  Agents  │ │Provider  │ │   MCP    │ │ Skills   │   │   │
+│  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘   │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              │                                  │
+│                              ▼                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                    Domain Layer                          │   │
+│  │                                                           │   │
+│  │  ┌────────────────────────────────────────────────────┐  │   │
+│  │  │              agent_runtime                          │  │   │
+│  │  │  (YAML config, executor, MCP managers, skills)     │  │   │
+│  │  └────────────────────────────────────────────────────┘  │   │
+│  │                                                           │   │
+│  │  ┌────────────────────────────────────────────────────┐  │   │
+│  │  │           conversation_runtime                      │  │   │
+│  │  │  (SQLite database, repositories)                    │  │   │
+│  │  └────────────────────────────────────────────────────┘  │   │
+│  └─────────────────────────────────────────────────────────┘   │
+│                              │                                  │
+│                              ▼                                  │
+│  ┌─────────────────────────────────────────────────────────┐   │
+│  │                  Zero Framework Crates                   │   │
+│  │                                                           │   │
+│  │  ┌─────────────────────────────────────────────────────┐ │   │
+│  │  │  zero-app (meta-package)                            │ │   │
+│  │  │    ├── zero-core      (Agent, Tool, Session, Event) │ │   │
+│  │  │    ├── zero-llm       (Llm trait, OpenAI client)    │ │   │
+│  │  │    ├── zero-agent     (LlmAgent, workflows)         │ │   │
+│  │  │    ├── zero-tool      (Tool trait)                  │ │   │
+│  │  │    ├── zero-session   (InMemorySession)             │ │   │
+│  │  │    ├── zero-mcp       (MCP client, bridge)          │ │   │
+│  │  │    ├── zero-prompt    (Prompt templates)            │ │   │
+│  │  │    └── zero-middleware (Middleware pipeline)        │ │   │
+│  │  └─────────────────────────────────────────────────────┘ │   │
+│  │                                                           │   │
+│  │  ┌─────────────────────────────────────────────────────┐ │   │
+│  │  │  agent-runtime                                      │ │   │
+│  │  │    ├── YAML config parsing                          │ │   │
+│  │  │    ├── MCP managers (stdio, HTTP/SSE)               │ │   │
+│  │  │    ├── Skill file loading                           │ │   │
+│  │  │    └── Executor orchestration                       │ │   │
+│  │  └─────────────────────────────────────────────────────┘ │   │
+│  │                                                           │   │
+│  │  ┌─────────────────────────────────────────────────────┐ │   │
+│  │  │  agent-tools                                        │ │   │
+│  │  │    ├── File: Read, Write, Edit                      │ │   │
+│  │  │    ├── Search: Grep, Glob                           │ │   │
+│  │  │    ├── Exec: Python, LoadSkill                      │ │   │
+│  │  │    └── UI: RequestInput, ShowContent                │ │   │
+│  │  └─────────────────────────────────────────────────────┘ │   │
+│  └─────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────┘
 ```
 
-### Backend Command Structure
+## Module Structure
 
-```mermaid
-graph TB
-    subgraph "Tauri Commands"
-        Lib[lib.rs] --> Agents[agents.rs]
-        Lib --> Skills[skills.rs]
-        Lib --> Providers[providers.rs]
-        Lib --> MCP[mcp.rs]
-        Lib --> Settings[settings.rs]
-        Lib --> Conversations[conversations.rs]
-        Lib --> Core[core.rs]
-        Lib --> Windows[windows.rs]
-    end
+### Commands Layer (`src-tauri/src/commands/`)
 
-    subgraph "File Operations"
-        Agents --> AgentFiles[Agent Files]
-        Skills --> SkillFiles[Skill Files]
-    end
+Tauri commands that expose functionality to the frontend via IPC.
 
-    subgraph "Process Management"
-        MCP --> MCPProcess[MCP stdio Processes]
-    end
+| Module | Purpose |
+|--------|---------|
+| `agents.rs` | Agent CRUD, file management |
+| `agents_runtime.rs` | Agent execution with streaming |
+| `providers.rs` | Provider CRUD operations |
+| `mcp.rs` | MCP server management |
+| `skills.rs` | Skill management with frontmatter |
+| `conversations.rs` | Chat history management |
+| `tools.rs` | Tool management |
+| `settings.rs` | Application settings |
 
-    subgraph "Storage"
-        AgentFiles --> AgentStore[agents/]
-        SkillFiles --> SkillStore[skills/]
-    end
+### Domain Layer (`src-tauri/src/domains/`)
+
+#### agent_runtime
+
+Core agent execution engine.
+
+```
+agent_runtime/
+├── mod.rs                  # Module exports
+├── executor.rs             # Main executor orchestration
+├── executor_v2.rs          # V2 executor with zero-framework
+├── config_adapter.rs       # Convert agent config to LlmAgent
+├── filesystem.rs           # FileSystemContext implementation
+├── middleware_integration.rs # Middleware integration
+└── types.rs                # Additional types
 ```
 
-### Domain Organization
+#### conversation_runtime
 
-The codebase is organized by **business domain**, not technical layer:
+Chat history and database management.
+
+```
+conversation_runtime/
+├── mod.rs                  # Module exports
+├── database/
+│   ├── connection.rs       # SQLite connection
+│   └── schema.rs           # Database schema
+└── repository/
+    ├── conversations.rs    # Conversation CRUD
+    └── messages.rs         # Message CRUD
+```
+
+### Frontend (`src/`)
+
+React + TypeScript frontend organized by feature and domain.
 
 ```
 src/
-├── core/              # Cross-cutting (routing, layout)
-│   ├── layout/        # AppShell, Sidebar, StatusBar
-│   └── utils/         # Shared utilities
-├── features/          # Feature modules
-│   ├── agents/        # Agent management + IDE
-│   ├── skills/        # Skill management + IDE
-│   ├── providers/     # LLM provider config
-│   ├── mcp/           # MCP server management
-│   ├── settings/      # App settings
-│   └── conversations/ # Chat interface
-├── shared/            # Shared across features
-│   ├── types/         # TypeScript definitions
-│   ├── ui/            # UI component library
-│   ├── constants/     # Routes, constants
-│   └── utils/         # Helper functions
-└── services/          # API abstraction layer
+├── core/                    # Core UI infrastructure
+│   ├── layout/
+│   │   ├── AppShell.tsx    # Main app layout with sidebar
+│   │   ├── Sidebar.tsx     # Navigation sidebar
+│   │   └── StatusBar.tsx   # Status bar
+│   └── utils/
+│       └── cn.ts           # Classname utility (clsx + tailwind-merge)
+│
+├── shared/                  # Shared code across features
+│   ├── ui/                 # Reusable UI components (Radix UI wrappers)
+│   │   ├── button.tsx
+│   │   ├── dialog.tsx
+│   │   ├── tabs.tsx
+│   │   ├── select.tsx
+│   │   ├── input.tsx
+│   │   ├── textarea.tsx
+│   │   ├── switch.tsx
+│   │   ├── separator.tsx
+│   │   ├── scroll-area.tsx
+│   │   ├── dropdown-menu.tsx
+│   │   ├── tooltip.tsx
+│   │   ├── label.tsx
+│   │   ├── badge.tsx
+│   │   ├── card.tsx
+│   │   └── utils.ts
+│   ├── types/              # TypeScript type definitions
+│   │   ├── agent.ts
+│   │   └── index.ts
+│   └── constants/          # Constants
+│       └── routes.ts       # Route definitions
+│
+├── features/               # Feature-based modules (pages & panels)
+│   ├── agents/             # Agent management
+│   │   ├── AgentIDEPage.tsx       # Agent IDE page
+│   │   ├── AgentIDEDialog.tsx     # Agent IDE dialog
+│   │   ├── AgentsPanel.tsx        # Agents list panel
+│   │   ├── AddAgentDialog.tsx     # Add agent dialog
+│   │   ├── ConfigYamlForm.tsx     # YAML config form
+│   │   └── AGENTS.md              # Agent management docs
+│   ├── providers/          # LLM provider management
+│   │   ├── ProvidersPanel.tsx
+│   │   └── AddProviderDialog.tsx
+│   ├── mcp/                # MCP server management
+│   │   ├── MCPServersPanel.tsx
+│   │   ├── AddMCPServerDialog.tsx
+│   │   └── types.ts
+│   ├── skills/             # Skill editor and management
+│   │   ├── SkillIDEPage.tsx
+│   │   ├── SkillsPanel.tsx
+│   │   ├── SkillMdForm.tsx
+│   │   └── types.ts
+│   ├── conversations/      # Chat conversations
+│   │   └── ConversationsPanel.tsx
+│   └── settings/           # App settings
+│       ├── SettingsPanel.tsx
+│       └── types.ts
+│
+├── domains/                # Domain-specific logic (not feature-specific)
+│   └── agent-runtime/      # Agent execution domain
+│       ├── components/     # Agent execution UI components
+│       │   ├── ConversationView.tsx    # Main conversation view
+│       │   ├── ConversationList.tsx    # Conversation history list
+│       │   ├── ThinkingPanel.tsx       # Thinking mode panel
+│       │   ├── ThinkingTab.tsx         # Thinking mode tab
+│       │   ├── ToolCallsSection.tsx    # Tool calls display
+│       │   ├── PlanSection.tsx         # Plan section
+│       │   ├── GenerativeCanvas.tsx    # Generative canvas
+│       │   ├── types.ts                # Domain types
+│       │   ├── useStreamEvents.ts      # Streaming events hook
+│       │   └── index.ts
+│       └── services/
+│           └── ConversationService.ts  # Conversation business logic
+│
+├── services/               # Tauri IPC service wrappers
+│   ├── agent.ts            # Agent commands wrapper
+│   ├── provider.ts         # Provider commands wrapper
+│   ├── mcp.ts              # MCP commands wrapper
+│   ├── skills.ts           # Skill commands wrapper
+│   ├── conversation.ts     # Conversation commands wrapper
+│   └── settings.ts         # Settings commands wrapper
+│
+├── styles/                 # Global styles
+│   └── index.css
+│
+├── App.tsx                 # Root app component
+└── main.tsx                # Entry point
 ```
 
-**Why this structure?**
-- Easy to find code by feature
-- Clear boundaries between features
-- Independent feature development
-- Better onboarding for new developers
+## Core Abstractions
 
-## Data Flow
+### Agent (zero-core)
 
-### Agent Creation Flow
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant UI as Agent IDE
-    participant S as Agent Service
-    participant C as Tauri Command
-    participant FS as File System
-
-    U->>UI: Click "Add Agent"
-    UI->>UI: Open Agent IDE (staging mode)
-    U->>UI: Fill form + edit files
-    UI->>S: writeAgentFile(staging, path, content)
-    S->>C: write_agent_file("staging", path, content)
-    C->>FS: Write to ~/.config/zeroagent/staging/
-
-    U->>UI: Click "Save Agent"
-    UI->>S: createAgent(agentData)
-    S->>C: create_agent(agent)
-    C->>FS: Create ~/.config/zeroagent/agents/{name}/
-    C->>FS: Write config.yaml
-    C->>FS: Write AGENTS.md
-    C->>FS: Copy files from staging/
-    C->>FS: Cleanup staging/
+```rust
+#[async_trait]
+pub trait Agent: Send + Sync {
+    async fn invoke(&self, context: InvocationContext) -> Result<EventStream>;
+}
 ```
 
-### File Explorer with Subdirectories
+### Tool (zero-core)
 
-```mermaid
-graph TB
-    subgraph Frontend
-        FE[File Explorer] --> BT[buildFileTree]
-        BT --> NM["nodeMap: Map<path, node>"]
-        BT --> RN["rootNodes: FileNode[]"]
-        RN --> Rec["renderFileNode() recursive"]
-    end
-
-    subgraph Backend
-        Cmd["list_agent_files()"] --> CF["collect_files() recursive"]
-        CF --> RD["fs::read_dir()"]
-        RD --> CF2["collect_files() subdirs"]
-    end
-
-    Cmd --> Files["File List"]
-    Files --> FE
+```rust
+#[async_trait]
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters(&self) -> Option<Value>;
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
+}
 ```
 
-### Auto-Save Flow
+### Session (zero-session)
 
-```mermaid
-graph LR
-    Input[User typing] --> State["editingContent state"]
-    State --> Effect["useEffect trigger"]
-    Effect --> Check{Guard checks}
-    Check -->|isNewAgent| Skip[Skip save]
-    Check -->|unchanged| Skip
-    Check -->|config.yaml| Skip
-    Check -->|valid| Timer["setTimeout 1s"]
-    Timer --> Save["writeAgentFile"]
-    Save --> Update["Update lastSaved"]
-    Update --> Display["Show saved time"]
+```rust
+#[async_trait]
+pub trait Session: Send + Sync {
+    async fn append(&self, event: Event) -> Result<()>;
+    async fn events(&self) -> Result<Vec<Event>>;
+}
 ```
 
-### MCP Server Communication
+### Llm (zero-llm)
 
-```mermaid
-sequenceDiagram
-    participant A as Agent
-    participant M as MCP Manager
-    participant C as Child Process
-    participant S as MCP Server
-
-    A->>M: listMCPServers()
-    M->>M: Return configured servers
-
-    A->>M: Start agent with MCPs
-    M->>C: Spawn stdio process
-    C->>S: Execute server binary
-    S-->>C: stdio communication
-
-    A->>M: Invoke tool
-    M->>C: Send JSON-RPC request
-    C->>S: Forward request
-    S-->>C: Response
-    C-->>M: Result
-    M-->>A: Return tool result
+```rust
+#[async_trait]
+pub trait Llm: Send + Sync {
+    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse>;
+    async fn generate_stream(&self, request: LlmRequest) -> Result<LlmResponseStream>;
+}
 ```
 
-## Component Relationships
-
-### Agent IDE Components
-
-```mermaid
-graph TB
-    subgraph "Agent IDE"
-        Page[AgentIDEPage] --> Config[ConfigYamlForm]
-        Page --> Explorer[File Explorer]
-        Page --> Editor[File Editor]
-        Page --> Dialog[Close Confirm Dialog]
-
-        Explorer --> Tree[File Tree]
-        Explorer --> Context[Context Menu]
-        Explorer --> Toolbar[Toolbar]
-
-        Editor --> MD[MDEditor for .md]
-        Editor --> Text[Textarea for others]
-    end
-
-    subgraph "Services"
-        AgentSvc[agent.ts] --> Cmd[list_agent_files]
-        AgentSvc --> Cmd[write_agent_file]
-        AgentSvc --> Cmd[create_agent_folder]
-    end
-
-    Page --> AgentSvc
-```
-
-## State Management Strategy
-
-### Local Component State (Preferred)
-
-Most state is kept local to components:
-
-```typescript
-// File explorer state in Agent IDE
-const [files, setFiles] = useState<AgentFile[]>([]);
-const [selectedFile, setSelectedFile] = useState<AgentFile | null>(null);
-const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-```
-
-**Why?**
-- Simpler than global state
-- State close to where it's used
-- Easier to reason about
-- No need for Zustand/Redux at current scale
-
-### When to Use Global State (Future)
-
-- User session info
-- Active conversation state
-- Global app settings
-
-## Technology Decisions
-
-### Tauri over Electron
-
-| Aspect | Tauri | Electron |
-|--------|-------|----------|
-| Bundle Size | ~10MB | ~100MB+ |
-| Memory | Lower | Higher |
-| Backend | Rust | Node.js |
-| Security | Smaller attack surface | Larger |
-| Native Integration | Better | Good |
-
-### React Router over Tauri Router
-
-- Client-side routing (faster)
-- Works with web standards
-- Easier testing/debugging
-- No IPC overhead for navigation
-
-### Custom File Explorer over Tree View Library
-
-- Full control over behavior
-- Consistent styling with app
-- Recursive pattern is straightforward
-- No additional dependency
-
-## Storage Patterns
-
-### Agent Storage
+## Data Flow: Agent Execution
 
 ```
-~/.config/zeroagent/agents/
-├── {agent-name}/
-│   ├── config.yaml      # Metadata (name, provider, model, etc.)
-│   ├── AGENTS.md        # Instructions (plain markdown)
-│   └── [user files]/    # Additional resources
+User Message (Frontend)
+       │
+       ▼
+┌─────────────────────────────────────────────────────────┐
+│  Tauri Command: execute_agent_stream                    │
+│       │                                                  │
+│       ▼                                                  │
+│  1. Load Agent Configuration                            │
+│     - Read config.yaml from ~/.config/zeroagent/agents/ │
+│     - Parse YAML to AgentConfig                          │
+│       │                                                  │
+│       ▼                                                  │
+│  2. Create LLM Client                                   │
+│     - Use provider config for API key, base URL         │
+│     - Create OpenAiLlm instance                         │
+│       │                                                  │
+│       ▼                                                  │
+│  3. Initialize MCP Servers                              │
+│     - For each MCP in agent config:                      │
+│       - Start stdio or HTTP/SSE client                   │
+│       - Discover tools                                   │
+│       - Bridge to zero-core Tool trait                   │
+│       │                                                  │
+│       ▼                                                  │
+│  4. Create Tools                                       │
+│     - Built-in tools from application/agent-tools       │
+│     - MCP tools from bridges                            │
+│     - Wrap in Toolset                                   │
+│       │                                                  │
+│       ▼                                                  │
+│  5. Create LlmAgent                                    │
+│     - Using builder pattern                             │
+│     - With LLM, session, tools, system instruction      │
+│       │                                                  │
+│       ▼                                                  │
+│  6. Invoke Agent                                       │
+│     - agent.invoke(context)                             │
+│     - Stream events back to frontend                    │
+└─────────────────────────────────────────────────────────┘
+       │
+       ▼
+LlmAgent Execution Loop
+┌─────────────────────────────────────────────────────────┐
+│  1. Build Request                                      │
+│     - Get events from session                          │
+│     - Convert to Content messages                     │
+│     - Add system instruction                           │
+│       │                                                  │
+│       ▼                                                  │
+│  2. Call LLM                                           │
+│     - llm.generate(request)                            │
+│       │                                                  │
+│       ▼                                                  │
+│  3. Check for Tool Calls                               │
+│     - If tool calls present:                           │
+│       - For each tool call:                            │
+│         - Execute tool via Toolset                     │
+│         - Append tool call event to session            │
+│         - Append tool response event to session        │
+│       - Loop back to step 1                            │
+│     - If no tool calls (turn_complete = true):         │
+│       - Return final response                          │
+└─────────────────────────────────────────────────────────┘
 ```
 
-### Skill Storage
+## Storage Schema
+
+### Agent Folder Structure
 
 ```
-~/.config/zeroagent/skills/
-├── {skill-name}/
-│   ├── SKILL.md         # Frontmatter + markdown
-│   ├── assets/          # Placeholder folder
-│   ├── resources/       # Placeholder folder
-│   └── scripts/         # Placeholder folder
+~/.config/zeroagent/agents/{agent-name}/
+├── config.yaml           # Agent metadata
+│   - name, displayName, description
+│   - providerId, model
+│   - temperature, maxTokens
+│   - thinkingEnabled
+│   - skills[]
+│   - mcps[]
+│
+├── AGENTS.md             # Agent instructions (markdown)
+└── [user files]          # Additional files/folders
 ```
 
-### Configuration Files
+### Skill Folder Structure
 
-```json
-// ~/.config/zeroagent/providers.json
-[{ "id": "openai", "name": "OpenAI", "baseUrl": "...", "models": ["gpt-4"] }]
-
-// ~/.config/zeroagent/mcps.json
-[{ "id": "filesystem", "name": "Filesystem", "command": "npx", "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"] }]
+```
+~/.config/zeroagent/skills/{skill-name}/
+├── SKILL.md             # Skill definition (markdown with frontmatter)
+│   ---
+│   name: Search
+│   description: Search the web
+│   parameters: [...]
+│   ---
+│   # Skill instructions...
+│
+└── [additional files]
 ```
 
-## Security Considerations
+### MCP Server Config
 
-1. **API Keys**: Stored in provider config, user-managed
-2. **File Access**: Agents/skills can access files in their folders only
-3. **MCP Servers**: Run in child processes, isolated
-4. **Staging Cleanup**: Prevents orphaned files on cancel
-
-## Performance Optimizations
-
-1. **Debounced Auto-Save**: 1 second delay prevents excessive IPC
-2. **Set for Expanded Folders**: O(1) lookup vs O(n) array search
-3. **Lazy Loading**: File explorer only loads when needed
-4. **Conditional Markdown Editor**: Only for .md files
-
-## Deployment Architecture
-
-```mermaid
-graph LR
-    subgraph Development
-        Dev["Developer machine"] --> Run["npm run tauri dev"]
-        Run --> Vite["Vite Dev Server"]
-        Run --> Rust["Rust Dev Build"]
-    end
-
-    subgraph Production
-        Build["npm run tauri build"] --> Bundle["App Bundle"]
-        Bundle --> Linux["Linux deb and AppImage"]
-        Bundle --> Win["Windows exe and msi"]
-        Bundle --> Mac["macOS dmg and app"]
-    end
-
-    subgraph Distribution
-        Linux --> GitHub["GitHub Releases"]
-        Win --> GitHub
-        Mac --> GitHub
-    end
+```
+~/.config/zeroagent/mcp_servers/{server-id}.json
+{
+  "id": "filesystem",
+  "name": "Filesystem",
+  "transport": "stdio",
+  "command": "npx",
+  "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path"],
+  "env": {}
+}
 ```
 
-## Extension Points
+### Conversation Database
 
-1. **New Features**: Add to `src/features/`
-2. **New Commands**: Add to `src-tauri/src/commands/`
-3. **UI Components**: Add to `src/shared/ui/`
-4. **Services**: Add to `src/services/`
+```
+~/.config/zeroagent/conversations.db (SQLite)
 
-## Known Limitations
+conversations:
+  - id (TEXT PRIMARY KEY)
+  - agent_id (TEXT)
+  - title (TEXT)
+  - created_at (TEXT)
+  - updated_at (TEXT)
 
-1. No cloud sync (local-only)
-2. Single-user design
-3. No real-time collaboration
-4. macOS/Windows/Linux desktop only
+messages:
+  - id (TEXT PRIMARY KEY)
+  - conversation_id (TEXT)
+  - role (TEXT)  -- "user" | "assistant" | "tool"
+  - content (TEXT)
+  - tool_calls (TEXT - JSON)
+  - tool_call_id (TEXT)
+  - created_at (TEXT)
+```
+
+## Configuration Files
+
+### Cargo Workspace (`Cargo.toml`)
+
+Defines workspace members and shared dependencies.
+
+### Tauri Config (`src-tauri/tauri.conf.json`)
+
+Application metadata, window config, security settings.
+
+## Known Issues
+
+See `memory-bank/known_issues.md` for tracked issues, including:
+- Write tool path resolution issue
+
+## Related Documentation
+
+| File | Description |
+|------|-------------|
+| `crates/*/AGENTS.md` | Framework crate documentation |
+| `crates/AGENTS.md` | Framework crates overview |
+| `application/*/AGENTS.md` | Application crate documentation |
+| `src-tauri/src/commands/AGENTS.md` | Commands implementation |
+| `memory-bank/known_issues.md` | Known issues tracking |
+| `memory-bank/learnings.md` | Architecture learnings |
+| `LOGGING.md` | Logging guidelines |

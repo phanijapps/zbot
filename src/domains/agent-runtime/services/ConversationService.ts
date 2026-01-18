@@ -85,7 +85,6 @@ export class ConversationService {
     const unlisten = await listen<any>(
       `agent-stream://${conversationId}`,
       (event) => {
-        console.log("[ConversationService] Received event from Rust:", event.payload);
         // Forward event to the caller's handler
         onEvent(event.payload);
       }
@@ -93,16 +92,14 @@ export class ConversationService {
 
     try {
       // Call Rust backend command - this will start execution and emit events
-      await invoke<any>("execute_agent_stream", {
+      await invoke<any>("execute_agent_zero_stream", {
         conversationId,
         agentId,
         message: userMessage,
       });
 
-      console.log("[ConversationService] Rust backend execution complete");
-
     } catch (error) {
-      console.error("[ConversationService] Error in executeAgentStream", error);
+      console.error("[ConversationService] Error:", error);
       // Emit error event
       onEvent({
         type: "error",
@@ -128,14 +125,8 @@ export class ConversationService {
     toolCalls?: ToolCall[];
     toolResults?: ToolResult[];
   }> {
-    console.log("[ConversationService] executeAgent (Rust backend)", {
-      conversationId,
-      agentId,
-      userMessage,
-    });
-
     // Call Rust backend command
-    const result = await invoke<any>("execute_agent_stream", {
+    const result = await invoke<any>("execute_agent_zero_stream", {
       conversationId,
       agentId,
       message: userMessage,

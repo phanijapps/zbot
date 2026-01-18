@@ -134,6 +134,7 @@ pub fn run() {
             commands::read_attachment_file,
             // Agent Runtime commands
             commands::execute_agent_stream,
+            commands::execute_agent_zero_stream,
             commands::get_agent_execution_config,
             commands::create_agent_conversation,
             commands::get_or_create_conversation,

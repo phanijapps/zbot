@@ -1,0 +1,30 @@
+[package]
+name = "zero-middleware"
+version.workspace = true
+edition.workspace = true
+authors = ["agentzero"]
+license = "MIT"
+
+[dependencies]
+# Core
+zero-core = { path = "../zero-core" }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Utilities
+regex = { workspace = true }
+chrono = { workspace = true }
+
+# Logging
+tracing = { workspace = true }

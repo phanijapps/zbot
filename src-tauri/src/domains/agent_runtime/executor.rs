@@ -4,13 +4,18 @@
 // ============================================================================
 
 //! Tauri-specific executor factory that handles file-based config loading
+//!
+//! # DEPRECATED
+//!
+//! This executor is deprecated and will be removed once the zero-app integration is complete.
+//! Use `executor_v2::create_zero_executor` instead.
 
 use std::sync::Arc;
 use serde_json::{json, Value};
 use rust_embed::RustEmbed;
 
 use crate::settings::AppDirs;
-use crate::domains::agent_runtime::{filesystem::TauriFileSystemContext, builtin_tools_with_fs};
+use crate::domains::agent_runtime::filesystem::TauriFileSystemContext;
 use agent_runtime::{
     ExecutorConfig, ExecutorError,
     LlmClient, LlmConfig, OpenAiClient,
@@ -114,12 +119,10 @@ pub async fn create_executor(agent_id: &str, conversation_id: Option<String>) ->
     // Get dirs Arc before wrapping fs_context in Arc (cheap clone since Arc)
     let dirs_arc = fs_context.dirs_arc();
 
-    let mut tool_registry = ToolRegistry::default();
-    let tools = builtin_tools_with_fs(Arc::new(fs_context));
-    for tool in tools {
-        tool_registry.register(tool);
-    }
-    let tool_registry = Arc::new(tool_registry);
+    // DEPRECATED: Old executor is not compatible with new zero-app tools
+    // Use executor_v2::create_zero_executor instead
+    // For now, create an empty tool registry
+    let tool_registry = Arc::new(ToolRegistry::default());
 
     // Build system prompt with skills, tools, and MCPs (pass tool_registry)
     let system_instruction = build_system_prompt(agent_id, &skills, &mcps, &conversation_id, &dirs_arc, &tool_registry).await?;
