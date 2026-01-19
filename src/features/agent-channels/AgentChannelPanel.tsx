@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Wrench } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Wrench, Trash2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -33,7 +33,6 @@ export function AgentChannelPanel() {
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
   const [currentSession, setCurrentSession] = useState<DailySession | null>(null);
   const [previousDays, setPreviousDays] = useState<DaySummary[]>([]);
-  const [showPreviousDays, setShowPreviousDays] = useState(false);
   const [messages, setMessages] = useState<MessageWithThinking[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [input, setInput] = useState("");
@@ -48,6 +47,9 @@ export function AgentChannelPanel() {
 
   // Generative Canvas state
   const [canvasOpen, setCanvasOpen] = useState(false);
+
+  // History Panel state
+  const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
 
   // Stream events handling
   const {
@@ -75,7 +77,6 @@ export function AgentChannelPanel() {
       setCurrentSession(null);
       setMessages([]);
       setPreviousDays([]);
-      setShowPreviousDays(false);
     }
     resetThinking();
   }, [selectedAgent]);
@@ -372,36 +373,15 @@ export function AgentChannelPanel() {
                 </span>
               </div>
               <div className="flex items-center gap-1">
-                <button className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5">
+                <button
+                  onClick={() => setHistoryPanelOpen(true)}
+                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  aria-label="Show history"
+                >
                   <History className="size-5" />
                 </button>
               </div>
             </div>
-
-            {/* Previous Days Summary (Collapsible) */}
-            {showPreviousDays && previousDays.length > 0 && (
-              <div className="border-b border-black/20 p-4 bg-black/5">
-                <h3 className="text-sm font-medium text-gray-300 mb-3">Previous Days</h3>
-                <div className="space-y-2">
-                  {previousDays.slice(0, 5).map((day) => (
-                    <div
-                      key={day.sessionId}
-                      className="flex items-center justify-between p-3 rounded-lg bg-[#2b2d31] border border-black/20"
-                    >
-                      <div>
-                        <div className="text-sm text-white">{formatSessionDate(day.sessionDate)}</div>
-                        <div className="text-xs text-gray-300">{day.messageCount} messages</div>
-                      </div>
-                      {day.summary && (
-                        <div className="text-xs text-gray-300 max-w-xs truncate">
-                          {day.summary}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto">
@@ -539,6 +519,106 @@ export function AgentChannelPanel() {
           isOpen={thinkingState.isOpen}
           onClose={() => resetThinking()}
         />
+      )}
+
+      {/* History Panel */}
+      {historyPanelOpen && (
+        <div className="fixed inset-y-0 right-0 w-80 bg-[#2b2d31] border-l border-black/20 shadow-xl z-50 flex flex-col">
+          {/* Header */}
+          <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
+            <div className="flex items-center gap-2">
+              <History className="size-5 text-gray-300" />
+              <h2 className="text-white font-semibold">History</h2>
+            </div>
+            <button
+              onClick={() => setHistoryPanelOpen(false)}
+              className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+              aria-label="Close history"
+            >
+              <X className="size-5" />
+            </button>
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 overflow-y-auto p-4">
+            {previousDays.length === 0 ? (
+              <div className="text-center py-8">
+                <p className="text-sm text-gray-300">No previous days found</p>
+              </div>
+            ) : (
+              <>
+                {/* Clear All Button */}
+                {previousDays.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      if (confirm('Are you sure you want to delete all history?')) {
+                        try {
+                          await invoke('delete_agent_history', { agentId: selectedAgent?.id });
+                        } catch (err) {
+                          console.error('Failed to delete history:', err);
+                        }
+                        if (selectedAgent) {
+                          await loadTodaySession(selectedAgent.id);
+                        }
+                      }
+                    }}
+                    className="w-full mb-4 px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Trash2 className="size-4" />
+                    Clear All History
+                  </button>
+                )}
+
+                {/* Days List */}
+                <div className="space-y-2">
+                  {previousDays.map((day) => (
+                    <div
+                      key={day.sessionId}
+                      className="p-3 rounded-lg bg-[#383a40] border border-black/20"
+                    >
+                      <div className="flex items-start justify-between mb-2">
+                        <div className="flex-1">
+                          <div className="text-sm text-white font-medium mb-1">
+                            {formatSessionDate(day.sessionDate)}
+                          </div>
+                          <div className="text-xs text-gray-300">
+                            {day.messageCount} message{day.messageCount !== 1 ? 's' : ''}
+                          </div>
+                          {day.summary && (
+                            <div className="text-xs text-gray-400 mt-1 line-clamp-2">
+                              {day.summary}
+                            </div>
+                          )}
+                        </div>
+                        <button
+                          onClick={async () => {
+                            if (confirm(`Delete history for ${formatSessionDate(day.sessionDate)}?`)) {
+                              try {
+                                await invoke('delete_agent_history', {
+                                  agentId: selectedAgent?.id,
+                                  beforeDate: day.sessionDate
+                                });
+                                if (selectedAgent) {
+                                  await loadTodaySession(selectedAgent.id);
+                                }
+                              } catch (err) {
+                                console.error('Failed to delete day:', err);
+                              }
+                            }
+                          }}
+                          className="p-1.5 text-gray-400 hover:text-red-400 transition-colors rounded hover:bg-white/5"
+                          aria-label={`Delete ${formatSessionDate(day.sessionDate)}`}
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       )}
 
       {/* Generative Canvas */}
