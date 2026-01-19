@@ -39,6 +39,7 @@ export function AgentChannelPanel() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isMountedRef = useRef(true);
+  const isExecutingRef = useRef(false); // Prevent concurrent executions
 
   // Execution stage for better UX
   const [executionStage, setExecutionStage] = useState<ExecutionStage>("idle");
@@ -176,6 +177,13 @@ export function AgentChannelPanel() {
   const executeAgentWithMessage = async (message: string, showUserMessage = true) => {
     if (!currentSession || !selectedAgent) return;
 
+    // Prevent concurrent executions
+    if (isExecutingRef.current) {
+      console.warn("[AgentChannelPanel] Execution already in progress, ignoring new request");
+      return;
+    }
+
+    isExecutingRef.current = true;
     setIsLoading(true);
     setExecutionStage("thinking");
 
@@ -224,6 +232,7 @@ export function AgentChannelPanel() {
       // Only update state if component is still mounted
       if (!isMountedRef.current) return;
 
+      isExecutingRef.current = false; // Reset execution flag
       setIsLoading(false);
       setExecutionStage("done");
       setActiveToolName(null);
