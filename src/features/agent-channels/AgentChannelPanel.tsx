@@ -317,11 +317,14 @@ export function AgentChannelPanel() {
           <>
             {/* Header */}
             <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 group">
                 <Hash className="size-5 text-gray-300" />
-                <h2 className="text-white font-semibold">
+                <h2 className="text-white font-semibold cursor-default" title={`${messages.length} message${messages.length !== 1 ? 's' : ''} today`}>
                   {selectedAgent.displayName}
                 </h2>
+                <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                  {messages.length}
+                </span>
               </div>
               <div className="flex items-center gap-1">
                 <button className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5">
@@ -377,22 +380,6 @@ export function AgentChannelPanel() {
                 )
               ) : (
                 <div className="px-4 py-6">
-                  <div className="mb-6">
-                    <div className="flex items-center gap-3 mb-2">
-                      <div className="size-12 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center">
-                        <Hash className="size-6 text-white" />
-                      </div>
-                      <div>
-                        <h3 className="text-white text-lg font-bold">
-                          {selectedAgent.displayName}
-                        </h3>
-                        <p className="text-gray-300 text-sm">
-                          Today • {messages.length} message{messages.length !== 1 ? 's' : ''}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-
                   <div className="space-y-4">
                     {messages.map((msg) => (
                       <div key={msg.id} className="group hover:bg-black/5 -mx-4 px-4 py-0.5">
