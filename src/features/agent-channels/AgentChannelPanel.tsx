@@ -172,6 +172,9 @@ export function AgentChannelPanel() {
     setIsLoading(true);
     setExecutionStage("thinking");
 
+    // Close history sidebar when sending a new message
+    setHistoryPanelOpen(false);
+
     // Note: User message recording is handled by the backend (agents_runtime.rs)
     // No need to record it here separately
 
