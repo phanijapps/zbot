@@ -194,7 +194,7 @@ export function AgentChannelPanel() {
       role: "assistant",
       content: "",
       timestamp: Date.now(),
-      thinking: { toolCount: 0 },
+      // Don't include thinking initially - only add it when there are tool calls
     };
     setMessages((prev) => [...prev, initialAssistantMessage]);
 
@@ -206,6 +206,7 @@ export function AgentChannelPanel() {
     let unlisten: (() => void) | null = null;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     let hasStoppedLoading = false;
+    let toolCallCount = 0; // Track tool calls locally during streaming
 
     const finishProcessing = () => {
       // Only update state if component is still mounted
@@ -267,6 +268,7 @@ export function AgentChannelPanel() {
         case "tool_call_start":
           setExecutionStage("using_tools");
           setActiveToolName(data.toolName || null);
+          toolCallCount++; // Increment local tool counter
           handleThinkingEvent({
             type: "tool_call_start",
             toolId: data.toolId || `tool-${Date.now()}`,
@@ -298,7 +300,7 @@ export function AgentChannelPanel() {
           if (data.finalMessage) {
             setMessages((prev) => prev.map((msg) =>
               msg.id === assistantMessageId
-                ? { ...msg, content: data.finalMessage || "", thinking: { toolCount: thinkingState.toolCalls.length } }
+                ? { ...msg, content: data.finalMessage || "", ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount } } : {}) }
                 : msg
             ));
           }
