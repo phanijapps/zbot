@@ -541,6 +541,37 @@ export function AgentChannelPanel() {
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-4">
+            {/* Clear Today Button (always shown if there's a session) */}
+            {currentSession && messages.length > 0 && (
+              <button
+                onClick={async () => {
+                  if (!selectedAgent) return;
+                  if (confirm(`Clear all messages from today's session with ${selectedAgent.displayName}?`)) {
+                    try {
+                      // Use tomorrow to delete today and everything before
+                      const tomorrow = new Date();
+                      tomorrow.setDate(tomorrow.getDate() + 1);
+                      const beforeDate = tomorrow.toISOString().split('T')[0];
+
+                      await invoke('delete_agent_history', {
+                        agentId: selectedAgent.id,
+                        beforeDate: beforeDate
+                      });
+                      // Refresh to get a fresh session
+                      await loadTodaySession(selectedAgent.id);
+                    } catch (err) {
+                      console.error('Failed to clear today:', err);
+                      alert('Failed to clear today: ' + (err as Error).message);
+                    }
+                  }
+                }}
+                className="w-full mb-4 px-3 py-2 bg-orange-500/20 hover:bg-orange-500/30 text-orange-300 text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
+              >
+                <Trash2 className="size-4" />
+                Clear Today's Messages
+              </button>
+            )}
+
             {previousDays.length === 0 ? (
               <div className="text-center py-8">
                 <p className="text-sm text-gray-300">No previous days found</p>
@@ -548,31 +579,29 @@ export function AgentChannelPanel() {
             ) : (
               <>
                 {/* Clear All Button */}
-                {previousDays.length > 0 && (
-                  <button
-                    onClick={async () => {
-                      if (!selectedAgent) return;
-                      if (confirm('Are you sure you want to delete all history?')) {
-                        try {
-                          // Use a far future date to delete all history (SQLite will interpret this correctly)
-                          await invoke('delete_agent_history', {
-                            agentId: selectedAgent.id,
-                            beforeDate: '2099-12-31'
-                          });
-                          // Refresh the session to update previous days list
-                          await loadTodaySession(selectedAgent.id);
-                        } catch (err) {
-                          console.error('Failed to delete history:', err);
-                          alert('Failed to delete history: ' + (err as Error).message);
-                        }
+                <button
+                  onClick={async () => {
+                    if (!selectedAgent) return;
+                    if (confirm('Are you sure you want to delete all history?')) {
+                      try {
+                        // Use a far future date to delete all history (SQLite will interpret this correctly)
+                        await invoke('delete_agent_history', {
+                          agentId: selectedAgent.id,
+                          beforeDate: '2099-12-31'
+                        });
+                        // Refresh the session to update previous days list
+                        await loadTodaySession(selectedAgent.id);
+                      } catch (err) {
+                        console.error('Failed to delete history:', err);
+                        alert('Failed to delete history: ' + (err as Error).message);
                       }
-                    }}
-                    className="w-full mb-4 px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
-                  >
-                    <Trash2 className="size-4" />
-                    Clear All History
-                  </button>
-                )}
+                    }
+                  }}
+                  className="w-full mb-3 px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
+                >
+                  <Trash2 className="size-4" />
+                  Clear All History
+                </button>
 
                 {/* Days List */}
                 <div className="space-y-2">
