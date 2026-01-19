@@ -1,6 +1,6 @@
 // ============================================================================
 // AGENT RUNTIME COMMANDS
-// Commands for executing AI agents with streaming support
+// Commands for executing AI agents with streaming support (Agent Channel model)
 // ============================================================================
 
 use std::sync::Arc;
@@ -9,19 +9,20 @@ use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
 
-use crate::domains::conversation_runtime::{get_database, repository};
 use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall, ToolResult};
 use crate::domains::agent_runtime::executor_v2::{create_zero_executor, ZeroAppStreamEvent};
+use daily_sessions::{DailySessionManager, DailySessionRepository};
+use crate::commands::agent_channels::SqliteSessionRepository;
 
 // ============================================================================
 // EXECUTOR CACHE
 // ============================================================================
 
-/// Cache key for executors (agent_id, conversation_id)
+/// Cache key for executors (agent_id, session_id)
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 struct CacheKey {
     agent_id: String,
-    conversation_id: String,
+    session_id: String,
 }
 
 /// Global executor cache
@@ -46,55 +47,54 @@ pub async fn clear_executor_cache_internal() {
 /// Execute an agent with streaming support
 ///
 /// This command:
-/// 1. Loads agent configuration
-/// 2. Creates/reuses an executor
-/// 3. Executes the agent with tool calling
-/// 4. Emits events to frontend in real-time
-/// 5. Returns the final response
+/// 1. Gets or creates today's session for the agent
+/// 2. Loads agent configuration
+/// 3. Creates/reuses an executor
+/// 4. Executes the agent with tool calling
+/// 5. Emits events to frontend in real-time
+/// 6. Saves messages to the daily session database
 #[tauri::command]
 pub async fn execute_agent_stream(
     app: AppHandle,
-    conversation_id: String,
     agent_id: String,
     message: String,
 ) -> Result<Value, String> {
-    // Verify conversation exists
-    let db = get_database()?;
-    let conversation = db.transaction(|conn| {
-        repository::get_conversation(conn, &conversation_id)
-    })
-    .map_err(|e| format!("Database error: {}", e))?;
+    // Get or create today's session for this agent
+    let db_path = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
 
-    if conversation.is_none() {
-        return Err(format!("Conversation not found: {}", conversation_id));
-    }
+    let repo = Arc::new(SqliteSessionRepository::new(db_path)?);
+    let manager = DailySessionManager::new(repo.clone());
 
-    // Save user message to database
-    let user_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_millis());
-    db.transaction(|conn| {
-        repository::create_message(conn, repository::CreateMessage {
-            id: user_msg_id.clone(),
-            conversation_id: conversation_id.clone(),
-            role: MessageRole::User,
-            content: message.clone(),
-            token_count: None,
-            tool_calls: None,
-            tool_results: None,
-        })
-    })
-    .map_err(|e| format!("Failed to save user message: {}", e))?;
+    let session = manager.get_or_create_today(&agent_id).await
+        .map_err(|e| format!("Failed to get session: {}", e))?;
+
+    let session_id = session.id.clone();
+
+    // Record user message
+    manager.record_message(&session_id, daily_sessions::SessionMessage {
+        id: format!("msg_{}", chrono::Utc::now().timestamp_millis()),
+        session_id: session_id.clone(),
+        role: "user".to_string(),
+        content: message.clone(),
+        created_at: chrono::Utc::now(),
+        token_count: 0,
+        tool_calls: None,
+        tool_results: None,
+    }).await.map_err(|e| format!("Failed to record user message: {}", e))?;
 
     // Get or create zero-app executor from cache
     let cache_key = CacheKey {
         agent_id: agent_id.clone(),
-        conversation_id: conversation_id.clone(),
+        session_id: session_id.clone(),
     };
 
     // Check cache first
     {
         let cache_read = EXECUTOR_CACHE.read().await;
         if let Some(_executor) = cache_read.get(&cache_key) {
-            tracing::info!("Using cached executor for agent: {} (conversation: {})", agent_id, conversation_id);
+            tracing::info!("Using cached executor for agent: {} (session: {})", agent_id, session_id);
         }
     }
 
@@ -108,8 +108,8 @@ pub async fn execute_agent_stream(
         exec
     } else {
         // Create new executor (cache miss)
-        tracing::info!("Creating new executor for agent: {} (conversation: {})", agent_id, conversation_id);
-        let exec = Arc::new(create_zero_executor(&agent_id, Some(conversation_id.clone())).await?);
+        tracing::info!("Creating new executor for agent: {} (session: {})", agent_id, session_id);
+        let exec = Arc::new(create_zero_executor(&agent_id, Some(session_id.clone())).await?);
 
         // Add to cache
         let mut cache_write = EXECUTOR_CACHE.write().await;
@@ -124,7 +124,7 @@ pub async fn execute_agent_stream(
     let mut current_tool_results: Vec<ToolResult> = Vec::new();
 
     executor.run_stream(message, |stream_event| {
-        let event_name = format!("agent-stream://{}", conversation_id);
+        let event_name = format!("agent-stream://{}", session_id);
 
         match stream_event {
             ZeroAppStreamEvent::Content { delta } => {
@@ -248,34 +248,31 @@ pub async fn execute_agent_stream(
         }
     }).await.map_err(|e| format!("Agent execution failed: {}", e))?;
 
-    // Save assistant response to database
-    let assistant_msg_id = format!("msg_{}", chrono::Utc::now().timestamp_millis());
-    let tool_calls_for_db = if current_tool_calls.is_empty() {
+    // Save assistant response to session
+    let tool_calls_json = if current_tool_calls.is_empty() {
         None
     } else {
-        Some(current_tool_calls.clone())
+        serde_json::to_value(&current_tool_calls).ok()
     };
-    let tool_results_for_db = if current_tool_results.is_empty() {
+    let tool_results_json = if current_tool_results.is_empty() {
         None
     } else {
-        Some(current_tool_results.clone())
+        serde_json::to_value(&current_tool_results).ok()
     };
 
-    db.transaction(|conn| {
-        repository::create_message(conn, repository::CreateMessage {
-            id: assistant_msg_id,
-            conversation_id: conversation_id.clone(),
-            role: MessageRole::Assistant,
-            content: final_response.clone(),
-            token_count: Some(final_response.len() as i64),
-            tool_calls: tool_calls_for_db,
-            tool_results: tool_results_for_db,
-        })
-    })
-    .map_err(|e| format!("Failed to save assistant message: {}", e))?;
+    manager.record_message(&session_id, daily_sessions::SessionMessage {
+        id: format!("msg_{}", chrono::Utc::now().timestamp_millis()),
+        session_id: session_id.clone(),
+        role: "assistant".to_string(),
+        content: final_response.clone(),
+        created_at: chrono::Utc::now(),
+        token_count: final_response.len() as i64,
+        tool_calls: tool_calls_json,
+        tool_results: tool_results_json,
+    }).await.map_err(|e| format!("Failed to record assistant message: {}", e))?;
 
     Ok(serde_json::json!({
-        "conversation_id": conversation_id,
+        "session_id": session_id,
         "agent_id": agent_id,
         "response": final_response,
         "tool_calls": current_tool_calls,
@@ -324,66 +321,59 @@ fn as_vec(value: &serde_yaml::Value) -> Option<Vec<String>> {
     value.as_sequence()?.iter().map(|v| v.as_str().map(|s| s.to_string())).collect()
 }
 
-/// Create a new conversation for an agent
+/// DEPRECATED: Use get_or_create_today_session instead
+/// Kept for backward compatibility during transition
 #[tauri::command]
 pub async fn create_agent_conversation(
     agent_id: String,
     title: Option<String>,
 ) -> Result<Value, String> {
-    let db = get_database()?;
+    // For now, create a new session (today's session will be used)
+    let db_path = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
 
-    let conversation_id = format!("conv_{}_{}", agent_id, chrono::Utc::now().timestamp());
-    let agent_id_clone = agent_id.clone();
+    let repo = Arc::new(SqliteSessionRepository::new(db_path)?);
+    let manager = DailySessionManager::new(repo);
 
-    let conv = db.transaction(|conn| {
-        repository::create_conversation(conn, repository::CreateConversation {
-            id: conversation_id.clone(),
-            agent_id,
-            title: title.unwrap_or_else(|| format!("Chat with {}", agent_id_clone)),
-            metadata: None,
-        })
-    })
-    .map_err(|e| format!("Failed to create conversation: {}", e))?;
+    let session = manager.get_or_create_today(&agent_id).await
+        .map_err(|e| format!("Failed to create session: {}", e))?;
 
-    serde_json::to_value(&conv)
+    serde_json::to_value(&session)
         .map_err(|e| format!("Failed to serialize: {}", e))
 }
 
-/// Get or create a conversation for an agent
+/// DEPRECATED: Use get_or_create_today_session instead
+/// Kept for backward compatibility during transition
 #[tauri::command]
 pub async fn get_or_create_conversation(
     agent_id: String,
     conversation_id: Option<String>,
 ) -> Result<Value, String> {
-    let db = get_database()?;
+    // The Agent Channel model doesn't use conversation_id
+    // Always return today's session for the agent
+    let db_path = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
 
-    if let Some(conv_id) = conversation_id {
-        // Try to get existing conversation
-        let conv = db.transaction(|conn| {
-            repository::get_conversation(conn, &conv_id)
-        })
-        .map_err(|e| format!("Database error: {}", e))?;
+    let repo = Arc::new(SqliteSessionRepository::new(db_path)?);
+    let manager = DailySessionManager::new(repo);
 
-        if let Some(c) = conv {
-            return serde_json::to_value(&c)
-                .map_err(|e| format!("Failed to serialize: {}", e));
-        }
-    }
+    let session = manager.get_or_create_today(&agent_id).await
+        .map_err(|e| format!("Failed to get session: {}", e))?;
 
-    // Create new conversation
-    let agent_id_clone = agent_id.clone();
-    let conv = db.transaction(|conn| {
-        repository::create_conversation(conn, repository::CreateConversation {
-            id: format!("conv_{}_{}", agent_id, chrono::Utc::now().timestamp()),
-            agent_id,
-            title: format!("Chat with {}", agent_id_clone),
-            metadata: None,
-        })
-    })
-    .map_err(|e| format!("Failed to create conversation: {}", e))?;
-
-    serde_json::to_value(&conv)
-        .map_err(|e| format!("Failed to serialize: {}", e))
+    // For backward compatibility, return in old format
+    Ok(serde_json::json!({
+        "id": session.id,
+        "agentId": session.agent_id,
+        "title": format!("{} - {}", session.agent_id, session.session_date),
+        "createdAt": session.created_at.to_rfc3339(),
+        "updatedAt": session.updated_at.to_rfc3339(),
+        // Map session_id to conversation_id for frontend compatibility
+        "conversation_id": session.id,
+        "session_id": session.id,
+        "session_date": session.session_date,
+    }))
 }
 
 /// Clear executor cache (for testing/debugging)

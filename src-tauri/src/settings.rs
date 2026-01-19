@@ -92,15 +92,19 @@ pub struct AppDirs {
     pub config_dir: PathBuf,
     /// Settings file path
     pub settings_file: PathBuf,
-    /// LanceDB database path
+    /// LanceDB database path (legacy, kept for compatibility)
     pub database_path: PathBuf,
-    /// Agents directory
+    /// Agents directory (configs)
     pub agents_dir: PathBuf,
+    /// Agents data directory (attachments, documents, archives)
+    pub agents_data_dir: PathBuf,
+    /// Database directory for Agent Channel SQLite database
+    pub db_dir: PathBuf,
     /// Skills directory
     pub skills_dir: PathBuf,
     /// Python virtual environment directory
     pub venv_dir: PathBuf,
-    /// Conversation logs directory (logs/<conv-id>/)
+    /// Conversation logs directory (logs/<conv-id>/) - legacy
     pub conversation_logs_dir: PathBuf,
     /// Outputs directory (~/Documents/ZeroAgent/outputs/)
     pub outputs_dir: PathBuf,
@@ -120,6 +124,8 @@ impl AppDirs {
             settings_file: config_dir.join("settings.yaml"),
             database_path: config_dir.join("zero_lance.db"),
             agents_dir: config_dir.join("agents"),
+            agents_data_dir: config_dir.join("agents_data"),
+            db_dir: config_dir.join("db"),
             skills_dir: config_dir.join("skills"),
             venv_dir: config_dir.join("venv"),
             conversation_logs_dir: config_dir.join("logs"),
@@ -146,6 +152,14 @@ impl AppDirs {
         // Create agents directory
         fs::create_dir_all(&self.agents_dir)
             .context("Failed to create agents directory")?;
+
+        // Create agents data directory
+        fs::create_dir_all(&self.agents_data_dir)
+            .context("Failed to create agents data directory")?;
+
+        // Create database directory
+        fs::create_dir_all(&self.db_dir)
+            .context("Failed to create database directory")?;
 
         // Create skills directory
         fs::create_dir_all(&self.skills_dir)
@@ -416,6 +430,74 @@ impl AppDirs {
         }
 
         Ok(())
+    }
+
+    // =========================================================================
+    // Agent Data Directory Helpers (Agent Channel Model)
+    // =========================================================================
+
+    /// Get the data directory for a specific agent
+    pub fn agent_data_dir(&self, agent_id: &str) -> PathBuf {
+        self.agents_data_dir.join(agent_id)
+    }
+
+    /// Get the attachments directory for a specific agent
+    /// Organized by month: agents_data/{agent_id}/attachments/YYYY-MM/
+    pub fn agent_attachments_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("attachments")
+    }
+
+    /// Get the attachments directory for a specific agent and month
+    pub fn agent_attachments_month_dir(&self, agent_id: &str, year_month: &str) -> PathBuf {
+        self.agent_attachments_dir(agent_id).join(year_month)
+    }
+
+    /// Get the documents directory for a specific agent
+    pub fn agent_documents_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("documents")
+    }
+
+    /// Get the knowledge graph directory for a specific agent
+    pub fn agent_knowledge_graph_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("knowledge_graph")
+    }
+
+    /// Get the archive directory for a specific agent (Parquet archives)
+    pub fn agent_archive_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("archive")
+    }
+
+    /// Create the directory structure for a new agent
+    /// Creates: agents_data/{agent-id}/attachments/, documents/, knowledge_graph/, archive/
+    pub fn create_agent_data_dirs(&self, agent_id: &str) -> Result<()> {
+        let agent_dir = self.agent_data_dir(agent_id);
+
+        // Create main agent data directory
+        fs::create_dir_all(&agent_dir)
+            .context("Failed to create agent data directory")?;
+
+        // Create attachments directory
+        fs::create_dir_all(self.agent_attachments_dir(agent_id))
+            .context("Failed to create agent attachments directory")?;
+
+        // Create documents directory
+        fs::create_dir_all(self.agent_documents_dir(agent_id))
+            .context("Failed to create agent documents directory")?;
+
+        // Create knowledge graph directory
+        fs::create_dir_all(self.agent_knowledge_graph_dir(agent_id))
+            .context("Failed to create agent knowledge graph directory")?;
+
+        // Create archive directory
+        fs::create_dir_all(self.agent_archive_dir(agent_id))
+            .context("Failed to create agent archive directory")?;
+
+        Ok(())
+    }
+
+    /// Get the Agent Channel database path
+    pub fn agent_channels_db_path(&self) -> PathBuf {
+        self.db_dir.join("agent_channels.db")
     }
 }
 

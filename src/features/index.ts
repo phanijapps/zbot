@@ -3,6 +3,7 @@
 // ============================================================================
 
 export { ConversationsPanel } from "./conversations/ConversationsPanel";
+export { AgentChannelPanel } from "./agent-channels";
 export { AgentsPanel } from "./agents/AgentsPanel";
 export { ProvidersPanel } from "./providers/ProvidersPanel";
 export { MCPServersPanel } from "./mcp/MCPServersPanel";

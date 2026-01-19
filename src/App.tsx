@@ -7,7 +7,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppShell } from "./core";
 
 import {
-  ConversationsPanel,
+  AgentChannelPanel,
   AgentsPanel,
   ProvidersPanel,
   MCPServersPanel,
@@ -20,7 +20,7 @@ function App() {
     <BrowserRouter>
       <AppShell>
         <Routes>
-          <Route path="/" element={<ConversationsPanel />} />
+          <Route path="/" element={<AgentChannelPanel />} />
           <Route path="/agents" element={<AgentsPanel />} />
           <Route path="/providers" element={<ProvidersPanel />} />
           <Route path="/mcp" element={<MCPServersPanel />} />

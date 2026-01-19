@@ -7,7 +7,7 @@ import { useState, useEffect } from "react";
 import {
   X, Save, File, FileText, FolderPlus, Trash2, Folder,
   Upload, RefreshCw, Bot, ChevronRight, ChevronDown, Loader2,
-  Plus, Lock, AlertTriangle, Settings
+  Plus, Lock, AlertTriangle
 } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";

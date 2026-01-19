@@ -27,6 +27,9 @@ export {
 } from "./ConversationView";
 export { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 
+// Agent Channel components
+export { AgentChannelList, CompactAgentChannelList } from "./AgentChannelList";
+
 // Hooks
 export { useStreamEvents, usePlanItems } from "./useStreamEvents";
 

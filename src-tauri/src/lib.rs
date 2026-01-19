@@ -78,6 +78,14 @@ pub fn run() {
             commands::create_agent_folder,
             commands::delete_agent_file,
             commands::upload_agent_file,
+            // Agent Channel commands (NEW)
+            commands::get_or_create_today_session,
+            commands::list_previous_days,
+            commands::load_session_messages,
+            commands::delete_agent_history,
+            commands::record_session_message,
+            commands::generate_session_summary,
+            commands::list_agent_channels,
             // Provider commands
             commands::list_providers,
             commands::get_provider,

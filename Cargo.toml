@@ -19,6 +19,7 @@ members = [
     # Application crates
     "application/agent-runtime",
     "application/agent-tools",
+    "application/daily-sessions",
 ]
 
 [workspace.package]

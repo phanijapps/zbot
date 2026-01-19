@@ -39,6 +39,7 @@ Examples of when to use `write`:
 
 **Rules:**
 - Activate tools as needed based on the task requirements
+- When asked to write/edit perform operations in `{CONV_ID}/{attachments|outputs|images|workbook}/` directory using write tool
 
 ---
 

@@ -6,6 +6,7 @@
 pub mod core;
 pub mod conversations;
 pub mod agents;
+pub mod agent_channels;
 pub mod providers;
 pub mod mcp;
 pub mod skills;
@@ -18,6 +19,7 @@ pub mod agents_runtime;
 pub use core::*;
 pub use conversations::*;
 pub use agents::*;
+pub use agent_channels::*;
 pub use providers::*;
 pub use mcp::*;
 pub use skills::*;

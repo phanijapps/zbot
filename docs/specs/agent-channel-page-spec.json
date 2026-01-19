@@ -1,0 +1,653 @@
+{
+  "specification": {
+    "name": "Agent Channel Page",
+    "version": "2.0.0",
+    "lastUpdated": "2025-01-18",
+    "description": "Discord-like agent interface with daily sessions - complete layout with navigation sidebar, agent channels sidebar, and conversation area"
+  },
+  "businessSignificance": {
+    "overview": "The Agent Channel Page is the primary user interface for interacting with AI agents. It features a global navigation sidebar for accessing all app features, an agent channels sidebar for selecting agents, and a main conversation area. The design follows modern patterns similar to Discord or Slack.",
+    "keyBenefits": [
+      "Unified navigation: Single sidebar for all app features (Conversations, Agents, Providers, MCP, Skills, Settings)",
+      "Quick switching: Icon-based nav allows instant access to different sections",
+      "Agent-centric: Each agent is a 'channel' with daily session persistence",
+      "Automatic organization: No manual conversation management needed",
+      "Historical context: Previous days accessible with one click"
+    ],
+    "targetUsers": [
+      "Developers using AI agents for coding assistance",
+      "Researchers conducting multi-day experiments with agents",
+      "Teams managing multiple specialized agents",
+      "Power users configuring providers, MCP servers, and skills"
+    ],
+    "successMetrics": [
+      "Time to first message: < 2 seconds from page load",
+      "Navigation switching: < 500ms between sections",
+      "Agent switching: < 1 second between agents",
+      "Message delivery: Real-time token streaming visible within 500ms"
+    ]
+  },
+  "layout": {
+    "structure": "appShell > (navigationSidebar + (agentChannelSidebar + mainContent))",
+    "components": {
+      "appShell": {
+        "file": "src/core/layout/AppShell.tsx",
+        "purpose": "Root layout container",
+        "children": ["navigationSidebar", "mainContentArea", "statusBar"],
+        "styling": {
+          "container": "flex flex-col h-screen bg-[#0a0a0a]",
+          "contentArea": "flex flex-1 overflow-hidden"
+        }
+      },
+      "navigationSidebar": {
+        "file": "src/core/layout/Sidebar.tsx",
+        "width": "w-16 (64px)",
+        "position": "Left edge, full height",
+        "styling": {
+          "background": "bg-[#0f0f0f]",
+          "border": "border-r border-white/5",
+          "padding": "py-4 gap-2"
+        },
+        "sections": {
+          "logo": {
+            "type": "App logo/brand",
+            "icon": "Sparkles",
+            "size": "size-6 (24px)",
+            "background": "bg-gradient-to-br from-blue-500 to-purple-600",
+            "container": "p-2.5 rounded-xl",
+            "hover": "Glow effect on hover (blur-md with opacity)",
+            "marginBottom": "mb-4"
+          },
+          "navItems": {
+            "type": "Navigation menu",
+            "items": [
+              {
+                "path": "/",
+                "icon": "MessageSquare",
+                "label": "Conversations",
+                "description": "Agent channel interface (main chat view)"
+              },
+              {
+                "path": "/agents",
+                "icon": "Bot",
+                "label": "Agents",
+                "description": "Create and configure AI agents"
+              },
+              {
+                "path": "/providers",
+                "icon": "Zap",
+                "label": "Providers",
+                "description": "Configure LLM providers (OpenAI, Anthropic, etc.)"
+              },
+              {
+                "path": "/mcp",
+                "icon": "Network",
+                "label": "MCP Servers",
+                "description": "Manage Model Context Protocol servers"
+              },
+              {
+                "path": "/skills",
+                "icon": "Sparkles",
+                "label": "Skills",
+                "description": "Agent skills and capabilities"
+              },
+              {
+                "path": "/settings",
+                "icon": "Settings",
+                "label": "Settings",
+                "description": "Application settings"
+              }
+            ],
+            "item": {
+              "size": "w-11 h-11 (44x44px)",
+              "borderRadius": "rounded-lg",
+              "states": {
+                "active": {
+                  "background": "bg-blue-600",
+                  "text": "text-white",
+                  "effect": "glow with bg-blue-500/20 blur-md"
+                },
+                "inactive": {
+                  "background": "transparent",
+                  "text": "text-gray-400",
+                  "hover": "hover:text-white hover:bg-white/5"
+                }
+              },
+              "tooltip": {
+                "position": "absolute left-full ml-2",
+                "text": "Item label",
+                "background": "bg-gray-900 text-white text-xs rounded",
+                "behavior": "opacity-0 group-hover:opacity-100"
+              }
+            }
+          }
+        }
+      },
+      "statusBar": {
+        "position": "Bottom of screen",
+        "height": "Fixed (not specified in code)",
+        "purpose": "App status, connection info, etc."
+      }
+    }
+  },
+  "agentChannelPanel": {
+    "file": "src/features/agent-channels/AgentChannelPanel.tsx",
+    "route": "/ (conversations)",
+    "purpose": "Main agent chat interface - rendered when navigation sidebar 'Conversations' is active",
+    "layout": {
+      "type": "flex-row",
+      "children": ["agentChannelSidebar", "mainContent"],
+      "styling": "flex h-full bg-zinc-950"
+    },
+    "state": {
+      "agents": "Agent[] - List of available agents",
+      "selectedAgent": "Agent | null - Currently selected agent",
+      "currentSession": "DailySession | null - Today's session for selected agent",
+      "previousDays": "DaySummary[] - Previous days with history",
+      "showPreviousDays": "boolean - Whether history panel is expanded",
+      "messages": "MessageWithThinking[] - Messages in current session",
+      "isLoading": "boolean - Is agent processing",
+      "input": "string - Current message input",
+      "executionStage": "ExecutionStage - Current processing stage",
+      "activeToolName": "string | null - Tool being used"
+    }
+  },
+  "agentChannelSidebar": {
+    "component": "AgentChannelList",
+    "file": "src/domains/agent-runtime/components/AgentChannelList.tsx",
+    "width": "w-80 (320px)",
+    "position": "Between nav sidebar and main content",
+    "styling": {
+      "background": "transparent (no border, clean look)",
+      "border": "None (removed for cleaner UX)"
+    },
+    "sections": {
+      "header": {
+        "height": "Auto",
+        "padding": "px-4 py-3",
+        "content": [
+          {
+            "type": "heading",
+            "text": "Agent Channels",
+            "style": "text-lg font-semibold text-white"
+          },
+          {
+            "type": "badge",
+            "content": "{count} agents",
+            "style": "text-xs text-gray-500"
+          }
+        ]
+      },
+      "agentList": {
+        "type": "scrollable",
+        "padding": "p-3 space-y-1",
+        "item": "AgentChannelCard",
+        "emptyState": {
+          "icon": "Bot in gradient container",
+          "title": "No agents yet",
+          "description": "Create an agent to start chatting"
+        }
+      }
+    }
+  },
+  "agentChannelCard": {
+    "purpose": "Single agent entry in the channels sidebar",
+    "states": {
+      "default": {
+        "background": "transparent",
+        "border": "border border-transparent"
+      },
+      "selected": {
+        "background": "bg-purple-500/10",
+        "border": "border-purple-500/30"
+      },
+      "hover": {
+        "background": "hover:bg-white/5",
+        "border": "hover:border-white/10"
+      }
+    },
+    "structure": {
+      "icon": {
+        "type": "agentIcon (from ConversationList)",
+        "size": "w-10 h-10 (40px)",
+        "background": "bg-gradient-to-br from-purple-500/20 to-blue-500/20",
+        "border": "border-white/10",
+        "borderRadius": "rounded-lg"
+      },
+      "info": {
+        "displayName": "text-sm font-medium text-white truncate",
+        "name": "text-xs text-gray-500",
+        "todayCount": {
+          "showWhen": "todayMessageCount > 0",
+          "icon": "MessageSquare (size-3)",
+          "text": "{count} messages"
+        }
+      },
+      "historyButton": {
+        "showWhen": "hasHistory === true",
+        "icon": "History (size-4)",
+        "action": "Opens previous days panel",
+        "style": "text-gray-500 hover:text-purple-400 hover:bg-white/10 p-2 rounded-lg"
+      },
+      "lastActivity": {
+        "showWhen": "!isSelected && todayMessageCount > 0",
+        "icon": "Clock (size-3)",
+        "text": "Human-readable (e.g., '2 hours ago')",
+        "style": "text-xs text-gray-600 mt-2"
+      }
+    }
+  },
+  "mainContent": {
+    "sections": ["header", "previousDays", "messagesArea", "inputArea"],
+    "styling": "flex-1 flex flex-col min-w-0"
+  },
+  "mainContentHeader": {
+    "height": "h-14 (56px)",
+    "padding": "px-4",
+    "styling": {
+      "border": "None (removed for cleaner UX)",
+      "display": "flex items-center justify-between"
+    },
+    "left": {
+      "type": "agentInfo",
+      "icon": "Bot in purple gradient container (8x)",
+      "displayName": "text-sm font-medium text-white",
+      "meta": "text-xs text-gray-500 - '{formattedDate} • {messageCount} messages'"
+    },
+    "right": {
+      "type": "historyToggle",
+      "showWhen": "previousDays.length > 0",
+      "text": "'Show' / 'Hide' History",
+      "icon": "History (size-4)",
+      "style": "px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg"
+    }
+  },
+  "previousDaysPanel": {
+    "type": "collapsible",
+    "showWhen": "showPreviousDays === true && previousDays.length > 0",
+    "maxItems": "5 (shown, more could be loaded)",
+    "styling": {
+      "container": "border-b border-white/10 p-4 bg-white/5",
+      "items": "bg-zinc-900/50 border border-white/5 p-3 rounded-lg"
+    },
+    "header": {
+      "text": "Previous Days",
+      "style": "text-sm font-medium text-gray-400 mb-3"
+    },
+    "item": {
+      "date": "Session date formatted (e.g., 'January 18, 2025')",
+      "messageCount": "text-xs text-gray-500 - '{count} messages'",
+      "summary": "Optional end-of-day summary",
+      "truncation": "max-w-xs truncate"
+    }
+  },
+  "messagesArea": {
+    "flex": "flex-1",
+    "overflow": "overflow-y-auto",
+    "layout": {
+      "maxWidth": "max-w-4xl mx-auto",
+      "padding": "py-6 px-4",
+      "spacing": "space-y-6"
+    },
+    "states": {
+      "noMessages": {
+        "showWhen": "messages.length === 0 && !isLoading",
+        "alignment": "flex flex-col items-center justify-center h-full px-6 text-center",
+        "content": {
+          "icon": "MessageSquare in w-14 h-14 gradient container",
+          "title": "text-base font-semibold text-white - 'Today's session'",
+          "description": "text-sm text-gray-500 - Agent-specific prompt"
+        }
+      },
+      "loading": {
+        "showWhen": "messages.length === 0 && isLoading",
+        "content": "Loader2 spinning in purple"
+      },
+      "withMessages": {
+        "messageItem": {
+          "container": "flex gap-3",
+          "user": {
+            "alignment": "justify-end",
+            "bubble": {
+              "maxWidth": "max-w-[80%]",
+              "background": "bg-purple-600",
+              "text": "text-white",
+              "padding": "px-4 py-3 rounded-lg",
+              "textSize": "text-sm whitespace-pre-wrap"
+            }
+          },
+          "assistant": {
+            "alignment": "justify-start",
+            "icon": "Bot in purple gradient (8x)",
+            "bubble": {
+              "maxWidth": "max-w-[80%]",
+              "background": "bg-white/5",
+              "text": "text-gray-100",
+              "padding": "px-4 py-3 rounded-lg",
+              "textSize": "text-sm whitespace-pre-wrap"
+            }
+          }
+        },
+        "loadingIndicator": {
+          "showWhen": "isLoading === true",
+          "position": "After messages, before scroll anchor",
+          "content": {
+            "icon": "Loader2 (spinning, size-4)",
+            "text": "Dynamic based on executionStage",
+            "stages": {
+              "thinking": "\"Thinking...\"",
+              "using_tools": "\"Using tool: {toolName}...\"",
+              "generating": "\"Generating response...\""
+            },
+            "style": "text-gray-400 text-sm py-4"
+          },
+          "behavior": "Stops 100ms after first token received"
+        }
+      }
+    },
+    "autoScroll": {
+      "trigger": "On messages.length change",
+      "delay": "50ms",
+      "behavior": "auto (instant, not smooth)",
+      "ref": "messagesEndRef"
+    }
+  },
+  "inputArea": {
+    "position": "Bottom of main content",
+    "styling": {
+      "container": "border-t border-white/10 p-4 shrink-0",
+      "maxWidth": "max-w-4xl mx-auto"
+    },
+    "components": {
+      "attachButton": {
+        "icon": "Paperclip (size-5)",
+        "action": "TODO: Open file picker",
+        "style": "p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5"
+      },
+      "textarea": {
+        "ref": "inputRef",
+        "minHeight": "min-h-[44px]",
+        "maxHeight": "max-h-[200px]",
+        "resize": "none",
+        "placeholder": "'Type your message...'",
+        "styling": "flex-1 bg-white/5 border-white/10 text-white placeholder:text-gray-500 rounded-lg",
+        "submitOn": "Enter (Shift+Enter for newline)"
+      },
+      "sendButton": {
+        "icon": "Send (size-5)",
+        "disabledWhen": "!input.trim() || isLoading",
+        "enabledStyle": "p-3 rounded-lg bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg shadow-purple-500/25",
+        "disabledStyle": "p-3 rounded-lg bg-white/5 text-gray-500 cursor-not-allowed"
+      }
+    }
+  },
+  "overlayComponents": {
+    "thinkingPanel": {
+      "trigger": "thinkingState.isOpen === true",
+      "purpose": "Shows detailed agent reasoning, tool calls, metadata",
+      "position": "Slide-over panel from right"
+    },
+    "generativeCanvas": {
+      "trigger": "canvasOpen === true && canvasContent !== null",
+      "purpose": "Displays rich content (images, files, forms) generated by agents",
+      "position": "Modal/overlay"
+    }
+  },
+  "navigationPages": {
+    "overview": "Other pages rendered in main content area when nav items are clicked",
+    "pages": [
+      {
+        "route": "/",
+        "name": "Conversations",
+        "component": "AgentChannelPanel",
+        "description": "Main chat interface with agent channels"
+      },
+      {
+        "route": "/agents",
+        "name": "Agents",
+        "component": "AgentIDEPage",
+        "description": "Agent creation and configuration (CRUD operations)"
+      },
+      {
+        "route": "/providers",
+        "name": "Providers",
+        "component": "Provider management page",
+        "description": "Configure LLM providers (OpenAI, Anthropic, local models, etc.)"
+      },
+      {
+        "route": "/mcp",
+        "name": "MCP Servers",
+        "component": "MCP server management page",
+        "description": "Model Context Protocol server configuration"
+      },
+      {
+        "route": "/skills",
+        "name": "Skills",
+        "component": "SkillIDEPage",
+        "description": "Agent skills and capabilities management"
+      },
+      {
+        "route": "/settings",
+        "name": "Settings",
+        "component": "Settings page",
+        "description": "Application-wide settings"
+      }
+    ]
+  },
+  "dataModels": {
+    "agent": {
+      "id": "string - Unique agent identifier (matches directory name)",
+      "name": "string - Internal agent name",
+      "displayName": "string - Human-readable name shown in UI",
+      "description": "string | null - Agent purpose description",
+      "configPath": "string - Path to agent config.yaml",
+      "systemPromptVersion": "number - Current prompt version",
+      "currentSystemPrompt": "string | null - Current prompt content",
+      "createdAt": "ISO datetime",
+      "updatedAt": "ISO datetime"
+    },
+    "dailySession": {
+      "id": "string - Format: 'session_{agent_id}_{YYYY_MM_DD}'",
+      "agentId": "string - Parent agent",
+      "sessionDate": "string - YYYY-MM-DD format",
+      "summary": "string | null - End-of-day summary",
+      "previousSessionIds": "string[] | null - Referenced session IDs",
+      "messageCount": "number - Total messages",
+      "tokenCount": "number - Total tokens",
+      "createdAt": "ISO datetime",
+      "updatedAt": "ISO datetime"
+    },
+    "daySummary": {
+      "sessionId": "string - Session identifier",
+      "sessionDate": "string - YYYY-MM-DD",
+      "summary": "string | null - Day's conversation summary",
+      "messageCount": "number - Messages that day",
+      "isArchived": "boolean - Whether in Parquet storage"
+    },
+    "sessionMessage": {
+      "id": "string - Unique message ID",
+      "sessionId": "string - Parent session",
+      "role": "'user' | 'assistant' | 'system' | 'tool'",
+      "content": "string - Message text",
+      "createdAt": "ISO datetime",
+      "tokenCount": "number - Message tokens",
+      "toolCalls": "JSON | null - Tool call data",
+      "toolResults": "JSON | null - Tool result data"
+    },
+    "agentChannel": {
+      "agentId": "string - Agent identifier",
+      "displayName": "string - Agent name",
+      "todayMessageCount": "number - Messages in today's session",
+      "hasHistory": "boolean - Previous days exist",
+      "lastActivity": "ISO datetime",
+      "lastActivityText": "string - Human-readable time"
+    }
+  },
+  "events": {
+    "backendToFrontend": {
+      "channel": "agent-stream://{sessionId}",
+      "events": {
+        "token": {
+          "purpose": "Stream response content",
+          "payload": {
+            "type": "\"token\"",
+            "content": "string - Token fragment",
+            "timestamp": "number"
+          },
+          "action": "Append to message content, set executionStage to 'generating', stop loading after 100ms"
+        },
+        "tool_call_start": {
+          "purpose": "Notify that agent is calling a tool",
+          "payload": {
+            "type": "\"tool_call_start\"",
+            "toolId": "string",
+            "toolName": "string",
+            "timestamp": "number"
+          },
+          "action": "Set executionStage to 'using_tools', show tool name"
+        },
+        "tool_result": {
+          "purpose": "Notify that tool completed",
+          "payload": {
+            "type": "\"tool_result\"",
+            "toolId": "string",
+            "result": "string - Tool output",
+            "timestamp": "number"
+          },
+          "action": "Set executionStage to 'generating', clear tool name"
+        },
+        "done": {
+          "purpose": "Signal stream completion",
+          "payload": {
+            "type": "\"done\"",
+            "finalMessage": "string - Complete response",
+            "tokenCount": "number",
+            "turnComplete": "boolean",
+            "timestamp": "number"
+          },
+          "action": "Set final message, call finishProcessing()"
+        },
+        "error": {
+          "purpose": "Signal execution error",
+          "payload": {
+            "type": "\"error\"",
+            "error": "string - Error message",
+            "timestamp": "number"
+          },
+          "action": "Show error message, call finishProcessing()"
+        }
+      }
+    }
+  },
+  "apiCommands": {
+    "listAgents": {
+      "command": "list_agents",
+      "returns": "Agent[]",
+      "purpose": "Get all available agents"
+    },
+    "getOrCreateTodaySession": {
+      "command": "get_or_create_today_session",
+      "params": { "agentId": "string" },
+      "returns": "DailySession",
+      "purpose": "Get today's session or create if doesn't exist"
+    },
+    "listPreviousDays": {
+      "command": "list_previous_days",
+      "params": { "agentId": "string", "limit": "number (default 30)" },
+      "returns": "DaySummary[]",
+      "purpose": "Get previous days with conversations"
+    },
+    "loadSessionMessages": {
+      "command": "load_session_messages",
+      "params": { "sessionId": "string" },
+      "returns": "SessionMessage[]",
+      "purpose": "Load all messages for a session"
+    },
+    "executeAgentStream": {
+      "command": "execute_agent_stream",
+      "params": { "agentId": "string", "message": "string" },
+      "returns": "Promise with session info",
+      "purpose": "Execute agent and stream response",
+      "sideEffects": "Emits events to agent-stream:// channel, records messages"
+    }
+  },
+  "styling": {
+    "colorScheme": "dark",
+    "colors": {
+      "backgrounds": {
+        "app": "bg-[#0a0a0a]",
+        "sidebar": "bg-[#0f0f0f]",
+        "panel": "bg-zinc-950",
+        "card": "bg-white/5",
+        "input": "bg-white/5"
+      },
+      "primary": {
+        "blue": "bg-blue-600 (active nav)",
+        "purple": "bg-purple-500/10 to bg-purple-600 (gradients)",
+        "gradient": "from-blue-500 to-purple-600 (logo)"
+      },
+      "text": {
+        "primary": "text-white",
+        "secondary": "text-gray-400",
+        "muted": "text-gray-500",
+        "dark": "text-gray-600"
+      },
+      "borders": "border-white/5, border-white/10"
+    },
+    "icons": {
+      "navSize": "size-5 (20px)",
+      "buttonSize": "size-4 to size-6",
+      "gradient": "from-purple-500/20 to-blue-500/20"
+    },
+    "effects": {
+      "glow": "blur-md with opacity",
+      "hover": "hover:bg-white/5",
+      "transition": "transition-all duration-200"
+    }
+  },
+  "edgeCases": {
+    "noAgents": "Show empty state in agent channels sidebar",
+    "noMessages": "Show 'Today's session' empty state in main area",
+    "agentWithoutHistory": "Hide last activity and history button",
+    "sessionLoadFailure": "Show error state",
+    "streamTimeout": "30 second fallback timeout to cleanup",
+    "attachmentClick": "TODO: Not yet implemented"
+  },
+  "dependencies": {
+    "layout": [
+      "src/core/layout/AppShell.tsx - Root layout",
+      "src/core/layout/Sidebar.tsx - Navigation sidebar",
+      "src/core/layout/StatusBar.tsx - Bottom status bar"
+    ],
+    "pages": [
+      "src/features/agent-channels/AgentChannelPanel.tsx - Conversations page",
+      "src/features/agents/AgentIDEPage.tsx - Agents management",
+      "src/features/skills/SkillIDEPage.tsx - Skills management"
+    ],
+    "components": [
+      "src/domains/agent-runtime/components/AgentChannelList.tsx - Agent channels sidebar",
+      "src/domains/agent-runtime/components/ThinkingPanel.tsx - Thinking overlay",
+      "src/domains/agent-runtime/components/GenerativeCanvas.tsx - Content display"
+    ],
+    "services": [
+      "src/services/agent.ts - Agent management",
+      "src/services/agentChannels.ts - Session management"
+    ],
+    "external": [
+      "react-router-dom - Navigation (NavLink, Outlet)",
+      "lucide-react - Icons",
+      "tauri - Backend commands"
+    ]
+  },
+  "futureEnhancements": {
+    "planned": [
+      "Parquet archival for old sessions",
+      "Knowledge graph visualization",
+      "Attachment preview in chat",
+      "Message editing/deletion",
+      "Export session to various formats",
+      "Search across all sessions",
+      "Multi-agent conversations"
+    ]
+  }
+}

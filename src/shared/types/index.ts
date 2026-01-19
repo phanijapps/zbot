@@ -23,7 +23,7 @@ export interface Route {
 }
 
 // ============================================================================
-// DOMAIN: Conversations
+// DOMAIN: Conversations (Legacy)
 // ============================================================================
 
 /** Chat message */
@@ -43,6 +43,54 @@ export interface Conversation {
   messages: Message[];
   createdAt: number;
   updatedAt: number;
+}
+
+// ============================================================================
+// DOMAIN: Agent Channels (New)
+// ============================================================================
+
+/** Daily session for an agent */
+export interface DailySession {
+  id: string;
+  agentId: string;
+  sessionDate: string; // YYYY-MM-DD format
+  summary?: string;
+  previousSessionIds?: string[];
+  messageCount: number;
+  tokenCount: number;
+  createdAt: string; // ISO datetime string
+  updatedAt: string; // ISO datetime string
+}
+
+/** Day summary for displaying in the UI */
+export interface DaySummary {
+  sessionId: string;
+  sessionDate: string;
+  summary?: string;
+  messageCount: number;
+  isArchived: boolean;
+}
+
+/** Session message (Agent Channel model) */
+export interface SessionMessage {
+  id: string;
+  sessionId: string;
+  role: string;
+  content: string;
+  createdAt: string; // ISO datetime string
+  tokenCount: number;
+  toolCalls?: Record<string, unknown>;
+  toolResults?: Record<string, unknown>;
+}
+
+/** Agent channel info for UI display */
+export interface AgentChannel {
+  agentId: string;
+  displayName: string;
+  todayMessageCount: number;
+  hasHistory: boolean;
+  lastActivity: string; // ISO datetime string
+  lastActivityText: string; // Human-readable like "2 hours ago"
 }
 
 // ============================================================================

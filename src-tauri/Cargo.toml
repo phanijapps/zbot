@@ -50,8 +50,10 @@ once_cell = "1.19"
 # Internal application crates
 agent-runtime = { path = "../application/agent-runtime" }
 agent-tools = { path = "../application/agent-tools" }
+daily-sessions = { path = "../application/daily-sessions" }
 
 # Zero framework integration
+zero-core = { path = "../crates/zero-core" }
 zero-app = { path = "../crates/zero-app" }
 
 # Logging
