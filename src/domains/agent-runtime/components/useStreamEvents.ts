@@ -237,6 +237,7 @@ export function useStreamEvents(
 
           case "done":
             // Agent finished - auto-collapse if enabled
+            console.log("[useStreamEvents] Done event, setting isActive=false, autoCollapse=", autoCollapse);
             return {
               ...prev,
               isActive: false,
