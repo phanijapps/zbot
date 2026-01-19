@@ -551,17 +551,16 @@ export function AgentChannelPanel() {
                 {previousDays.length > 0 && (
                   <button
                     onClick={async () => {
+                      if (!selectedAgent) return;
                       if (confirm('Are you sure you want to delete all history?')) {
                         try {
-                          // Use today's date to delete all history before today
-                          const today = new Date().toISOString().split('T')[0];
+                          // Use a far future date to delete all history (SQLite will interpret this correctly)
                           await invoke('delete_agent_history', {
-                            agentId: selectedAgent?.id,
-                            beforeDate: today
+                            agentId: selectedAgent.id,
+                            beforeDate: '2099-12-31'
                           });
-                          if (selectedAgent) {
-                            await loadTodaySession(selectedAgent.id);
-                          }
+                          // Refresh the session to update previous days list
+                          await loadTodaySession(selectedAgent.id);
                         } catch (err) {
                           console.error('Failed to delete history:', err);
                           alert('Failed to delete history: ' + (err as Error).message);
@@ -600,15 +599,21 @@ export function AgentChannelPanel() {
                           onClick={async () => {
                             if (confirm(`Delete history for ${formatSessionDate(day.sessionDate)}?`)) {
                               try {
+                                // Add 1 day to the date so we delete this day and everything before it
+                                const targetDate = new Date(day.sessionDate + 'T00:00:00');
+                                targetDate.setDate(targetDate.getDate() + 1);
+                                const beforeDate = targetDate.toISOString().split('T')[0];
+
                                 await invoke('delete_agent_history', {
                                   agentId: selectedAgent?.id,
-                                  beforeDate: day.sessionDate
+                                  beforeDate: beforeDate
                                 });
                                 if (selectedAgent) {
                                   await loadTodaySession(selectedAgent.id);
                                 }
                               } catch (err) {
                                 console.error('Failed to delete day:', err);
+                                alert('Failed to delete: ' + (err as Error).message);
                               }
                             }
                           }}
