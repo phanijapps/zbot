@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -302,58 +302,47 @@ export function AgentChannelPanel() {
   };
 
   return (
-    <div className="flex h-full bg-zinc-950">
+    <div className="flex h-full bg-[#313338]">
       {/* Sidebar - Agent Channels */}
-      <div className="w-80 flex flex-col shrink-0">
-        <AgentChannelList
-          agents={agents}
-          selectedAgentId={selectedAgent?.id}
-          onSelectAgent={setSelectedAgent}
-          onShowHistory={handleShowHistory}
-        />
-      </div>
+      <AgentChannelList
+        agents={agents}
+        selectedAgentId={selectedAgent?.id}
+        onSelectAgent={setSelectedAgent}
+        onShowHistory={handleShowHistory}
+      />
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0">
         {selectedAgent && currentSession ? (
           <>
             {/* Header */}
-            <div className="h-14 flex items-center justify-between px-4 shrink-0">
-              <div className="flex items-center gap-3">
-                <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center">
-                  <Bot className="size-4 text-purple-400" />
-                </div>
-                <div>
-                  <div className="font-medium text-white text-sm">{selectedAgent.displayName}</div>
-                  <div className="text-xs text-gray-500">
-                    {formatSessionDate(currentSession.sessionDate)} • {currentSession.messageCount} messages
-                  </div>
-                </div>
+            <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
+              <div className="flex items-center gap-2">
+                <Hash className="size-5 text-gray-400" />
+                <h2 className="text-white font-semibold">
+                  {selectedAgent.displayName}
+                </h2>
               </div>
-              {previousDays.length > 0 && (
-                <button
-                  onClick={() => setShowPreviousDays(!showPreviousDays)}
-                  className="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-colors"
-                >
-                  <History className="size-4" />
-                  {showPreviousDays ? "Hide" : "Show"} History
+              <div className="flex items-center gap-1">
+                <button className="p-2 text-gray-400 hover:text-white transition-colors rounded hover:bg-white/5">
+                  <History className="size-5" />
                 </button>
-              )}
+              </div>
             </div>
 
             {/* Previous Days Summary (Collapsible) */}
             {showPreviousDays && previousDays.length > 0 && (
-              <div className="border-b border-white/10 p-4 bg-white/5">
+              <div className="border-b border-black/20 p-4 bg-black/5">
                 <h3 className="text-sm font-medium text-gray-400 mb-3">Previous Days</h3>
                 <div className="space-y-2">
                   {previousDays.slice(0, 5).map((day) => (
                     <div
                       key={day.sessionId}
-                      className="flex items-center justify-between p-3 rounded-lg bg-zinc-900/50 border border-white/5"
+                      className="flex items-center justify-between p-3 rounded-lg bg-[#2b2d31] border border-black/20"
                     >
                       <div>
                         <div className="text-sm text-white">{formatSessionDate(day.sessionDate)}</div>
-                        <div className="text-xs text-gray-500">{day.messageCount} messages</div>
+                        <div className="text-xs text-gray-400">{day.messageCount} messages</div>
                       </div>
                       {day.summary && (
                         <div className="text-xs text-gray-400 max-w-xs truncate">
@@ -371,100 +360,110 @@ export function AgentChannelPanel() {
               {messages.length === 0 ? (
                 isLoading ? (
                   <div className="flex items-center justify-center h-full">
-                    <Loader2 className="size-6 text-purple-400 animate-spin" />
+                    <Loader2 className="size-6 text-violet-400 animate-spin" />
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full px-6 text-center">
-                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center mb-4 border border-white/10">
-                      <MessageSquare className="size-7 text-purple-400" />
+                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-violet-600/20 to-purple-700/20 flex items-center justify-center mb-4 border border-white/10">
+                      <MessageSquare className="size-7 text-violet-400" />
                     </div>
                     <h3 className="text-base font-semibold text-white mb-2">
                       Today's session
                     </h3>
-                    <p className="text-sm text-gray-500 max-w-xs">
+                    <p className="text-sm text-gray-400 max-w-xs">
                       Start a conversation with {selectedAgent.displayName}. Messages are saved to today's session.
                     </p>
                   </div>
                 )
               ) : (
-                <div className="max-w-4xl mx-auto py-6 px-4 space-y-6">
-                  {messages.map((msg) => (
-                    <div
-                      key={msg.id}
-                      className={cn(
-                        "flex gap-3",
-                        msg.role === "user" ? "justify-end" : "justify-start"
-                      )}
-                    >
-                      {msg.role === "assistant" && (
-                        <div className="w-8 h-8 rounded-lg bg-purple-500/20 flex items-center justify-center shrink-0">
-                          <Bot className="size-4 text-purple-400" />
-                        </div>
-                      )}
-                      <div
-                        className={cn(
-                          "max-w-[80%] rounded-lg px-4 py-3",
-                          msg.role === "user"
-                            ? "bg-purple-600 text-white"
-                            : "bg-white/5 text-gray-100"
-                        )}
-                      >
-                        <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+                <div className="px-4 py-6">
+                  <div className="mb-6">
+                    <div className="flex items-center gap-3 mb-2">
+                      <div className="size-12 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center">
+                        <Hash className="size-6 text-white" />
+                      </div>
+                      <div>
+                        <h3 className="text-white text-lg font-bold">
+                          {selectedAgent.displayName}
+                        </h3>
+                        <p className="text-gray-400 text-sm">
+                          Today • {messages.length} message{messages.length !== 1 ? 's' : ''}
+                        </p>
                       </div>
                     </div>
-                  ))}
-                  {isLoading && (
-                    <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
-                      <Loader2 className="size-4 animate-spin" />
-                      <span>
-                        {executionStage === "thinking" && "Thinking..."}
-                        {executionStage === "using_tools" && `Using tool: ${activeToolName || "processing"}...`}
-                        {executionStage === "generating" && "Generating response..."}
-                      </span>
-                    </div>
-                  )}
-                  <div ref={messagesEndRef} />
+                  </div>
+
+                  <div className="space-y-4">
+                    {messages.map((msg) => (
+                      <div key={msg.id} className="group hover:bg-black/5 -mx-4 px-4 py-0.5">
+                        <div className="flex gap-4">
+                          <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
+                            {msg.role === 'user' ? 'U' : 'AI'}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-baseline gap-2 mb-1">
+                              <span className="font-semibold text-white">
+                                {msg.role === 'user' ? 'You' : selectedAgent.displayName}
+                              </span>
+                            </div>
+                            <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                              {msg.content}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {isLoading && (
+                      <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
+                        <Loader2 className="size-4 animate-spin" />
+                        <span>
+                          {executionStage === "thinking" && "Thinking..."}
+                          {executionStage === "using_tools" && `Using tool: ${activeToolName || "processing"}...`}
+                          {executionStage === "generating" && "Generating response..."}
+                        </span>
+                      </div>
+                    )}
+                    <div ref={messagesEndRef} />
+                  </div>
                 </div>
               )}
             </div>
 
             {/* Input Area */}
-            <div className="border-t border-white/10 p-4 shrink-0">
-              <div className="max-w-4xl mx-auto">
-                <div className="flex items-end gap-3">
-                  <button
-                    className="p-2 rounded-lg text-gray-400 hover:text-white hover:bg-white/5 transition-colors"
-                    title="Attach file"
-                  >
+            <div className="px-4 pb-6 shrink-0">
+              <div className="relative bg-[#383a40] rounded-lg">
+                <div className="flex items-start gap-3 p-3">
+                  <button className="p-2 text-gray-400 hover:text-white transition-colors rounded hover:bg-white/5 mt-1">
                     <Paperclip className="size-5" />
                   </button>
-                  <div className="flex-1 relative">
-                    <Textarea
-                      ref={inputRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          handleSendMessage();
-                        }
-                      }}
-                      placeholder="Type your message..."
-                      className="min-h-[44px] max-h-[200px] resize-none bg-white/5 border-white/10 text-white placeholder:text-gray-500"
-                    />
+                  <Textarea
+                    ref={inputRef}
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendMessage();
+                      }
+                    }}
+                    placeholder={`Message ${selectedAgent.displayName}`}
+                    className="flex-1 min-h-[24px] max-h-[200px] bg-transparent border-0 text-white placeholder:text-gray-500 resize-none focus-visible:ring-0 p-0"
+                    rows={1}
+                  />
+                  <div className="flex items-center gap-1 mt-1">
+                    <button
+                      onClick={handleSendMessage}
+                      disabled={!input.trim() || isLoading}
+                      className={cn(
+                        'p-1.5 rounded transition-colors',
+                        input.trim() && !isLoading
+                          ? 'text-white hover:bg-white/5'
+                          : 'text-gray-600 cursor-not-allowed'
+                      )}
+                    >
+                      <Send className="size-5" />
+                    </button>
                   </div>
-                  <button
-                    onClick={handleSendMessage}
-                    disabled={!input.trim() || isLoading}
-                    className={cn(
-                      "p-3 rounded-lg transition-all",
-                      input.trim() && !isLoading
-                        ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg shadow-purple-500/25"
-                        : "bg-white/5 text-gray-500 cursor-not-allowed"
-                    )}
-                  >
-                    <Send className="size-5" />
-                  </button>
                 </div>
               </div>
             </div>
@@ -473,13 +472,13 @@ export function AgentChannelPanel() {
           /* Empty State - No Agent Selected */
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center px-6">
-              <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center mx-auto mb-4 border border-white/10">
-                <Bot className="size-8 text-purple-400" />
+              <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-violet-600/20 to-purple-700/20 flex items-center justify-center mx-auto mb-4 border border-white/10">
+                <Bot className="size-8 text-violet-400" />
               </div>
               <h2 className="text-xl font-semibold text-white mb-2">
                 Select an Agent Channel
               </h2>
-              <p className="text-gray-500 max-w-md mx-auto">
+              <p className="text-gray-400 max-w-md mx-auto">
                 Choose an agent from the sidebar to start your conversation. Each agent has its own daily session.
               </p>
             </div>

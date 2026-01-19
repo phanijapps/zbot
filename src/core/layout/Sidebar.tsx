@@ -1,6 +1,6 @@
 // ============================================================================
 // SIDEBAR
-// Modern icon-based navigation sidebar with dark theme
+// Discord-style navigation sidebar with violet accents
 // ============================================================================
 
 import { NavLink } from "react-router-dom";
@@ -16,50 +16,49 @@ export function Sidebar({ className }: SidebarProps) {
     { path: "/", icon: MessageSquare, label: "Conversations" },
     { path: "/agents", icon: Bot, label: "Agents" },
     { path: "/providers", icon: Zap, label: "Providers" },
-    { path: "/mcp", icon: Network, label: "MCP Servers" },
+    { path: "/mcp", icon: Network, label: "MCP" },
     { path: "/skills", icon: Sparkles, label: "Skills" },
     { path: "/settings", icon: Settings, label: "Settings" },
   ];
 
   return (
-    <aside className={cn("w-16 bg-[#0f0f0f] border-r border-white/5 flex flex-col items-center py-4 gap-2", className)}>
+    <aside className={cn("w-[72px] bg-[#1a1a1d] flex flex-col items-center py-3 gap-2 border-r border-black/20", className)}>
       {/* Logo */}
-      <div className="mb-4 relative group cursor-pointer">
-        <div className="absolute inset-0 bg-gradient-to-br from-blue-500 to-purple-600 rounded-xl opacity-0 group-hover:opacity-100 blur-md transition-opacity" />
-        <div className="relative bg-gradient-to-br from-blue-500 to-purple-600 p-2.5 rounded-xl">
-          <Sparkles className="size-6 text-white" strokeWidth={2.5} />
+      <div className="mb-2 cursor-pointer group">
+        <div className="relative bg-gradient-to-br from-violet-600 to-purple-700 p-3 rounded-2xl transition-all group-hover:rounded-xl">
+          <Sparkles className="size-7 text-white" strokeWidth={2.5} fill="white" />
         </div>
       </div>
 
+      {/* Separator */}
+      <div className="w-8 h-[2px] bg-white/10 rounded-full my-1" />
+
       {/* Menu Items */}
-      <nav className="flex flex-col gap-2">
+      <nav className="flex flex-col gap-2 flex-1">
         {menuItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
             className={({ isActive }) =>
               cn(
-                "w-11 h-11 rounded-lg flex items-center justify-center transition-all relative group",
+                "w-12 h-12 rounded-2xl flex items-center justify-center transition-all relative group",
                 isActive
-                  ? "bg-blue-600 text-white"
-                  : "text-gray-400 hover:text-white hover:bg-white/5"
+                  ? "bg-violet-600 text-white rounded-xl"
+                  : "bg-[#2b2d31] text-gray-400 hover:text-white hover:bg-violet-600 hover:rounded-xl"
               )
             }
           >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <div className="absolute inset-0 bg-blue-500/20 rounded-lg blur-md" />
-                )}
-                <item.icon className="size-5 relative z-10" />
-                <div className="absolute left-full ml-2 px-2 py-1 bg-gray-900 text-white text-xs rounded opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap transition-opacity">
-                  {item.label}
-                </div>
-              </>
-            )}
+            <item.icon className="size-5" />
+            {/* Tooltip with arrow */}
+            <div className="absolute left-full ml-4 px-3 py-2 bg-black text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-xl">
+              {item.label}
+              <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-black" />
+            </div>
           </NavLink>
         ))}
       </nav>
+
+      {/* Settings at bottom - already included in menuItems above */}
     </aside>
   );
 }
