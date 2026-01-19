@@ -90,6 +90,10 @@ impl SqliteSessionRepository {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
 
+        // Enable foreign key constraints for CASCADE deletes to work
+        conn.execute("PRAGMA foreign_keys = ON", [])
+            .map_err(|e| format!("Failed to enable foreign keys: {}", e))?;
+
         // Initialize schema
         initialize_schema(&conn)?;
 
