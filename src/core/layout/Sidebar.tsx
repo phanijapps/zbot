@@ -22,37 +22,41 @@ export function Sidebar({ className }: SidebarProps) {
   ];
 
   return (
-    <aside className={cn("w-[72px] bg-[#1a1a1d] flex flex-col items-center py-3 gap-2 border-r border-black/20", className)}>
+    <aside className={cn("w-[72px] bg-[#1a1a1d] flex flex-col items-center py-3 gap-2 border-r border-black/20", className)} aria-label="Main navigation">
       {/* Logo */}
-      <div className="mb-2 cursor-pointer group">
+      <button
+        className="mb-2 cursor-pointer group bg-transparent border-0 p-0"
+        aria-label="AgentZero home"
+      >
         <div className="relative bg-gradient-to-br from-violet-600 to-purple-700 p-3 rounded-2xl transition-all group-hover:rounded-xl">
           <Sparkles className="size-7 text-white" strokeWidth={2.5} fill="white" />
         </div>
-      </div>
+      </button>
 
       {/* Separator */}
-      <div className="w-8 h-[2px] bg-white/10 rounded-full my-1" />
+      <div className="w-8 h-[2px] bg-white/10 rounded-full my-1" aria-hidden="true" />
 
       {/* Menu Items */}
-      <nav className="flex flex-col gap-2 flex-1">
+      <nav className="flex flex-col gap-2 flex-1" aria-label="Primary navigation">
         {menuItems.map((item) => (
           <NavLink
             key={item.path}
             to={item.path}
+            aria-label={item.label}
             className={({ isActive }) =>
               cn(
                 "w-12 h-12 rounded-2xl flex items-center justify-center transition-all relative group",
                 isActive
                   ? "bg-violet-600 text-white rounded-xl"
-                  : "bg-[#2b2d31] text-gray-400 hover:text-white hover:bg-violet-600 hover:rounded-xl"
+                  : "bg-[#2b2d31] text-gray-300 hover:text-white hover:bg-violet-600 hover:rounded-xl"
               )
             }
           >
-            <item.icon className="size-5" />
+            <item.icon className="size-5" aria-hidden="true" />
             {/* Tooltip with arrow */}
-            <div className="absolute left-full ml-4 px-3 py-2 bg-black text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-xl">
+            <div className="absolute left-full ml-4 px-3 py-2 bg-black text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-xl" role="tooltip">
               {item.label}
-              <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-black" />
+              <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-black" aria-hidden="true" />
             </div>
           </NavLink>
         ))}

@@ -3,7 +3,7 @@
 // Discord-like agent interface with daily sessions
 // ============================================================================
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -14,7 +14,6 @@ import {
   useStreamEvents,
   ThinkingPanel,
   GenerativeCanvas,
-  type ContentState,
   type MessageWithThinking,
 } from "@/domains/agent-runtime/components";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
@@ -37,21 +36,18 @@ export function AgentChannelPanel() {
   const [showPreviousDays, setShowPreviousDays] = useState(false);
   const [messages, setMessages] = useState<MessageWithThinking[]>([]);
   const [isLoading, setIsLoading] = useState(false);
-  const [_loading, setLoading] = useState(true);
   const [input, setInput] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isMountedRef = useRef(true);
 
   // Execution stage for better UX
   const [executionStage, setExecutionStage] = useState<ExecutionStage>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
 
-  // Error state
-  const [_error, setError] = useState<string | null>(null);
 
   // Generative Canvas state
   const [canvasOpen, setCanvasOpen] = useState(false);
-  const [_canvasContent, _setCanvasContent] = useState<ContentState | null>(null);
 
   // Stream events handling
   const {
@@ -61,7 +57,12 @@ export function AgentChannelPanel() {
 
   // Load agents on mount
   useEffect(() => {
+    isMountedRef.current = true;
     loadAgents();
+
+    return () => {
+      isMountedRef.current = false;
+    };
   }, []);
 
   // Load session when agent is selected
@@ -89,32 +90,44 @@ export function AgentChannelPanel() {
   /**
    * Scroll to bottom of messages
    */
-  const scrollToBottom = () => {
+  const scrollToBottom = useCallback(() => {
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }, 50);
-  };
+  }, []);
+
+  /**
+   * Convert SessionMessage to MessageWithThinking format
+   */
+  const convertSessionMessagesToWithThinking = useCallback((
+    sessionMessages: SessionMessage[]
+  ): MessageWithThinking[] => {
+    return sessionMessages.map((msg) => ({
+      id: msg.id,
+      conversationId: msg.sessionId,
+      role: msg.role as "user" | "assistant" | "system",
+      content: msg.content,
+      timestamp: new Date(msg.createdAt).getTime(),
+      thinking: { toolCount: 0 },
+    }));
+  }, []);
 
   /**
    * Load all agents
    */
-  const loadAgents = async () => {
+  const loadAgents = useCallback(async () => {
     try {
-      setLoading(true);
       const agentList = await listAgents();
       setAgents(agentList);
     } catch (err) {
       console.error("Failed to load agents:", err);
-      setError("Failed to load agents");
-    } finally {
-      setLoading(false);
     }
-  };
+  }, []);
 
   /**
    * Load today's session for an agent
    */
-  const loadTodaySession = async (agentId: string) => {
+  const loadTodaySession = useCallback(async (agentId: string) => {
     try {
       setIsLoading(true);
       const session = await getOrCreateTodaySession(agentId);
@@ -132,27 +145,10 @@ export function AgentChannelPanel() {
       scrollToBottom();
     } catch (err) {
       console.error("Failed to load session:", err);
-      setError("Failed to load session");
     } finally {
       setIsLoading(false);
     }
-  };
-
-  /**
-   * Convert SessionMessage to MessageWithThinking format
-   */
-  const convertSessionMessagesToWithThinking = (
-    sessionMessages: SessionMessage[]
-  ): MessageWithThinking[] => {
-    return sessionMessages.map((msg) => ({
-      id: msg.id,
-      conversationId: msg.sessionId,
-      role: msg.role as "user" | "assistant" | "system",
-      content: msg.content,
-      timestamp: new Date(msg.createdAt).getTime(),
-      thinking: { toolCount: 0 },
-    }));
-  };
+  }, [convertSessionMessagesToWithThinking, scrollToBottom]);
 
   /**
    * Handle sending a message
@@ -198,13 +194,18 @@ export function AgentChannelPanel() {
     let hasStoppedLoading = false;
 
     const finishProcessing = () => {
+      // Only update state if component is still mounted
+      if (!isMountedRef.current) return;
+
       setIsLoading(false);
       setExecutionStage("done");
       setActiveToolName(null);
 
       loadSessionMessages(currentSession.id).then((sessionMessages) => {
-        setMessages(convertSessionMessagesToWithThinking(sessionMessages));
-        scrollToBottom();
+        if (isMountedRef.current) {
+          setMessages(convertSessionMessagesToWithThinking(sessionMessages));
+          scrollToBottom();
+        }
       }).catch((err) => {
         console.error("Failed to refresh messages:", err);
       });
@@ -220,6 +221,9 @@ export function AgentChannelPanel() {
     };
 
     const unlistenPromise = listen(eventChannel, (event) => {
+      // Don't process events if component is unmounted
+      if (!isMountedRef.current) return;
+
       const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string };
       if (!data) return;
 
@@ -276,7 +280,9 @@ export function AgentChannelPanel() {
 
     // Fallback timeout - if we don't get done/error within 30 seconds, finish anyway
     timeoutId = setTimeout(() => {
-      finishProcessing();
+      if (isMountedRef.current) {
+        finishProcessing();
+      }
     }, 30000);
 
     try {
@@ -285,20 +291,15 @@ export function AgentChannelPanel() {
         message: userMessage,
       });
     } catch (error) {
-      setMessages((prev) => prev.map((msg) =>
-        msg.id === assistantMessageId && msg.content === ""
-          ? { ...msg, content: `Error: ${error instanceof Error ? error.message : String(error)}` }
-          : msg
-      ));
-      finishProcessing();
+      if (isMountedRef.current) {
+        setMessages((prev) => prev.map((msg) =>
+          msg.id === assistantMessageId && msg.content === ""
+            ? { ...msg, content: `Error: ${error instanceof Error ? error.message : String(error)}` }
+            : msg
+        ));
+        finishProcessing();
+      }
     }
-  };
-
-  /**
-   * Handle showing previous days
-   */
-  const handleShowHistory = () => {
-    setShowPreviousDays(!showPreviousDays);
   };
 
   return (
@@ -308,7 +309,6 @@ export function AgentChannelPanel() {
         agents={agents}
         selectedAgentId={selectedAgent?.id}
         onSelectAgent={setSelectedAgent}
-        onShowHistory={handleShowHistory}
       />
 
       {/* Main Content Area */}
@@ -318,13 +318,13 @@ export function AgentChannelPanel() {
             {/* Header */}
             <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
               <div className="flex items-center gap-2">
-                <Hash className="size-5 text-gray-400" />
+                <Hash className="size-5 text-gray-300" />
                 <h2 className="text-white font-semibold">
                   {selectedAgent.displayName}
                 </h2>
               </div>
               <div className="flex items-center gap-1">
-                <button className="p-2 text-gray-400 hover:text-white transition-colors rounded hover:bg-white/5">
+                <button className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5">
                   <History className="size-5" />
                 </button>
               </div>
@@ -333,7 +333,7 @@ export function AgentChannelPanel() {
             {/* Previous Days Summary (Collapsible) */}
             {showPreviousDays && previousDays.length > 0 && (
               <div className="border-b border-black/20 p-4 bg-black/5">
-                <h3 className="text-sm font-medium text-gray-400 mb-3">Previous Days</h3>
+                <h3 className="text-sm font-medium text-gray-300 mb-3">Previous Days</h3>
                 <div className="space-y-2">
                   {previousDays.slice(0, 5).map((day) => (
                     <div
@@ -342,10 +342,10 @@ export function AgentChannelPanel() {
                     >
                       <div>
                         <div className="text-sm text-white">{formatSessionDate(day.sessionDate)}</div>
-                        <div className="text-xs text-gray-400">{day.messageCount} messages</div>
+                        <div className="text-xs text-gray-300">{day.messageCount} messages</div>
                       </div>
                       {day.summary && (
-                        <div className="text-xs text-gray-400 max-w-xs truncate">
+                        <div className="text-xs text-gray-300 max-w-xs truncate">
                           {day.summary}
                         </div>
                       )}
@@ -370,7 +370,7 @@ export function AgentChannelPanel() {
                     <h3 className="text-base font-semibold text-white mb-2">
                       Today's session
                     </h3>
-                    <p className="text-sm text-gray-400 max-w-xs">
+                    <p className="text-sm text-gray-300 max-w-xs">
                       Start a conversation with {selectedAgent.displayName}. Messages are saved to today's session.
                     </p>
                   </div>
@@ -386,7 +386,7 @@ export function AgentChannelPanel() {
                         <h3 className="text-white text-lg font-bold">
                           {selectedAgent.displayName}
                         </h3>
-                        <p className="text-gray-400 text-sm">
+                        <p className="text-gray-300 text-sm">
                           Today • {messages.length} message{messages.length !== 1 ? 's' : ''}
                         </p>
                       </div>
@@ -414,7 +414,7 @@ export function AgentChannelPanel() {
                       </div>
                     ))}
                     {isLoading && (
-                      <div className="flex items-center gap-2 text-gray-400 text-sm py-4">
+                      <div className="flex items-center gap-2 text-gray-300 text-sm py-4">
                         <Loader2 className="size-4 animate-spin" />
                         <span>
                           {executionStage === "thinking" && "Thinking..."}
@@ -433,7 +433,7 @@ export function AgentChannelPanel() {
             <div className="px-4 pb-6 shrink-0">
               <div className="relative bg-[#383a40] rounded-lg">
                 <div className="flex items-start gap-3 p-3">
-                  <button className="p-2 text-gray-400 hover:text-white transition-colors rounded hover:bg-white/5 mt-1">
+                  <button className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 mt-1">
                     <Paperclip className="size-5" />
                   </button>
                   <Textarea
@@ -478,7 +478,7 @@ export function AgentChannelPanel() {
               <h2 className="text-xl font-semibold text-white mb-2">
                 Select an Agent Channel
               </h2>
-              <p className="text-gray-400 max-w-md mx-auto">
+              <p className="text-gray-300 max-w-md mx-auto">
                 Choose an agent from the sidebar to start your conversation. Each agent has its own daily session.
               </p>
             </div>
@@ -496,9 +496,9 @@ export function AgentChannelPanel() {
       )}
 
       {/* Generative Canvas */}
-      {canvasOpen && _canvasContent && (
+      {canvasOpen && (
         <GenerativeCanvas
-          content={_canvasContent}
+          content={null}
           isOpen={canvasOpen}
           onClose={() => setCanvasOpen(false)}
         />
