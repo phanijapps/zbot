@@ -47,6 +47,10 @@ export function AgentChannelPanel() {
 
   // Generative Canvas state
   const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasContent, setCanvasContent] = useState<{
+    type: "request_input" | "show_content";
+    event: any;
+  } | null>(null);
 
   // History Panel state
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
@@ -237,7 +241,7 @@ export function AgentChannelPanel() {
       // Don't process events if component is unmounted
       if (!isMountedRef.current) return;
 
-      const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string };
+      const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string; formId?: string; title?: string; description?: string; schema?: any; submitButton?: string };
       if (!data) return;
 
       // Map simplified events to AgentStreamEvent format and pass to thinking panel
@@ -312,6 +316,28 @@ export function AgentChannelPanel() {
               : msg
           ));
           finishProcessing();
+          break;
+
+        case "request_input":
+          // Open form for user input via GenerativeCanvas
+          handleThinkingEvent({
+            type: "request_input",
+            formId: data.formId || `form-${Date.now()}`,
+            title: data.title || "Input Required",
+            description: data.description || "",
+            timestamp: Date.now()
+          });
+          setCanvasContent({
+            type: "request_input",
+            event: {
+              formId: data.formId || `form-${Date.now()}`,
+              title: data.title || "Input Required",
+              description: data.description || "",
+              schema: data.schema || {},
+              submitButton: data.submitButton || "Submit"
+            }
+          });
+          setCanvasOpen(true);
           break;
 
         case "error":
@@ -673,9 +699,13 @@ export function AgentChannelPanel() {
       {/* Generative Canvas */}
       {canvasOpen && (
         <GenerativeCanvas
-          content={null}
+          content={canvasContent}
           isOpen={canvasOpen}
-          onClose={() => setCanvasOpen(false)}
+          onClose={() => {
+            setCanvasOpen(false);
+            setCanvasContent(null);
+          }}
+          conversationId={currentSession?.id}
         />
       )}
     </div>
