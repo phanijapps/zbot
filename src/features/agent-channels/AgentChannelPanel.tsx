@@ -194,7 +194,8 @@ export function AgentChannelPanel() {
       role: "assistant",
       content: "",
       timestamp: Date.now(),
-      // Don't include thinking initially - only add it when there are tool calls
+      // Initialize thinking with toolCount 0 so React can detect changes
+      thinking: { toolCount: 0 }
     };
     setMessages((prev) => [...prev, initialAssistantMessage]);
 
