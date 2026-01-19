@@ -182,7 +182,7 @@ export function AgentChannelPanel() {
       role: "user",
       content: userMessage,
       timestamp: Date.now(),
-      thinking: { toolCount: 0 },
+      // User messages don't have tool calls - don't set thinking
     };
     setMessages((prev) => [...prev, tempUserMessage]);
 
@@ -216,14 +216,9 @@ export function AgentChannelPanel() {
       setExecutionStage("done");
       setActiveToolName(null);
 
-      loadSessionMessages(currentSession.id).then((sessionMessages) => {
-        if (isMountedRef.current) {
-          setMessages(convertSessionMessagesToWithThinking(sessionMessages));
-          scrollToBottom();
-        }
-      }).catch((err) => {
-        console.error("Failed to refresh messages:", err);
-      });
+      // Don't reload from database - we already have the correct state in memory
+      // Reloading would overwrite the tool count we just set
+      scrollToBottom();
 
       if (unlisten) {
         unlisten();
@@ -297,13 +292,16 @@ export function AgentChannelPanel() {
             tokenCount: 0,
             timestamp: Date.now()
           });
-          if (data.finalMessage) {
-            setMessages((prev) => prev.map((msg) =>
-              msg.id === assistantMessageId
-                ? { ...msg, content: data.finalMessage || "", ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount } } : {}) }
-                : msg
-            ));
-          }
+          // Update with both content and tool count, forcing React to see the change
+          setMessages((prev) => prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? {
+                  ...msg,
+                  content: data.finalMessage || "",
+                  thinking: { toolCount: toolCallCount }
+                }
+              : msg
+          ));
           finishProcessing();
           break;
 
