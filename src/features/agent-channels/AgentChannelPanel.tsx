@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Wrench } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -52,7 +52,9 @@ export function AgentChannelPanel() {
   // Stream events handling
   const {
     state: thinkingState,
+    handleEvent: handleThinkingEvent,
     reset: resetThinking,
+    setCurrentMessage,
   } = useStreamEvents(true, false);
 
   // Load agents on mount
@@ -187,6 +189,9 @@ export function AgentChannelPanel() {
     };
     setMessages((prev) => [...prev, initialAssistantMessage]);
 
+    // Set current message for thinking panel
+    setCurrentMessage(assistantMessageId);
+
     // Listen for streaming events from the backend
     const eventChannel = `agent-stream://${currentSession.id}`;
     let unlisten: (() => void) | null = null;
@@ -224,12 +229,18 @@ export function AgentChannelPanel() {
       // Don't process events if component is unmounted
       if (!isMountedRef.current) return;
 
-      const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string };
+      const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string };
       if (!data) return;
 
+      // Map simplified events to AgentStreamEvent format and pass to thinking panel
       switch (data.type) {
         case "token":
           setExecutionStage("generating");
+          handleThinkingEvent({
+            type: "token",
+            content: data.content || "",
+            timestamp: Date.now()
+          });
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
               ? { ...msg, content: msg.content + (data.content || "") }
@@ -247,18 +258,38 @@ export function AgentChannelPanel() {
         case "tool_call_start":
           setExecutionStage("using_tools");
           setActiveToolName(data.toolName || null);
+          handleThinkingEvent({
+            type: "tool_call_start",
+            toolId: data.toolId || `tool-${Date.now()}`,
+            toolName: data.toolName || "unknown",
+            timestamp: Date.now()
+          });
           break;
 
         case "tool_result":
           setExecutionStage("generating");
           setActiveToolName(null);
+          handleThinkingEvent({
+            type: "tool_result",
+            toolId: data.toolId || `tool-${Date.now()}`,
+            toolName: data.toolName || "unknown",
+            result: data.result || "",
+            error: data.error,
+            timestamp: Date.now()
+          });
           break;
 
         case "done":
+          handleThinkingEvent({
+            type: "done",
+            finalMessage: data.finalMessage || "",
+            tokenCount: 0,
+            timestamp: Date.now()
+          });
           if (data.finalMessage) {
             setMessages((prev) => prev.map((msg) =>
               msg.id === assistantMessageId
-                ? { ...msg, content: data.finalMessage || "" }
+                ? { ...msg, content: data.finalMessage || "", thinking: { toolCount: thinkingState.toolCalls.length } }
                 : msg
             ));
           }
@@ -266,6 +297,12 @@ export function AgentChannelPanel() {
           break;
 
         case "error":
+          handleThinkingEvent({
+            type: "error",
+            error: data.error || "Unknown error",
+            recoverable: false,
+            timestamp: Date.now()
+          });
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId && msg.content === ""
               ? { ...msg, content: `Error: ${data.error || "Unknown error"}` }
@@ -400,6 +437,12 @@ export function AgentChannelPanel() {
                               <span className="font-semibold text-white">
                                 {msg.role === 'user' ? 'You' : selectedAgent.displayName}
                               </span>
+                              {msg.thinking?.toolCount && msg.thinking.toolCount > 0 && (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-xs font-medium">
+                                  <Wrench className="size-3" />
+                                  {msg.thinking.toolCount} tool{msg.thinking.toolCount !== 1 ? 's' : ''}
+                                </span>
+                              )}
                             </div>
                             <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
                               {msg.content}
