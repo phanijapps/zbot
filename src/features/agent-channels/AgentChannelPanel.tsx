@@ -104,14 +104,22 @@ export function AgentChannelPanel() {
   const convertSessionMessagesToWithThinking = useCallback((
     sessionMessages: SessionMessage[]
   ): MessageWithThinking[] => {
-    return sessionMessages.map((msg) => ({
-      id: msg.id,
-      conversationId: msg.sessionId,
-      role: msg.role as "user" | "assistant" | "system",
-      content: msg.content,
-      timestamp: new Date(msg.createdAt).getTime(),
-      thinking: { toolCount: 0 },
-    }));
+    return sessionMessages.map((msg) => {
+      // Count tool calls from the Record
+      const toolCallCount = msg.toolCalls ? Object.keys(msg.toolCalls).length : 0;
+
+      return {
+        id: msg.id,
+        conversationId: msg.sessionId,
+        role: msg.role as "user" | "assistant" | "system",
+        content: msg.content,
+        timestamp: new Date(msg.createdAt).getTime(),
+        // Only include thinking if there are actual tool calls
+        ...(toolCallCount > 0 ? {
+          thinking: { toolCount: toolCallCount }
+        } : {}),
+      };
+    });
   }, []);
 
   /**
