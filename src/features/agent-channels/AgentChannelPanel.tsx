@@ -284,6 +284,12 @@ export function AgentChannelPanel() {
             error: data.error,
             timestamp: Date.now()
           });
+          // Update tool count in real-time as tools complete (shows tickmark in sidebar)
+          setMessages((prev) => prev.map((msg) =>
+            msg.id === assistantMessageId
+              ? { ...msg, thinking: { toolCount: toolCallCount } }
+              : msg
+          ));
           break;
 
         case "done":
