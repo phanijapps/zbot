@@ -142,34 +142,37 @@ export function useStreamEvents(
 
         switch (event.type) {
           case "metadata":
-            // Agent started working - auto-open panel
-            console.log("[useStreamEvents] Metadata event, opening panel");
+            // Agent started working - mark as active but don't open panel yet
+            // Panel will open when there's actual thinking content (tools, reasoning, etc)
+            console.log("[useStreamEvents] Metadata event, marking as active");
             return {
               ...prev,
               isActive: true,
-              isOpen: true, // Always open on metadata
+              // Don't open panel on metadata - wait for actual thinking content
               currentMessageId: event.agentId,
             };
 
           case "token":
-            // Still active - also ensure panel is open
-            console.log("[useStreamEvents] Token event, ensuring panel is open");
+            // Still active - but don't open panel unless there's thinking content
+            console.log("[useStreamEvents] Token event, keeping active but not opening panel");
             return {
               ...prev,
               isActive: true,
-              isOpen: true, // Keep panel open during streaming
+              // Don't open panel on token events - only when there's thinking content
             };
 
           case "reasoning":
-            // Add to reasoning blocks
+            // Add to reasoning blocks and open panel
+            console.log("[useStreamEvents] Reasoning event, opening panel");
             return {
               ...prev,
               reasoning: [...prev.reasoning, event.content],
+              isOpen: true, // Open panel when there's reasoning
             };
 
           case "tool_call_start":
-            // New tool call starting - ensure panel is open
-            console.log("🔧 Tool call:", event.toolName);
+            // New tool call starting - open panel
+            console.log("🔧 Tool call:", event.toolName, "- opening panel");
             const newTool: ToolCallDisplay = {
               id: event.toolId,
               name: event.toolName,
@@ -178,7 +181,7 @@ export function useStreamEvents(
             return {
               ...prev,
               isActive: true,
-              isOpen: true, // Ensure panel is open when tools are running
+              isOpen: true, // Open panel when tools are running
               toolCalls: [...prev.toolCalls, newTool],
             };
 
@@ -236,12 +239,12 @@ export function useStreamEvents(
           }
 
           case "done":
-            // Agent finished - auto-collapse if enabled
-            console.log("[useStreamEvents] Done event, setting isActive=false, autoCollapse=", autoCollapse);
+            // Agent finished - always collapse panel and reset state
+            console.log("[useStreamEvents] Done event received, closing panel and setting isActive=false");
             return {
               ...prev,
               isActive: false,
-              isOpen: autoCollapse ? false : prev.isOpen,
+              isOpen: false, // Always close panel when done
             };
 
           case "error":

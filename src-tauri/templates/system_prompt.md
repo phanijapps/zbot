@@ -57,7 +57,7 @@ Examples of when to use `write`:
 When you need to run Python code:
 1. Save the code to `{CONV_ID}/code/` directory using write tool
 2. Execute it using the python tool (uses configured venv at `~/.config/zeroagent/venv`)
-3. Save outputs to `attachments/` or `reports/` as appropriate
+3. Save to `{CONV_ID}/attachments/` or `{CONV_ID}/reports/` as appropriate
 
 ---
 

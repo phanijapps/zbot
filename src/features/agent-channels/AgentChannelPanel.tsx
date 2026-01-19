@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Wrench, Trash2, X } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -12,8 +12,8 @@ import { Textarea } from "@/shared/ui/textarea";
 import {
   AgentChannelList,
   useStreamEvents,
-  ThinkingPanel,
   GenerativeCanvas,
+  InlineToolCallsList,
   type MessageWithThinking,
 } from "@/domains/agent-runtime/components";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
@@ -40,6 +40,7 @@ export function AgentChannelPanel() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isMountedRef = useRef(true);
   const isExecutingRef = useRef(false); // Prevent concurrent executions
+  const currentUnlistenRef = useRef<(() => void) | null>(null); // Track current event listener for cleanup
 
   // Execution stage for better UX
   const [executionStage, setExecutionStage] = useState<ExecutionStage>("idle");
@@ -61,7 +62,7 @@ export function AgentChannelPanel() {
 
   // Stream events handling
   const {
-    state: thinkingState,
+    state: _thinkingState,
     handleEvent: handleThinkingEvent,
     reset: resetThinking,
     setCurrentMessage,
@@ -74,6 +75,12 @@ export function AgentChannelPanel() {
 
     return () => {
       isMountedRef.current = false;
+      // Clean up any dangling event listener on unmount
+      if (currentUnlistenRef.current) {
+        console.log("[AgentChannelPanel] Cleaning up event listener on unmount");
+        currentUnlistenRef.current();
+        currentUnlistenRef.current = null;
+      }
     };
   }, []);
 
@@ -114,8 +121,29 @@ export function AgentChannelPanel() {
     sessionMessages: SessionMessage[]
   ): MessageWithThinking[] => {
     return sessionMessages.map((msg) => {
-      // Count tool calls from the Record
-      const toolCallCount = msg.toolCalls ? Object.keys(msg.toolCalls).length : 0;
+      // Parse tool calls from the database format
+      let toolCalls: { toolCount: number; toolCalls?: any[] } | undefined;
+
+      if (msg.toolCalls && Object.keys(msg.toolCalls).length > 0) {
+        try {
+          const toolCallsArray = Array.isArray(msg.toolCalls)
+            ? msg.toolCalls as any[]
+            : Object.values(msg.toolCalls);
+
+          toolCalls = {
+            toolCount: toolCallsArray.length,
+            toolCalls: toolCallsArray.map((tc: any) => ({
+              id: tc.id || tc.tool_call_id || `tool-${Date.now()}-${Math.random()}`,
+              name: tc.name || tc.function?.name || 'unknown',
+              status: 'completed' as "completed" | "failed",
+              result: msg.toolResults?.[tc.id || tc.tool_call_id] as string | undefined,
+            }))
+          };
+        } catch (e) {
+          console.warn('[AgentChannelPanel] Failed to parse tool calls:', e);
+          toolCalls = { toolCount: Object.keys(msg.toolCalls).length };
+        }
+      }
 
       return {
         id: msg.id,
@@ -124,9 +152,7 @@ export function AgentChannelPanel() {
         content: msg.content,
         timestamp: new Date(msg.createdAt).getTime(),
         // Only include thinking if there are actual tool calls
-        ...(toolCallCount > 0 ? {
-          thinking: { toolCount: toolCallCount }
-        } : {}),
+        ...(toolCalls ? { thinking: toolCalls } : {}),
       };
     });
   }, []);
@@ -170,15 +196,30 @@ export function AgentChannelPanel() {
   }, [convertSessionMessagesToWithThinking, scrollToBottom]);
 
   /**
-   * Execute agent with a message (optionally show user message)
+   * Execute agent with a message
+   * User message should already be added to state before calling this.
    * @param message - The message to send to the agent
-   * @param showUserMessage - Whether to display the user message in the chat
    */
-  const executeAgentWithMessage = async (message: string, showUserMessage = true) => {
+  const executeAgentWithMessage = async (message: string) => {
     if (!currentSession || !selectedAgent) return;
 
+    // Clean up any previous event listener before starting a new execution
+    if (currentUnlistenRef.current) {
+      console.log("[AgentChannelPanel] Cleaning up previous event listener");
+      currentUnlistenRef.current();
+      currentUnlistenRef.current = null;
+    }
+
     // Wait for any ongoing execution to complete before starting a new one
+    // Add a timeout to prevent infinite waiting
+    const maxWaitTime = 5000; // 5 seconds max wait
+    const waitStart = Date.now();
     while (isExecutingRef.current) {
+      if (Date.now() - waitStart > maxWaitTime) {
+        console.warn("[AgentChannelPanel] Previous execution timed out, forcing cleanup and starting new execution");
+        isExecutingRef.current = false; // Force reset
+        break;
+      }
       console.log("[AgentChannelPanel] Waiting for previous execution to complete...");
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -190,24 +231,8 @@ export function AgentChannelPanel() {
     // Close history sidebar when sending a new message
     setHistoryPanelOpen(false);
 
-    // Optionally add user message to UI
-    let assistantMessageId: string;
-    if (showUserMessage) {
-      const tempUserMessage: MessageWithThinking = {
-        id: Date.now().toString(),
-        conversationId: currentSession.id,
-        role: "user",
-        content: message,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, tempUserMessage]);
-      assistantMessageId = (Date.now() + 1).toString();
-    } else {
-      // For hidden messages (form submissions), don't show user message
-      assistantMessageId = Date.now().toString();
-    }
-
     // Create assistant message placeholder for streaming response
+    const assistantMessageId = Date.now().toString();
     const initialAssistantMessage: MessageWithThinking = {
       id: assistantMessageId,
       conversationId: currentSession.id,
@@ -218,36 +243,37 @@ export function AgentChannelPanel() {
     };
     setMessages((prev) => [...prev, initialAssistantMessage]);
 
-    // Set current message for thinking panel
+    // Set current message for thinking events
     setCurrentMessage(assistantMessageId);
 
     // Listen for streaming events from the backend
     const eventChannel = `agent-stream://${currentSession.id}`;
-    let unlisten: (() => void) | null = null;
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let hasStoppedLoading = false;
+    console.log("[AgentChannelPanel] Setting up event listener for channel:", eventChannel);
     let toolCallCount = 0; // Track tool calls locally during streaming
+    const toolCallsData: Array<{ id: string; name: string; status: "running" | "completed" | "failed"; result?: string }> = []; // Track actual tool call data
 
     const finishProcessing = () => {
       // Only update state if component is still mounted
       if (!isMountedRef.current) return;
 
-      isExecutingRef.current = false; // Reset execution flag
+      isExecutingRef.current = false;
       setIsLoading(false);
       setExecutionStage("done");
       setActiveToolName(null);
 
-      // Don't reload from database - we already have the correct state in memory
-      // Reloading would overwrite the tool count we just set
+      handleThinkingEvent({
+        type: "done",
+        finalMessage: "",
+        tokenCount: 0,
+        timestamp: Date.now()
+      });
+
       scrollToBottom();
 
-      if (unlisten) {
-        unlisten();
-        unlisten = null;
-      }
-      if (timeoutId) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
+      // Clean up event listener
+      if (currentUnlistenRef.current) {
+        currentUnlistenRef.current();
+        currentUnlistenRef.current = null;
       }
     };
 
@@ -274,22 +300,22 @@ export function AgentChannelPanel() {
               ? { ...msg, content: msg.content + (data.content || "") }
               : msg
           ));
-          // Stop spinner on first token (only once)
-          if (!hasStoppedLoading) {
-            hasStoppedLoading = true;
-            setTimeout(() => {
-              setIsLoading(false);
-            }, 100);
-          }
           break;
 
         case "tool_call_start":
           setExecutionStage("using_tools");
           setActiveToolName(data.toolName || null);
           toolCallCount++; // Increment local tool counter
+          // Store tool call data
+          const toolId = data.toolId || `tool-${Date.now()}`;
+          toolCallsData.push({
+            id: toolId,
+            name: data.toolName || "unknown",
+            status: "running",
+          });
           handleThinkingEvent({
             type: "tool_call_start",
-            toolId: data.toolId || `tool-${Date.now()}`,
+            toolId: toolId,
             toolName: data.toolName || "unknown",
             timestamp: Date.now()
           });
@@ -298,6 +324,15 @@ export function AgentChannelPanel() {
         case "tool_result":
           setExecutionStage("generating");
           setActiveToolName(null);
+          // Update the tool call with result
+          const toolIdx = toolCallsData.findIndex(tc => tc.id === data.toolId);
+          if (toolIdx !== -1) {
+            toolCallsData[toolIdx] = {
+              ...toolCallsData[toolIdx],
+              status: data.error ? "failed" : "completed",
+              result: data.result,
+            };
+          }
           handleThinkingEvent({
             type: "tool_result",
             toolId: data.toolId || `tool-${Date.now()}`,
@@ -306,10 +341,10 @@ export function AgentChannelPanel() {
             error: data.error,
             timestamp: Date.now()
           });
-          // Update tool count in real-time as tools complete (shows tickmark in sidebar)
+          // Update tool count in real-time as tools complete
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
-              ? { ...msg, thinking: { toolCount: toolCallCount } }
+              ? { ...msg, thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } }
               : msg
           ));
           break;
@@ -321,13 +356,13 @@ export function AgentChannelPanel() {
             tokenCount: 0,
             timestamp: Date.now()
           });
-          // Update with content and tool count only if tools were used
+          // Update with final content and tool data
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
               ? {
                   ...msg,
-                  content: data.finalMessage || "",
-                  ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount } } : {})
+                  content: data.finalMessage || msg.content,
+                  ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {})
                 }
               : msg
           ));
@@ -341,8 +376,10 @@ export function AgentChannelPanel() {
           handleThinkingEvent({
             type: "request_input",
             formId: data.formId || `form-${Date.now()}`,
+            formType: "json_schema",
             title: data.title || "Input Required",
             description: data.description || "",
+            schema: data.schema || {},
             timestamp: Date.now()
           });
           setCanvasContent({
@@ -358,7 +395,39 @@ export function AgentChannelPanel() {
           setCanvasOpen(true);
           break;
 
+        case "show_content": {
+          // Show content in GenerativeCanvas (HTML, PDF, image, etc.)
+          const showContentData = data as {
+            contentType?: string;
+            content?: string;
+            filePath?: string;
+            base64?: boolean;
+            title?: string;
+            isAttachment?: boolean;
+          };
+          handleThinkingEvent({
+            type: "show_content",
+            contentType: showContentData.contentType || "text",
+            title: showContentData.title || "Content",
+            timestamp: Date.now()
+          } as any);
+          setCanvasContent({
+            type: "show_content",
+            event: {
+              contentType: showContentData.contentType || "text",
+              content: showContentData.content || "",
+              filePath: showContentData.filePath,
+              base64: showContentData.base64,
+              title: showContentData.title || "Content",
+              isAttachment: showContentData.isAttachment || false,
+            }
+          });
+          setCanvasOpen(true);
+          break;
+        }
+
         case "error":
+          console.log("[AgentChannelPanel] ERROR event received");
           handleThinkingEvent({
             type: "error",
             error: data.error || "Unknown error",
@@ -375,20 +444,18 @@ export function AgentChannelPanel() {
       }
     });
 
-    unlisten = await unlistenPromise;
-
-    // Fallback timeout - if we don't get done/error within 30 seconds, finish anyway
-    timeoutId = setTimeout(() => {
-      if (isMountedRef.current) {
-        finishProcessing();
-      }
-    }, 30000);
+    currentUnlistenRef.current = await unlistenPromise;
 
     try {
       await invoke("execute_agent_stream", {
         agentId: selectedAgent.id,
         message: message,
       });
+      // Fallback: if invoke completes but isExecuting is still true, call finishProcessing
+      // This handles the case where backend doesn't send a done event
+      if (isMountedRef.current && isExecutingRef.current) {
+        finishProcessing();
+      }
     } catch (error) {
       if (isMountedRef.current) {
         setMessages((prev) => prev.map((msg) =>
@@ -409,7 +476,23 @@ export function AgentChannelPanel() {
 
     const userMessage = input.trim();
     setInput("");
-    await executeAgentWithMessage(userMessage, true);
+
+    // Show loading spinner immediately
+    setIsLoading(true);
+    setExecutionStage("thinking");
+
+    // Add user message immediately - React will render it
+    const tempUserMessage: MessageWithThinking = {
+      id: Date.now().toString(),
+      conversationId: currentSession.id,
+      role: "user",
+      content: userMessage,
+      timestamp: Date.now(),
+    };
+    setMessages((prev) => [...prev, tempUserMessage]);
+
+    // Then call backend
+    await executeAgentWithMessage(userMessage);
   };
 
   return (
@@ -480,27 +563,53 @@ export function AgentChannelPanel() {
                             : 'bg-transparent hover:bg-black/5'
                         )}
                       >
-                        <div className="flex gap-4">
-                          <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
-                            {msg.role === 'user' ? 'U' : 'AI'}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-baseline gap-2 mb-1">
-                              <span className="font-semibold text-white">
-                                {msg.role === 'user' ? 'You' : selectedAgent.displayName}
-                              </span>
-                              {msg.thinking?.toolCount && msg.thinking.toolCount > 0 && (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-violet-500/20 text-violet-300 text-xs font-medium">
-                                  <Wrench className="size-3" />
-                                  {msg.thinking.toolCount} tool{msg.thinking.toolCount !== 1 ? 's' : ''}
-                                </span>
-                              )}
+                        {/* User message */}
+                        {msg.role === 'user' ? (
+                          <div className="flex gap-4">
+                            <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
+                              U
                             </div>
-                            <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
-                              {msg.content}
-                            </p>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-baseline gap-2 mb-1">
+                                <span className="font-semibold text-white">You</span>
+                              </div>
+                              <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                                {msg.content}
+                              </p>
+                            </div>
                           </div>
-                        </div>
+                        ) : (
+                          /* Assistant message with optional tool cards */
+                          <>
+                            {/* Inline tool cards - displayed before the message */}
+                            {msg.thinking?.toolCalls && msg.thinking.toolCalls.length > 0 && (
+                              <div className="ml-14 mb-2">
+                                <InlineToolCallsList
+                                  tools={msg.thinking.toolCalls.map(tc => ({
+                                    name: tc.name,
+                                    status: tc.status,
+                                    result: tc.result,
+                                    error: tc.error,
+                                  }))}
+                                />
+                              </div>
+                            )}
+                            {/* Assistant message content */}
+                            <div className="flex gap-4">
+                              <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
+                                AI
+                              </div>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-baseline gap-2 mb-1">
+                                  <span className="font-semibold text-white">{selectedAgent.displayName}</span>
+                                </div>
+                                <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                                  {msg.content}
+                                </p>
+                              </div>
+                            </div>
+                          </>
+                        )}
                       </div>
                     ))}
                     {isLoading && (
@@ -575,15 +684,6 @@ export function AgentChannelPanel() {
           </div>
         )}
       </div>
-
-      {/* Thinking Panel */}
-      {thinkingState.isOpen && (
-        <ThinkingPanel
-          state={thinkingState}
-          isOpen={thinkingState.isOpen}
-          onClose={() => resetThinking()}
-        />
-      )}
 
       {/* History Panel */}
       {historyPanelOpen && (
@@ -752,7 +852,7 @@ export function AgentChannelPanel() {
             setCanvasContent(null);
 
             // Execute agent directly with form data (no user message shown)
-            await executeAgentWithMessage(JSON.stringify(data, null, 2), false);
+            await executeAgentWithMessage(JSON.stringify(data, null, 2));
           }}
           onCanvasCancel={() => {
             // Focus the input when canvas is cancelled
