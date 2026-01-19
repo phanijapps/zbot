@@ -169,35 +169,37 @@ export function AgentChannelPanel() {
   }, [convertSessionMessagesToWithThinking, scrollToBottom]);
 
   /**
-   * Handle sending a message
+   * Execute agent with a message (optionally show user message)
+   * @param message - The message to send to the agent
+   * @param showUserMessage - Whether to display the user message in the chat
    */
-  const handleSendMessage = async () => {
-    if (!input.trim() || !currentSession || !selectedAgent) return;
+  const executeAgentWithMessage = async (message: string, showUserMessage = true) => {
+    if (!currentSession || !selectedAgent) return;
 
-    const userMessage = input.trim();
-    setInput("");
     setIsLoading(true);
     setExecutionStage("thinking");
 
     // Close history sidebar when sending a new message
     setHistoryPanelOpen(false);
 
-    // Note: User message recording is handled by the backend (agents_runtime.rs)
-    // No need to record it here separately
-
-    // Add user message to UI immediately
-    const tempUserMessage: MessageWithThinking = {
-      id: Date.now().toString(),
-      conversationId: currentSession.id,
-      role: "user",
-      content: userMessage,
-      timestamp: Date.now(),
-      // User messages don't have tool calls - don't set thinking
-    };
-    setMessages((prev) => [...prev, tempUserMessage]);
+    // Optionally add user message to UI
+    let assistantMessageId: string;
+    if (showUserMessage) {
+      const tempUserMessage: MessageWithThinking = {
+        id: Date.now().toString(),
+        conversationId: currentSession.id,
+        role: "user",
+        content: message,
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, tempUserMessage]);
+      assistantMessageId = (Date.now() + 1).toString();
+    } else {
+      // For hidden messages (form submissions), don't show user message
+      assistantMessageId = Date.now().toString();
+    }
 
     // Create assistant message placeholder for streaming response
-    const assistantMessageId = (Date.now() + 1).toString();
     const initialAssistantMessage: MessageWithThinking = {
       id: assistantMessageId,
       conversationId: currentSession.id,
@@ -376,7 +378,7 @@ export function AgentChannelPanel() {
     try {
       await invoke("execute_agent_stream", {
         agentId: selectedAgent.id,
-        message: userMessage,
+        message: message,
       });
     } catch (error) {
       if (isMountedRef.current) {
@@ -388,6 +390,17 @@ export function AgentChannelPanel() {
         finishProcessing();
       }
     }
+  };
+
+  /**
+   * Handle sending a message from the input field
+   */
+  const handleSendMessage = async () => {
+    if (!input.trim() || !currentSession || !selectedAgent) return;
+
+    const userMessage = input.trim();
+    setInput("");
+    await executeAgentWithMessage(userMessage, true);
   };
 
   return (
@@ -725,15 +738,12 @@ export function AgentChannelPanel() {
               setPendingRequestInputToolId(null);
             }
 
-            // Send form data as JSON string to continue the conversation
-            const jsonMessage = JSON.stringify(data, null, 2);
-            setInput(jsonMessage);
-            // Auto-send the message
-            setTimeout(() => {
-              handleSendMessage();
-            }, 100);
+            // Close the canvas
             setCanvasOpen(false);
             setCanvasContent(null);
+
+            // Execute agent directly with form data (no user message shown)
+            await executeAgentWithMessage(JSON.stringify(data, null, 2), false);
           }}
           onCanvasCancel={() => {
             // Focus the input when canvas is cancelled
