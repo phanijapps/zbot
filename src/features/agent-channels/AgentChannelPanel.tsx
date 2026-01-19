@@ -194,8 +194,7 @@ export function AgentChannelPanel() {
       role: "assistant",
       content: "",
       timestamp: Date.now(),
-      // Initialize thinking with toolCount 0 so React can detect changes
-      thinking: { toolCount: 0 }
+      // Don't set thinking initially - only add when tools are actually used
     };
     setMessages((prev) => [...prev, initialAssistantMessage]);
 
@@ -299,13 +298,13 @@ export function AgentChannelPanel() {
             tokenCount: 0,
             timestamp: Date.now()
           });
-          // Update with both content and tool count, forcing React to see the change
+          // Update with content and tool count only if tools were used
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
               ? {
                   ...msg,
                   content: data.finalMessage || "",
-                  thinking: { toolCount: toolCallCount }
+                  ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount } } : {})
                 }
               : msg
           ));
