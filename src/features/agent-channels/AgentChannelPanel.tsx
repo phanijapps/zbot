@@ -382,7 +382,15 @@ export function AgentChannelPanel() {
                 <div className="px-4 py-6">
                   <div className="space-y-4">
                     {messages.map((msg) => (
-                      <div key={msg.id} className="group hover:bg-black/5 -mx-4 px-4 py-0.5">
+                      <div
+                        key={msg.id}
+                        className={cn(
+                          "group -mx-4 px-4 py-0.5",
+                          msg.role === 'user'
+                            ? 'bg-[#404249] hover:bg-[#45474f]'
+                            : 'bg-transparent hover:bg-black/5'
+                        )}
+                      >
                         <div className="flex gap-4">
                           <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
                             {msg.role === 'user' ? 'U' : 'AI'}
