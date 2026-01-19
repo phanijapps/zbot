@@ -196,6 +196,7 @@ pub async fn execute_agent_stream(
                         if let Err(e) = app.emit(&event_name, serde_json::json!({
                             "type": "request_input",
                             "timestamp": chrono::Utc::now().timestamp_millis(),
+                            "toolId": id,
                             "formId": parsed.get("form_id").and_then(|v| v.as_str()),
                             "title": parsed.get("title").and_then(|v| v.as_str()),
                             "description": parsed.get("description").and_then(|v| v.as_str()),

@@ -55,6 +55,9 @@ export function AgentChannelPanel() {
   // History Panel state
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
 
+  // Track the current request_input tool ID for marking it as completed when form is submitted
+  const [pendingRequestInputToolId, setPendingRequestInputToolId] = useState<string | null>(null);
+
   // Stream events handling
   const {
     state: thinkingState,
@@ -320,6 +323,8 @@ export function AgentChannelPanel() {
 
         case "request_input":
           // Open form for user input via GenerativeCanvas
+          // Track the toolId so we can mark it as completed when form is submitted
+          setPendingRequestInputToolId(data.toolId || null);
           handleThinkingEvent({
             type: "request_input",
             formId: data.formId || `form-${Date.now()}`,
@@ -704,6 +709,33 @@ export function AgentChannelPanel() {
           onClose={() => {
             setCanvasOpen(false);
             setCanvasContent(null);
+          }}
+          onFormSubmit={async (data) => {
+            // Mark the request_input tool as completed with checkmark
+            if (pendingRequestInputToolId) {
+              handleThinkingEvent({
+                type: "tool_result",
+                toolId: pendingRequestInputToolId,
+                toolName: "request_input",
+                result: JSON.stringify(data),
+                timestamp: Date.now()
+              });
+              setPendingRequestInputToolId(null);
+            }
+
+            // Send form data as JSON string to continue the conversation
+            const jsonMessage = JSON.stringify(data, null, 2);
+            setInput(jsonMessage);
+            // Auto-send the message
+            setTimeout(() => {
+              handleSendMessage();
+            }, 100);
+            setCanvasOpen(false);
+            setCanvasContent(null);
+          }}
+          onCanvasCancel={() => {
+            // Focus the input when canvas is cancelled
+            inputRef.current?.focus();
           }}
           conversationId={currentSession?.id}
         />
