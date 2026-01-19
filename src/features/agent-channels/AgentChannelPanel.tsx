@@ -247,6 +247,8 @@ export function AgentChannelPanel() {
       const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string; formId?: string; title?: string; description?: string; schema?: any; submitButton?: string };
       if (!data) return;
 
+      console.log("[AgentChannelPanel] Received event:", data.type, "payload:", data);
+
       // Map simplified events to AgentStreamEvent format and pass to thinking panel
       switch (data.type) {
         case "token":
