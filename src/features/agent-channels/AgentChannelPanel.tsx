@@ -553,12 +553,18 @@ export function AgentChannelPanel() {
                     onClick={async () => {
                       if (confirm('Are you sure you want to delete all history?')) {
                         try {
-                          await invoke('delete_agent_history', { agentId: selectedAgent?.id });
+                          // Use today's date to delete all history before today
+                          const today = new Date().toISOString().split('T')[0];
+                          await invoke('delete_agent_history', {
+                            agentId: selectedAgent?.id,
+                            beforeDate: today
+                          });
+                          if (selectedAgent) {
+                            await loadTodaySession(selectedAgent.id);
+                          }
                         } catch (err) {
                           console.error('Failed to delete history:', err);
-                        }
-                        if (selectedAgent) {
-                          await loadTodaySession(selectedAgent.id);
+                          alert('Failed to delete history: ' + (err as Error).message);
                         }
                       }
                     }}
