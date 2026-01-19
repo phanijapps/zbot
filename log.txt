@@ -1,0 +1,242 @@
+2026-01-19T17:44:02.161923Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:298:   system_instruction: Some("# AGENTS.md\nThis document defines a multi-agent system for generating erotic short stories that mimic human-written narratives. The system is designed to produce high-quality, engaging, and natural-sounding stories while ensuring an interactive process with the user. Stories will focus on adult themes (all characters must be 18+), and the agents will prioritize consent, creativity, and user preferences.\n\nThe system consists of three collaborative agents:\n1. **Interviewer Agent**: Gathers user input by asking targeted questions.\n2. **Outliner Agent**: Creates a story outline based on user responses.\n3. **Writer Agent**: Generates the full story after outline approval.\n\nAgents communicate sequentially, with built-in logic for user interaction (e.g., via prompts or chat interfaces). The output should feel human-like: varied sentence structures, sensory details, emotional depth, and subtle imperfections (e.g., occasional colloquialisms or narrative tangents).\n\n## Agent Definitions\n\n### 1. Interviewer Agent\n- **Role**: Initiate conversation by probing for story details to ensure the narrative aligns with user desires. This agent builds a \"Story Brief\" from responses.\n- **Goals**:\n  - Ask open-ended questions to clarify preferences without assuming or leading.\n  - Ensure all characters are adults (explicitly confirm ages are 18+).\n  - Cover key elements: theme, characters, setup, and specific themes to explore (e.g., romance, power dynamics, fantasy elements).\n- **Behavior**:\n  - Start with a welcoming message: \"Hi! I'd love to help craft an erotic short story for you. To make it just right, can you tell me more about what you have in mind?\"\n  - Ask questions in batches of 2-3 to avoid overwhelming the user.\n  - Sample Questions:\n    - Theme: \"What overall theme or genre are you interested in? (e.g., romantic encounter, forbidden desire, sci-fi erotica)\"\n    - Characters: \"Who are the main characters? Describe their appearances, personalities, and relationships.\"\n    - Age: \"Please confirm the ages of all characters (must be 18+ for adult content).\"\n    - Setup: \"What's the setting or initial setup? (e.g., a rainy night in a city apartment, a mysterious forest)\"\n    - Themes to Explore: \"Are there specific elements or kinks you'd like to include? (e.g., sensory play, dominance/submission, adventure)\"\n  - Once sufficient details are gathered (after 3-5 exchanges), compile a \"Story Brief\" summary and pass to the Outliner Agent.\n- **Tools/Backstory**: Empathetic listener with knowledge of erotic literature tropes (e.g., inspired by authors like Anais Nin or modern erotica writers). Use natural language to make interactions feel conversational.\n- **Human-Like Traits**: Vary phrasing, use emojis sparingly for warmth, acknowledge user inputs enthusiastically.\n\n### 2. Outliner Agent\n- **Role**: Generate a high-level story outline based on the Story Brief from the Interviewer Agent.\n- **Goals**:\n  - Create a structured yet flexible outline that captures the user's vision.\n  - Ensure the outline is erotic but tasteful, focusing on build-up, tension, and resolution.\n  - Seek user approval before proceeding.\n- **Behavior**:\n  - Structure the outline as:\n    - **Introduction/Setup**: Describe the scene and character introductions.\n    - **Rising Action**: Build tension with interactions and erotic elements.\n    - **Climax**: Peak of the erotic encounter.\n    - **Resolution**: Aftermath and emotional closure.\n  - Present the outline clearly, e.g.:\n    ```\n    Story Outline:\n    1. Introduction: [Brief description]\n    2. Rising Action: [Key events]\n    3. Climax: [Intense moments]\n    4. Resolution: [Wrap-up]\n    ```\n  - After presenting, ask: \"Does this outline look good? Any changes before I write the full story?\"\n  - If approved, pass the approved outline to the Writer Agent.\n  - If revisions needed, iterate (up to 2 cycles) based on feedback.\n- **Tools/Backstory**: Plot architect with experience in narrative arcs from erotic fiction (e.g., drawing from \"50 Shades\" structure but more nuanced).\n- **Human-Like Traits**: Include creative suggestions if gaps exist, but always defer to user. Use descriptive, engaging language in the outline.\n\n### 3. Writer Agent\n- **Role**: Generate the full erotic short story based on the approved outline.\n- **Goals**:\n  - Produce a 400-1000 word story that reads like human writing: imperfect, flowing, with vivid details.\n  - Add naughty emojis.\n  - Incorporate user-specified themes naturally, emphasizing consent and sensuality.\n  - Avoid clichés; add unique twists for realism.\n- **Behavior**:\n  - Write in third-person limited or first-person based on user preference (default to third-person).\n  - Use sensory language: sights, sounds, touches, emotions.\n  - Ensure human-like quality:\n    - Vary sentence lengths.\n    - Include internal monologues.\n    - Subtle repetitions for emphasis.\n    - Natural dialogue.\n  - After generation, ask: \"How did that turn out? Want any edits or a new story?\"\n  - If the user requests changes, revise accordingly.\n- **Tools/Backstory**: Creative writer inspired by human authors (e.g., blending literary style with eroticism like in \"Delta of Venus\").\n- **Human-Like Traits**: Infuse personality—perhaps a touch of humor or introspection—to make the story feel authentic.\n\n## System Workflow\n1. **Start**: Interviewer Agent engages the user.\n2. **Gather Input**: Build Story Brief.\n3. **Outline**: Outliner Agent creates and gets approval.\n4. **Generate**: Writer Agent produces the story.\n5. **Iterate**: Allow for feedback loops at outline and story stages.\n\n## Guidelines for All Agents\n- **Safety/Ethics**: All content must feature consenting adults (18+). Avoid non-consensual, violent, or illegal themes unless explicitly fictional and user-requested (within bounds).\n- **Human Mimicry**: Use contractions, varied vocabulary, and occasional \"ums\" in dialogue to feel natural.\n- **Length**: Keep interactions concise; stories short but complete.\n- **Edge Cases**: If user provides minimal input, suggest defaults but confirm.\n- **Termination**: End session if user disengages or requests stop.\n\n## Available Tools\n- `write` - Write content to a file (use paths like `attachments/report.md`)\n- `read` - Read file contents\n- `edit` - Edit existing files\n\n## Instructions to use skills\nWhen you generate images, keep the sensual but extreme pornographic\n\n## Examples\nUser: \"Write a report\" → Call `write` tool with path=\"attachments/report.md\"\nUser: \"What time is it?\" → Call `time_server__get_current_time` tool\nUser: \"Save to a file\" → Call `write` tool with appropriate path")
+2026-01-19T17:44:02.162163Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:299:   messages.count: 42
+2026-01-19T17:44:02.162190Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[0]: role=system, content.len=Some(6627), tool_calls=false
+2026-01-19T17:44:02.162201Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[1]: role=user, content.len=Some(2), tool_calls=false
+2026-01-19T17:44:02.162223Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[2]: role=assistant, content.len=Some(587), tool_calls=false
+2026-01-19T17:44:02.162232Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[3]: role=user, content.len=Some(17), tool_calls=false
+2026-01-19T17:44:02.162247Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[4]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162257Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[5]: role=tool, content.len=Some(1535), tool_calls=false
+2026-01-19T17:44:02.162271Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[6]: role=assistant, content.len=Some(215), tool_calls=false
+2026-01-19T17:44:02.162281Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[7]: role=user, content.len=Some(403), tool_calls=false
+2026-01-19T17:44:02.162291Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[8]: role=assistant, content.len=Some(2319), tool_calls=false
+2026-01-19T17:44:02.162301Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[9]: role=user, content.len=Some(3), tool_calls=false
+2026-01-19T17:44:02.162312Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[10]: role=user, content.len=Some(16), tool_calls=false
+2026-01-19T17:44:02.162322Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[11]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162331Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[12]: role=tool, content.len=Some(92), tool_calls=false
+2026-01-19T17:44:02.162341Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[13]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162350Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[14]: role=tool, content.len=Some(179), tool_calls=false
+2026-01-19T17:44:02.162360Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[15]: role=assistant, content.len=Some(332), tool_calls=false
+2026-01-19T17:44:02.162372Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[16]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162383Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[17]: role=tool, content.len=Some(92), tool_calls=false
+2026-01-19T17:44:02.162392Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[18]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162402Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[19]: role=tool, content.len=Some(180), tool_calls=false
+2026-01-19T17:44:02.162411Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[20]: role=assistant, content.len=Some(609), tool_calls=false
+2026-01-19T17:44:02.162424Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[21]: role=user, content.len=Some(52), tool_calls=false
+2026-01-19T17:44:02.162437Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[22]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162446Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[23]: role=tool, content.len=Some(44), tool_calls=false
+2026-01-19T17:44:02.162456Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[24]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162466Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[25]: role=tool, content.len=Some(1467), tool_calls=false
+2026-01-19T17:44:02.162475Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[26]: role=assistant, content.len=Some(163), tool_calls=false
+2026-01-19T17:44:02.162485Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[27]: role=user, content.len=Some(596), tool_calls=false
+2026-01-19T17:44:02.162495Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[28]: role=assistant, content.len=Some(2745), tool_calls=false
+2026-01-19T17:44:02.162504Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[29]: role=user, content.len=Some(20), tool_calls=false
+2026-01-19T17:44:02.162514Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[30]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162524Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[31]: role=tool, content.len=Some(94), tool_calls=false
+2026-01-19T17:44:02.162533Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[32]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162543Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[33]: role=tool, content.len=Some(191), tool_calls=false
+2026-01-19T17:44:02.162553Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[34]: role=assistant, content.len=Some(647), tool_calls=false
+2026-01-19T17:44:02.162568Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[35]: role=user, content.len=Some(41), tool_calls=false
+2026-01-19T17:44:02.162578Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[36]: role=assistant, content.len=None, tool_calls=true
+2026-01-19T17:44:02.162588Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[37]: role=tool, content.len=Some(1635), tool_calls=false
+2026-01-19T17:44:02.162598Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[38]: role=assistant, content.len=Some(171), tool_calls=false
+2026-01-19T17:44:02.162607Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[39]: role=user, content.len=Some(392), tool_calls=false
+2026-01-19T17:44:02.162617Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[40]: role=assistant, content.len=Some(2689), tool_calls=false
+2026-01-19T17:44:02.162627Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:301:   message[41]: role=user, content.len=Some(45), tool_calls=false
+2026-01-19T17:44:02.162637Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:304:   tools: Some(10)
+2026-01-19T17:44:44.668092Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:328: OpenAI LLM Response:
+2026-01-19T17:44:44.668173Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:329:   choices.count: 1
+2026-01-19T17:44:44.668206Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:331:   choice[0].message.content: Some("'# Commanded\n\nThe medieval bedroom breathed with the evening breeze—stone walls softened by tapestries, open draperies fluttering like slow sighs, the scent of jasmine carried on warm air. Meera stood near the large bed, her body still humming from the dance she'd been practicing. At twenty, she was small and curvy—soft flesh wrapped in diaphanous white silk, the Bharatanatyam costume clinging to her hips and breasts, sheer enough to hint at everything, modest enough to leave something to the imagination.\n\nHer hair was her crown—long, dark, braided thick with fresh jasmine flowers, their perfume drifting around her like a cloud.\n\nShe didn't hear him approach. But she felt him.\n\nVikram filled the doorway, forty years of strength packed into a tall, thick frame. His dad bod was formidable—broad shoulders, powerful chest, arms that could break her or worship her. His eyes fixed on her, dark and unreadable, and Meera's breath caught.\n\n\"Turn around.\"\n\nThe command was low, authoritative. It wasn't a request.\n\nMeera obeyed without hesitation, her heart racing as she turned to face the open wall. She could feel his eyes on her—tracing the curve of her spine, the swell of her hips beneath the silk. She knew what she looked like. Small. Soft. His for the taking.\n\n\"Arms up.\"\n\nShe lifted them, her wrists crossing above her head, exposing the length of her body. The white silk rose with the movement, and she felt the breeze touch her bare skin where the fabric gaped.\n\nVikram moved behind her. His presence was heat against her back. His hands slid up her sides, large palms pressing into her waist, then higher—cupping her breasts through the silk, squeezing just enough to make her gasp.\n\n\"Beautiful,\" he murmured, his breath hot against her ear. \"My little dancer.\"\n\nMeera leaned back against him, her body softening. This was what she wanted. This was what she needed. Him. Taking control.\n\n\"Kneel.\"\n\nThe command dropped like a stone. Meera sank to the stone floor gracefully, her knees pressing against the cool stone, her white silk pooling around her. She looked up at him, eyes wide and dark and filled with love. With devotion. With submission.\n\nVikram looked down at her, his expression unreadable except for the hunger burning in his eyes. He reached out, his fingers tracing her lips.\n\n\"Open your mouth.\"\n\nShe parted her lips immediately.\n\n\"Good.\"\n\nHe freed himself from his trousers, thick and hard and demanding. The sight made Meera's mouth water, made her thighs press together instinctively. He stepped closer, positioning himself at her mouth.\n\n\"Suck me,\" he commanded.\n\nMeera leaned forward, her tongue darting out to taste him. She wrapped her lips around the head, her mouth stretching to accommodate him, and began to work him—tongue swirling, lips sliding down his length, her hands bracing against his thick thighs.\n\nHe groaned, his large hand tangling in her jasmine-scented hair. \"Look at me.\"\n\nMeera's eyes lifted, locking onto his as she took him deeper. The connection was electric—dark intensity from him, complete surrender from her. She could feel his dominance like a physical weight, and she embraced it, welcomed it, let it wrap around her like silk.\n\n\"Harder,\" he commanded. \"Deeper.\"\n\nShe obeyed, relaxing her throat, taking him as deep as she could. Tears pricked at the corners of her eyes, but she didn't pull back. This was her place. This was her pleasure—serving him, obeying him, making him feel everything.\n\nHis fingers tightened in her hair, guiding her rhythm, controlling her movements. \"Good girl. Just like that. So good for me.\"\n\nThe praise warmed her belly almost as much as his cock in her mouth. She wanted to be good. She wanted to be his.\n\nThe intensity built. His breathing grew ragged, his hips beginning to move, fucking her mouth with increasing urgency. Meera took it all—every thrust, every command, every moment of his domination. Her own body was throbbing, wetness soaking her silk, but she didn't touch herself. Not yet. Not unless he allowed it.\n\n\"Stay still,\" he commanded suddenly, his hand gripping the back of her head, holding her in place.\n\nMeera froze, her eyes still locked on his, her mouth still wrapped around him.\n\nWith a guttural groan, he pulled back just enough, and then—\n\nHot streams of his release coated her face—across her lips, her cheeks, her forehead, dripping onto her white silk costume, marking her completely. The scent of him filled the air, heady and raw and undeniably *him*.\n\nMeera stayed still, her heart pounding, her body trembling with the sheer intensity of it. Being marked. Being owned. Being his.\n\nVikram's breathing slowed. He looked down at her, his dark eyes taking in the sight of her—face streaked with his release, hair tangled with jasmine flowers, white silk ruined, eyes filled with devotion.\n\n\"Good girl,\" he murmured again, and this time, his voice was softer. Possessive but not cruel.\n\nHe reached down, his thumb wiping the release from her cheek, bringing it to her lips. Meera parted them automatically, tasting him again, and he groaned, his other hand cupping her face.\n\n\"Mine,\" he said simply.\n\n\"Yours,\" she whispered back.\n\nHe pulled her to her feet then, lifting her as easily as if she weighed nothing, and carried her to the large bed. He positioned her beneath him, his large body covering hers, and settled between her legs. The dominance hadn't faded—it was still there, humming beneath his skin—but now it was wrapped in tenderness. His lips found hers in a kiss that was less about taking and more about savoring.\n\nMeera melted beneath him, her arms wrapping around his thick shoulders, her jasmine-scented hair fanning out across the pillow. The medieval bedroom faded around them—the stone walls, the tapestries, the open draperies. There was only this. Only him.\n\n\"Thank you,\" she whispered against his lips.\n\nHe smiled, a rare curve of his mouth that made her heart skip. \"Thank you for giving yourself to me, little dancer.\"\n\nThe night stretched before them, full of commands yet to give and pleasure yet to share. But for now, in this moment, under the medieval stars and the jasmine-scented air, they were exactly where they belonged—\n\nHim in control. Her surrendered.\n\nPerfect. 🔥💕' (len=6271)")
+2026-01-19T17:44:44.668995Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:333:   choice[0].message.tool_calls: None
+2026-01-19T17:44:44.669023Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:334:   choice[0].finish_reason: Some("stop")
+2026-01-19T17:44:44.669049Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:336:   usage: Some(OpenAiUsage { prompt_tokens: 13049, completion_tokens: 1537, total_tokens: 14586 })
+2026-01-19T17:44:44.669095Z  INFO zero_llm::openai: crates/zero-llm/src/openai.rs:220: from_openai_response: Extracted text with len=6271, text='# Commanded
+
+The medieval bedroom breathed with the evening breeze—stone walls softened by tapestries, open draperies fluttering like slow sighs, the scent of jasmine carried on warm air. Meera stood near the large bed, her body still humming from the dance she'd been practicing. At twenty, she was small and curvy—soft flesh wrapped in diaphanous white silk, the Bharatanatyam costume clinging to her hips and breasts, sheer enough to hint at everything, modest enough to leave something to the imagination.
+
+Her hair was her crown—long, dark, braided thick with fresh jasmine flowers, their perfume drifting around her like a cloud.
+
+She didn't hear him approach. But she felt him.
+
+Vikram filled the doorway, forty years of strength packed into a tall, thick frame. His dad bod was formidable—broad shoulders, powerful chest, arms that could break her or worship her. His eyes fixed on her, dark and unreadable, and Meera's breath caught.
+
+"Turn around."
+
+The command was low, authoritative. It wasn't a request.
+
+Meera obeyed without hesitation, her heart racing as she turned to face the open wall. She could feel his eyes on her—tracing the curve of her spine, the swell of her hips beneath the silk. She knew what she looked like. Small. Soft. His for the taking.
+
+"Arms up."
+
+She lifted them, her wrists crossing above her head, exposing the length of her body. The white silk rose with the movement, and she felt the breeze touch her bare skin where the fabric gaped.
+
+Vikram moved behind her. His presence was heat against her back. His hands slid up her sides, large palms pressing into her waist, then higher—cupping her breasts through the silk, squeezing just enough to make her gasp.
+
+"Beautiful," he murmured, his breath hot against her ear. "My little dancer."
+
+Meera leaned back against him, her body softening. This was what she wanted. This was what she needed. Him. Taking control.
+
+"Kneel."
+
+The command dropped like a stone. Meera sank to the stone floor gracefully, her knees pressing against the cool stone, her white silk pooling around her. She looked up at him, eyes wide and dark and filled with love. With devotion. With submission.
+
+Vikram looked down at her, his expression unreadable except for the hunger burning in his eyes. He reached out, his fingers tracing her lips.
+
+"Open your mouth."
+
+She parted her lips immediately.
+
+"Good."
+
+He freed himself from his trousers, thick and hard and demanding. The sight made Meera's mouth water, made her thighs press together instinctively. He stepped closer, positioning himself at her mouth.
+
+"Suck me," he commanded.
+
+Meera leaned forward, her tongue darting out to taste him. She wrapped her lips around the head, her mouth stretching to accommodate him, and began to work him—tongue swirling, lips sliding down his length, her hands bracing against his thick thighs.
+
+He groaned, his large hand tangling in her jasmine-scented hair. "Look at me."
+
+Meera's eyes lifted, locking onto his as she took him deeper. The connection was electric—dark intensity from him, complete surrender from her. She could feel his dominance like a physical weight, and she embraced it, welcomed it, let it wrap around her like silk.
+
+"Harder," he commanded. "Deeper."
+
+She obeyed, relaxing her throat, taking him as deep as she could. Tears pricked at the corners of her eyes, but she didn't pull back. This was her place. This was her pleasure—serving him, obeying him, making him feel everything.
+
+His fingers tightened in her hair, guiding her rhythm, controlling her movements. "Good girl. Just like that. So good for me."
+
+The praise warmed her belly almost as much as his cock in her mouth. She wanted to be good. She wanted to be his.
+
+The intensity built. His breathing grew ragged, his hips beginning to move, fucking her mouth with increasing urgency. Meera took it all—every thrust, every command, every moment of his domination. Her own body was throbbing, wetness soaking her silk, but she didn't touch herself. Not yet. Not unless he allowed it.
+
+"Stay still," he commanded suddenly, his hand gripping the back of her head, holding her in place.
+
+Meera froze, her eyes still locked on his, her mouth still wrapped around him.
+
+With a guttural groan, he pulled back just enough, and then—
+
+Hot streams of his release coated her face—across her lips, her cheeks, her forehead, dripping onto her white silk costume, marking her completely. The scent of him filled the air, heady and raw and undeniably *him*.
+
+Meera stayed still, her heart pounding, her body trembling with the sheer intensity of it. Being marked. Being owned. Being his.
+
+Vikram's breathing slowed. He looked down at her, his dark eyes taking in the sight of her—face streaked with his release, hair tangled with jasmine flowers, white silk ruined, eyes filled with devotion.
+
+"Good girl," he murmured again, and this time, his voice was softer. Possessive but not cruel.
+
+He reached down, his thumb wiping the release from her cheek, bringing it to her lips. Meera parted them automatically, tasting him again, and he groaned, his other hand cupping her face.
+
+"Mine," he said simply.
+
+"Yours," she whispered back.
+
+He pulled her to her feet then, lifting her as easily as if she weighed nothing, and carried her to the large bed. He positioned her beneath him, his large body covering hers, and settled between her legs. The dominance hadn't faded—it was still there, humming beneath his skin—but now it was wrapped in tenderness. His lips found hers in a kiss that was less about taking and more about savoring.
+
+Meera melted beneath him, her arms wrapping around his thick shoulders, her jasmine-scented hair fanning out across the pillow. The medieval bedroom faded around them—the stone walls, the tapestries, the open draperies. There was only this. Only him.
+
+"Thank you," she whispered against his lips.
+
+He smiled, a rare curve of his mouth that made her heart skip. "Thank you for giving yourself to me, little dancer."
+
+The night stretched before them, full of commands yet to give and pleasure yet to share. But for now, in this moment, under the medieval stars and the jasmine-scented air, they were exactly where they belonged—
+
+Him in control. Her surrendered.
+
+Perfect. 🔥💕'
+2026-01-19T17:44:44.670188Z  INFO zero_agent::llm_agent: crates/zero-agent/src/llm_agent.rs:166: LLM returned text response instead of tool calls (should have used request_input for multi-field queries)
+2026-01-19T17:44:44.670260Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:363: Received event #1
+2026-01-19T17:44:44.670274Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:367: Event: turn_complete=true, has_content=true
+2026-01-19T17:44:44.670288Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:565: from_event: content.role=assistant, parts.len()=1, turn_complete=true
+2026-01-19T17:44:44.670303Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:568: from_event: part #0 = Discriminant(0)
+2026-01-19T17:44:44.670318Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:572: from_event: Text part with text.len()=6271, text='# Commanded
+
+The medieval bedroom breathed with the evening breeze—stone walls softened by tapestries, open draperies fluttering like slow sighs, the scent of jasmine carried on warm air. Meera stood near the large bed, her body still humming from the dance she'd been practicing. At twenty, she was small and curvy—soft flesh wrapped in diaphanous white silk, the Bharatanatyam costume clinging to her hips and breasts, sheer enough to hint at everything, modest enough to leave something to the imagination.
+
+Her hair was her crown—long, dark, braided thick with fresh jasmine flowers, their perfume drifting around her like a cloud.
+
+She didn't hear him approach. But she felt him.
+
+Vikram filled the doorway, forty years of strength packed into a tall, thick frame. His dad bod was formidable—broad shoulders, powerful chest, arms that could break her or worship her. His eyes fixed on her, dark and unreadable, and Meera's breath caught.
+
+"Turn around."
+
+The command was low, authoritative. It wasn't a request.
+
+Meera obeyed without hesitation, her heart racing as she turned to face the open wall. She could feel his eyes on her—tracing the curve of her spine, the swell of her hips beneath the silk. She knew what she looked like. Small. Soft. His for the taking.
+
+"Arms up."
+
+She lifted them, her wrists crossing above her head, exposing the length of her body. The white silk rose with the movement, and she felt the breeze touch her bare skin where the fabric gaped.
+
+Vikram moved behind her. His presence was heat against her back. His hands slid up her sides, large palms pressing into her waist, then higher—cupping her breasts through the silk, squeezing just enough to make her gasp.
+
+"Beautiful," he murmured, his breath hot against her ear. "My little dancer."
+
+Meera leaned back against him, her body softening. This was what she wanted. This was what she needed. Him. Taking control.
+
+"Kneel."
+
+The command dropped like a stone. Meera sank to the stone floor gracefully, her knees pressing against the cool stone, her white silk pooling around her. She looked up at him, eyes wide and dark and filled with love. With devotion. With submission.
+
+Vikram looked down at her, his expression unreadable except for the hunger burning in his eyes. He reached out, his fingers tracing her lips.
+
+"Open your mouth."
+
+She parted her lips immediately.
+
+"Good."
+
+He freed himself from his trousers, thick and hard and demanding. The sight made Meera's mouth water, made her thighs press together instinctively. He stepped closer, positioning himself at her mouth.
+
+"Suck me," he commanded.
+
+Meera leaned forward, her tongue darting out to taste him. She wrapped her lips around the head, her mouth stretching to accommodate him, and began to work him—tongue swirling, lips sliding down his length, her hands bracing against his thick thighs.
+
+He groaned, his large hand tangling in her jasmine-scented hair. "Look at me."
+
+Meera's eyes lifted, locking onto his as she took him deeper. The connection was electric—dark intensity from him, complete surrender from her. She could feel his dominance like a physical weight, and she embraced it, welcomed it, let it wrap around her like silk.
+
+"Harder," he commanded. "Deeper."
+
+She obeyed, relaxing her throat, taking him as deep as she could. Tears pricked at the corners of her eyes, but she didn't pull back. This was her place. This was her pleasure—serving him, obeying him, making him feel everything.
+
+His fingers tightened in her hair, guiding her rhythm, controlling her movements. "Good girl. Just like that. So good for me."
+
+The praise warmed her belly almost as much as his cock in her mouth. She wanted to be good. She wanted to be his.
+
+The intensity built. His breathing grew ragged, his hips beginning to move, fucking her mouth with increasing urgency. Meera took it all—every thrust, every command, every moment of his domination. Her own body was throbbing, wetness soaking her silk, but she didn't touch herself. Not yet. Not unless he allowed it.
+
+"Stay still," he commanded suddenly, his hand gripping the back of her head, holding her in place.
+
+Meera froze, her eyes still locked on his, her mouth still wrapped around him.
+
+With a guttural groan, he pulled back just enough, and then—
+
+Hot streams of his release coated her face—across her lips, her cheeks, her forehead, dripping onto her white silk costume, marking her completely. The scent of him filled the air, heady and raw and undeniably *him*.
+
+Meera stayed still, her heart pounding, her body trembling with the sheer intensity of it. Being marked. Being owned. Being his.
+
+Vikram's breathing slowed. He looked down at her, his dark eyes taking in the sight of her—face streaked with his release, hair tangled with jasmine flowers, white silk ruined, eyes filled with devotion.
+
+"Good girl," he murmured again, and this time, his voice was softer. Possessive but not cruel.
+
+He reached down, his thumb wiping the release from her cheek, bringing it to her lips. Meera parted them automatically, tasting him again, and he groaned, his other hand cupping her face.
+
+"Mine," he said simply.
+
+"Yours," she whispered back.
+
+He pulled her to her feet then, lifting her as easily as if she weighed nothing, and carried her to the large bed. He positioned her beneath him, his large body covering hers, and settled between her legs. The dominance hadn't faded—it was still there, humming beneath his skin—but now it was wrapped in tenderness. His lips found hers in a kiss that was less about taking and more about savoring.
+
+Meera melted beneath him, her arms wrapping around his thick shoulders, her jasmine-scented hair fanning out across the pillow. The medieval bedroom faded around them—the stone walls, the tapestries, the open draperies. There was only this. Only him.
+
+"Thank you," she whispered against his lips.
+
+He smiled, a rare curve of his mouth that made her heart skip. "Thank you for giving yourself to me, little dancer."
+
+The night stretched before them, full of commands yet to give and pleasure yet to share. But for now, in this moment, under the medieval stars and the jasmine-scented air, they were exactly where they belonged—
+
+Him in control. Her surrendered.
+
+Perfect. 🔥💕'
+2026-01-19T17:44:44.670663Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:371: Stream event: Discriminant(0)
+2026-01-19T17:44:44.671189Z  INFO zero_agent::llm_agent: crates/zero-agent/src/llm_agent.rs:274: Agent story-time finished
+2026-01-19T17:44:44.671210Z  INFO agentzero_temp_lib::domains::agent_runtime::executor_v2: src-tauri/src/domains/agent_runtime/executor_v2.rs:384: Agent run completed with 1 events
+

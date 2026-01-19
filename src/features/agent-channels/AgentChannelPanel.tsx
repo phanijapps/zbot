@@ -177,10 +177,10 @@ export function AgentChannelPanel() {
   const executeAgentWithMessage = async (message: string, showUserMessage = true) => {
     if (!currentSession || !selectedAgent) return;
 
-    // Prevent concurrent executions
-    if (isExecutingRef.current) {
-      console.warn("[AgentChannelPanel] Execution already in progress, ignoring new request");
-      return;
+    // Wait for any ongoing execution to complete before starting a new one
+    while (isExecutingRef.current) {
+      console.log("[AgentChannelPanel] Waiting for previous execution to complete...");
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     isExecutingRef.current = true;
