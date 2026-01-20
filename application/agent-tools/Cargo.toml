@@ -7,6 +7,7 @@ license = "MIT"
 
 [dependencies]
 zero-core = { path = "../../crates/zero-core" }
+knowledge-graph = { path = "../knowledge-graph" }
 
 async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }

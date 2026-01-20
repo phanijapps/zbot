@@ -26,6 +26,10 @@ pub mod state_keys {
     /// State key for provider ID
     /// The LLM provider being used for the current conversation
     pub const PROVIDER_ID: &str = "app:provider_id";
+
+    /// State key for database path
+    /// Path to the agent_channels.db for knowledge graph access
+    pub const DB_PATH: &str = "app:db_path";
 }
 
 #[cfg(test)]
@@ -38,5 +42,6 @@ mod tests {
         assert!(state_keys::USER_ID.starts_with("app:"));
         assert!(state_keys::AGENT_ID.starts_with("app:"));
         assert!(state_keys::PROVIDER_ID.starts_with("app:"));
+        assert!(state_keys::DB_PATH.starts_with("app:"));
     }
 }

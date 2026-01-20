@@ -278,8 +278,14 @@ impl ZeroAppExecutor {
                 state_keys::state_keys::PROVIDER_ID.to_string(),
                 json!(config.provider_id),
             );
-            tracing::info!("Set session state: conversation_id={}, agent_id={}, provider_id={}",
-                conversation_id, config.agent_id, config.provider_id);
+            // Set db_path for knowledge graph tools
+            let db_path = dirs.agent_channels_db_path().to_string_lossy().to_string();
+            session.state_mut().set(
+                state_keys::state_keys::DB_PATH.to_string(),
+                json!(db_path),
+            );
+            tracing::info!("Set session state: conversation_id={}, agent_id={}, provider_id={}, db_path={}",
+                conversation_id, config.agent_id, config.provider_id, db_path);
         }
 
         // Create middleware executor with minimal pipeline

@@ -6,6 +6,7 @@ mod file;
 mod search;
 mod execution;
 mod ui;
+mod knowledge_graph;
 
 use std::sync::Arc;
 
@@ -17,6 +18,13 @@ pub use search::{GrepTool, GlobTool};
 pub use execution::PythonTool;
 pub use execution::skills::LoadSkillTool;
 pub use ui::{RequestInputTool, ShowContentTool};
+pub use knowledge_graph::{
+    ListEntitiesTool,
+    SearchEntitiesTool,
+    GetEntityRelationshipsTool,
+    AddEntityTool,
+    AddRelationshipTool,
+};
 
 // ============================================================================
 // BUILT-IN TOOLS FACTORY
@@ -47,5 +55,11 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         Arc::new(LoadSkillTool::new(fs.clone())),
         Arc::new(RequestInputTool),
         Arc::new(ShowContentTool),
+        // Knowledge Graph tools
+        Arc::new(ListEntitiesTool),
+        Arc::new(SearchEntitiesTool),
+        Arc::new(GetEntityRelationshipsTool),
+        Arc::new(AddEntityTool),
+        Arc::new(AddRelationshipTool),
     ]
 }
