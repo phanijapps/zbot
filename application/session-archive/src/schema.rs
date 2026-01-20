@@ -110,3 +110,185 @@ pub fn messages_to_record_batch(messages: Vec<ArchivedMessage>) -> crate::error:
         ],
     ).map_err(|e| crate::error::ArchiveError::Arrow(e))
 }
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_archived_message_serialization() {
+        let msg = ArchivedMessage {
+            id: "msg-1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            agent_name: "Test Agent".to_string(),
+            role: "user".to_string(),
+            content: "Hello, world!".to_string(),
+            created_at: Utc::now(),
+            token_count: Some(5),
+            tool_calls: None,
+            tool_results: None,
+        };
+
+        let json_str = serde_json::to_string(&msg).unwrap();
+        let parsed: ArchivedMessage = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(parsed.id, "msg-1");
+        assert_eq!(parsed.role, "user");
+        assert_eq!(parsed.content, "Hello, world!");
+        assert_eq!(parsed.token_count, Some(5));
+    }
+
+    #[test]
+    fn test_archived_message_with_tool_calls() {
+        let tool_calls = serde_json::json!([{"id": "call_1", "name": "search"}]);
+
+        let msg = ArchivedMessage {
+            id: "msg-1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            agent_name: "Test Agent".to_string(),
+            role: "assistant".to_string(),
+            content: "".to_string(),
+            created_at: Utc::now(),
+            token_count: None,
+            tool_calls: Some(tool_calls.to_string()),
+            tool_results: None,
+        };
+
+        assert!(msg.tool_calls.is_some());
+        assert!(msg.tool_results.is_none());
+    }
+
+    #[test]
+    fn test_archive_metadata() {
+        let now = Utc::now();
+        let metadata = ArchiveMetadata {
+            agent_id: "agent-1".to_string(),
+            session_id: "session-1".to_string(),
+            session_date: "2025-01-20".to_string(),
+            message_count: 10,
+            earliest_message: now,
+            latest_message: now + chrono::Duration::hours(1),
+            total_tokens: 500,
+            file_size: 1024,
+            file_path: "/archive/session.parquet".to_string(),
+        };
+
+        assert_eq!(metadata.agent_id, "agent-1");
+        assert_eq!(metadata.message_count, 10);
+        assert_eq!(metadata.total_tokens, 500);
+        assert_eq!(metadata.file_size, 1024);
+    }
+
+    #[test]
+    fn test_archive_metadata_serialization() {
+        let now = Utc::now();
+        let metadata = ArchiveMetadata {
+            agent_id: "agent-1".to_string(),
+            session_id: "session-1".to_string(),
+            session_date: "2025-01-20".to_string(),
+            message_count: 10,
+            earliest_message: now,
+            latest_message: now,
+            total_tokens: 0,
+            file_size: 0,
+            file_path: "/archive/session.parquet".to_string(),
+        };
+
+        let json_str = serde_json::to_string(&metadata).unwrap();
+        let parsed: ArchiveMetadata = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(parsed.agent_id, "agent-1");
+        assert_eq!(parsed.session_date, "2025-01-20");
+    }
+
+    #[test]
+    fn test_arrow_schema() {
+        let schema = arrow_schema();
+        assert_eq!(schema.fields().len(), 10);
+
+        let field_names: Vec<&str> = schema.fields().iter().map(|f| f.name().as_str()).collect();
+        assert!(field_names.contains(&"id"));
+        assert!(field_names.contains(&"session_id"));
+        assert!(field_names.contains(&"agent_id"));
+        assert!(field_names.contains(&"role"));
+        assert!(field_names.contains(&"content"));
+        assert!(field_names.contains(&"created_at"));
+        assert!(field_names.contains(&"token_count"));
+        assert!(field_names.contains(&"tool_calls"));
+        assert!(field_names.contains(&"tool_results"));
+    }
+
+    #[test]
+    fn test_messages_to_record_batch() {
+        let now = Utc::now();
+        let messages = vec![
+            ArchivedMessage {
+                id: "msg-1".to_string(),
+                session_id: "session-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                agent_name: "Agent".to_string(),
+                role: "user".to_string(),
+                content: "Hello".to_string(),
+                created_at: now,
+                token_count: Some(2),
+                tool_calls: None,
+                tool_results: None,
+            },
+            ArchivedMessage {
+                id: "msg-2".to_string(),
+                session_id: "session-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                agent_name: "Agent".to_string(),
+                role: "assistant".to_string(),
+                content: "Hi there!".to_string(),
+                created_at: now + chrono::Duration::seconds(1),
+                token_count: Some(3),
+                tool_calls: None,
+                tool_results: None,
+            },
+        ];
+
+        let result = messages_to_record_batch(messages);
+        assert!(result.is_ok());
+
+        let batch = result.unwrap();
+        assert_eq!(batch.num_rows(), 2);
+    }
+
+    #[test]
+    fn test_messages_to_record_batch_empty() {
+        let result = messages_to_record_batch(vec![]);
+        assert!(result.is_ok());
+
+        let batch = result.unwrap();
+        assert_eq!(batch.num_rows(), 0);
+    }
+
+    #[test]
+    fn test_messages_to_record_batch_with_tool_calls() {
+        let now = Utc::now();
+        let tool_calls = serde_json::json!([{"id": "call_1"}]);
+
+        let messages = vec![ArchivedMessage {
+            id: "msg-1".to_string(),
+            session_id: "session-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            agent_name: "Agent".to_string(),
+            role: "assistant".to_string(),
+            content: "".to_string(),
+            created_at: now,
+            token_count: None,
+            tool_calls: Some(tool_calls.to_string()),
+            tool_results: None,
+        }];
+
+        let result = messages_to_record_batch(messages);
+        assert!(result.is_ok());
+    }
+}
