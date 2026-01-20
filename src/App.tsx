@@ -13,6 +13,7 @@ import {
   MCPServersPanel,
   SkillsPanel,
   SettingsPanel,
+  SearchPanel,
 } from "./features";
 
 function App() {
@@ -26,6 +27,7 @@ function App() {
           <Route path="/mcp" element={<MCPServersPanel />} />
           <Route path="/skills" element={<SkillsPanel />} />
           <Route path="/settings" element={<SettingsPanel />} />
+          <Route path="/search" element={<SearchPanel />} />
         </Routes>
       </AppShell>
     </BrowserRouter>

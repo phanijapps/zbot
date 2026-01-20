@@ -6,8 +6,10 @@
 pub mod database;
 pub mod repository;
 pub mod memory;
+pub mod deletion;
 
 pub use database::{
     init_database,
     get_database,
 };
+pub use deletion::{DeletionService, DeletionResult, DeletionScope};

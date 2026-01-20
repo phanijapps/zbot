@@ -23,6 +23,42 @@ export interface Route {
 }
 
 // ============================================================================
+// DOMAIN: Vaults (Profiles)
+// ============================================================================
+
+/** Vault (profile) for isolating agent configurations */
+export interface Vault {
+  id: string;
+  name: string;
+  path: string;
+  isDefault: boolean;
+  createdAt: string; // ISO datetime string
+  lastAccessed: string; // ISO datetime string
+}
+
+/** Request to create a new vault */
+export interface CreateVaultRequest {
+  name: string;
+  path?: string;
+}
+
+/** Detailed information about a vault */
+export interface VaultInfo {
+  vault: Vault;
+  agentCount: number;
+  skillCount: number;
+  storageInfo: VaultStorageInfo;
+}
+
+/** Storage information for a vault */
+export interface VaultStorageInfo {
+  totalUsed: number;
+  databaseSize: number;
+  agentsSize: number;
+  skillsSize: number;
+}
+
+// ============================================================================
 // DOMAIN: Conversations (Legacy)
 // ============================================================================
 
@@ -201,6 +237,8 @@ export interface Provider {
   apiKey: string;
   baseUrl: string;
   models: string[];
+  /** Embedding models for vector search/memory */
+  embeddingModels?: string[];
   verified?: boolean;
   createdAt: string;
 }
@@ -242,6 +280,36 @@ export interface Skill {
 }
 
 // ============================================================================
+// DOMAIN: Deletion & Cache
+// ============================================================================
+
+/** Deletion result showing what was deleted */
+export interface DeletionResult {
+  sessionsDeleted: number;
+  messagesDeleted: number;
+  cacheEntriesInvalidated: number;
+}
+
+/** Check if deletion result is empty */
+export function isDeletionResultEmpty(result: DeletionResult): boolean {
+  return result.sessionsDeleted === 0 && result.messagesDeleted === 0;
+}
+
+/** Deletion scope for Chrome-style history clearing */
+export type DeletionScope =
+  | { type: "last_7_days" }
+  | { type: "last_30_days" }
+  | { type: "all_time" }
+  | { type: "custom_range"; startDate: string; endDate: string };
+
+/** Cache statistics */
+export interface CacheStats {
+  entryCount: number;
+  hitCount: number;
+  missCount: number;
+}
+
+// ============================================================================
 // DOMAIN: Settings
 // ============================================================================
 
@@ -252,4 +320,56 @@ export interface AppSettings {
   autoSave: boolean;
   defaultProvider?: string;
   defaultAgent?: string;
+}
+
+// ============================================================================
+// DOMAIN: Search
+// ============================================================================
+
+/** Message source location */
+export type MessageSource =
+  | { type: "sqlite"; sessionId: string }
+  | { type: "parquet"; sessionId: string; filePath: string };
+
+/** Search result with location info */
+export interface SearchResult {
+  messageId: string;
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  role: string;
+  content: string;
+  createdAt: string; // ISO datetime string
+  score: number;
+  source: MessageSource;
+}
+
+/** Search query parameters */
+export interface SearchQuery {
+  query: string;
+  agentId?: string;
+  startDate?: string; // ISO datetime string
+  endDate?: string; // ISO datetime string
+  limit?: number;
+}
+
+/** Document to be indexed */
+export interface IndexedDocument {
+  messageId: string;
+  sessionId: string;
+  agentId: string;
+  agentName: string;
+  role: string;
+  content: string;
+  timestamp: number; // Unix timestamp
+  sourceType: string; // "sqlite" or "parquet"
+  sourcePath?: string; // Parquet file path if archived
+}
+
+/** Index build progress for rebuilding index */
+export interface IndexBuildProgress {
+  totalMessages: number;
+  indexedMessages: number;
+  stage: string;
+  isComplete: boolean;
 }

@@ -24,6 +24,7 @@ interface ProviderPreset {
   baseUrl: string;
   description: string;
   models: string;
+  embeddingModels?: string;
 }
 
 const PROVIDER_PRESETS: ProviderPreset[] = [
@@ -32,6 +33,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://api.openai.com/v1",
     description: "Official OpenAI API",
     models: "gpt-4o, gpt-4-turbo, gpt-4, gpt-3.5-turbo",
+    embeddingModels: "text-embedding-3-small, text-embedding-3-large",
   },
   {
     name: "DeepSeek",
@@ -71,6 +73,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("https://api.openai.com/v1");
   const [models, setModels] = useState("");
+  const [embeddingModels, setEmbeddingModels] = useState("");
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<ProviderTestResult | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -83,6 +86,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
       setApiKey(editingProvider.apiKey);
       setBaseUrl(editingProvider.baseUrl);
       setModels(editingProvider.models.join(", "));
+      setEmbeddingModels(editingProvider.embeddingModels?.join(", ") || "");
       setTestResult(null);
     } else {
       setName("");
@@ -90,6 +94,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
       setApiKey("");
       setBaseUrl("https://api.openai.com/v1");
       setModels("");
+      setEmbeddingModels("");
       setTestResult(null);
     }
   }, [editingProvider, open]);
@@ -99,6 +104,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
     setBaseUrl(preset.baseUrl);
     setDescription(preset.description);
     setModels(preset.models);
+    setEmbeddingModels(preset.embeddingModels || "");
     setTestResult(null);
   };
 
@@ -114,6 +120,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
         apiKey,
         baseUrl,
         models: models.split(",").map((m) => m.trim()),
+        embeddingModels: embeddingModels ? embeddingModels.split(",").map((m) => m.trim()) : undefined,
       };
       const result = await providerService.testProvider(provider);
       setTestResult(result);
@@ -136,6 +143,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
         apiKey,
         baseUrl,
         models: models.split(",").map((m) => m.trim()),
+        embeddingModels: embeddingModels ? embeddingModels.split(",").map((m) => m.trim()) : undefined,
         verified: testResult?.success ?? false,
       };
       await onSave(provider);
@@ -146,6 +154,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
       setApiKey("");
       setBaseUrl("https://api.openai.com/v1");
       setModels("");
+      setEmbeddingModels("");
       setTestResult(null);
       onClose();
     } finally {
@@ -258,6 +267,21 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
                 className="bg-white/5 border-white/10 text-white placeholder:text-gray-500"
               />
               <p className="text-xs text-gray-500 mt-1">Comma-separated list of model names</p>
+            </div>
+
+            <div>
+              <Label className="text-white mb-2 block flex items-center gap-2">
+                <Key className="size-4 text-green-400" />
+                Embedding Models
+                <span className="text-[10px] px-1.5 py-0.5 bg-white/10 rounded text-gray-400">Optional</span>
+              </Label>
+              <Input
+                placeholder="text-embedding-3-small, text-embedding-3-large"
+                value={embeddingModels}
+                onChange={(e) => setEmbeddingModels(e.target.value)}
+                className="bg-white/5 border-white/10 text-white placeholder:text-gray-500"
+              />
+              <p className="text-xs text-gray-500 mt-1">For vector search and memory management</p>
             </div>
           </div>
 

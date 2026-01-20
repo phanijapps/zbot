@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { NavLink } from "react-router-dom";
-import { MessageSquare, Bot, Zap, Network, Sparkles, Settings } from "lucide-react";
+import { MessageSquare, Bot, Zap, Network, Sparkles, Settings, Search } from "lucide-react";
 import { cn } from "../../shared/utils";
 
 interface SidebarProps {
@@ -14,6 +14,7 @@ interface SidebarProps {
 export function Sidebar({ className }: SidebarProps) {
   const menuItems = [
     { path: "/", icon: MessageSquare, label: "Conversations" },
+    { path: "/search", icon: Search, label: "Search" },
     { path: "/agents", icon: Bot, label: "Agents" },
     { path: "/providers", icon: Zap, label: "Providers" },
     { path: "/mcp", icon: Network, label: "MCP" },

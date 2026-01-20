@@ -165,7 +165,7 @@ export function ProvidersPanel() {
                 </div>
 
                 {/* Models */}
-                <div className="flex flex-wrap gap-1.5">
+                <div className="flex flex-wrap gap-1.5 mb-2">
                   {provider.models.slice(0, 4).map((model) => (
                     <span
                       key={model}
@@ -180,6 +180,26 @@ export function ProvidersPanel() {
                     </span>
                   )}
                 </div>
+
+                {/* Embedding Models */}
+                {provider.embeddingModels && provider.embeddingModels.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {provider.embeddingModels.slice(0, 3).map((model) => (
+                      <span
+                        key={model}
+                        className="px-2 py-0.5 bg-green-500/10 rounded-full text-xs text-green-300 border border-green-500/20 flex items-center gap-1"
+                      >
+                        <Brain className="size-2.5" />
+                        {model.length > 15 ? model.substring(0, 15) + "..." : model}
+                      </span>
+                    ))}
+                    {provider.embeddingModels.length > 3 && (
+                      <span className="px-2 py-0.5 bg-green-500/10 rounded-full text-xs text-green-400 border border-green-500/20">
+                        +{provider.embeddingModels.length - 3} more
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
             ))}
           </div>

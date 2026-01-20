@@ -55,6 +55,30 @@ pub fn run() {
             // Core commands
             commands::greet,
             commands::get_app_info,
+            // Vault commands
+            commands::list_vaults,
+            commands::get_active_vault,
+            commands::create_vault,
+            commands::switch_vault,
+            commands::delete_vault,
+            commands::get_vault_info,
+            commands::initialize_vault_system,
+            // Deletion & Cache commands (NEW)
+            commands::delete_session,
+            commands::delete_agent_history_with_scope,
+            commands::get_cache_stats,
+            commands::clear_cache,
+            commands::invalidate_session_cache,
+            commands::invalidate_agent_cache,
+            // Search commands (NEW)
+            commands::initialize_search_index,
+            commands::search_messages,
+            commands::index_message,
+            commands::index_messages,
+            commands::rebuild_search_index,
+            commands::delete_session_from_index,
+            commands::delete_agent_from_index,
+            commands::clear_search_index,
             // Conversation commands
             commands::list_conversations,
             commands::get_conversation,

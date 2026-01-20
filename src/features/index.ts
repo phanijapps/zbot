@@ -9,3 +9,4 @@ export { ProvidersPanel } from "./providers/ProvidersPanel";
 export { MCPServersPanel } from "./mcp/MCPServersPanel";
 export { SkillsPanel } from "./skills/SkillsPanel";
 export { SettingsPanel } from "./settings/SettingsPanel";
+export { SearchPanel } from "./search/SearchPanel";

@@ -16,6 +16,7 @@ import {
   InlineToolCallsList,
   type MessageWithThinking,
 } from "@/domains/agent-runtime/components";
+import { ClearHistoryDialog } from "./ClearHistoryDialog";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -56,6 +57,12 @@ export function AgentChannelPanel() {
 
   // History Panel state
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
+
+  // Clear History Dialog state
+  const [showClearHistoryDialog, setShowClearHistoryDialog] = useState(false);
+
+  // Vault Switcher state - toggled by chevron in AgentChannelList
+  const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
 
   // Track the current request_input tool ID for marking it as completed when form is submitted
   const [pendingRequestInputToolId, setPendingRequestInputToolId] = useState<string | null>(null);
@@ -502,6 +509,8 @@ export function AgentChannelPanel() {
         agents={agents}
         selectedAgentId={selectedAgent?.id}
         onSelectAgent={setSelectedAgent}
+        onToggleVault={() => setShowVaultSwitcher(!showVaultSwitcher)}
+        showVaultSwitcher={showVaultSwitcher}
       />
 
       {/* Main Content Area */}
@@ -744,23 +753,7 @@ export function AgentChannelPanel() {
               <>
                 {/* Clear All Button */}
                 <button
-                  onClick={async () => {
-                    if (!selectedAgent) return;
-                    if (confirm('Are you sure you want to delete all history?')) {
-                      try {
-                        // Use a far future date to delete all history (SQLite will interpret this correctly)
-                        await invoke('delete_agent_history', {
-                          agentId: selectedAgent.id,
-                          beforeDate: '2099-12-31'
-                        });
-                        // Refresh the session to update previous days list
-                        await loadTodaySession(selectedAgent.id);
-                      } catch (err) {
-                        console.error('Failed to delete history:', err);
-                        alert('Failed to delete history: ' + (err as Error).message);
-                      }
-                    }
-                  }}
+                  onClick={() => setShowClearHistoryDialog(true)}
                   className="w-full mb-3 px-3 py-2 bg-red-500/20 hover:bg-red-500/30 text-red-300 text-sm rounded-lg transition-colors flex items-center justify-center gap-2"
                 >
                   <Trash2 className="size-4" />
@@ -859,6 +852,16 @@ export function AgentChannelPanel() {
             inputRef.current?.focus();
           }}
           conversationId={currentSession?.id}
+        />
+      )}
+
+      {/* Clear History Dialog */}
+      {selectedAgent && (
+        <ClearHistoryDialog
+          open={showClearHistoryDialog}
+          onClose={() => setShowClearHistoryDialog(false)}
+          agentId={selectedAgent.id}
+          agentName={selectedAgent.displayName}
         />
       )}
     </div>

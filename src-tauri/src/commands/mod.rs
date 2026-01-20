@@ -14,6 +14,9 @@ pub mod settings;
 pub mod windows;
 pub mod tools;
 pub mod agents_runtime;
+pub mod vaults;
+pub mod deletion;
+pub mod search;
 
 // Re-export all commands
 pub use core::*;
@@ -27,3 +30,6 @@ pub use settings::*;
 pub use windows::*;
 pub use tools::*;
 pub use agents_runtime::*;
+pub use vaults::*;
+pub use deletion::*;
+pub use search::*;

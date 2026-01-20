@@ -13,6 +13,7 @@ use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall, To
 use crate::domains::agent_runtime::executor_v2::{create_zero_executor, ZeroAppStreamEvent};
 use daily_sessions::{DailySessionManager, DailySessionRepository};
 use crate::commands::agent_channels::SqliteSessionRepository;
+use crate::settings::AppDirs;
 
 // ============================================================================
 // EXECUTOR CACHE
@@ -73,7 +74,7 @@ pub async fn execute_agent_stream(
     let session_id = session.id.clone();
 
     // Record user message
-    manager.record_message(&session_id, daily_sessions::SessionMessage {
+    let user_message = daily_sessions::SessionMessage {
         id: format!("msg_{}", chrono::Utc::now().timestamp_millis()),
         session_id: session_id.clone(),
         role: "user".to_string(),
@@ -82,7 +83,19 @@ pub async fn execute_agent_stream(
         token_count: 0,
         tool_calls: None,
         tool_results: None,
-    }).await.map_err(|e| format!("Failed to record user message: {}", e))?;
+    };
+    manager.record_message(&session_id, user_message.clone()).await
+        .map_err(|e| format!("Failed to record user message: {}", e))?;
+
+    // Index user message for search (fire and forget)
+    let db_path = AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
+    let session_id_clone = session_id.clone();
+    let agent_id_clone = agent_id.clone();
+    tokio::spawn(async move {
+        let _ = index_message_from_db(&db_path, &session_id_clone, &agent_id_clone).await;
+    });
 
     // Get or create zero-app executor from cache
     let cache_key = CacheKey {
@@ -272,6 +285,16 @@ pub async fn execute_agent_stream(
         tool_results: tool_results_json,
     }).await.map_err(|e| format!("Failed to record assistant message: {}", e))?;
 
+    // Index assistant message for search (fire and forget)
+    let db_path = AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
+    let session_id_clone = session_id.clone();
+    let agent_id_clone = agent_id.clone();
+    tokio::spawn(async move {
+        let _ = index_message_from_db(&db_path, &session_id_clone, &agent_id_clone).await;
+    });
+
     Ok(serde_json::json!({
         "session_id": session_id,
         "agent_id": agent_id,
@@ -327,7 +350,7 @@ fn as_vec(value: &serde_yaml::Value) -> Option<Vec<String>> {
 #[tauri::command]
 pub async fn create_agent_conversation(
     agent_id: String,
-    title: Option<String>,
+    _title: Option<String>,
 ) -> Result<Value, String> {
     // For now, create a new session (today's session will be used)
     let db_path = crate::settings::AppDirs::get()
@@ -381,5 +404,71 @@ pub async fn get_or_create_conversation(
 #[tauri::command]
 pub async fn clear_executor_cache() -> Result<(), String> {
     clear_executor_cache_internal().await;
+    Ok(())
+}
+
+// ============================================================================
+// SEARCH INDEXING HELPER
+// ============================================================================
+
+/// Helper to index the most recent message from a session
+/// This is called after messages are recorded to ensure they're searchable
+async fn index_message_from_db(
+    db_path: &std::path::PathBuf,
+    session_id: &str,
+    agent_id: &str,
+) -> Result<(), String> {
+    use rusqlite::params;
+
+    // Get the most recent message for this session
+    let conn = rusqlite::Connection::open(db_path)
+        .map_err(|e| format!("Failed to open database: {}", e))?;
+
+    let result: Result<Option<(String, String, String, String, i64, String)>, String> = (|| {
+        let mut stmt = conn.prepare(
+            "SELECT m.id, m.session_id, m.role, m.content, m.created_at, a.name as agent_name
+             FROM messages m
+             INNER JOIN agents a ON a.id = ?
+             WHERE m.session_id = ?
+             ORDER BY m.created_at DESC
+             LIMIT 1"
+        ).map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        let result = stmt.query_row(params![agent_id, session_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,   // id
+                row.get::<_, String>(1)?,   // session_id
+                row.get::<_, String>(2)?,   // role
+                row.get::<_, String>(3)?,   // content
+                row.get::<_, String>(4)?,   // created_at
+                row.get::<_, String>(5)?,   // agent_name
+            ))
+        });
+
+        match result {
+            Ok((id, session_id, role, content, created_at, agent_name)) => {
+                let timestamp = chrono::DateTime::parse_from_rfc3339(&created_at)
+                    .map(|dt| dt.timestamp())
+                    .unwrap_or(0);
+                Ok(Some((id, session_id, role, content, timestamp, agent_name)))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Failed to query message: {}", e))
+        }
+    })();
+
+    // Now call the indexing function (async is fine here since we've dropped Statement)
+    if let Ok(Some((id, session_id, role, content, timestamp, agent_name))) = result {
+        crate::commands::search::index_message_internal(
+            id,
+            session_id,
+            agent_id.to_string(),
+            agent_name,
+            role,
+            content,
+            timestamp,
+        ).await;
+    }
+
     Ok(())
 }

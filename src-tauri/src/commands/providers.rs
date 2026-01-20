@@ -20,6 +20,9 @@ pub struct Provider {
     #[serde(rename = "baseUrl")]
     pub base_url: String,
     pub models: Vec<String>,
+    /// Embedding models for vector search/memory
+    #[serde(rename = "embeddingModels", skip_serializing_if = "Option::is_none")]
+    pub embedding_models: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]

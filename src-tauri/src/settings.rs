@@ -111,26 +111,62 @@ pub struct AppDirs {
 }
 
 impl AppDirs {
-    /// Get the application directories for the current platform
-    pub fn get() -> Result<Self> {
-        let config_dir = Self::get_config_dir()?;
+    /// Get AppDirs for a specific vault path
+    /// This creates all necessary directories and returns AppDirs pointing to the vault
+    pub fn for_vault(vault_path: &std::path::Path) -> Result<Self> {
+        let vault_root = vault_path.to_path_buf();
 
-        // Get documents directory for outputs
+        // Ensure all directories exist
+        fs::create_dir_all(&vault_root).context("Failed to create vault directory")?;
+        fs::create_dir_all(vault_root.join("agents"))
+            .context("Failed to create agents directory")?;
+        fs::create_dir_all(vault_root.join("skills"))
+            .context("Failed to create skills directory")?;
+        fs::create_dir_all(vault_root.join("agents_data"))
+            .context("Failed to create agents_data directory")?;
+        fs::create_dir_all(vault_root.join("db"))
+            .context("Failed to create db directory")?;
+        fs::create_dir_all(vault_root.join("logs"))
+            .context("Failed to create logs directory")?;
+
+        // Get documents directory for outputs (not vault-specific)
         let documents_dir = dirs::document_dir()
-            .unwrap_or_else(|| config_dir.clone());
+            .unwrap_or_else(|| vault_root.clone());
         let outputs_dir = documents_dir.join("ZeroAgent").join("outputs");
 
         Ok(Self {
-            settings_file: config_dir.join("settings.yaml"),
-            database_path: config_dir.join("zero_lance.db"),
-            agents_dir: config_dir.join("agents"),
-            agents_data_dir: config_dir.join("agents_data"),
-            db_dir: config_dir.join("db"),
-            skills_dir: config_dir.join("skills"),
-            venv_dir: config_dir.join("venv"),
-            conversation_logs_dir: config_dir.join("logs"),
+            settings_file: vault_root.join("settings.yaml"),
+            database_path: vault_root.join("zero_lance.db"),
+            agents_dir: vault_root.join("agents"),
+            agents_data_dir: vault_root.join("agents_data"),
+            db_dir: vault_root.join("db"),
+            skills_dir: vault_root.join("skills"),
+            venv_dir: vault_root.join("venv"),
+            conversation_logs_dir: vault_root.join("logs"),
             outputs_dir,
-            config_dir,
+            config_dir: vault_root,
+        })
+    }
+
+    /// Get the application directories for the current platform
+    /// This uses the active vault path if set, otherwise falls back to default
+    pub fn get() -> Result<Self> {
+        // Try to get active vault path from global state
+        if let Ok(vault_path) = get_active_vault_path_blocking() {
+            return Self::for_vault(&vault_path);
+        }
+
+        // Fall back to default config directory
+        let config_dir = Self::get_config_dir()?;
+        Self::for_vault(&config_dir)
+    }
+
+    /// Get the default vault path (for backward compatibility)
+    pub fn get_default_vault_path() -> std::path::PathBuf {
+        Self::get_config_dir().unwrap_or_else(|_| {
+            dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+                .join("zeroagent")
         })
     }
 
@@ -535,4 +571,31 @@ mod tests {
         assert_eq!(settings.appearance.dark_mode, deserialized.appearance.dark_mode);
         assert_eq!(settings.appearance.theme, deserialized.appearance.theme);
     }
+}
+
+// ============================================================================
+// VAULT INTEGRATION
+// Blocking wrapper for async vault path functions
+// ============================================================================
+
+/// Blocking version of get_active_vault_path
+/// Used from sync code (like AppDirs::get)
+fn get_active_vault_path_blocking() -> Result<std::path::PathBuf, String> {
+    use crate::domains::vault::manager::CURRENT_VAULT_PATH;
+
+    // Use try_read to avoid blocking if there's a write in progress
+    if let Ok(vault_path) = CURRENT_VAULT_PATH.try_read() {
+        if let Some(path) = vault_path.as_ref() {
+            return Ok(path.clone());
+        }
+    }
+
+    // Try to load from registry if global state isn't set yet
+    if let Ok(registry) = crate::domains::vault::registry::load_vault_registry() {
+        if let Some(vault) = registry.active_vault() {
+            return Ok(std::path::PathBuf::from(&vault.vault_path));
+        }
+    }
+
+    Err("No active vault set".to_string())
 }

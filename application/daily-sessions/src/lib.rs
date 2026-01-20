@@ -1,15 +1,17 @@
 // ============================================================================
 // DAILY SESSIONS
-// Core logic for daily session lifecycle, summary generation, and session chaining
+// Daily session management for Agent Channel architecture
 // ============================================================================
 
 pub mod types;
 pub mod manager;
 pub mod repository;
-pub mod summary;
+pub mod cache;
 
-// Re-export common types
 pub use types::*;
-pub use manager::DailySessionManager;
-pub use repository::DailySessionRepository;
-pub use zero_core::Result;
+pub use manager::*;
+pub use repository::*;
+pub use cache::*;
+
+// Result type for this crate
+pub type Result<T> = std::result::Result<T, DailySessionError>;

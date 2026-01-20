@@ -5,15 +5,18 @@
  */
 
 import type { Agent } from "@/shared/types";
-import { Hash, ChevronDown, Plus, Bot } from "lucide-react";
+import { Hash, ChevronDown, ChevronRight, Plus, Bot } from "lucide-react";
 import { cn } from "@/shared/utils";
 import { memo } from "react";
+import { VaultSwitcher } from "@/features/vaults/VaultSwitcher";
 
 interface AgentChannelListProps {
   agents: Agent[];
   selectedAgentId?: string;
   onSelectAgent: (agent: Agent) => void;
   onCreateAgent?: () => void;
+  onToggleVault?: () => void;
+  showVaultSwitcher?: boolean;
   className?: string;
 }
 
@@ -61,15 +64,35 @@ export const AgentChannelList = memo(function AgentChannelList({
   selectedAgentId,
   onSelectAgent,
   onCreateAgent,
+  onToggleVault,
+  showVaultSwitcher = false,
   className,
 }: AgentChannelListProps) {
   return (
     <div className={cn("w-60 bg-[#2b2d31] flex flex-col", className)} role="navigation" aria-label="Agent channels">
-      {/* Header */}
-      <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 hover:bg-black/10 cursor-pointer group transition-colors" role="button" tabIndex={0} aria-label="Toggle agent channels">
+      {/* Header - Click chevron to toggle vault switcher */}
+      <div className="h-12 border-b border-black/20 flex items-center justify-between px-4">
         <h2 className="text-white font-semibold">Agent Channels</h2>
-        <ChevronDown className="size-4 text-gray-300 group-hover:text-white transition-colors" aria-hidden="true" />
+        <button
+          onClick={onToggleVault}
+          className="hover:bg-black/10 p-1 rounded transition-colors"
+          aria-label="Toggle vault switcher"
+          aria-expanded={showVaultSwitcher}
+        >
+          {showVaultSwitcher ? (
+            <ChevronDown className="size-4 text-gray-300 hover:text-white transition-colors" aria-hidden="true" />
+          ) : (
+            <ChevronRight className="size-4 text-gray-300 hover:text-white transition-colors" aria-hidden="true" />
+          )}
+        </button>
       </div>
+
+      {/* Vault Switcher - Shown between header and agent list when expanded */}
+      {showVaultSwitcher && (
+        <div className="px-2 py-3 border-b border-black/10">
+          <VaultSwitcher className="bg-transparent border-0" />
+        </div>
+      )}
 
       {/* Channel Count & Actions */}
       <div className="px-2 py-3 flex items-center justify-between">

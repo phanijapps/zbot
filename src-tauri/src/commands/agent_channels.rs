@@ -4,12 +4,13 @@
 // ============================================================================
 
 use crate::settings::AppDirs;
-use daily_sessions::{DailySessionManager, DailySessionRepository, DaySummary, DailySession, SessionMessage};
+use daily_sessions::{DailySessionManager, DailySessionRepository, DaySummary, DailySession, SessionMessage, DailySessionError};
+use daily_sessions::types::{Agent as DailySessionAgent, SystemPromptCheck};
 use rusqlite::{Connection, params};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use chrono::{DateTime, Utc};
-use zero_core::ZeroError;
+use std::path::PathBuf;
 
 // ============================================================================
 // TYPES
@@ -131,12 +132,23 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
             previous_session_ids TEXT,
             message_count INTEGER DEFAULT 0,
             token_count INTEGER DEFAULT 0,
+            system_prompt_version INTEGER DEFAULT 1,
             created_at TEXT NOT NULL,
             updated_at TEXT NOT NULL,
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         )",
         [],
     ).map_err(|e| format!("Failed to create daily_sessions table: {}", e))?;
+
+    // Migration: Add system_prompt_version column if it doesn't exist (for existing databases)
+    // Check if column exists by trying to select it
+    let column_exists = conn.prepare("SELECT system_prompt_version FROM daily_sessions LIMIT 1").is_ok();
+    if !column_exists {
+        conn.execute(
+            "ALTER TABLE daily_sessions ADD COLUMN system_prompt_version INTEGER DEFAULT 1",
+            [],
+        ).map_err(|e| format!("Failed to add system_prompt_version column: {}", e))?;
+    }
 
     // Create index for daily sessions
     conn.execute(
@@ -290,18 +302,18 @@ impl DailySessionRepository for SqliteSessionRepository {
 
         // First, ensure the agent exists in the agents table
         ensure_agent_exists(&conn, agent_id)
-            .map_err(|e| ZeroError::Generic(e))?;
+            .map_err(DailySessionError::NotFound)?;
 
         // Try to get existing session
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, session_date, summary, previous_session_ids,
-                    message_count, token_count, created_at, updated_at
+                    message_count, token_count, system_prompt_version, created_at, updated_at
              FROM daily_sessions WHERE id = ?1"
-        ).map_err(|e| ZeroError::Generic(format!("Failed to prepare query: {}", e)))?;
+        )?;
 
         let session = stmt.query_row([&session_id], |row| {
-            let created_at_str: String = row.get(7)?;
-            let updated_at_str: String = row.get(8)?;
+            let created_at_str: String = row.get(8)?;
+            let updated_at_str: String = row.get(9)?;
             Ok(DailySession {
                 id: row.get(0)?,
                 agent_id: row.get(1)?,
@@ -313,6 +325,7 @@ impl DailySessionRepository for SqliteSessionRepository {
                 },
                 message_count: row.get(5)?,
                 token_count: row.get(6)?,
+                system_prompt_version: row.get(7)?,
                 created_at: parse_datetime(&created_at_str).unwrap_or_else(|_| Utc::now()),
                 updated_at: parse_datetime(&updated_at_str).unwrap_or_else(|_| Utc::now()),
             })
@@ -326,15 +339,15 @@ impl DailySessionRepository for SqliteSessionRepository {
                 let now = Utc::now().to_rfc3339();
 
                 conn.execute(
-                    "INSERT INTO daily_sessions (id, agent_id, session_date, message_count, token_count, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                    "INSERT INTO daily_sessions (id, agent_id, session_date, message_count, token_count, system_prompt_version, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
                     params![&new_session.id, &new_session.agent_id, &new_session.session_date,
-                            0i64, 0i64, &now, &now]
-                ).map_err(|e| ZeroError::Generic(format!("Failed to insert session: {}", e)))?;
+                            0i64, 0i64, 1i64, &now, &now]
+                )?;
 
                 Ok(new_session)
             }
-            Err(e) => Err(ZeroError::Generic(format!("Database error: {}", e)))
+            Err(e) => Err(DailySessionError::Database(e))
         }
     }
 
@@ -343,13 +356,13 @@ impl DailySessionRepository for SqliteSessionRepository {
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, session_date, summary, previous_session_ids,
-                    message_count, token_count, created_at, updated_at
+                    message_count, token_count, system_prompt_version, created_at, updated_at
              FROM daily_sessions WHERE id = ?1"
-        ).map_err(|e| ZeroError::Generic(format!("Failed to prepare query: {}", e)))?;
+        )?;
 
         let session = stmt.query_row([&session_id], |row| {
-            let created_at_str: String = row.get(7)?;
-            let updated_at_str: String = row.get(8)?;
+            let created_at_str: String = row.get(8)?;
+            let updated_at_str: String = row.get(9)?;
             Ok(DailySession {
                 id: row.get(0)?,
                 agent_id: row.get(1)?,
@@ -361,6 +374,7 @@ impl DailySessionRepository for SqliteSessionRepository {
                 },
                 message_count: row.get(5)?,
                 token_count: row.get(6)?,
+                system_prompt_version: row.get(7)?,
                 created_at: parse_datetime(&created_at_str).unwrap_or_else(|_| Utc::now()),
                 updated_at: parse_datetime(&updated_at_str).unwrap_or_else(|_| Utc::now()),
             })
@@ -369,7 +383,7 @@ impl DailySessionRepository for SqliteSessionRepository {
         match session {
             Ok(s) => Ok(Some(s)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(ZeroError::Generic(format!("Database error: {}", e)))
+            Err(e) => Err(DailySessionError::Database(e))
         }
     }
 
@@ -382,7 +396,7 @@ impl DailySessionRepository for SqliteSessionRepository {
              WHERE agent_id = ?1 AND session_date < date('now')
              ORDER BY session_date DESC
              LIMIT ?2"
-        ).map_err(|e| ZeroError::Generic(format!("Failed to prepare query: {}", e)))?;
+        )?;
 
         let rows = stmt.query_map(params![agent_id, limit as i64], |row| {
             Ok(DaySummary {
@@ -392,11 +406,11 @@ impl DailySessionRepository for SqliteSessionRepository {
                 message_count: row.get(3)?,
                 is_archived: false, // TODO: check archive table
             })
-        }).map_err(|e| ZeroError::Generic(format!("Failed to execute query: {}", e)))?;
+        })?;
 
         let mut results = Vec::new();
         for row in rows {
-            results.push(row.map_err(|e| ZeroError::Generic(format!("Row error: {}", e)))?);
+            results.push(row?);
         }
 
         Ok(results)
@@ -408,7 +422,7 @@ impl DailySessionRepository for SqliteSessionRepository {
         conn.execute(
             "UPDATE daily_sessions SET summary = ?1, updated_at = ?2 WHERE id = ?3",
             params![&summary, &Utc::now().to_rfc3339(), session_id]
-        ).map_err(|e| ZeroError::Generic(format!("Failed to update summary: {}", e)))?;
+        )?;
 
         Ok(())
     }
@@ -419,7 +433,7 @@ impl DailySessionRepository for SqliteSessionRepository {
         conn.execute(
             "UPDATE daily_sessions SET message_count = message_count + 1, updated_at = ?1 WHERE id = ?2",
             params![&Utc::now().to_rfc3339(), session_id]
-        ).map_err(|e| ZeroError::Generic(format!("Failed to increment message count: {}", e)))?;
+        )?;
 
         Ok(())
     }
@@ -430,7 +444,7 @@ impl DailySessionRepository for SqliteSessionRepository {
         conn.execute(
             "UPDATE daily_sessions SET token_count = token_count + ?1, updated_at = ?2 WHERE id = ?3",
             params![tokens, &Utc::now().to_rfc3339(), session_id]
-        ).map_err(|e| ZeroError::Generic(format!("Failed to add token count: {}", e)))?;
+        )?;
 
         Ok(())
     }
@@ -441,7 +455,7 @@ impl DailySessionRepository for SqliteSessionRepository {
         let rows = conn.execute(
             "DELETE FROM daily_sessions WHERE agent_id = ?1 AND session_date < ?2",
             params![agent_id, before_date]
-        ).map_err(|e| ZeroError::Generic(format!("Failed to delete sessions: {}", e)))?;
+        )?;
 
         Ok(rows as usize)
     }
@@ -452,7 +466,7 @@ impl DailySessionRepository for SqliteSessionRepository {
         let mut stmt = conn.prepare(
             "SELECT id, session_id, role, content, created_at, token_count, tool_calls, tool_results
              FROM messages WHERE session_id = ?1 ORDER BY created_at"
-        ).map_err(|e| ZeroError::Generic(format!("Failed to prepare query: {}", e)))?;
+        )?;
 
         let rows = stmt.query_map(params![session_id], |row| {
             let created_at_str: String = row.get(4)?;
@@ -468,11 +482,11 @@ impl DailySessionRepository for SqliteSessionRepository {
                 tool_calls: tool_calls_str.and_then(|s| serde_json::from_str(&s).ok()),
                 tool_results: tool_results_str.and_then(|s| serde_json::from_str(&s).ok()),
             })
-        }).map_err(|e| ZeroError::Generic(format!("Failed to execute query: {}", e)))?;
+        })?;
 
         let mut results = Vec::new();
         for row in rows {
-            results.push(row.map_err(|e| ZeroError::Generic(format!("Row error: {}", e)))?);
+            results.push(row?);
         }
 
         Ok(results)
@@ -502,9 +516,155 @@ impl DailySessionRepository for SqliteSessionRepository {
                 tool_calls_str.as_deref(),
                 tool_results_str.as_deref(),
             ]
-        ).map_err(|e| ZeroError::Generic(format!("Failed to insert message: {}", e)))?;
+        )?;
 
         Ok(())
+    }
+
+    async fn get_or_create_today_session_with_prompt(&self, agent_id: &str, _system_prompt: &str) -> daily_sessions::Result<(DailySession, SystemPromptCheck)> {
+        // For now, delegate to the simpler method and create a default check
+        // A full implementation would require checking the agent table first
+        let session = self.get_or_create_today_session(agent_id).await?;
+        let version = session.system_prompt_version;
+        Ok((session, SystemPromptCheck {
+            has_changed: false,
+            previous_version: Some(version),
+            new_version: version,
+            previous_prompt: None,
+        }))
+    }
+
+    async fn upsert_agent(&self, agent: DailySessionAgent) -> daily_sessions::Result<()> {
+        let conn = self.conn.lock().await;
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT INTO agents (id, name, display_name, description, config_path, system_prompt_version, current_system_prompt, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                display_name = excluded.display_name,
+                description = excluded.description,
+                config_path = excluded.config_path,
+                system_prompt_version = excluded.system_prompt_version,
+                current_system_prompt = excluded.current_system_prompt,
+                updated_at = excluded.updated_at",
+            params![
+                &agent.id,
+                &agent.name,
+                &agent.display_name,
+                &agent.description,
+                &agent.config_path,
+                &agent.system_prompt_version,
+                &agent.current_system_prompt,
+                &now,
+                &now,
+            ],
+        )?;
+
+        Ok(())
+    }
+
+    async fn get_agent(&self, agent_id: &str) -> daily_sessions::Result<Option<DailySessionAgent>> {
+        let conn = self.conn.lock().await;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, name, display_name, description, config_path, system_prompt_version, current_system_prompt, created_at, updated_at
+             FROM agents WHERE id = ?1"
+        )?;
+
+        let result = stmt.query_row([&agent_id], |row| {
+            let created_at_str: String = row.get(7)?;
+            let updated_at_str: String = row.get(8)?;
+            Ok(DailySessionAgent {
+                id: row.get(0)?,
+                name: row.get(1)?,
+                display_name: row.get(2)?,
+                description: row.get(3)?,
+                config_path: row.get(4)?,
+                system_prompt_version: row.get(5)?,
+                current_system_prompt: row.get(6)?,
+                created_at: parse_datetime(&created_at_str).unwrap_or_else(|_| Utc::now()),
+                updated_at: parse_datetime(&updated_at_str).unwrap_or_else(|_| Utc::now()),
+            })
+        });
+
+        match result {
+            Ok(agent) => Ok(Some(agent)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(DailySessionError::Database(e))
+        }
+    }
+
+    async fn check_system_prompt(&self, agent_id: &str, system_prompt: &str) -> daily_sessions::Result<SystemPromptCheck> {
+        let conn = self.conn.lock().await;
+
+        // Get current agent record
+        let current_agent = self.get_agent(agent_id).await?;
+
+        match current_agent {
+            Some(agent) => {
+                // Check if prompt has changed
+                let has_changed = match &agent.current_system_prompt {
+                    Some(current_prompt) => current_prompt != system_prompt,
+                    None => true,
+                };
+
+                if has_changed {
+                    // Increment version and update
+                    let new_version = agent.system_prompt_version + 1;
+
+                    conn.execute(
+                        "UPDATE agents
+                         SET system_prompt_version = ?1,
+                             current_system_prompt = ?2,
+                             updated_at = datetime('now')
+                         WHERE id = ?3",
+                        params![new_version, system_prompt, agent_id],
+                    )?;
+
+                    Ok(SystemPromptCheck {
+                        has_changed: true,
+                        previous_version: Some(agent.system_prompt_version),
+                        new_version,
+                        previous_prompt: agent.current_system_prompt,
+                    })
+                } else {
+                    Ok(SystemPromptCheck {
+                        has_changed: false,
+                        previous_version: Some(agent.system_prompt_version),
+                        new_version: agent.system_prompt_version,
+                        previous_prompt: agent.current_system_prompt,
+                    })
+                }
+            }
+            None => {
+                // Agent doesn't exist yet, create with version 1
+                let now = Utc::now();
+
+                conn.execute(
+                    "INSERT INTO agents (id, name, display_name, config_path, system_prompt_version, current_system_prompt, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                    params![
+                        agent_id,
+                        agent_id,  // Use agent_id as name for now
+                        agent_id,  // Use agent_id as display_name for now
+                        "",         // Empty config_path for now
+                        1i64,
+                        system_prompt,
+                        now.to_rfc3339(),
+                        now.to_rfc3339(),
+                    ],
+                )?;
+
+                Ok(SystemPromptCheck {
+                    has_changed: false,
+                    previous_version: None,
+                    new_version: 1,
+                    previous_prompt: None,
+                })
+            }
+        }
     }
 }
 
@@ -592,14 +752,14 @@ pub async fn record_session_message(
         .map_err(|e| e.to_string())?
         .agent_channels_db_path();
 
-    let repo = SqliteSessionRepository::new(db_path)?;
+    let repo = SqliteSessionRepository::new(db_path.clone())?;
     let manager = DailySessionManager::new(Arc::new(repo));
 
     let message = SessionMessage {
         id: uuid::Uuid::new_v4().to_string(),
         session_id: session_id.clone(),
-        role,
-        content,
+        role: role.clone(),
+        content: content.clone(),
         created_at: Utc::now(),
         token_count: 0,
         tool_calls,
@@ -609,21 +769,170 @@ pub async fn record_session_message(
     manager.record_message(&session_id, message.clone()).await
         .map_err(|e| e.to_string())?;
 
+    // Extract agent_id from session_id (format: session_{agent_id}_{date})
+    let agent_id = session_id
+        .strip_prefix("session_")
+        .and_then(|s| s.rsplit('_').nth(1)) // Get agent_id from "agent_id_date"
+        .unwrap_or(&session_id)
+        .to_string();
+
+    // Get agent name from database for indexing
+    let agent_name = get_agent_name(&db_path, &agent_id).await.unwrap_or_else(|_| agent_id.clone());
+
+    // Index the message asynchronously (fire and forget)
+    let message_id = message.id.clone();
+    let session_id_clone = session_id.clone();
+    let content_clone = content.clone();
+    let role_clone = role.clone();
+    let timestamp = message.created_at.timestamp();
+
+    tokio::spawn(async move {
+        crate::commands::search::index_message_internal(
+            message_id,
+            session_id_clone,
+            agent_id,
+            agent_name,
+            role_clone,
+            content_clone,
+            timestamp,
+        ).await;
+    });
+
     Ok(message.id)
 }
 
-/// Generate end-of-day summary for a session
+/// Helper to get agent name from database
+async fn get_agent_name(db_path: &PathBuf, agent_id: &str) -> Result<String, String> {
+    let conn = Connection::open(db_path)
+        .map_err(|e| e.to_string())?;
+
+    let mut stmt = conn.prepare("SELECT name FROM agents WHERE id = ?1")
+        .map_err(|e| e.to_string())?;
+
+    let name = stmt.query_row(params![agent_id], |row| row.get::<_, String>(0))
+        .unwrap_or_else(|_| agent_id.to_string());
+
+    Ok(name)
+}
+
+/// Generate end-of-day summary for a session using LLM
 #[tauri::command]
 pub async fn generate_session_summary(session_id: String) -> Result<String, String> {
-    let db_path = AppDirs::get()
-        .map_err(|e| e.to_string())?
-        .agent_channels_db_path();
+    use zero_app::{Content, Llm, LlmConfig, OpenAiLlm, LlmRequest};
 
+    let app_dirs = AppDirs::get()
+        .map_err(|e| e.to_string())?;
+
+    let db_path = app_dirs.agent_channels_db_path();
+
+    // Scope the database query to ensure connection is dropped before await
+    let messages: Vec<(String, String)> = {
+        use rusqlite::params;
+
+        let conn = rusqlite::Connection::open(&db_path)
+            .map_err(|e| format!("Failed to open database: {}", e))?;
+
+        let mut stmt = conn.prepare(
+            "SELECT role, content FROM messages WHERE session_id = ? ORDER BY created_at ASC"
+        ).map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        // Collect rows into a Vec first (this consumes the iterator)
+        let rows = stmt.query_map(params![&session_id], |row| {
+            Ok((row.get(0)?, row.get(1)?))
+        }).map_err(|e| format!("Failed to query messages: {}", e))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| format!("Failed to collect messages: {}", e))?;
+
+        // Drop stmt and conn explicitly before returning
+        drop(stmt);
+        drop(conn);
+
+        rows
+    }; // conn is dropped here
+
+    if messages.is_empty() {
+        return Ok("No messages in this session.".to_string());
+    }
+
+    // Read providers.json to get the default provider
+    let providers_path = app_dirs.config_dir.join("providers.json");
+    let providers_json = std::fs::read_to_string(&providers_path)
+        .map_err(|e| format!("Failed to read providers.json: {}", e))?;
+
+    let providers: Vec<crate::commands::providers::Provider> = serde_json::from_str(&providers_json)
+        .map_err(|e| format!("Failed to parse providers.json: {}", e))?;
+
+    let provider = providers.first()
+        .ok_or("No provider configured. Please add a provider first.")?;
+
+    // Create LLM config (check if base_url is provided)
+    let llm_config = if !provider.base_url.is_empty() {
+        LlmConfig::compatible(&provider.api_key, &provider.base_url,
+            provider.models.first().unwrap_or(&"gpt-4o-mini".to_string()))
+    } else {
+        LlmConfig::new(&provider.api_key,
+            provider.models.first().unwrap_or(&"gpt-4o-mini".to_string()))
+    };
+
+    // Build conversation text for summarization
+    let conversation_text: String = messages
+        .iter()
+        .map(|(role, content)| format!("{}: {}", role, content))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // Create summary prompt
+    let system_prompt = r#"You are a conversation summarizer. Your task is to create a concise summary (2-3 sentences) of a day's conversation between a user and an AI assistant.
+
+Focus on:
+- Main topics discussed
+- Key decisions made
+- Important outcomes or action items
+
+Keep the summary brief and factual. Do not include the conversation details themselves, just the summary."#;
+
+    let user_prompt = format!(
+        "Here is the conversation to summarize:\n\n{}\n\nPlease provide a 2-3 sentence summary of this conversation.",
+        conversation_text
+    );
+
+    // Create LLM request
+    let llm = OpenAiLlm::new(llm_config)
+        .map_err(|e| format!("Failed to create LLM: {}", e))?;
+
+    let request = LlmRequest::new()
+        .with_system_instruction(system_prompt)
+        .with_content(Content::user(user_prompt));
+
+    // Call LLM (use spawn_blocking for potentially blocking HTTP operations)
+    let response = tokio::task::spawn_blocking(move || {
+        // Get the current runtime handle or create a new one if needed
+        let handle = tokio::runtime::Handle::try_current();
+        match handle {
+            Ok(h) => h.block_on(llm.generate(request)),
+            Err(_) => {
+                // No runtime exists, create a temporary one
+                let rt = tokio::runtime::Runtime::new()
+                    .map_err(|e| zero_app::ZeroError::Generic(format!("Failed to create runtime: {}", e)))?;
+                rt.block_on(llm.generate(request))
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("Task failed: {}", e))?
+    .map_err(|e| format!("LLM request failed: {}", e))?;
+
+    // Extract the summary text from the response
+    let summary = response.content
+        .and_then(|c| c.text().map(|s| s.to_string()))
+        .unwrap_or_else(|| "No summary generated.".to_string());
+
+    // Save summary to database
     let repo = SqliteSessionRepository::new(db_path)?;
-    let manager = DailySessionManager::new(Arc::new(repo));
+    repo.update_session_summary(&session_id, summary.clone()).await
+        .map_err(|e| e.to_string())?;
 
-    manager.generate_end_of_day_summary(&session_id).await
-        .map_err(|e| e.to_string())
+    Ok(summary)
 }
 
 /// Get agent channel info for the sidebar
