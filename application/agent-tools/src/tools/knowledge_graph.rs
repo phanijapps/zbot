@@ -47,7 +47,6 @@ impl Tool for ListEntitiesTool {
         let entity_type_filter = args.get("entity_type")
             .and_then(|v| v.as_str());
 
-        tracing::debug!("ListEntities: agent_id={}, entity_type_filter={:?}", agent_id, entity_type_filter);
 
         // Get entities from knowledge graph storage
         let storage = get_graph_storage(ctx.clone())?;
@@ -123,7 +122,6 @@ impl Tool for SearchEntitiesTool {
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing agent_id in context".to_string()))?;
 
-        tracing::debug!("SearchEntities: agent_id={}, query={}", agent_id, query);
 
         // Search entities
         let storage = get_graph_storage(ctx.clone())?;
@@ -191,7 +189,6 @@ impl Tool for GetEntityRelationshipsTool {
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing agent_id in context".to_string()))?;
 
-        tracing::debug!("GetEntityRelationships: agent_id={}, entity_name={}", agent_id, entity_name);
 
         // Get all entities and relationships
         let storage = get_graph_storage(ctx.clone())?;
@@ -309,7 +306,6 @@ impl Tool for AddEntityTool {
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing agent_id in context".to_string()))?;
 
-        tracing::debug!("AddEntity: agent_id={}, name={}, type={}", agent_id, name, entity_type_str);
 
         // Create entity
         let entity_type = knowledge_graph::types::EntityType::from_str(entity_type_str);
@@ -404,8 +400,6 @@ impl Tool for AddRelationshipTool {
             .and_then(|v| v.as_str().map(|s| s.to_string()))
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing agent_id in context".to_string()))?;
 
-        tracing::debug!("AddRelationship: agent_id={}, source={}, target={}, type={}",
-            agent_id, source_name, target_name, rel_type_str);
 
         // Get entities to find their IDs
         let storage = get_graph_storage(ctx.clone())?;

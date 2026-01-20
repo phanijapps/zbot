@@ -227,3 +227,226 @@ pub struct ExtractedKnowledge {
     pub entities: Vec<Entity>,
     pub relationships: Vec<Relationship>,
 }
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_entity_type_from_str() {
+        assert_eq!(EntityType::from_str("person"), EntityType::Person);
+        assert_eq!(EntityType::from_str("PERSON"), EntityType::Person);
+        assert_eq!(EntityType::from_str("Person"), EntityType::Person);
+        assert_eq!(EntityType::from_str("organization"), EntityType::Organization);
+        assert_eq!(EntityType::from_str("org"), EntityType::Organization);
+        assert_eq!(EntityType::from_str("location"), EntityType::Location);
+        assert_eq!(EntityType::from_str("concept"), EntityType::Concept);
+        assert_eq!(EntityType::from_str("tool"), EntityType::Tool);
+        assert_eq!(EntityType::from_str("project"), EntityType::Project);
+        assert_eq!(EntityType::from_str("custom_type"), EntityType::Custom("custom_type".to_string()));
+    }
+
+    #[test]
+    fn test_entity_type_as_str() {
+        assert_eq!(EntityType::Person.as_str(), "person");
+        assert_eq!(EntityType::Organization.as_str(), "organization");
+        assert_eq!(EntityType::Location.as_str(), "location");
+        assert_eq!(EntityType::Concept.as_str(), "concept");
+        assert_eq!(EntityType::Tool.as_str(), "tool");
+        assert_eq!(EntityType::Project.as_str(), "project");
+        assert_eq!(EntityType::Custom("custom".to_string()).as_str(), "custom");
+    }
+
+    #[test]
+    fn test_relationship_type_from_str() {
+        assert_eq!(RelationshipType::from_str("works_for"), RelationshipType::WorksFor);
+        assert_eq!(RelationshipType::from_str("worksfor"), RelationshipType::WorksFor);
+        assert_eq!(RelationshipType::from_str("located_in"), RelationshipType::LocatedIn);
+        assert_eq!(RelationshipType::from_str("related_to"), RelationshipType::RelatedTo);
+        assert_eq!(RelationshipType::from_str("created"), RelationshipType::Created);
+        assert_eq!(RelationshipType::from_str("uses"), RelationshipType::Uses);
+        assert_eq!(RelationshipType::from_str("part_of"), RelationshipType::PartOf);
+        assert_eq!(RelationshipType::from_str("mentions"), RelationshipType::Mentions);
+        assert_eq!(RelationshipType::from_str("custom_rel"), RelationshipType::Custom("customrel".to_string()));
+    }
+
+    #[test]
+    fn test_relationship_type_as_str() {
+        assert_eq!(RelationshipType::WorksFor.as_str(), "works_for");
+        assert_eq!(RelationshipType::LocatedIn.as_str(), "located_in");
+        assert_eq!(RelationshipType::RelatedTo.as_str(), "related_to");
+        assert_eq!(RelationshipType::Created.as_str(), "created");
+        assert_eq!(RelationshipType::Uses.as_str(), "uses");
+        assert_eq!(RelationshipType::PartOf.as_str(), "part_of");
+        assert_eq!(RelationshipType::Mentions.as_str(), "mentions");
+        assert_eq!(RelationshipType::Custom("custom".to_string()).as_str(), "custom");
+    }
+
+    #[test]
+    fn test_entity_new() {
+        let entity = Entity::new(
+            "agent-123".to_string(),
+            EntityType::Person,
+            "John Smith".to_string(),
+        );
+
+        assert_eq!(entity.agent_id, "agent-123");
+        assert_eq!(entity.name, "John Smith");
+        assert!(matches!(entity.entity_type, EntityType::Person));
+        assert_eq!(entity.mention_count, 1);
+        assert!(entity.properties.is_empty());
+        assert!(entity.id.starts_with("entity_agent-123_"));
+    }
+
+    #[test]
+    fn test_entity_touch() {
+        let mut entity = Entity::new(
+            "agent-123".to_string(),
+            EntityType::Person,
+            "John Smith".to_string(),
+        );
+
+        let original_count = entity.mention_count;
+        entity.touch();
+
+        assert_eq!(entity.mention_count, original_count + 1);
+        assert!(entity.last_seen_at > entity.first_seen_at);
+    }
+
+    #[test]
+    fn test_entity_with_property() {
+        let entity = Entity::new(
+            "agent-123".to_string(),
+            EntityType::Person,
+            "John Smith".to_string(),
+        )
+        .with_property("email".to_string(), json!("john@example.com"))
+        .with_property("role".to_string(), json!("Engineer"));
+
+        assert_eq!(entity.properties.len(), 2);
+        assert_eq!(entity.properties.get("email"), Some(&json!("john@example.com")));
+        assert_eq!(entity.properties.get("role"), Some(&json!("Engineer")));
+    }
+
+    #[test]
+    fn test_entity_serialization() {
+        let entity = Entity::new(
+            "agent-123".to_string(),
+            EntityType::Organization,
+            "Acme Corp".to_string(),
+        );
+
+        let json_str = serde_json::to_string(&entity).unwrap();
+        let parsed: Entity = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(parsed.id, entity.id);
+        assert_eq!(parsed.name, entity.name);
+        assert_eq!(parsed.agent_id, entity.agent_id);
+    }
+
+    #[test]
+    fn test_relationship_new() {
+        let relationship = Relationship::new(
+            "agent-123".to_string(),
+            "entity-1".to_string(),
+            "entity-2".to_string(),
+            RelationshipType::WorksFor,
+        );
+
+        assert_eq!(relationship.agent_id, "agent-123");
+        assert_eq!(relationship.source_entity_id, "entity-1");
+        assert_eq!(relationship.target_entity_id, "entity-2");
+        assert!(matches!(relationship.relationship_type, RelationshipType::WorksFor));
+        assert_eq!(relationship.mention_count, 1);
+        assert!(relationship.properties.is_empty());
+    }
+
+    #[test]
+    fn test_relationship_touch() {
+        let mut relationship = Relationship::new(
+            "agent-123".to_string(),
+            "entity-1".to_string(),
+            "entity-2".to_string(),
+            RelationshipType::Uses,
+        );
+
+        let original_count = relationship.mention_count;
+        relationship.touch();
+
+        assert_eq!(relationship.mention_count, original_count + 1);
+        assert!(relationship.last_seen_at > relationship.first_seen_at);
+    }
+
+    #[test]
+    fn test_relationship_with_property() {
+        let relationship = Relationship::new(
+            "agent-123".to_string(),
+            "entity-1".to_string(),
+            "entity-2".to_string(),
+            RelationshipType::RelatedTo,
+        )
+        .with_property("confidence".to_string(), json!(0.9))
+        .with_property("context".to_string(), json!("project meeting"));
+
+        assert_eq!(relationship.properties.len(), 2);
+        assert_eq!(relationship.properties.get("confidence"), Some(&json!(0.9)));
+    }
+
+    #[test]
+    fn test_relationship_serialization() {
+        let relationship = Relationship::new(
+            "agent-123".to_string(),
+            "source".to_string(),
+            "target".to_string(),
+            RelationshipType::PartOf,
+        );
+
+        let json_str = serde_json::to_string(&relationship).unwrap();
+        let parsed: Relationship = serde_json::from_str(&json_str).unwrap();
+
+        assert_eq!(parsed.id, relationship.id);
+        assert_eq!(parsed.source_entity_id, "source");
+        assert_eq!(parsed.target_entity_id, "target");
+    }
+
+    #[test]
+    fn test_extracted_knowledge_empty() {
+        let knowledge = ExtractedKnowledge {
+            entities: vec![],
+            relationships: vec![],
+        };
+
+        assert!(knowledge.entities.is_empty());
+        assert!(knowledge.relationships.is_empty());
+    }
+
+    #[test]
+    fn test_extracted_knowledge_with_data() {
+        let entity = Entity::new(
+            "agent-1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
+
+        let relationship = Relationship::new(
+            "agent-1".to_string(),
+            entity.id.clone(),
+            "org-1".to_string(),
+            RelationshipType::WorksFor,
+        );
+
+        let knowledge = ExtractedKnowledge {
+            entities: vec![entity],
+            relationships: vec![relationship],
+        };
+
+        assert_eq!(knowledge.entities.len(), 1);
+        assert_eq!(knowledge.relationships.len(), 1);
+        assert_eq!(knowledge.entities[0].name, "Alice");
+    }
+}
