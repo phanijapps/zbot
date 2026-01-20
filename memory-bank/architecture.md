@@ -69,7 +69,11 @@ agentzero/
 │   └── zero-app/              # Meta-package (all zero-* crates)
 ├── application/               # Application-specific crates
 │   ├── agent-runtime/         # Agent executor with config, MCP, skills
-│   └── agent-tools/           # Built-in tools (read, write, grep, python, etc.)
+│   ├── agent-tools/           # Built-in tools (read, write, grep, python, etc.)
+│   ├── daily-sessions/        # Daily session management for agent channels
+│   ├── search-index/          # Tantivy-based full-text search
+│   ├── session-archive/       # Parquet-based long-term message archival
+│   └── knowledge-graph/       # Semantic memory (entities and relationships)
 ├── memory-bank/               # Project documentation
 │   ├── architecture.md        # This file
 │   ├── learnings.md           # Architecture learnings
@@ -106,7 +110,11 @@ The **application crates** are tightly coupled to the Tauri app and its specific
 | Crate | Purpose |
 |-------|---------|
 | `agent-runtime` | YAML config, executor, MCP managers, skill loading |
-| `agent-tools` | Built-in tools: Read, Write, Edit, Grep, Glob, Python, etc. |
+| `agent-tools` | Built-in tools: Read, Write, Edit, Grep, Glob, Python, Knowledge Graph |
+| `daily-sessions` | Daily session management with SQLite storage |
+| `search-index` | Tantivy-based full-text search across messages |
+| `session-archive` | Parquet-based long-term message archival |
+| `knowledge-graph` | Semantic memory with entities and relationships |
 
 ## Architecture Diagram
 
@@ -185,7 +193,10 @@ The **application crates** are tightly coupled to the Tauri app and its specific
 │  │  │    ├── File: Read, Write, Edit                      │ │   │
 │  │  │    ├── Search: Grep, Glob                           │ │   │
 │  │  │    ├── Exec: Python, LoadSkill                      │ │   │
-│  │  │    └── UI: RequestInput, ShowContent                │ │   │
+│  │  │    ├── UI: RequestInput, ShowContent                │ │   │
+│  │  │    └── Knowledge Graph: list_entities,              │ │   │
+│  │  │       search_entities, get_entity_relationships,    │ │   │
+│  │  │       add_entity, add_relationship                 │ │   │
 │  │  └─────────────────────────────────────────────────────┘ │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
@@ -533,10 +544,12 @@ See `memory-bank/known_issues.md` for tracked issues, including:
 
 | File | Description |
 |------|-------------|
+| `memory-bank/knowledge-graph.md` | Knowledge Graph feature guide with examples |
+| `memory-bank/known_issues.md` | Known issues tracking |
+| `memory-bank/learnings.md` | Architecture learnings |
+| `memory-bank/product.md` | Product definition |
 | `crates/*/AGENTS.md` | Framework crate documentation |
 | `crates/AGENTS.md` | Framework crates overview |
 | `application/*/AGENTS.md` | Application crate documentation |
 | `src-tauri/src/commands/AGENTS.md` | Commands implementation |
-| `memory-bank/known_issues.md` | Known issues tracking |
-| `memory-bank/learnings.md` | Architecture learnings |
 | `LOGGING.md` | Logging guidelines |
