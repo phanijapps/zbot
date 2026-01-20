@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -17,6 +17,7 @@ import {
   type MessageWithThinking,
 } from "@/domains/agent-runtime/components";
 import { ClearHistoryDialog } from "./ClearHistoryDialog";
+import { DaySeparator } from "./DaySeparator";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -25,6 +26,18 @@ import {
   formatSessionDate,
 } from "@/services/agentChannels";
 import { listAgents } from "@/services/agent";
+
+/**
+ * Messages grouped by session date
+ */
+interface DayMessages {
+  sessionId: string;
+  sessionDate: string;
+  formattedDate: string;
+  summary?: string;
+  messageCount: number;
+  messages: MessageWithThinking[];
+}
 
 type ExecutionStage = "idle" | "thinking" | "using_tools" | "generating" | "done";
 
@@ -46,6 +59,16 @@ export function AgentChannelPanel() {
   // Execution stage for better UX
   const [executionStage, setExecutionStage] = useState<ExecutionStage>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
+
+  // Day Messages - stores messages grouped by session date
+  // Structure: array of DayMessages, ordered by date (newest first)
+  const [loadedDays, setLoadedDays] = useState<DayMessages[]>([]);
+
+  // Track which days are expanded (by session ID)
+  const [expandedDays, setExpandedDays] = useState<Set<string>>(new Set());
+
+  // Track which days are currently loading
+  const [loadingDays, setLoadingDays] = useState<Set<string>>(new Set());
 
 
   // Generative Canvas state
@@ -99,6 +122,8 @@ export function AgentChannelPanel() {
       setCurrentSession(null);
       setMessages([]);
       setPreviousDays([]);
+      setLoadedDays([]);
+      setExpandedDays(new Set());
     }
     resetThinking();
   }, [selectedAgent]);
@@ -187,7 +212,21 @@ export function AgentChannelPanel() {
 
       // Load messages for this session
       const sessionMessages = await loadSessionMessages(session.id);
-      setMessages(convertSessionMessagesToWithThinking(sessionMessages));
+      const convertedMessages = convertSessionMessagesToWithThinking(sessionMessages);
+      setMessages(convertedMessages);
+
+      // Initialize loadedDays with today's session
+      const todayDate = new Date().toISOString().split('T')[0];
+      setLoadedDays([{
+        sessionId: session.id,
+        sessionDate: todayDate,
+        formattedDate: 'Today',
+        messageCount: convertedMessages.length,
+        messages: convertedMessages,
+      }]);
+
+      // Expand today by default
+      setExpandedDays(new Set([session.id]));
 
       // Load previous days
       const days = await listPreviousDays(agentId, 30);
@@ -201,6 +240,85 @@ export function AgentChannelPanel() {
       setIsLoading(false);
     }
   }, [convertSessionMessagesToWithThinking, scrollToBottom]);
+
+  /**
+   * Toggle a day's expanded state
+   */
+  const toggleDayExpansion = useCallback((sessionId: string) => {
+    setExpandedDays((prev) => {
+      const newSet = new Set(prev);
+      if (newSet.has(sessionId)) {
+        newSet.delete(sessionId);
+      } else {
+        newSet.add(sessionId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  /**
+   * Load a historical day's messages and expand it
+   */
+  const loadHistoricalDay = useCallback(async (daySummary: DaySummary) => {
+    if (!selectedAgent || loadingDays.has(daySummary.sessionId)) {
+      return;
+    }
+
+    // Check if already loaded
+    if (loadedDays.find(d => d.sessionId === daySummary.sessionId)) {
+      // Just expand it
+      toggleDayExpansion(daySummary.sessionId);
+      return;
+    }
+
+    // Mark as loading
+    setLoadingDays((prev) => new Set(prev).add(daySummary.sessionId));
+
+    try {
+      // Load messages for this day
+      const sessionMessages = await loadSessionMessages(daySummary.sessionId);
+      const convertedMessages = convertSessionMessagesToWithThinking(sessionMessages);
+
+      // Add to loadedDays (maintain order: today first, then other days by date desc)
+      setLoadedDays((prev) => {
+        const newDay: DayMessages = {
+          sessionId: daySummary.sessionId,
+          sessionDate: daySummary.sessionDate,
+          formattedDate: formatSessionDate(daySummary.sessionDate),
+          summary: daySummary.summary,
+          messageCount: convertedMessages.length,
+          messages: convertedMessages,
+        };
+
+        // Insert after today's session, before other historical days
+        const todayIndex = prev.findIndex(d => d.sessionId === currentSession?.id);
+        if (todayIndex === -1) {
+          // Shouldn't happen, but handle it
+          return [...prev, newDay];
+        }
+
+        // Insert after today
+        const newDays = [...prev];
+        newDays.splice(todayIndex + 1, 0, newDay);
+        return newDays;
+      });
+
+      // Expand the newly loaded day
+      setExpandedDays((prev) => new Set(prev).add(daySummary.sessionId));
+
+      // Close the history panel after loading
+      setHistoryPanelOpen(false);
+    } catch (err) {
+      console.error("Failed to load historical day:", err);
+      alert('Failed to load messages: ' + (err as Error).message);
+    } finally {
+      setLoadingDays((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(daySummary.sessionId);
+        return newSet;
+      });
+    }
+  }, [selectedAgent, loadingDays, loadedDays, currentSession, toggleDayExpansion, convertSessionMessagesToWithThinking]);
 
   /**
    * Execute agent with a message
@@ -249,6 +367,12 @@ export function AgentChannelPanel() {
       // Don't set thinking initially - only add when tools are actually used
     };
     setMessages((prev) => [...prev, initialAssistantMessage]);
+    // Also add to loadedDays
+    setLoadedDays((prev) => prev.map((day) =>
+      day.sessionId === currentSession.id
+        ? { ...day, messages: [...day.messages, initialAssistantMessage], messageCount: day.messages.length + 1 }
+        : day
+    ));
 
     // Set current message for thinking events
     setCurrentMessage(assistantMessageId);
@@ -302,10 +426,23 @@ export function AgentChannelPanel() {
             content: data.content || "",
             timestamp: Date.now()
           });
+          // Update both messages and loadedDays
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
               ? { ...msg, content: msg.content + (data.content || "") }
               : msg
+          ));
+          setLoadedDays((prev) => prev.map((day) =>
+            day.sessionId === currentSession?.id
+              ? {
+                  ...day,
+                  messages: day.messages.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, content: msg.content + (data.content || "") }
+                      : msg
+                  ),
+                }
+              : day
           ));
           break;
 
@@ -349,10 +486,23 @@ export function AgentChannelPanel() {
             timestamp: Date.now()
           });
           // Update tool count in real-time as tools complete
+          const updatedMsg = { toolCount: toolCallCount, toolCalls: [...toolCallsData] };
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
-              ? { ...msg, thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } }
+              ? { ...msg, thinking: updatedMsg }
               : msg
+          ));
+          setLoadedDays((prev) => prev.map((day) =>
+            day.sessionId === currentSession?.id
+              ? {
+                  ...day,
+                  messages: day.messages.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, thinking: updatedMsg }
+                      : msg
+                  ),
+                }
+              : day
           ));
           break;
 
@@ -364,14 +514,26 @@ export function AgentChannelPanel() {
             timestamp: Date.now()
           });
           // Update with final content and tool data
+          const finalMsg = {
+            content: data.finalMessage || "",
+            ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {})
+          };
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId
-              ? {
-                  ...msg,
-                  content: data.finalMessage || msg.content,
-                  ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {})
-                }
+              ? { ...msg, ...finalMsg }
               : msg
+          ));
+          setLoadedDays((prev) => prev.map((day) =>
+            day.sessionId === currentSession?.id
+              ? {
+                  ...day,
+                  messages: day.messages.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? { ...msg, ...finalMsg }
+                      : msg
+                  ),
+                }
+              : day
           ));
           finishProcessing();
           break;
@@ -441,10 +603,23 @@ export function AgentChannelPanel() {
             recoverable: false,
             timestamp: Date.now()
           });
+          const errorMsg = `Error: ${data.error || "Unknown error"}`;
           setMessages((prev) => prev.map((msg) =>
             msg.id === assistantMessageId && msg.content === ""
-              ? { ...msg, content: `Error: ${data.error || "Unknown error"}` }
+              ? { ...msg, content: errorMsg }
               : msg
+          ));
+          setLoadedDays((prev) => prev.map((day) =>
+            day.sessionId === currentSession?.id
+              ? {
+                  ...day,
+                  messages: day.messages.map((msg) =>
+                    msg.id === assistantMessageId && msg.content === ""
+                      ? { ...msg, content: errorMsg }
+                      : msg
+                  ),
+                }
+              : day
           ));
           finishProcessing();
           break;
@@ -465,10 +640,23 @@ export function AgentChannelPanel() {
       }
     } catch (error) {
       if (isMountedRef.current) {
+        const errorMsg = `Error: ${error instanceof Error ? error.message : String(error)}`;
         setMessages((prev) => prev.map((msg) =>
           msg.id === assistantMessageId && msg.content === ""
-            ? { ...msg, content: `Error: ${error instanceof Error ? error.message : String(error)}` }
+            ? { ...msg, content: errorMsg }
             : msg
+        ));
+        setLoadedDays((prev) => prev.map((day) =>
+          day.sessionId === currentSession?.id
+            ? {
+                ...day,
+                messages: day.messages.map((msg) =>
+                  msg.id === assistantMessageId && msg.content === ""
+                    ? { ...msg, content: errorMsg }
+                    : msg
+                ),
+              }
+            : day
         ));
         finishProcessing();
       }
@@ -497,6 +685,12 @@ export function AgentChannelPanel() {
       timestamp: Date.now(),
     };
     setMessages((prev) => [...prev, tempUserMessage]);
+    // Also add to loadedDays
+    setLoadedDays((prev) => prev.map((day) =>
+      day.sessionId === currentSession.id
+        ? { ...day, messages: [...day.messages, tempUserMessage], messageCount: day.messages.length + 1 }
+        : day
+    ));
 
     // Then call backend
     await executeAgentWithMessage(userMessage);
@@ -521,11 +715,11 @@ export function AgentChannelPanel() {
             <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
               <div className="flex items-center gap-2 group">
                 <Hash className="size-5 text-gray-300" />
-                <h2 className="text-white font-semibold cursor-default" title={`${messages.length} message${messages.length !== 1 ? 's' : ''} today`}>
+                <h2 className="text-white font-semibold cursor-default" title={`${loadedDays.reduce((sum, d) => sum + d.messageCount, 0)} total messages across ${loadedDays.length} day${loadedDays.length !== 1 ? 's' : ''}`}>
                   {selectedAgent.displayName}
                 </h2>
                 <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
-                  {messages.length}
+                  {loadedDays.reduce((sum, d) => sum + d.messageCount, 0)}
                 </span>
               </div>
               <div className="flex items-center gap-1">
@@ -541,7 +735,7 @@ export function AgentChannelPanel() {
 
             {/* Messages Area */}
             <div className="flex-1 overflow-y-auto">
-              {messages.length === 0 ? (
+              {loadedDays.length === 0 || (loadedDays.length === 1 && loadedDays[0].messages.length === 0) ? (
                 isLoading ? (
                   <div className="flex items-center justify-center h-full">
                     <Loader2 className="size-6 text-violet-400 animate-spin" />
@@ -561,67 +755,100 @@ export function AgentChannelPanel() {
                 )
               ) : (
                 <div className="px-4 py-6">
-                  <div className="space-y-4">
-                    {messages.map((msg) => (
-                      <div
-                        key={msg.id}
-                        className={cn(
-                          "group -mx-4 px-4 py-0.5",
-                          msg.role === 'user'
-                            ? 'bg-[#404249] hover:bg-[#45474f]'
-                            : 'bg-transparent hover:bg-black/5'
-                        )}
-                      >
-                        {/* User message */}
-                        {msg.role === 'user' ? (
-                          <div className="flex gap-4">
-                            <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
-                              U
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-baseline gap-2 mb-1">
-                                <span className="font-semibold text-white">You</span>
-                              </div>
-                              <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
-                                {msg.content}
-                              </p>
-                            </div>
-                          </div>
-                        ) : (
-                          /* Assistant message with optional tool cards */
-                          <>
-                            {/* Inline tool cards - displayed before the message */}
-                            {msg.thinking?.toolCalls && msg.thinking.toolCalls.length > 0 && (
-                              <div className="ml-14 mb-2">
-                                <InlineToolCallsList
-                                  tools={msg.thinking.toolCalls.map(tc => ({
-                                    name: tc.name,
-                                    status: tc.status,
-                                    result: tc.result,
-                                    error: tc.error,
-                                  }))}
-                                />
-                              </div>
-                            )}
-                            {/* Assistant message content */}
-                            <div className="flex gap-4">
-                              <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
-                                AI
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-baseline gap-2 mb-1">
-                                  <span className="font-semibold text-white">{selectedAgent.displayName}</span>
+                  <div className="space-y-2">
+                    {loadedDays.map((day) => {
+                      const isExpanded = expandedDays.has(day.sessionId);
+                      const isLoading = loadingDays.has(day.sessionId);
+
+                      return (
+                        <div key={day.sessionId}>
+                          {/* Day Separator */}
+                          <DaySeparator
+                            date={day.formattedDate}
+                            messageCount={day.messageCount}
+                            isExpanded={isExpanded}
+                            onToggle={() => toggleDayExpansion(day.sessionId)}
+                            summary={day.summary}
+                          />
+
+                          {/* Messages for this day */}
+                          {isExpanded && (
+                            <div className="space-y-4 mt-2">
+                              {isLoading ? (
+                                <div className="flex items-center gap-2 text-gray-300 text-sm py-4">
+                                  <Loader2 className="size-4 animate-spin" />
+                                  <span>Loading messages...</span>
                                 </div>
-                                <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
-                                  {msg.content}
-                                </p>
-                              </div>
+                              ) : (
+                                <>
+                                  {day.messages.map((msg) => (
+                                    <div
+                                      key={msg.id}
+                                      className={cn(
+                                        "group -mx-4 px-4 py-0.5",
+                                        msg.role === 'user'
+                                          ? 'bg-[#404249] hover:bg-[#45474f]'
+                                          : 'bg-transparent hover:bg-black/5'
+                                      )}
+                                    >
+                                      {/* User message */}
+                                      {msg.role === 'user' ? (
+                                        <div className="flex gap-4">
+                                          <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
+                                            U
+                                          </div>
+                                          <div className="flex-1 min-w-0">
+                                            <div className="flex items-baseline gap-2 mb-1">
+                                              <span className="font-semibold text-white">You</span>
+                                            </div>
+                                            <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                                              {msg.content}
+                                            </p>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        /* Assistant message with optional tool cards */
+                                        <>
+                                          {/* Inline tool cards - displayed before the message */}
+                                          {msg.thinking?.toolCalls && msg.thinking.toolCalls.length > 0 && (
+                                            <div className="ml-14 mb-2">
+                                              <InlineToolCallsList
+                                                tools={msg.thinking.toolCalls.map(tc => ({
+                                                  name: tc.name,
+                                                  status: tc.status,
+                                                  result: tc.result,
+                                                  error: tc.error,
+                                                }))}
+                                              />
+                                            </div>
+                                          )}
+                                          {/* Assistant message content */}
+                                          <div className="flex gap-4">
+                                            <div className="size-10 rounded-full bg-gradient-to-br from-violet-600 to-purple-700 flex items-center justify-center shrink-0 text-white font-semibold">
+                                              AI
+                                            </div>
+                                            <div className="flex-1 min-w-0">
+                                              <div className="flex items-baseline gap-2 mb-1">
+                                                <span className="font-semibold text-white">{selectedAgent.displayName}</span>
+                                              </div>
+                                              <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                                                {msg.content}
+                                              </p>
+                                            </div>
+                                          </div>
+                                        </>
+                                      )}
+                                    </div>
+                                  ))}
+                                </>
+                              )}
                             </div>
-                          </>
-                        )}
-                      </div>
-                    ))}
-                    {isLoading && (
+                          )}
+                        </div>
+                      );
+                    })}
+                    {/* Show loading indicator for today's session */}
+                    {isLoading && expandedDays.has(currentSession?.id || '') && (
                       <div className="flex items-center gap-2 text-gray-300 text-sm py-4">
                         <Loader2 className="size-4 animate-spin" />
                         <span>
@@ -714,8 +941,8 @@ export function AgentChannelPanel() {
 
           {/* Content */}
           <div className="flex-1 overflow-y-auto p-4">
-            {/* Clear Today Button (always shown if there's a session) */}
-            {currentSession && messages.length > 0 && (
+            {/* Clear Today Button (always shown if there's a session with messages) */}
+            {currentSession && loadedDays.some(d => d.sessionId === currentSession.id && d.messages.length > 0) && (
               <button
                 onClick={async () => {
                   if (!selectedAgent) return;
@@ -762,55 +989,83 @@ export function AgentChannelPanel() {
 
                 {/* Days List */}
                 <div className="space-y-2">
-                  {previousDays.map((day) => (
-                    <div
-                      key={day.sessionId}
-                      className="p-3 rounded-lg bg-[#383a40] border border-black/20"
-                    >
-                      <div className="flex items-start justify-between mb-2">
-                        <div className="flex-1">
-                          <div className="text-sm text-white font-medium mb-1">
-                            {formatSessionDate(day.sessionDate)}
-                          </div>
-                          <div className="text-xs text-gray-300">
-                            {day.messageCount} message{day.messageCount !== 1 ? 's' : ''}
-                          </div>
-                          {day.summary && (
-                            <div className="text-xs text-gray-400 mt-1 line-clamp-2">
-                              {day.summary}
-                            </div>
-                          )}
-                        </div>
-                        <button
-                          onClick={async () => {
-                            if (confirm(`Delete history for ${formatSessionDate(day.sessionDate)}?`)) {
-                              try {
-                                // Add 1 day to the date so we delete this day and everything before it
-                                const targetDate = new Date(day.sessionDate + 'T00:00:00');
-                                targetDate.setDate(targetDate.getDate() + 1);
-                                const beforeDate = targetDate.toISOString().split('T')[0];
+                  {previousDays.map((day) => {
+                    const isLoaded = loadedDays.find(d => d.sessionId === day.sessionId);
+                    const isExpanded = expandedDays.has(day.sessionId);
+                    const isDayLoading = loadingDays.has(day.sessionId);
 
-                                await invoke('delete_agent_history', {
-                                  agentId: selectedAgent?.id,
-                                  beforeDate: beforeDate
-                                });
-                                if (selectedAgent) {
-                                  await loadTodaySession(selectedAgent.id);
+                    return (
+                      <div
+                        key={day.sessionId}
+                        className={cn(
+                          "p-3 rounded-lg border border-black/20 transition-colors",
+                          isLoaded ? 'bg-[#404249]' : 'bg-[#383a40] hover:bg-[#404249]'
+                        )}
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          {/* Clickable area to load/expand day */}
+                          <button
+                            onClick={() => loadHistoricalDay(day)}
+                            className="flex-1 text-left"
+                            disabled={isDayLoading}
+                          >
+                            <div className="flex items-center gap-2 mb-1">
+                              {isDayLoading ? (
+                                <Loader2 className="size-3 text-gray-400 animate-spin" />
+                              ) : isLoaded && isExpanded ? (
+                                <ChevronDown className="size-3 text-gray-400" />
+                              ) : isLoaded ? (
+                                <ChevronRight className="size-3 text-gray-400" />
+                              ) : null}
+                              <div className="text-sm text-white font-medium">
+                                {formatSessionDate(day.sessionDate)}
+                              </div>
+                              {isLoaded && (
+                                <span className="text-xs text-violet-400">• Loaded</span>
+                              )}
+                            </div>
+                            <div className="text-xs text-gray-300">
+                              {day.messageCount} message{day.messageCount !== 1 ? 's' : ''}
+                            </div>
+                            {day.summary && (
+                              <div className="text-xs text-gray-400 mt-1 line-clamp-2">
+                                {day.summary}
+                              </div>
+                            )}
+                          </button>
+                          {/* Delete button */}
+                          <button
+                            onClick={async (e) => {
+                              e.stopPropagation();
+                              if (confirm(`Delete history for ${formatSessionDate(day.sessionDate)}?`)) {
+                                try {
+                                  // Add 1 day to the date so we delete this day and everything before it
+                                  const targetDate = new Date(day.sessionDate + 'T00:00:00');
+                                  targetDate.setDate(targetDate.getDate() + 1);
+                                  const beforeDate = targetDate.toISOString().split('T')[0];
+
+                                  await invoke('delete_agent_history', {
+                                    agentId: selectedAgent?.id,
+                                    beforeDate: beforeDate
+                                  });
+                                  if (selectedAgent) {
+                                    await loadTodaySession(selectedAgent.id);
+                                  }
+                                } catch (err) {
+                                  console.error('Failed to delete day:', err);
+                                  alert('Failed to delete: ' + (err as Error).message);
                                 }
-                              } catch (err) {
-                                console.error('Failed to delete day:', err);
-                                alert('Failed to delete: ' + (err as Error).message);
                               }
-                            }
-                          }}
-                          className="p-1.5 text-gray-400 hover:text-red-400 transition-colors rounded hover:bg-white/5"
-                          aria-label={`Delete ${formatSessionDate(day.sessionDate)}`}
-                        >
-                          <Trash2 className="size-4" />
-                        </button>
+                            }}
+                            className="p-1.5 text-gray-400 hover:text-red-400 transition-colors rounded hover:bg-white/5 shrink-0"
+                            aria-label={`Delete ${formatSessionDate(day.sessionDate)}`}
+                          >
+                            <Trash2 className="size-4" />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               </>
             )}
