@@ -640,3 +640,6 @@ fn is_binary_file(filename: &str) -> bool {
         false
     }
 }
+
+// ============================================================================
+// AGENT CREATOR INITIALIZATION

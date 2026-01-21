@@ -103,15 +103,6 @@ pub async fn execute_agent_stream(
         session_id: session_id.clone(),
     };
 
-    // Check cache first
-    {
-        let cache_read = EXECUTOR_CACHE.read().await;
-        if let Some(_executor) = cache_read.get(&cache_key) {
-            tracing::info!("Using cached executor for agent: {} (session: {})", agent_id, session_id);
-        }
-    }
-
-    // Try to get from cache, or create new executor
     let executor = {
         let cache_read = EXECUTOR_CACHE.read().await;
         cache_read.get(&cache_key).cloned()
@@ -122,7 +113,7 @@ pub async fn execute_agent_stream(
     } else {
         // Create new executor (cache miss)
         tracing::info!("Creating new executor for agent: {} (session: {})", agent_id, session_id);
-        let exec = Arc::new(create_zero_executor(&agent_id, Some(session_id.clone())).await?);
+        let exec = Arc::new(create_zero_executor(&agent_id, Some(session_id.clone()), None, None).await?);
 
         // Add to cache
         let mut cache_write = EXECUTOR_CACHE.write().await;
@@ -205,7 +196,7 @@ pub async fn execute_agent_stream(
 
                     // Check for request_input marker
                     if parsed.get("__request_input").and_then(|v| v.as_bool()).unwrap_or(false) {
-                        tracing::debug!("Detected request_input marker, emitting request_input event");
+                        tracing::info!("Detected request_input marker, emitting request_input event");
                         if let Err(e) = app.emit(&event_name, serde_json::json!({
                             "type": "request_input",
                             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -372,7 +363,7 @@ pub async fn create_agent_conversation(
 #[tauri::command]
 pub async fn get_or_create_conversation(
     agent_id: String,
-    conversation_id: Option<String>,
+    _conversation_id: Option<String>,
 ) -> Result<Value, String> {
     // The Agent Channel model doesn't use conversation_id
     // Always return today's session for the agent
@@ -408,6 +399,7 @@ pub async fn clear_executor_cache() -> Result<(), String> {
 }
 
 // ============================================================================
+// AGENT CREATOR COMMAND (Reserved System Agent)
 // SEARCH INDEXING HELPER
 // ============================================================================
 

@@ -63,6 +63,8 @@ pub fn run() {
             commands::delete_vault,
             commands::get_vault_info,
             commands::initialize_vault_system,
+            commands::get_vault_status,
+            commands::set_default_vault,
             // Deletion & Cache commands (NEW)
             commands::delete_session,
             commands::delete_agent_history_with_scope,

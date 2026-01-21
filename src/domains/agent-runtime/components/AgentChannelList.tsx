@@ -5,7 +5,7 @@
  */
 
 import type { Agent } from "@/shared/types";
-import { Hash, ChevronDown, ChevronRight, Plus, Bot } from "lucide-react";
+import { Hash, ChevronDown, ChevronRight, Bot } from "lucide-react";
 import { cn } from "@/shared/utils";
 import { memo } from "react";
 import { VaultSwitcher } from "@/features/vaults/VaultSwitcher";
@@ -14,7 +14,6 @@ interface AgentChannelListProps {
   agents: Agent[];
   selectedAgentId?: string;
   onSelectAgent: (agent: Agent) => void;
-  onCreateAgent?: () => void;
   onToggleVault?: () => void;
   showVaultSwitcher?: boolean;
   className?: string;
@@ -63,7 +62,6 @@ export const AgentChannelList = memo(function AgentChannelList({
   agents,
   selectedAgentId,
   onSelectAgent,
-  onCreateAgent,
   onToggleVault,
   showVaultSwitcher = false,
   className,
@@ -94,21 +92,12 @@ export const AgentChannelList = memo(function AgentChannelList({
         </div>
       )}
 
-      {/* Channel Count & Actions */}
-      <div className="px-2 py-3 flex items-center justify-between">
+      {/* Channel Count */}
+      <div className="px-2 py-3 flex items-center">
         <div className="flex items-center gap-2 px-2">
           <div className="text-xs text-gray-300 uppercase tracking-wide font-semibold" aria-live="polite">
             {agents.length} agent{agents.length !== 1 ? 's' : ''}
           </div>
-        </div>
-        <div className="flex items-center gap-1">
-          <button
-            onClick={onCreateAgent}
-            className="p-1 text-gray-300 hover:text-white transition-colors"
-            aria-label="Create new agent"
-          >
-            <Plus className="size-4" aria-hidden="true" />
-          </button>
         </div>
       </div>
 

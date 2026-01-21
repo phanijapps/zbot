@@ -375,7 +375,20 @@ impl ZeroAppExecutor {
                     // Convert event to stream event and emit it
                     let stream_event = ZeroAppStreamEvent::from_event(&event);
                     tracing::info!("Stream event: {:?}", std::mem::discriminant(&stream_event));
+
+                    // Check if we need to emit an additional Complete event after the Content event
+                    let needs_complete_event = event.turn_complete && matches!(stream_event, ZeroAppStreamEvent::Content { .. });
+
                     callback(stream_event);
+
+                    // If the event has turn_complete=true and we emitted a Content event,
+                    // also emit a Complete event so the frontend knows the turn is done
+                    if needs_complete_event {
+                        tracing::info!("Event has turn_complete=true, emitting additional Complete event");
+                        callback(ZeroAppStreamEvent::Complete {
+                            turn_complete: true,
+                        });
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Event error: {}", e);
@@ -593,6 +606,7 @@ impl ZeroAppStreamEvent {
                     Part::FunctionResponse { id, response } => {
                         // response is already a JSON string from the tool, no need to serialize again
                         tracing::info!("from_event: FunctionResponse id={}, response.len={}", id, response.len());
+
                         return Self::ToolResponse {
                             id: id.clone(),
                             response: response.clone(),
@@ -754,9 +768,17 @@ impl InvocationContext for ZeroInvocationContext {
 /// Create a zero-app executor from an agent ID and conversation ID
 ///
 /// This is the main entry point for creating executors in the Tauri app
+///
+/// # Arguments
+/// * `agent_id` - The ID of the agent to load
+/// * `conversation_id` - Optional conversation/session ID
+/// * `provider_id_override` - Optional override for the provider ID (instead of config)
+/// * `model_override` - Optional override for the model (instead of config)
 pub async fn create_zero_executor(
     agent_id: &str,
     conversation_id: Option<String>,
+    provider_id_override: Option<&str>,
+    model_override: Option<&str>,
 ) -> TResult<ZeroAppExecutor> {
     let dirs = Arc::new(AppDirs::get().map_err(|e| e.to_string())?);
 
@@ -776,7 +798,7 @@ pub async fn create_zero_executor(
 
     // Read AGENTS.md for system instruction
     let agents_md_file = agent_dir.join("AGENTS.md");
-    let system_instruction = if agents_md_file.exists() {
+    let mut system_instruction = if agents_md_file.exists() {
         std::fs::read_to_string(&agents_md_file)
             .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?
             .trim()
@@ -785,24 +807,70 @@ pub async fn create_zero_executor(
         String::new()
     };
 
-    // Override system_instruction with AGENTS.md content
+    // Load skills and append their content to the system instruction
+    let skills_dir = dirs.skills_dir.clone();
+    for skill_id in &agent_config.skills {
+        let skill_dir = skills_dir.join(skill_id);
+        let skill_md_file = skill_dir.join("SKILL.md");
+
+        if skill_md_file.exists() {
+            match std::fs::read_to_string(&skill_md_file) {
+                Ok(skill_content) => {
+                    // Parse and extract the content after frontmatter
+                    if let Some(pos) = skill_content.find("---") {
+                        let after_first_delim = &skill_content[pos + 3..];
+                        if let Some(pos2) = after_first_delim.find("---") {
+                            let skill_instructions = &after_first_delim[pos2 + 3..];
+                            system_instruction.push_str(&format!("\n\n## Skill: {}\n{}", skill_id, skill_instructions.trim()));
+                        } else {
+                            // No second delimiter, use everything after first
+                            system_instruction.push_str(&format!("\n\n## Skill: {}\n{}", skill_id, after_first_delim.trim()));
+                        }
+                    } else {
+                        // No frontmatter, use the whole file
+                        system_instruction.push_str(&format!("\n\n## Skill: {}\n{}", skill_id, skill_content.trim()));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read skill {}: {}", skill_id, e);
+                }
+            }
+        } else {
+            tracing::warn!("Skill not found: {}", skill_id);
+        }
+    }
+
+    // For agent-creator, inject available providers, skills, and MCPs into system instruction
+    if agent_id == "agent-creator" {
+        let available_context = load_available_context(&dirs).await.unwrap_or_default();
+        system_instruction.push_str(&available_context);
+    }
+
+    // Override system_instruction with AGENTS.md content + skills
     let agent_config = AgentYamlConfig {
         system_instruction: if system_instruction.is_empty() { None } else { Some(system_instruction) },
         ..agent_config
     };
 
-    // Load provider credentials
-    let provider_id = agent_config.provider_id.as_ref()
-        .ok_or_else(|| format!("Agent missing providerId"))?
-        .clone();
+    // Use provider override if provided, otherwise use config
+    let provider_id = provider_id_override
+        .map(|p| p.to_string())
+        .or_else(|| agent_config.provider_id.clone())
+        .ok_or_else(|| format!("Agent missing providerId"))?;
 
     let (api_key, base_url) = load_provider_credentials(&provider_id).await?;
+
+    // Use model override if provided, otherwise use config
+    let model = model_override
+        .map(|m| m.to_string())
+        .or_else(|| agent_config.model.clone())
+        .unwrap_or_else(|| "gpt-4".to_string());
 
     // Create LLM config
     let llm_config = LlmConfig {
         api_key,
         base_url: Some(base_url),
-        model: agent_config.model.clone().unwrap_or_else(|| "gpt-4".to_string()),
+        model,
         organization_id: None, // Optional: can be added to config if needed
         temperature: agent_config.temperature.map(|t| t as f32),
         max_tokens: agent_config.max_tokens,
@@ -851,6 +919,80 @@ async fn load_provider_credentials(provider_id: &str) -> TResult<(String, String
         .to_string();
 
     Ok((api_key, base_url))
+}
+
+/// Load available context (providers, skills, MCPs) for agent-creator
+async fn load_available_context(dirs: &AppDirs) -> TResult<String> {
+    let mut context = String::from("\n\n# Available Options\n\n");
+
+    // Load providers
+    let providers_file = dirs.config_dir.join("providers.json");
+    if providers_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&providers_file) {
+            if let Ok(providers) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                context.push_str("## Available Providers\n\n");
+                for provider in providers {
+                    let id = provider.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let name = provider.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    context.push_str(&format!("- **{}** (id: `{}`)\n", name, id));
+                }
+                context.push_str("\n");
+            }
+        }
+    }
+
+    // Load skills
+    let skills_dir = dirs.skills_dir.clone();
+    if skills_dir.exists() {
+        context.push_str("## Available Skills\n\n");
+        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_file = path.join("SKILL.md");
+                    if skill_file.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                            // Extract name from frontmatter
+                            let name = content.lines()
+                                .skip_while(|line| !line.starts_with("name:"))
+                                .next()
+                                .and_then(|line| line.split(':').nth(1))
+                                .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
+                                .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().to_string());
+
+                            let id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            context.push_str(&format!("- **{}** (id: `{}`)\n", name, id));
+                        }
+                    }
+                }
+            }
+            context.push_str("\n");
+        }
+    }
+
+    // Load MCP servers
+    let mcps_file = dirs.config_dir.join("mcps.json");
+    if mcps_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&mcps_file) {
+            let mcps: Vec<serde_json::Value> = if content.trim().starts_with('[') {
+                serde_json::from_str(&content).unwrap_or_default()
+            } else {
+                vec![serde_json::from_str(&content).unwrap_or_default()]
+            };
+
+            if !mcps.is_empty() {
+                context.push_str("## Available MCP Servers\n\n");
+                for mcp in mcps {
+                    let id = mcp.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let name = mcp.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    context.push_str(&format!("- **{}** (id: `{}`)\n", name, id));
+                }
+                context.push_str("\n");
+            }
+        }
+    }
+
+    Ok(context)
 }
 
 /// Load and start MCP servers from the config file

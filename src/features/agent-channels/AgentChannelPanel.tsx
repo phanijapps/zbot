@@ -191,11 +191,13 @@ export function AgentChannelPanel() {
 
   /**
    * Load all agents
+   * Note: agent-creator is filtered out as it's only accessible via the + button
    */
   const loadAgents = useCallback(async () => {
     try {
       const agentList = await listAgents();
-      setAgents(agentList);
+      // Filter out agent-creator from the list - it's only accessible via the + button
+      setAgents(agentList.filter(agent => agent.id !== "agent-creator"));
     } catch (err) {
       console.error("Failed to load agents:", err);
     }
