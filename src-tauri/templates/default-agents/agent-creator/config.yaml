@@ -1,0 +1,21 @@
+# Agent Creator Agent Configuration
+name: agent-creator
+displayName: Agent Creator
+description: AI assistant that helps you create new AI agents
+
+agentType: llm
+
+# Provider and model - will be overridden by user selection
+providerId: openai
+model: gpt-4o
+
+temperature: 0.7
+maxTokens: 4000
+thinkingEnabled: false
+
+# Only the zero-agent-creator skill can be used
+skills:
+  - zero-agent-creator
+
+# No MCPs needed for agent creation
+mcps: []
