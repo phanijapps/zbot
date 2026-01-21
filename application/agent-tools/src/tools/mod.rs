@@ -7,6 +7,7 @@ mod search;
 mod execution;
 mod ui;
 mod knowledge_graph;
+mod agent;
 
 use std::sync::Arc;
 
@@ -25,6 +26,7 @@ pub use knowledge_graph::{
     AddEntityTool,
     AddRelationshipTool,
 };
+pub use agent::CreateAgentTool;
 
 // ============================================================================
 // BUILT-IN TOOLS FACTORY
@@ -61,5 +63,7 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         Arc::new(GetEntityRelationshipsTool),
         Arc::new(AddEntityTool),
         Arc::new(AddRelationshipTool),
+        // Agent tools
+        Arc::new(CreateAgentTool::new(fs.clone())),
     ]
 }

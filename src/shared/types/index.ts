@@ -58,6 +58,15 @@ export interface VaultStorageInfo {
   skillsSize: number;
 }
 
+/** Status of the vault system for initialization */
+export interface VaultStatus {
+  registryExists: boolean;
+  hasVaults: boolean;
+  hasActiveVault: boolean;
+  activeVault: Vault | null;
+  vaults: Vault[];
+}
+
 // ============================================================================
 // DOMAIN: Conversations (Legacy)
 // ============================================================================

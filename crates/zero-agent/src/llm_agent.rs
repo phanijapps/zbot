@@ -65,7 +65,7 @@ impl LlmAgent {
 
         // Build tool definitions
         let tools = self.tools.tools().await.unwrap_or_default();
-        debug!("Available tools for {}: {}", self.name, tools.iter().map(|t| t.name().to_string()).collect::<Vec<_>>().join(", "));
+        info!("Available tools for {}: {} (total: {})", self.name, tools.iter().map(|t| t.name().to_string()).collect::<Vec<_>>().join(", "), tools.len());
         let tool_definitions: Vec<ToolDefinition> = tools
             .iter()
             .map(|tool| ToolDefinition {
@@ -74,7 +74,7 @@ impl LlmAgent {
                 parameters: tool.parameters_schema(),
             })
             .collect();
-        debug!("Tool definitions sent to LLM: {}", tool_definitions.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
+        info!("Tool definitions sent to LLM: {} (total: {})", tool_definitions.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "), tool_definitions.len());
 
         let mut request = LlmRequest::new();
         request.contents = all_contents;

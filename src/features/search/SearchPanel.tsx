@@ -68,7 +68,8 @@ export function SearchPanel({ onResultClick }: SearchPanelProps) {
     // Fetch agents
     invoke<Agent[]>("list_agents")
       .then((agentList) => {
-        setAgents(agentList.map(a => ({ id: a.id, name: a.name })));
+        // Filter out agent-creator - it's only accessible via + button in agent channels
+        setAgents(agentList.filter(a => a.id !== "agent-creator").map(a => ({ id: a.id, name: a.name })));
       })
       .catch((err) => {
         console.error("Failed to load agents:", err);

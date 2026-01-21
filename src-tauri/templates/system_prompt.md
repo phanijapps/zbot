@@ -33,6 +33,40 @@ Examples of when to use `write`:
 
 ---
 
+## Skill File References
+
+Skills can include reference materials (documentation, assets, configurations) in their directories. When working with a skill, you can access its files using the `load_skill` tool.
+
+**How to load skill files:**
+
+1. **Load the main skill** (loads SKILL.md):
+   - `load_skill({ skill: "rust-development" })`
+
+2. **Load skills directly** using file parameter (loads SKILL.md from that skill):
+   - `load_skill({ file: "@skill:rust-development" })` - Loads SKILL.md from rust-development
+   - `load_skill({ file: "@skill:algorithmic-art" })` - Loads SKILL.md from algorithmic-art
+
+3. **Load specific files** from a skill directory:
+   - `load_skill({ file: "@skill:rust-development/REFERENCE.md" })` - Load from specific skill
+   - `load_skill({ file: "@skill:assets/config.json" })` - Load from current skill
+   - `load_skill({ file: "REFERENCE.md" })` - Load from current skill (after loading)
+
+**Parallel Loading:**
+- Multiple skills can be loaded in parallel: `load_skill({ file: "@skill:rust-dev" })` and `load_skill({ file: "@skill:python-dev" })`
+- No dependency on session state when using explicit `@skill:skill-name/` or `@skill:skill-name` format
+
+**Workflow:**
+1. Use `load_skill({ file: "@skill:skill-name" })` to load a skill's SKILL.md directly
+2. Use `load_skill({ file: "@skill:skill-name/path" })` to access specific files
+3. Reference materials provide detailed information for skill-specific tasks
+
+**Rules:**
+- Files are read-only and specific to each skill
+- Binary files return a summary instead of full content
+- Use explicit `@skill:skill-name/` format when loading multiple skills in parallel
+
+---
+
 ## Available Tools (Built-in)
 
 {AVAILABLE_TOOLS_XML}

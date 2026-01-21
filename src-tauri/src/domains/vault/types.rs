@@ -115,10 +115,13 @@ pub struct VaultInfo {
     /// The vault
     pub vault: Vault,
     /// Number of agents in the vault
+    #[serde(rename = "agentCount")]
     pub agent_count: usize,
     /// Number of skills in the vault
+    #[serde(rename = "skillCount")]
     pub skill_count: usize,
     /// Storage information
+    #[serde(rename = "storageInfo")]
     pub storage_info: StorageInfo,
 }
 
@@ -126,12 +129,16 @@ pub struct VaultInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StorageInfo {
     /// Total used space in bytes
+    #[serde(rename = "totalUsed")]
     pub total_used: u64,
     /// Database size in bytes
+    #[serde(rename = "databaseSize")]
     pub database_size: u64,
     /// Agents directory size in bytes
+    #[serde(rename = "agentsSize")]
     pub agents_size: u64,
     /// Skills directory size in bytes
+    #[serde(rename = "skillsSize")]
     pub skills_size: u64,
 }
 
@@ -141,5 +148,36 @@ impl Default for VaultRegistry {
             active_vault_id: String::new(),
             vaults: Vec::new(),
         }
+    }
+}
+
+/// Status of the vault system for initialization
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultStatus {
+    /// Whether the vault registry exists
+    #[serde(rename = "registryExists")]
+    pub registry_exists: bool,
+    /// Whether there are any vaults
+    #[serde(rename = "hasVaults")]
+    pub has_vaults: bool,
+    /// Whether there's a valid active vault
+    #[serde(rename = "hasActiveVault")]
+    pub has_active_vault: bool,
+    /// The active vault if valid
+    #[serde(rename = "activeVault")]
+    pub active_vault: Option<Vault>,
+    /// All available vaults
+    pub vaults: Vec<Vault>,
+}
+
+impl VaultStatus {
+    /// Check if we need to show vault selector
+    pub fn needs_vault_selector(&self) -> bool {
+        !self.has_active_vault || self.active_vault.is_none()
+    }
+
+    /// Check if we need to show vault creation flow
+    pub fn needs_vault_creation(&self) -> bool {
+        !self.has_vaults
     }
 }

@@ -5,8 +5,8 @@
 
 use crate::domains::vault::{
     manager::{self, create_default_vault_configs, expand_tilde, generate_vault_id, validate_vault_path, set_active_vault_path},
-    registry::{self, initialize_default_vault},
-    types::{CreateVaultRequest, StorageInfo, Vault, VaultInfo, VaultRegistry},
+    registry::{self, initialize_default_vault, vault_registry_exists},
+    types::{CreateVaultRequest, StorageInfo, Vault, VaultInfo, VaultRegistry, VaultStatus},
 };
 use crate::settings::AppDirs;
 use std::path::PathBuf;
@@ -221,4 +221,68 @@ pub async fn initialize_vault_system() -> Result<Vault, String> {
     } else {
         Err("No active vault after initialization".to_string())
     }
+}
+
+/// Get the current status of the vault system
+/// Returns information about vault registry, available vaults, and active vault
+#[tauri::command]
+pub async fn get_vault_status() -> Result<VaultStatus, String> {
+    let registry_exists = vault_registry_exists();
+    let registry = registry::load_vault_registry()
+        .unwrap_or_else(|_| VaultRegistry::default());
+
+    let has_vaults = !registry.vaults.is_empty();
+
+    // Get active vault (validating it exists in the vaults list)
+    let active_vault = if !registry.active_vault_id.is_empty() {
+        registry.vaults.iter()
+            .find(|v| v.id == registry.active_vault_id)
+            .cloned()
+    } else {
+        None
+    };
+
+    let has_active_vault = active_vault.is_some();
+
+    Ok(VaultStatus {
+        registry_exists,
+        has_vaults,
+        has_active_vault,
+        active_vault,
+        vaults: registry.vaults,
+    })
+}
+
+/// Set a vault as the default (active) vault
+/// This updates both the is_default flag and the active_vault_id
+#[tauri::command]
+pub async fn set_default_vault(vault_id: String, app: AppHandle) -> Result<Vault, String> {
+    let mut registry = registry::load_vault_registry()
+        .map_err(|e| format!("Failed to load vault registry: {}", e))?;
+
+    // Find the vault
+    let vault = registry.vaults.iter()
+        .find(|v| v.id == vault_id)
+        .ok_or_else(|| format!("Vault not found: {}", vault_id))?
+        .clone();
+
+    // Update active_vault_id
+    registry.set_active(vault_id.clone())
+        .map_err(|e| e.to_string())?;
+
+    // Update last_accessed time
+    registry.update_access_time(&vault_id);
+
+    // Save registry
+    registry::save_vault_registry(&registry)
+        .map_err(|e| format!("Failed to save vault registry: {}", e))?;
+
+    // Update global state
+    set_active_vault_path(vault.path()).await;
+
+    // Emit event for frontend to reload
+    app.emit("vault-changed", &vault)
+        .map_err(|e| format!("Failed to emit vault-changed event: {}", e))?;
+
+    Ok(vault)
 }

@@ -30,7 +30,8 @@ export function AgentsPanel() {
     setLoading(true);
     try {
       const loaded = await agentService.listAgents();
-      setAgents(loaded);
+      // Filter out agent-creator - it's only accessible via + button in agent channels
+      setAgents(loaded.filter(agent => agent.id !== "agent-creator"));
     } catch (error) {
       console.error("Failed to load agents:", error);
     } finally {

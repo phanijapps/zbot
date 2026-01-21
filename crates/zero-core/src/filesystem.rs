@@ -18,6 +18,9 @@ pub trait FileSystemContext: Send + Sync {
     /// Get the skills directory
     fn skills_dir(&self) -> Option<PathBuf>;
 
+    /// Get the agents directory
+    fn agents_dir(&self) -> Option<PathBuf>;
+
     /// Get the Python executable path
     fn python_executable(&self) -> Option<PathBuf>;
 }
@@ -37,6 +40,10 @@ impl FileSystemContext for NoFileSystemContext {
     }
 
     fn skills_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn agents_dir(&self) -> Option<PathBuf> {
         None
     }
 

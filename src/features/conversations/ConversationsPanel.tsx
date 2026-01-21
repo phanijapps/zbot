@@ -127,16 +127,20 @@ export function ConversationsPanel() {
 
   /**
    * Load all agents
+   * Note: agent-creator is filtered out as it's only accessible via the + button
    */
   const loadAgents = async () => {
     try {
       const agentList = await listAgents();
+      // Filter out agent-creator - it's only accessible via + button in agent channels
       setAgents(
-        agentList.map((a) => ({
-          id: a.id,
-          name: a.name,
-          displayName: a.displayName,
-        }))
+        agentList
+          .filter(agent => agent.id !== "agent-creator")
+          .map((a) => ({
+            id: a.id,
+            name: a.name,
+            displayName: a.displayName,
+          }))
       );
     } catch (error) {
       console.error("Failed to load agents:", error);

@@ -52,6 +52,10 @@ impl FileSystemContext for TauriFileSystemContext {
         Some(self.dirs.skills_dir.clone())
     }
 
+    fn agents_dir(&self) -> Option<PathBuf> {
+        Some(self.dirs.agents_dir.clone())
+    }
+
     fn python_executable(&self) -> Option<PathBuf> {
         // Use Python from venv if available
         let python_path = if cfg!(target_os = "windows") {
