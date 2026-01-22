@@ -80,6 +80,15 @@ agentzero/
 │   ├── known_issues.md        # Known issues tracking
 │   └── product.md             # Product definition
 └── src-tauri/                 # Tauri application
+    ├── templates/             # Default agents and skills templates
+    │   ├── default-agents/    # Pre-configured agents (shipped with app)
+    │   │   └── agent-creator/ # Agent Creator agent
+    │   │       ├── config.yaml # Agent configuration
+    │   │       └── AGENTS.md   # Agent instructions
+    │   ├── default-skills/     # Built-in skills
+    │   │   └── zero-agent-creator/
+    │   │       └── SKILL.md    # Skill definition
+    │   └── system_prompt.md    # System prompt template for all agents
     └── src/
         ├── commands/          # Tauri IPC commands
         └── domains/           # Domain layer (agent_runtime, conversation_runtime)
@@ -537,8 +546,16 @@ Application metadata, window config, security settings.
 
 ## Known Issues
 
-See `memory-bank/known_issues.md` for tracked issues, including:
-- Write tool path resolution issue
+See `memory-bank/known_issues.md` for tracked issues.
+
+### Recently Resolved (January 2025)
+- **Write tool path resolution issue** - Fixed with state-based conversation ID propagation
+- **__awaiting_input__ error** - Fixed by removing special AwaitingInput handling
+- **Conversation history not loading** - Fixed useEffect dependency
+- **Agent Creator request_input issue** - Workaround: agent now works conversationally without request_input
+
+### Current Known Issues
+- Agent Creator request_input requires framework-level support for pausing execution (see known_issues.md for details)
 
 ## Related Documentation
 

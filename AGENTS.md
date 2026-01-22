@@ -1,6 +1,24 @@
 # Agent Zero
 Agent Zero is an Agent UI similar to Claude Desktop. The difference being, it can be used to connect to any OpenAI based APIs and be used to build agents, skills and connect to tools for daily use.
 
+## Recent Updates (January 2025)
+
+### Agent Creator
+- **Simplified Architecture**: Agent-creator now works as a regular agent using the standard workflow
+- No special execution path - uses existing `execute_agent_stream` command
+- Template files located in `src-tauri/templates/default-agents/agent-creator/`
+- Users chat directly with agent-creator to create new agents conversationally
+
+### System Prompt Improvements
+- **Write vs Edit Guidance**: Agents now intelligently choose between write (small content) and edit (large content) tools
+- **Error Handling**: Agents adapt their strategy when tools fail (e.g., switch to edit chunks on token limit errors)
+- **Lazy Skill Loading**: Only skill name/description injected initially; full content loaded on-demand via `load_skill` tool
+- **Conversation History Fix**: Day's conversation history now loads correctly when agent is selected
+
+### Bug Fixes
+- Resolved `__awaiting_input__` error by removing special AwaitingInput handling
+- Fixed conversation loading bug by adding missing useEffect dependency
+
 ## Technology Stack
 Read "Technology Stack" section in `memory-bank/architecture.md`
 

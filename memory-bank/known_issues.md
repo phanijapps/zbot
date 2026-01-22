@@ -2,6 +2,64 @@
 
 This document tracks known issues that need to be addressed.
 
+## ~~__awaiting_input__ Execution Error~~ ✅ RESOLVED
+
+**Status:** Resolved
+**Priority:** High
+**Component:** `executor_v2.rs` / `agents_runtime.rs`
+**Resolution Date:** 2025-01-21
+
+### Description
+
+After removing special agent-creator handling, agent execution failed with:
+```
+Error: Agent execution failed: __awaiting_input__
+```
+
+### Root Cause
+
+Leftover `AwaitingInput` variant and handling code remained in the executor after removing agent-creator special execution path.
+
+### Solution
+
+Removed all AwaitingInput-related code:
+- Removed `AwaitingInput` variant from `ZeroAppStreamEvent` enum
+- Removed AwaitingInput detection in `run_stream`
+- Removed AwaitingInput event handling from `agents_runtime.rs`
+
+### Changes Made
+
+- `src-tauri/src/domains/agent_runtime/executor_v2.rs` - Removed AwaitingInput variant and detection
+- `src-tauri/src/commands/agents_runtime.rs` - Removed AwaitingInput event handling
+
+---
+
+## ~~Conversation History Not Loading on Agent Selection~~ ✅ RESOLVED
+
+**Status:** Resolved
+**Priority:** Medium
+**Component:** Frontend / `AgentChannelPanel.tsx`
+**Resolution Date:** 2025-01-21
+
+### Description
+
+When selecting an agent, the day's conversation history wasn't loading automatically.
+
+### Root Cause
+
+`loadTodaySession` function was missing from the useEffect dependency array in `AgentChannelPanel.tsx`, causing a stale closure issue.
+
+### Solution
+
+Added `loadTodaySession` to the useEffect dependency array:
+```typescript
+}, [selectedAgent, loadTodaySession]);
+```
+
+### Changes Made
+
+- `src/features/agent-channels/AgentChannelPanel.tsx` - Added missing dependency
+
 ## ~~Write Tool Path Resolution Issue~~ ✅ RESOLVED
 
 **Status:** Resolved
@@ -70,8 +128,8 @@ Implemented **state-based conversation ID propagation**:
 
 ## Agent Creator request_input Tool Response Format Issue
 
-**Status:** Open
-**Priority:** High
+**Status:** Workaround Implemented
+**Priority:** Medium
 **Component:** `agent-creator` / OpenAI API
 **Reported Date:** 2025-01-21
 
@@ -93,9 +151,14 @@ The zero-agent framework doesn't natively support "pausing" for user input. When
 
 OpenAI's API requires that after a `tool_calls` message, the next message MUST be a `tool` response with matching `tool_call_id`.
 
-### Current Workaround
+### Current Workaround ✅
 
-The agent-creator instructions have been updated to work conversationally without using `request_input`. Users should provide information through regular chat messages instead of forms.
+**Implemented January 2025**: The agent-creator instructions have been updated to work conversationally without using `request_input`. Users provide information through regular chat messages instead of forms.
+
+**Agent-creator is now a regular agent** using the standard workflow:
+- Located in `src-tauri/templates/default-agents/agent-creator/`
+- Uses `zero-agent-creator` skill for agent creation tools
+- No special execution path required
 
 ### Potential Solutions
 
@@ -118,9 +181,10 @@ The agent-creator instructions have been updated to work conversationally withou
 
 - `src-tauri/src/commands/agents_runtime.rs` - Agent execution
 - `src-tauri/src/domains/agent_runtime/executor_v2.rs` - Executor implementation
-- `src-tauri/templates/default-agents/agent-creator/AGENTS.md` - Agent instructions
-- `src/features/agents/AgentCreatorDialog.tsx` - Frontend UI
+- `src-tauri/templates/default-agents/agent-creator/AGENTS.md` - Agent instructions (conversational approach)
+- `src-tauri/templates/default-agents/agent-creator/config.yaml` - Agent configuration
+- `src-tauri/templates/default-skills/zero-agent-creator/SKILL.md` - Skill with agent creation tools
 
 ### Notes
 
-The executor cache (`EXECUTOR_CACHE`) maintains session across multiple message turns, allowing multi-turn conversations. The issue is specifically with how `request_input` form submissions integrate with the conversation history.
+The executor cache (`EXECUTOR_CACHE`) maintains session across multiple message turns, allowing multi-turn conversations. The current conversational approach works well without requiring framework-level changes for pausing execution.
