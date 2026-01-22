@@ -126,7 +126,7 @@ export function AgentChannelPanel() {
       setExpandedDays(new Set());
     }
     resetThinking();
-  }, [selectedAgent]);
+  }, [selectedAgent, loadTodaySession]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
