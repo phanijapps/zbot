@@ -807,7 +807,8 @@ pub async fn create_zero_executor(
         String::new()
     };
 
-    // Load skills and append their content to the system instruction
+    // Load skills and append their name/description to the system instruction
+    // Full skill content is lazy-loaded via load_skill tool when needed
     let skills_dir = dirs.skills_dir.clone();
     for skill_id in &agent_config.skills {
         let skill_dir = skills_dir.join(skill_id);
@@ -816,19 +817,14 @@ pub async fn create_zero_executor(
         if skill_md_file.exists() {
             match std::fs::read_to_string(&skill_md_file) {
                 Ok(skill_content) => {
-                    // Parse and extract the content after frontmatter
+                    // Parse the YAML frontmatter to extract name and description
                     if let Some(pos) = skill_content.find("---") {
-                        let after_first_delim = &skill_content[pos + 3..];
-                        if let Some(pos2) = after_first_delim.find("---") {
-                            let skill_instructions = &after_first_delim[pos2 + 3..];
-                            system_instruction.push_str(&format!("\n\n## Skill: {}\n{}", skill_id, skill_instructions.trim()));
-                        } else {
-                            // No second delimiter, use everything after first
-                            system_instruction.push_str(&format!("\n\n## Skill: {}\n{}", skill_id, after_first_delim.trim()));
-                        }
+                        let frontmatter = &skill_content[0..pos].trim();
+                        // Just add skill name/description - full content is lazy-loaded
+                        system_instruction.push_str(&format!("\n\n## Available Skill: {}\nYAML: {}", skill_id, frontmatter.trim()));
                     } else {
-                        // No frontmatter, use the whole file
-                        system_instruction.push_str(&format!("\n\n## Skill: {}\n{}", skill_id, skill_content.trim()));
+                        // No frontmatter, just mention the skill exists
+                        system_instruction.push_str(&format!("\n\n## Available Skill: {}\n(Use load_skill to load this skill)", skill_id));
                     }
                 }
                 Err(e) => {

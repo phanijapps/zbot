@@ -110,7 +110,7 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file. Creates parent directories automatically. Use 'outputs/' prefix for files that should be accessible via browser."
+        "Write content to a file. Creates parent directories automatically."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -119,7 +119,7 @@ impl Tool for WriteTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to write. Use 'outputs/' prefix for browser-accessible files."
+                    "description": "Path where the file should be created."
                 },
                 "content": {
                     "type": "string",
