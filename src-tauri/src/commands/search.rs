@@ -84,7 +84,7 @@ pub async fn index_messages(docs: Vec<IndexedDocument>) -> Result<(), String> {
 pub async fn rebuild_search_index() -> Result<String, String> {
     use crate::settings::AppDirs;
 
-    let mut guard = SEARCH_MANAGER.lock().await;
+    let guard = SEARCH_MANAGER.lock().await;
     let manager = guard
         .as_ref()
         .ok_or("Search index not initialized.")?;

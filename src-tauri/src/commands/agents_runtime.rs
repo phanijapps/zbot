@@ -191,7 +191,7 @@ pub async fn execute_agent_stream(
                         })) {
                             eprintln!("Failed to emit show_content event to frontend: {}", e);
                         }
-                        return;
+                        // Don't return - continue to emit tool_result so the UI knows the tool completed
                     }
 
                     // Check for request_input marker
@@ -209,7 +209,7 @@ pub async fn execute_agent_stream(
                         })) {
                             eprintln!("Failed to emit request_input event to frontend: {}", e);
                         }
-                        return;
+                        // Don't return - continue to emit tool_result so the UI knows the tool completed
                     }
                 } else {
                     tracing::debug!("Failed to parse tool response as JSON: {}", response.chars().take(200).collect::<String>());

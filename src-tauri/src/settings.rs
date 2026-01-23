@@ -504,29 +504,15 @@ impl AppDirs {
     }
 
     /// Create the directory structure for a new agent
-    /// Creates: agents_data/{agent-id}/attachments/, documents/, knowledge_graph/, archive/
+    /// Creates the base agent data directory only.
+    /// Subdirectories (attachments/, documents/, etc.) are created by tools as needed.
     pub fn create_agent_data_dirs(&self, agent_id: &str) -> Result<()> {
         let agent_dir = self.agent_data_dir(agent_id);
 
-        // Create main agent data directory
+        // Create main agent data directory only
+        // Subdirectories will be created by tools when writing files
         fs::create_dir_all(&agent_dir)
             .context("Failed to create agent data directory")?;
-
-        // Create attachments directory
-        fs::create_dir_all(self.agent_attachments_dir(agent_id))
-            .context("Failed to create agent attachments directory")?;
-
-        // Create documents directory
-        fs::create_dir_all(self.agent_documents_dir(agent_id))
-            .context("Failed to create agent documents directory")?;
-
-        // Create knowledge graph directory
-        fs::create_dir_all(self.agent_knowledge_graph_dir(agent_id))
-            .context("Failed to create agent knowledge graph directory")?;
-
-        // Create archive directory
-        fs::create_dir_all(self.agent_archive_dir(agent_id))
-            .context("Failed to create agent archive directory")?;
 
         Ok(())
     }

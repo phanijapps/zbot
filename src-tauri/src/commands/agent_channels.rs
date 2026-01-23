@@ -12,6 +12,10 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use std::path::PathBuf;
 
+// Import zero_app types for session loading
+use zero_app::{MutexSession, Content};
+use zero_core::Part;
+
 // ============================================================================
 // TYPES
 // ============================================================================
@@ -210,6 +214,17 @@ fn initialize_schema(conn: &Connection) -> Result<(), String> {
         )",
         [],
     ).map_err(|e| format!("Failed to create kg_relationships table: {}", e))?;
+
+    // Create session_state table for persisting agent session state
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS session_state (
+            agent_id TEXT PRIMARY KEY,
+            state_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        )",
+        [],
+    ).map_err(|e| format!("Failed to create session_state table: {}", e))?;
 
     Ok(())
 }
@@ -665,6 +680,130 @@ impl DailySessionRepository for SqliteSessionRepository {
                 })
             }
         }
+    }
+}
+
+// ============================================================================
+// SESSION STATE PERSISTENCE (Agent Memory)
+// ============================================================================
+
+impl SqliteSessionRepository {
+    /// Load session state for an agent from SQLite
+    pub async fn load_session_state(&self, agent_id: &str) -> Result<Option<std::collections::HashMap<String, serde_json::Value>>, String> {
+        let conn = self.conn.lock().await;
+
+        let mut stmt = conn.prepare(
+            "SELECT state_json FROM session_state WHERE agent_id = ?1"
+        ).map_err(|e| format!("Failed to prepare query: {}", e))?;
+
+        let result = stmt.query_row([agent_id], |row| {
+            let state_json: String = row.get(0)?;
+            Ok(state_json)
+        });
+
+        match result {
+            Ok(json_str) => {
+                let state: std::collections::HashMap<String, serde_json::Value> = serde_json::from_str(&json_str)
+                    .map_err(|e| format!("Failed to parse session state JSON: {}", e))?;
+                Ok(Some(state))
+            }
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(format!("Database error: {}", e))
+        }
+    }
+
+    /// Save session state for an agent to SQLite
+    pub async fn save_session_state(&self, agent_id: &str, state: &std::collections::HashMap<String, serde_json::Value>) -> Result<(), String> {
+        let state_json = serde_json::to_string(state)
+            .map_err(|e| format!("Failed to serialize session state: {}", e))?;
+
+        let conn = self.conn.lock().await;
+        let now = Utc::now().to_rfc3339();
+
+        conn.execute(
+            "INSERT OR REPLACE INTO session_state (agent_id, state_json, updated_at)
+             VALUES (?1, ?2, ?3)",
+            params![agent_id, &state_json, &now],
+        ).map_err(|e| format!("Failed to save session state: {}", e))?;
+
+        Ok(())
+    }
+
+    /// Load conversation history for an agent's today session and populate a session
+    pub async fn load_conversation_history_into_session(
+        &self,
+        agent_id: &str,
+        session: &MutexSession,
+    ) -> Result<usize, String> {
+        // Get today's session ID
+        let today = Utc::now().format("%Y-%m-%d").to_string();
+        let session_id = daily_sessions::DailySession::generate_id(agent_id, &today);
+
+        // Load messages from SQLite
+        let messages = self.get_session_messages(&session_id).await
+            .map_err(|e| format!("Failed to load session messages: {}", e))?;
+
+        // Convert messages to Content and add to session
+        let mut count = 0;
+        if let Ok(mut sess) = session.0.lock() {
+            for msg in messages {
+                let mut parts = Vec::new();
+
+                // Add text part
+                parts.push(Part::Text { text: msg.content });
+
+                // Add tool calls if present
+                if let Some(tool_calls) = &msg.tool_calls {
+                    if let Some(calls_array) = tool_calls.as_array() {
+                        for call in calls_array {
+                            if let (Some(id), Some(name), Some(args)) = (
+                                call.get("id").and_then(|v| v.as_str()),
+                                call.get("name").and_then(|v| v.as_str()),
+                                call.get("arguments"),
+                            ) {
+                                parts.push(Part::FunctionCall {
+                                    id: Some(id.to_string()),
+                                    name: name.to_string(),
+                                    args: args.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
+
+                // Add tool results if present
+                if let Some(tool_results) = &msg.tool_results {
+                    if let Some(results_array) = tool_results.as_array() {
+                        for result in results_array {
+                            if let (Some(id), Some(output)) = (
+                                result.get("tool_call_id").and_then(|v| v.as_str()),
+                                result.get("output"),
+                            ) {
+                                let response = if let Some(s) = output.as_str() {
+                                    s.to_string()
+                                } else {
+                                    output.to_string()
+                                };
+                                parts.push(Part::FunctionResponse {
+                                    id: id.to_string(),
+                                    response,
+                                });
+                            }
+                        }
+                    }
+                }
+
+                let content = Content {
+                    role: msg.role,
+                    parts,
+                };
+
+                sess.add_content(content);
+                count += 1;
+            }
+        }
+
+        Ok(count)
     }
 }
 

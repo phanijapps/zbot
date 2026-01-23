@@ -56,6 +56,10 @@ impl FileSystemContext for TauriFileSystemContext {
         Some(self.dirs.agents_dir.clone())
     }
 
+    fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf> {
+        Some(self.dirs.agents_data_dir.join(agent_id))
+    }
+
     fn python_executable(&self) -> Option<PathBuf> {
         // Use Python from venv if available
         let python_path = if cfg!(target_os = "windows") {

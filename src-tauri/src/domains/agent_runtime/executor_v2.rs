@@ -20,6 +20,7 @@ use crate::domains::agent_runtime::{
     McpManager,
     state_keys,
 };
+use crate::commands::agent_channels::SqliteSessionRepository;
 use agent_tools::builtin_tools_with_fs;
 use serde_json::json;
 
@@ -262,30 +263,68 @@ impl ZeroAppExecutor {
             "user".to_string(),
         ));
 
+        // Load conversation history and session state from SQLite
+        let db_path = dirs.agent_channels_db_path();
+        let repo = SqliteSessionRepository::new(db_path.clone())
+            .map_err(|e| format!("Failed to create session repository: {}", e))?;
+
+        // Load session state first (this contains things the agent learned)
+        if let Ok(Some(saved_state)) = repo.load_session_state(&config.agent_id).await {
+            tracing::info!("Loading saved session state for agent: {} ({} keys)",
+                config.agent_id, saved_state.len());
+
+            if let Ok(mut session) = session.lock().map_err(|e| format!("Session lock error: {}", e)) {
+                // Merge saved state into session state
+                for (key, value) in saved_state {
+                    session.state_mut().set(key, value);
+                }
+            }
+        } else {
+            tracing::info!("No saved session state found for agent: {}", config.agent_id);
+        }
+
+        // Load conversation history from today's session
+        match repo.load_conversation_history_into_session(&config.agent_id, &session).await {
+            Ok(count) => {
+                tracing::info!("Loaded {} messages from history for agent: {}", count, config.agent_id);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load conversation history: {}", e);
+            }
+        }
+
         // Set conversation_id in session state so tools can access it
         {
             let mut session = session.lock().map_err(|e| format!("Session lock error: {}", e))?;
-            session.state_mut().set(
-                state_keys::state_keys::CONVERSATION_ID.to_string(),
-                json!(conversation_id),
-            );
-            // Also set agent_id and provider_id for tool access
-            session.state_mut().set(
-                state_keys::state_keys::AGENT_ID.to_string(),
-                json!(config.agent_id),
-            );
-            session.state_mut().set(
-                state_keys::state_keys::PROVIDER_ID.to_string(),
-                json!(config.provider_id),
-            );
-            // Set db_path for knowledge graph tools
-            let db_path = dirs.agent_channels_db_path().to_string_lossy().to_string();
+            // Only set if not already in state (don't override loaded state)
+            if session.state().get(state_keys::state_keys::CONVERSATION_ID).is_none() {
+                session.state_mut().set(
+                    state_keys::state_keys::CONVERSATION_ID.to_string(),
+                    json!(conversation_id),
+                );
+            }
+            // Only set if not already in state (don't override loaded state)
+            if session.state().get(state_keys::state_keys::AGENT_ID).is_none() {
+                session.state_mut().set(
+                    state_keys::state_keys::AGENT_ID.to_string(),
+                    json!(config.agent_id),
+                );
+            }
+            // Only set if not already in state (don't override loaded state)
+            if session.state().get(state_keys::state_keys::PROVIDER_ID).is_none() {
+                session.state_mut().set(
+                    state_keys::state_keys::PROVIDER_ID.to_string(),
+                    json!(config.provider_id),
+                );
+            }
+            // Set db_path for knowledge graph tools (always set, not in saved state)
+            let db_path_str = db_path.to_string_lossy().to_string();
             session.state_mut().set(
                 state_keys::state_keys::DB_PATH.to_string(),
-                json!(db_path),
+                json!(db_path_str),
             );
-            tracing::info!("Set session state: conversation_id={}, agent_id={}, provider_id={}, db_path={}",
-                conversation_id, config.agent_id, config.provider_id, db_path);
+            tracing::info!("Session ready: conversation_id={}, agent_id={}, provider_id={}",
+                conversation_id, config.agent_id, config.provider_id);
         }
 
         // Create middleware executor with minimal pipeline
@@ -588,7 +627,13 @@ impl ZeroAppStreamEvent {
 
                 match part {
                     Part::Text { text } => {
-                        tracing::info!("from_event: Text part with text.len()={}, text='{}'", text.len(), text);
+                        // Truncate text in logs to avoid spamming console with full prompts/responses
+                        let preview = if text.len() > 100 {
+                            format!("{}... ({} chars total)", &text[..100], text.len())
+                        } else {
+                            format!("{} ({} chars)", text, text.len())
+                        };
+                        tracing::info!("from_event: Text part with text='{}'", preview);
                         return Self::Content {
                             delta: text.clone(),
                         };

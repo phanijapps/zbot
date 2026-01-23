@@ -4,7 +4,6 @@
 // ============================================================================
 
 use std::sync::Arc;
-use std::path::PathBuf;
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -59,7 +58,12 @@ impl Tool for ReadTool {
         let offset = args.get("offset").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
         let limit = args.get("limit").and_then(|v| v.as_u64());
 
-        tracing::debug!("Reading file: {} (offset: {}, limit: {:?})", path, offset, limit);
+        tracing::debug!(
+            file = %file!(),
+            line = %line!(),
+            "Reading file: {} (offset: {}, limit: {:?})",
+            path, offset, limit
+        );
 
         let content = std::fs::read_to_string(path)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read file: {}", e)))?;
@@ -110,7 +114,9 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file. Creates parent directories automatically."
+        "Write content to a file in your agent's data directory. Creates parent directories automatically. \
+        Use subdirectories like 'outputs/', 'documents/', 'images/', etc. to organize files. \
+        Example: 'outputs/comic.html' writes to {vault}/agent_data/{agent_id}/outputs/comic.html"
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -119,7 +125,7 @@ impl Tool for WriteTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path where the file should be created."
+                    "description": "Relative path for the file. Will be written under agent_data/{agent_id}/. Use subdirectories like 'outputs/', 'documents/', etc."
                 },
                 "content": {
                     "type": "string",
@@ -136,16 +142,25 @@ impl Tool for WriteTool {
             let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
             let truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
             return Err(zero_core::ZeroError::Tool(format!(
-                "Tool call failed ({}): {}{}",
+                "{}: {}",
                 error_type,
-                message,
-                if truncated { " - The LLM response was truncated. Try increasing max_tokens or reducing content size." } else { "" }
+                message
             )));
         }
 
         let path = args.get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
+
+        // Extract filename for logging
+        let filename = path.rsplit('/').next().unwrap_or(path);
+
+        tracing::info!(
+            file = %file!(),
+            line = %line!(),
+            "WRITE tool called: filename='{}', requested_path='{}'",
+            filename, path
+        );
 
         let content = args.get("content")
             .and_then(|v| v.as_str())
@@ -154,44 +169,38 @@ impl Tool for WriteTool {
         // Security: Reject paths with parent directory components
         if path.contains("..") {
             return Err(zero_core::ZeroError::Tool(
-                "Path cannot contain '..' for security reasons. Files must be written within the conversation directory.".to_string()
+                "Path cannot contain '..' for security reasons.".to_string()
             ));
         }
 
         // Security: Reject absolute paths
         if path.starts_with('/') || path.starts_with('\\') {
             return Err(zero_core::ZeroError::Tool(
-                "Absolute paths are not allowed. Use a relative path within the conversation directory.".to_string()
+                "Absolute paths are not allowed. Use a relative path within the agent data directory.".to_string()
             ));
         }
 
-        // Get conversation_id from session state
-        let conv_id = ctx.get_state("app:conversation_id")
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
-        tracing::info!("Writing file: path='{}' ({} bytes), conversation_id={:?}", path, content.len(), conv_id);
+        // Get agent_id from session state (required for all writes)
+        let agent_id = ctx.get_state("app:agent_id")
+            .and_then(|v| v.as_str().map(|s| s.to_owned()))
+            .ok_or_else(|| zero_core::ZeroError::Tool(
+                "Agent ID not found in state. Cannot write file.".to_string()
+            ))?;
 
-        // Handle outputs/ prefix
-        let final_path = if path.starts_with("outputs/") {
-            if let Some(outputs_dir) = self.fs.outputs_dir() {
-                outputs_dir.join(&path[8..])
-            } else {
-                return Err(zero_core::ZeroError::Tool(
-                    "outputs/ directory is not configured".to_string()
-                ));
-            }
-        } else {
-            // All other paths must be within the conversation directory
-            let conv_id = conv_id.as_deref().unwrap_or("");
-            let conv_dir = self.fs.conversation_dir(conv_id);
+        tracing::info!(
+            file = %file!(),
+            line = %line!(),
+            "Writing file: path='{}' ({} bytes), agent_id={}",
+            path, content.len(), agent_id
+        );
 
-            if let Some(dir) = conv_dir {
-                dir.join(path)
-            } else {
-                return Err(zero_core::ZeroError::Tool(
-                    "No conversation context available. Cannot write file.".to_string()
-                ));
-            }
-        };
+        // Resolve path: all paths go under agent_data/<agent_id>/
+        let agent_data_dir = self.fs.agent_data_dir(&agent_id)
+            .ok_or_else(|| zero_core::ZeroError::Tool(
+                "Agent data directory not available".to_string()
+            ))?;
+
+        let final_path = agent_data_dir.join(path);
 
         // Create parent directories
         if let Some(parent) = final_path.parent() {
@@ -200,23 +209,19 @@ impl Tool for WriteTool {
         }
 
         // Write the file
-        tracing::info!("Writing to file: {}", final_path.display());
+        tracing::info!(
+            file = %file!(),
+            line = %line!(),
+            "Writing to file: {}",
+            final_path.display()
+        );
         std::fs::write(&final_path, content)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write file: {}", e)))?;
 
-        // Set permissions for output files
-        if path.starts_with("outputs/") {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = std::fs::metadata(&final_path)?.permissions();
-                perms.set_mode(0o644);
-                std::fs::set_permissions(&final_path, perms)?;
-            }
-        }
-
+        // Return the original requested path (not the absolute resolved path)
+        // so the LLM continues to use relative paths
         Ok(json!({
-            "path": final_path.to_string_lossy(),
+            "path": path,
             "bytes_written": content.len(),
         }))
     }
@@ -250,7 +255,8 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Edit a file by performing search and replace operations."
+        "Edit a file in your agent's data directory by performing search and replace operations. \
+        Files must exist within agent_data/{agent_id}/. Use the same relative path as when writing."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -259,7 +265,7 @@ impl Tool for EditTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to edit"
+                    "description": "Relative path to the file to edit. Will be resolved under agent_data/{agent_id}/"
                 },
                 "replacements": {
                     "type": "array",
@@ -284,16 +290,25 @@ impl Tool for EditTool {
             let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
             let truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
             return Err(zero_core::ZeroError::Tool(format!(
-                "Tool call failed ({}): {}{}",
+                "{}: {}",
                 error_type,
-                message,
-                if truncated { " - The LLM response was truncated. Try increasing max_tokens or reducing content size." } else { "" }
+                message
             )));
         }
 
         let path = args.get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
+
+        // Extract filename for logging
+        let filename = path.rsplit('/').next().unwrap_or(path);
+
+        tracing::info!(
+            file = %file!(),
+            line = %line!(),
+            "EDIT tool called: filename='{}', requested_path='{}'",
+            filename, path
+        );
 
         let replacements = args.get("replacements")
             .and_then(|v| v.as_array())
@@ -302,28 +317,38 @@ impl Tool for EditTool {
         // Security: Reject paths with parent directory components
         if path.contains("..") {
             return Err(zero_core::ZeroError::Tool(
-                "Path cannot contain '..' for security reasons. Files must be within the conversation directory.".to_string()
+                "Path cannot contain '..' for security reasons.".to_string()
             ));
         }
 
         // Security: Reject absolute paths
         if path.starts_with('/') || path.starts_with('\\') {
             return Err(zero_core::ZeroError::Tool(
-                "Absolute paths are not allowed. Use a relative path within the conversation directory.".to_string()
+                "Absolute paths are not allowed. Use a relative path within the agent data directory.".to_string()
             ));
         }
 
-        // Get conversation_id from session state
-        let conv_id = ctx.get_state("app:conversation_id")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
+        // Get agent_id from session state (required for all edits)
+        let agent_id = ctx.get_state("app:agent_id")
+            .and_then(|v| v.as_str().map(|s| s.to_owned()))
             .ok_or_else(|| zero_core::ZeroError::Tool(
-                "Conversation ID not found in state. Cannot resolve file path.".to_string()
+                "Agent ID not found in state. Cannot edit file.".to_string()
             ))?;
 
-        // Resolve path in conversation context
-        let conv_dir = self.fs.conversation_dir(&conv_id)
-            .ok_or_else(|| zero_core::ZeroError::Tool("Conversation directory not found".to_string()))?;
-        let final_path = conv_dir.join(path);
+        tracing::info!(
+            file = %file!(),
+            line = %line!(),
+            "Editing file: path='{}', agent_id={}",
+            path, agent_id
+        );
+
+        // Resolve path: all paths go under agent_data/<agent_id>/
+        let agent_data_dir = self.fs.agent_data_dir(&agent_id)
+            .ok_or_else(|| zero_core::ZeroError::Tool(
+                "Agent data directory not available".to_string()
+            ))?;
+
+        let final_path = agent_data_dir.join(path);
 
         let mut content = std::fs::read_to_string(&final_path)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read file: {}", e)))?;
@@ -342,10 +367,19 @@ impl Tool for EditTool {
             content = content.replace(old, new);
         }
 
+        tracing::info!(
+            file = %file!(),
+            line = %line!(),
+            "Editing file: {} ({} replacements)",
+            final_path.display(), count
+        );
+
         std::fs::write(&final_path, content)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write file: {}", e)))?;
 
+        // Return the original requested path (not the absolute resolved path)
         Ok(json!({
+            "path": path,
             "replacements_made": count,
         }))
     }

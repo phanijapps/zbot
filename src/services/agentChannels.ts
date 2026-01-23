@@ -164,6 +164,12 @@ export function formatSessionDate(sessionDate: string): string {
   if (sessionDate === yesterday) return "Yesterday";
 
   const date = new Date(sessionDate + "T00:00:00");
+
+  // Check if date is invalid
+  if (isNaN(date.getTime())) {
+    return sessionDate || "Unknown Date";
+  }
+
   const isCurrentYear = date.getFullYear() === new Date().getFullYear();
 
   if (isCurrentYear) {

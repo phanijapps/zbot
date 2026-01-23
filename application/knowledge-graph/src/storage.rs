@@ -294,6 +294,37 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
         [],
     ).map_err(|e| GraphError::Database(e))?;
 
+    // Migration: Add mention_count column if it doesn't exist (for databases created before this feature)
+    // Check if mention_count column exists in kg_entities
+    let has_entities_mention_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('kg_entities') WHERE name='mention_count'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    if has_entities_mention_count == 0 {
+        tracing::info!("Migrating kg_entities: adding mention_count column");
+        conn.execute(
+            "ALTER TABLE kg_entities ADD COLUMN mention_count INTEGER DEFAULT 1",
+            [],
+        ).map_err(|e| GraphError::Database(e))?;
+    }
+
+    // Check if mention_count column exists in kg_relationships
+    let has_relationships_mention_count: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('kg_relationships') WHERE name='mention_count'",
+        [],
+        |row| row.get(0),
+    ).unwrap_or(0);
+
+    if has_relationships_mention_count == 0 {
+        tracing::info!("Migrating kg_relationships: adding mention_count column");
+        conn.execute(
+            "ALTER TABLE kg_relationships ADD COLUMN mention_count INTEGER DEFAULT 1",
+            [],
+        ).map_err(|e| GraphError::Database(e))?;
+    }
+
     Ok(())
 }
 

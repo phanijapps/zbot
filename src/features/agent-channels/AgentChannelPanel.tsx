@@ -3,11 +3,19 @@
 // Discord-like agent interface with daily sessions
 // ============================================================================
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, startTransition } from "react";
 import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
+
+// Conditional logging - only log in development mode
+const isDev = import.meta.env.DEV;
+const debugLog = (...args: unknown[]) => {
+  if (isDev) {
+    console.log("[AgentChannelPanel]", ...args);
+  }
+};
 import { Textarea } from "@/shared/ui/textarea";
 import {
   AgentChannelList,
@@ -107,7 +115,7 @@ export function AgentChannelPanel() {
       isMountedRef.current = false;
       // Clean up any dangling event listener on unmount
       if (currentUnlistenRef.current) {
-        console.log("[AgentChannelPanel] Cleaning up event listener on unmount");
+        debugLog("Cleaning up event listener on unmount");
         currentUnlistenRef.current();
         currentUnlistenRef.current = null;
       }
@@ -126,14 +134,16 @@ export function AgentChannelPanel() {
       setExpandedDays(new Set());
     }
     resetThinking();
-  }, [selectedAgent, loadTodaySession]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgent?.id, resetThinking]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (messages.length > 0) {
-      setTimeout(() => {
+      const timer = setTimeout(() => {
         messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
       }, 50);
+      return () => clearTimeout(timer);
     }
   }, [messages]);
 
@@ -141,6 +151,8 @@ export function AgentChannelPanel() {
    * Scroll to bottom of messages
    */
   const scrollToBottom = useCallback(() => {
+    // Note: Not adding cleanup here since this is called multiple times
+    // and the timeout is short (50ms). The useEffect above has proper cleanup.
     setTimeout(() => {
       messagesEndRef.current?.scrollIntoView({ behavior: "auto" });
     }, 50);
@@ -332,7 +344,7 @@ export function AgentChannelPanel() {
 
     // Clean up any previous event listener before starting a new execution
     if (currentUnlistenRef.current) {
-      console.log("[AgentChannelPanel] Cleaning up previous event listener");
+      debugLog("Cleaning up previous event listener");
       currentUnlistenRef.current();
       currentUnlistenRef.current = null;
     }
@@ -347,7 +359,7 @@ export function AgentChannelPanel() {
         isExecutingRef.current = false; // Force reset
         break;
       }
-      console.log("[AgentChannelPanel] Waiting for previous execution to complete...");
+      debugLog("Waiting for previous execution to complete...");
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
@@ -359,7 +371,7 @@ export function AgentChannelPanel() {
     setHistoryPanelOpen(false);
 
     // Create assistant message placeholder for streaming response
-    const assistantMessageId = Date.now().toString();
+    const assistantMessageId = crypto.randomUUID();
     const initialAssistantMessage: MessageWithThinking = {
       id: assistantMessageId,
       conversationId: currentSession.id,
@@ -381,7 +393,7 @@ export function AgentChannelPanel() {
 
     // Listen for streaming events from the backend
     const eventChannel = `agent-stream://${currentSession.id}`;
-    console.log("[AgentChannelPanel] Setting up event listener for channel:", eventChannel);
+    debugLog("Setting up event listener for channel:", eventChannel);
     let toolCallCount = 0; // Track tool calls locally during streaming
     const toolCallsData: Array<{ id: string; name: string; status: "running" | "completed" | "failed"; result?: string }> = []; // Track actual tool call data
 
@@ -417,8 +429,6 @@ export function AgentChannelPanel() {
       const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string; formId?: string; title?: string; description?: string; schema?: any; submitButton?: string };
       if (!data) return;
 
-      console.log("[AgentChannelPanel] Received event:", data.type, "payload:", data);
-
       // Map simplified events to AgentStreamEvent format and pass to thinking panel
       switch (data.type) {
         case "token":
@@ -428,24 +438,27 @@ export function AgentChannelPanel() {
             content: data.content || "",
             timestamp: Date.now()
           });
-          // Update both messages and loadedDays
-          setMessages((prev) => prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, content: msg.content + (data.content || "") }
-              : msg
-          ));
-          setLoadedDays((prev) => prev.map((day) =>
-            day.sessionId === currentSession?.id
-              ? {
-                  ...day,
-                  messages: day.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? { ...msg, content: msg.content + (data.content || "") }
-                      : msg
-                  ),
-                }
-              : day
-          ));
+          // Batch state updates using startTransition for better performance
+          startTransition(() => {
+            // Update both messages and loadedDays
+            setMessages((prev) => prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: msg.content + (data.content || "") }
+                : msg
+            ));
+            setLoadedDays((prev) => prev.map((day) =>
+              day.sessionId === currentSession?.id
+                ? {
+                    ...day,
+                    messages: day.messages.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, content: msg.content + (data.content || "") }
+                        : msg
+                    ),
+                  }
+                : day
+            ));
+          });
           break;
 
         case "tool_call_start":
@@ -487,25 +500,28 @@ export function AgentChannelPanel() {
             error: data.error,
             timestamp: Date.now()
           });
-          // Update tool count in real-time as tools complete
-          const updatedMsg = { toolCount: toolCallCount, toolCalls: [...toolCallsData] };
-          setMessages((prev) => prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, thinking: updatedMsg }
-              : msg
-          ));
-          setLoadedDays((prev) => prev.map((day) =>
-            day.sessionId === currentSession?.id
-              ? {
-                  ...day,
-                  messages: day.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? { ...msg, thinking: updatedMsg }
-                      : msg
-                  ),
-                }
-              : day
-          ));
+          // Batch state updates using startTransition for better performance
+          startTransition(() => {
+            // Update tool count in real-time as tools complete
+            const updatedMsg = { toolCount: toolCallCount, toolCalls: [...toolCallsData] };
+            setMessages((prev) => prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, thinking: updatedMsg }
+                : msg
+            ));
+            setLoadedDays((prev) => prev.map((day) =>
+              day.sessionId === currentSession?.id
+                ? {
+                    ...day,
+                    messages: day.messages.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, thinking: updatedMsg }
+                        : msg
+                    ),
+                  }
+                : day
+            ));
+          });
           break;
 
         case "done":
@@ -515,28 +531,31 @@ export function AgentChannelPanel() {
             tokenCount: 0,
             timestamp: Date.now()
           });
-          // Update with final content and tool data
-          const finalMsg = {
-            content: data.finalMessage || "",
-            ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {})
-          };
-          setMessages((prev) => prev.map((msg) =>
-            msg.id === assistantMessageId
-              ? { ...msg, ...finalMsg }
-              : msg
-          ));
-          setLoadedDays((prev) => prev.map((day) =>
-            day.sessionId === currentSession?.id
-              ? {
-                  ...day,
-                  messages: day.messages.map((msg) =>
-                    msg.id === assistantMessageId
-                      ? { ...msg, ...finalMsg }
-                      : msg
-                  ),
-                }
-              : day
-          ));
+          // Batch state updates using startTransition for better performance
+          startTransition(() => {
+            // Update with final content and tool data
+            const finalMsg = {
+              content: data.finalMessage || "",
+              ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {})
+            };
+            setMessages((prev) => prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, ...finalMsg }
+                : msg
+            ));
+            setLoadedDays((prev) => prev.map((day) =>
+              day.sessionId === currentSession?.id
+                ? {
+                    ...day,
+                    messages: day.messages.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, ...finalMsg }
+                        : msg
+                    ),
+                  }
+                : day
+            ));
+          });
           finishProcessing();
           break;
 
@@ -598,7 +617,7 @@ export function AgentChannelPanel() {
         }
 
         case "error":
-          console.log("[AgentChannelPanel] ERROR event received");
+          debugLog("ERROR event received");
           handleThinkingEvent({
             type: "error",
             error: data.error || "Unknown error",
@@ -606,23 +625,26 @@ export function AgentChannelPanel() {
             timestamp: Date.now()
           });
           const errorMsg = `Error: ${data.error || "Unknown error"}`;
-          setMessages((prev) => prev.map((msg) =>
-            msg.id === assistantMessageId && msg.content === ""
-              ? { ...msg, content: errorMsg }
-              : msg
-          ));
-          setLoadedDays((prev) => prev.map((day) =>
-            day.sessionId === currentSession?.id
-              ? {
-                  ...day,
-                  messages: day.messages.map((msg) =>
-                    msg.id === assistantMessageId && msg.content === ""
-                      ? { ...msg, content: errorMsg }
-                      : msg
-                  ),
-                }
-              : day
-          ));
+          // Batch state updates using startTransition for better performance
+          startTransition(() => {
+            setMessages((prev) => prev.map((msg) =>
+              msg.id === assistantMessageId && msg.content === ""
+                ? { ...msg, content: errorMsg }
+                : msg
+            ));
+            setLoadedDays((prev) => prev.map((day) =>
+              day.sessionId === currentSession?.id
+                ? {
+                    ...day,
+                    messages: day.messages.map((msg) =>
+                      msg.id === assistantMessageId && msg.content === ""
+                        ? { ...msg, content: errorMsg }
+                        : msg
+                    ),
+                  }
+                : day
+            ));
+          });
           finishProcessing();
           break;
       }
@@ -643,23 +665,26 @@ export function AgentChannelPanel() {
     } catch (error) {
       if (isMountedRef.current) {
         const errorMsg = `Error: ${error instanceof Error ? error.message : String(error)}`;
-        setMessages((prev) => prev.map((msg) =>
-          msg.id === assistantMessageId && msg.content === ""
-            ? { ...msg, content: errorMsg }
-            : msg
-        ));
-        setLoadedDays((prev) => prev.map((day) =>
-          day.sessionId === currentSession?.id
-            ? {
-                ...day,
-                messages: day.messages.map((msg) =>
-                  msg.id === assistantMessageId && msg.content === ""
-                    ? { ...msg, content: errorMsg }
-                    : msg
-                ),
-              }
-            : day
-        ));
+        // Batch state updates using startTransition for better performance
+        startTransition(() => {
+          setMessages((prev) => prev.map((msg) =>
+            msg.id === assistantMessageId && msg.content === ""
+              ? { ...msg, content: errorMsg }
+              : msg
+          ));
+          setLoadedDays((prev) => prev.map((day) =>
+            day.sessionId === currentSession?.id
+              ? {
+                  ...day,
+                  messages: day.messages.map((msg) =>
+                    msg.id === assistantMessageId && msg.content === ""
+                      ? { ...msg, content: errorMsg }
+                      : msg
+                  ),
+                }
+              : day
+          ));
+        });
         finishProcessing();
       }
     }
@@ -680,7 +705,7 @@ export function AgentChannelPanel() {
 
     // Add user message immediately - React will render it
     const tempUserMessage: MessageWithThinking = {
-      id: Date.now().toString(),
+      id: crypto.randomUUID(),
       conversationId: currentSession.id,
       role: "user",
       content: userMessage,
@@ -816,6 +841,7 @@ export function AgentChannelPanel() {
                                             <div className="ml-14 mb-2">
                                               <InlineToolCallsList
                                                 tools={msg.thinking.toolCalls.map(tc => ({
+                                                  id: tc.id,
                                                   name: tc.name,
                                                   status: tc.status,
                                                   result: tc.result,
@@ -1043,6 +1069,12 @@ export function AgentChannelPanel() {
                                 try {
                                   // Add 1 day to the date so we delete this day and everything before it
                                   const targetDate = new Date(day.sessionDate + 'T00:00:00');
+
+                                  // Check if date is valid
+                                  if (isNaN(targetDate.getTime())) {
+                                    throw new Error(`Invalid date: ${day.sessionDate}`);
+                                  }
+
                                   targetDate.setDate(targetDate.getDate() + 1);
                                   const beforeDate = targetDate.toISOString().split('T')[0];
 

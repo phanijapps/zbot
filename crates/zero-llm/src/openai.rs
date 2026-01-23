@@ -174,7 +174,7 @@ impl OpenAiLlm {
                             name: tc.function.name.clone(),
                             arguments: serde_json::json!({
                                 "__error__": "TRUNCATED_ARGUMENTS",
-                                "__message__": format!("Tool call arguments were truncated due to max_tokens limit. Increase max_tokens or reduce content size."),
+                                "__message__": "The file content is too large to complete in one call. Split the content into smaller chunks and write them separately. For example: 1) Write the first half of the content to the file. 2) Use the edit tool or make multiple write calls with different filenames to write the remaining content.",
                                 "__original_length__": args_str.len(),
                                 "__truncated__": true
                             }),
@@ -295,7 +295,7 @@ impl Llm for OpenAiLlm {
         // Debug: Log the request being sent
         tracing::info!("OpenAI LLM Request:");
         tracing::info!("  model: {}", openai_request.model);
-        tracing::info!("  system_instruction: {:?}", request.system_instruction);
+        tracing::info!("  system_instruction: {}", request.system_instruction.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string()));
         tracing::info!("  messages.count: {}", openai_request.messages.len());
         for (i, msg) in openai_request.messages.iter().enumerate() {
             tracing::info!("  message[{}]: role={}, content.len={:?}, tool_calls={}",
@@ -328,8 +328,8 @@ impl Llm for OpenAiLlm {
         tracing::info!("OpenAI LLM Response:");
         tracing::info!("  choices.count: {}", openai_response.choices.len());
         if let Some(choice) = openai_response.choices.first() {
-            tracing::info!("  choice[0].message.content: {:?}",
-                choice.message.content.as_ref().map(|c| format!("'{}' (len={})", c, c.len())));
+            tracing::info!("  choice[0].message.content: {}",
+                choice.message.content.as_ref().map(|c| format!("{} chars", c.len())).as_deref().unwrap_or("None"));
             tracing::info!("  choice[0].message.tool_calls: {:?}", choice.message.tool_calls);
             tracing::info!("  choice[0].finish_reason: {:?}", choice.finish_reason);
         }

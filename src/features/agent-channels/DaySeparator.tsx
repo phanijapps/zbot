@@ -4,6 +4,7 @@
  * Discord-style day separator that can be expanded/collapsed to show/hide messages
  */
 
+import { memo } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { cn } from "@/shared/utils";
 
@@ -16,7 +17,7 @@ interface DaySeparatorProps {
   className?: string;
 }
 
-export function DaySeparator({
+export const DaySeparator = memo(function DaySeparator({
   date,
   messageCount,
   isExpanded,
@@ -61,4 +62,12 @@ export function DaySeparator({
       )}
     </button>
   );
-}
+}, (prev, next) => {
+  // Custom comparison to prevent unnecessary re-renders
+  return (
+    prev.date === next.date &&
+    prev.messageCount === next.messageCount &&
+    prev.isExpanded === next.isExpanded &&
+    prev.summary === next.summary
+  );
+});
