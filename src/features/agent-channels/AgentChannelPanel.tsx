@@ -105,6 +105,7 @@ export function AgentChannelPanel() {
   // Transcript Comment Dialog state
   const [commentDialogOpen, setCommentDialogOpen] = useState(false);
   const [pendingTranscript, setPendingTranscript] = useState<TranscriptAttachmentInfo | null>(null);
+  const [sendingTranscript, setSendingTranscript] = useState(false);
 
   // Attachments Panel state
   const [attachmentsPanelOpen, setAttachmentsPanelOpen] = useState(false);
@@ -787,6 +788,8 @@ export function AgentChannelPanel() {
   const handleSendTranscript = async (comments: string) => {
     if (!pendingTranscript || !selectedAgent || !currentSession) return;
 
+    setSendingTranscript(true);
+
     try {
       // Create message content with file path for agent to scan
       const messageContent = `TRANSCRIPT_FILE: ${pendingTranscript.file_path}\nUSER_COMMENTS: ${comments}\n\nPlease analyze this transcript, extract entities to the knowledge graph, provide a summary, and suggest actions.`;
@@ -822,15 +825,22 @@ export function AgentChannelPanel() {
       };
       setAttachments((prev) => [...prev, newAttachment]);
 
-      // Execute agent with this message
-      await executeAgentWithMessage(messageContent);
+      // Execute agent with this message (fire and forget - dialog closes immediately)
+      executeAgentWithMessage(messageContent).catch((err) => {
+        console.error("Agent execution failed:", err);
+      });
 
-      // Close dialog and clear pending transcript
+      // Close dialog and clear pending transcript immediately
       setCommentDialogOpen(false);
       setPendingTranscript(null);
 
     } catch (err) {
       console.error("Failed to send transcript:", err);
+      // Still close dialog even on error
+      setCommentDialogOpen(false);
+      setPendingTranscript(null);
+    } finally {
+      setSendingTranscript(false);
     }
   };
 
@@ -1362,6 +1372,7 @@ export function AgentChannelPanel() {
             setCommentDialogOpen(false);
             setPendingTranscript(null);
           }}
+          loading={sendingTranscript}
         />
       )}
 
