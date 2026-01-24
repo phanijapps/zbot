@@ -10,8 +10,10 @@ import { Badge } from "@/shared/ui/badge";
 import { AddMCPServerDialog } from "./AddMCPServerDialog";
 import * as mcpService from "@/services/mcp";
 import type { MCPServer } from "./types";
+import { useVaults } from "@/features/vaults/useVaults";
 
 export function MCPServersPanel() {
+  const { currentVault } = useVaults();
   const [servers, setServers] = useState<MCPServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
@@ -19,10 +21,10 @@ export function MCPServersPanel() {
   const [testingServerId, setTestingServerId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Load servers on mount
+  // Load servers on mount and when vault changes
   useEffect(() => {
     loadServers();
-  }, []);
+  }, [currentVault?.id]); // Reload when vault changes
 
   const loadServers = async () => {
     setLoading(true);
@@ -253,7 +255,7 @@ export function MCPServersPanel() {
                 Supports command-based (stdio), HTTP, and SSE (Server-Sent Events) servers.
               </p>
               <p className="text-xs text-orange-300 mt-2">
-                💾 Configuration saved to: <code className="bg-white/10 px-1.5 py-0.5 rounded">~/.config/zeroagent/mcps.json</code>
+                💾 Configuration saved to: <code className="bg-white/10 px-1.5 py-0.5 rounded">{currentVault?.path || "~/.config/zeroagent"}/mcps.json</code>
               </p>
             </div>
           </div>

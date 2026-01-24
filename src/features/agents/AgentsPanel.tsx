@@ -11,8 +11,10 @@ import * as agentService from "@/services/agent";
 import * as providerService from "@/services/provider";
 import type { Agent } from "@/shared/types";
 import type { Provider } from "@/shared/types";
+import { useVaults } from "@/features/vaults/useVaults";
 
 export function AgentsPanel() {
+  const { currentVault } = useVaults();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,11 +22,11 @@ export function AgentsPanel() {
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Load agents and providers on mount
+  // Load agents and providers on mount and when vault changes
   useEffect(() => {
     loadAgents();
     loadProviders();
-  }, []);
+  }, [currentVault?.id]); // Reload when vault changes
 
   const loadAgents = async () => {
     setLoading(true);

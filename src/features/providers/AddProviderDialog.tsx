@@ -11,6 +11,7 @@ import { Button } from "@/shared/ui/button";
 import { Label } from "@/shared/ui/label";
 import type { Provider, ProviderTestResult } from "@/shared/types";
 import * as providerService from "@/services/provider";
+import { useVaults } from "@/features/vaults/useVaults";
 
 interface AddProviderDialogProps {
   open: boolean;
@@ -68,6 +69,7 @@ const PROVIDER_PRESETS: ProviderPreset[] = [
 ];
 
 export function AddProviderDialog({ open, onClose, onSave, editingProvider }: AddProviderDialogProps) {
+  const { currentVault } = useVaults();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -253,7 +255,7 @@ export function AddProviderDialog({ open, onClose, onSave, editingProvider }: Ad
               <div className="flex items-start gap-2 mt-2 p-2 bg-yellow-500/10 border border-yellow-500/20 rounded-lg">
                 <AlertCircle className="size-4 text-yellow-400 shrink-0 mt-0.5" />
                 <p className="text-xs text-yellow-200">
-                  💾 API keys are stored locally in: <code className="text-yellow-300">~/.config/zeroagent/providers.json</code>
+                  💾 API keys are stored locally in: <code className="text-yellow-300">{currentVault?.path || "~/.config/zeroagent"}/providers.json</code>
                 </p>
               </div>
             </div>

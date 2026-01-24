@@ -10,18 +10,20 @@ import { Badge } from "@/shared/ui/badge";
 import { AddProviderDialog } from "./AddProviderDialog";
 import * as providerService from "@/services/provider";
 import type { Provider } from "@/shared/types";
+import { useVaults } from "@/features/vaults/useVaults";
 
 export function ProvidersPanel() {
+  const { currentVault } = useVaults();
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAddDialog, setShowAddDialog] = useState(false);
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Load providers on mount
+  // Load providers on mount and when vault changes
   useEffect(() => {
     loadProviders();
-  }, []);
+  }, [currentVault?.id]); // Reload when vault changes
 
   const loadProviders = async () => {
     setLoading(true);
@@ -217,7 +219,7 @@ export function ProvidersPanel() {
                 Configure OpenAI-compatible API providers. These providers are used to power AI agents in your conversations.
               </p>
               <p className="text-xs text-blue-300 mt-2">
-                💾 Configuration saved to: <code className="bg-white/10 px-1.5 py-0.5 rounded">~/.config/zeroagent/providers.json</code>
+                💾 Configuration saved to: <code className="bg-white/10 px-1.5 py-0.5 rounded">{currentVault?.path || "~/.config/zeroagent"}/providers.json</code>
               </p>
             </div>
           </div>

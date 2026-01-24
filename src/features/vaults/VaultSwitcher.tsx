@@ -7,6 +7,7 @@ import { Plus, Check } from "lucide-react";
 import { useVaults } from "./useVaults";
 import { CreateVaultDialog } from "./CreateVaultDialog";
 import { useState } from "react";
+import type { Vault } from "@/shared/types";
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -20,7 +21,7 @@ interface VaultSwitcherProps {
 }
 
 export function VaultSwitcher({ className = "" }: VaultSwitcherProps) {
-  const { currentVault, vaults, switchVault, isLoading } = useVaults();
+  const { currentVault, vaults, switchVault, isLoading, reloadVaults } = useVaults();
   const [showCreateDialog, setShowCreateDialog] = useState(false);
 
   const handleVaultChange = async (vaultId: string) => {
@@ -29,6 +30,14 @@ export function VaultSwitcher({ className = "" }: VaultSwitcherProps) {
 
   const handleCreateVault = () => {
     setShowCreateDialog(true);
+  };
+
+  const handleVaultCreated = async (vault: Vault) => {
+    setShowCreateDialog(false);
+    // Reload vaults to get the updated list
+    await reloadVaults?.();
+    // Switch to the newly created vault
+    await switchVault(vault.id);
   };
 
   if (isLoading) {
@@ -87,9 +96,7 @@ export function VaultSwitcher({ className = "" }: VaultSwitcherProps) {
       <CreateVaultDialog
         open={showCreateDialog}
         onClose={() => setShowCreateDialog(false)}
-        onCreated={() => {
-          setShowCreateDialog(false);
-        }}
+        onCreated={handleVaultCreated}
       />
     </>
   );

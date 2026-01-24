@@ -7,6 +7,7 @@ use crate::settings::{AppDirs, Settings, StorageInfo};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
+extern crate dirs;
 
 /// Get all application settings
 #[tauri::command]
@@ -82,10 +83,18 @@ pub struct DirectoriesInfo {
 // PYTHON VENV REQUIREMENTS COMMANDS
 // ============================================================================
 
+/// Get the shared venv path at ~/.config/zeroagent/venv
+/// All vaults use this shared Python environment
+fn get_shared_venv_path() -> Result<PathBuf, String> {
+    let config_dir = dirs::config_dir()
+        .ok_or_else(|| "Failed to get config directory".to_string())?
+        .join("zeroagent");
+    Ok(config_dir.join("venv"))
+}
+
 /// Get the Python interpreter path from the venv
 fn get_python_venv() -> Result<PathBuf, String> {
-    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
-    let venv_path = dirs.config_dir.join("venv");
+    let venv_path = get_shared_venv_path()?;
 
     #[cfg(target_os = "windows")]
     let python_path = venv_path.join("Scripts").join("python.exe");
@@ -106,8 +115,7 @@ fn get_python_venv() -> Result<PathBuf, String> {
 /// Get venv information (path, requirements.txt exists, installed packages)
 #[tauri::command]
 pub async fn get_venv_info() -> Result<VenvInfo, String> {
-    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
-    let venv_path = dirs.config_dir.join("venv");
+    let venv_path = get_shared_venv_path()?;
     let requirements_path = venv_path.join("requirements.txt");
 
     let requirements_exists = requirements_path.exists();
@@ -155,9 +163,14 @@ pub struct VenvInfo {
 /// Read requirements.txt content
 #[tauri::command]
 pub async fn read_requirements() -> Result<String, String> {
-    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
-    let venv_path = dirs.config_dir.join("venv");
+    let venv_path = get_shared_venv_path()?;
     let requirements_path = venv_path.join("requirements.txt");
+
+    // Ensure venv directory exists
+    if !venv_path.exists() {
+        fs::create_dir_all(&venv_path)
+            .map_err(|e| format!("Failed to create venv directory: {}", e))?;
+    }
 
     if !requirements_path.exists() {
         // Return empty content with a comment
@@ -171,9 +184,14 @@ pub async fn read_requirements() -> Result<String, String> {
 /// Save requirements.txt content
 #[tauri::command]
 pub async fn save_requirements(content: String) -> Result<(), String> {
-    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
-    let venv_path = dirs.config_dir.join("venv");
+    let venv_path = get_shared_venv_path()?;
     let requirements_path = venv_path.join("requirements.txt");
+
+    // Ensure venv directory exists before writing
+    if !venv_path.exists() {
+        fs::create_dir_all(&venv_path)
+            .map_err(|e| format!("Failed to create venv directory: {}", e))?;
+    }
 
     fs::write(&requirements_path, content)
         .map_err(|e| format!("Failed to write requirements.txt: {}", e))?;
@@ -185,8 +203,7 @@ pub async fn save_requirements(content: String) -> Result<(), String> {
 #[tauri::command]
 pub async fn install_requirements() -> Result<String, String> {
     let python_path = get_python_venv()?;
-    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
-    let venv_path = dirs.config_dir.join("venv");
+    let venv_path = get_shared_venv_path()?;
     let requirements_path = venv_path.join("requirements.txt");
 
     if !requirements_path.exists() {

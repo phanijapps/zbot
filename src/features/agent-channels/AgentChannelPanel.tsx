@@ -38,6 +38,7 @@ import {
   formatSessionDate,
 } from "@/services/agentChannels";
 import { listAgents } from "@/services/agent";
+import { useVaults } from "@/features/vaults/useVaults";
 
 /**
  * Messages grouped by session date
@@ -54,6 +55,8 @@ interface DayMessages {
 type ExecutionStage = "idle" | "thinking" | "using_tools" | "generating" | "done";
 
 export function AgentChannelPanel() {
+  const { currentVault } = useVaults();
+
   // UI State
   const [agents, setAgents] = useState<Agent[]>([]);
   const [selectedAgent, setSelectedAgent] = useState<Agent | null>(null);
@@ -125,7 +128,7 @@ export function AgentChannelPanel() {
     setCurrentMessage,
   } = useStreamEvents(true, false);
 
-  // Load agents on mount
+  // Load agents on mount and when vault changes
   useEffect(() => {
     isMountedRef.current = true;
     loadAgents();
@@ -139,7 +142,19 @@ export function AgentChannelPanel() {
         currentUnlistenRef.current = null;
       }
     };
-  }, []);
+  }, [currentVault?.id]); // Reload when vault changes
+
+  // Reset state when vault changes
+  useEffect(() => {
+    // Clear selected agent, session, and messages when vault changes
+    setSelectedAgent(null);
+    setCurrentSession(null);
+    setMessages([]);
+    setPreviousDays([]);
+    setLoadedDays([]);
+    setExpandedDays(new Set());
+    debugLog("Vault changed, state reset");
+  }, [currentVault?.id]); // Reset when vault changes
 
   // Load session when agent is selected
   useEffect(() => {

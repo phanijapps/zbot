@@ -16,6 +16,7 @@ export function useVaults() {
   const [vaults, setVaults] = useState<Vault[]>([]);
   const [currentVault, setCurrentVault] = useState<Vault | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isSwitchingVault, setIsSwitchingVault] = useState(false);
 
   // Load vaults on mount
   useEffect(() => {
@@ -35,8 +36,8 @@ export function useVaults() {
         // Listen for vault changes
         const unlistenPromise = onVaultChanged((vault) => {
           setCurrentVault(vault);
-          // Reload all data after vault change
-          window.location.reload();
+          // Hide loading animation after vault is switched
+          setIsSwitchingVault(false);
         });
 
         unlistenPromise.then((unlisten) => {
@@ -57,12 +58,26 @@ export function useVaults() {
   }, []);
 
   const switchVault = useCallback(async (vaultId: string) => {
+    // Show loading animation immediately
+    setIsSwitchingVault(true);
     try {
       const vault = await switchVaultService(vaultId);
+      // Note: The actual vault state update happens in onVaultChanged listener
+      // The loader will be hidden there after the event fires
       return vault;
     } catch (error) {
       console.error("Failed to switch vault:", error);
+      setIsSwitchingVault(false); // Hide loader on error
       throw error;
+    }
+  }, []);
+
+  const reloadVaults = useCallback(async () => {
+    try {
+      const allVaults = await listVaults();
+      setVaults(allVaults);
+    } catch (error) {
+      console.error("Failed to reload vaults:", error);
     }
   }, []);
 
@@ -70,6 +85,8 @@ export function useVaults() {
     vaults,
     currentVault,
     isLoading,
+    isSwitchingVault,
     switchVault,
+    reloadVaults,
   };
 }

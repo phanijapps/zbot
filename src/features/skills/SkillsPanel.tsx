@@ -11,6 +11,7 @@ import { Badge } from "@/shared/ui/badge";
 import { SkillIDEPage } from "./SkillIDEPage";
 import * as skillsService from "@/services/skills";
 import type { Skill } from "@/shared/types";
+import { useVaults } from "@/features/vaults/useVaults";
 
 const SKILL_CATEGORIES = [
   "utility",
@@ -26,6 +27,7 @@ const SKILL_CATEGORIES = [
 ];
 
 export function SkillsPanel() {
+  const { currentVault } = useVaults();
   const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFullPageEditor, setShowFullPageEditor] = useState(false);
@@ -33,10 +35,10 @@ export function SkillsPanel() {
   const [selectedCategory, setSelectedCategory] = useState<string>("all");
   const [refreshing, setRefreshing] = useState(false);
 
-  // Load skills on mount
+  // Load skills on mount and when vault changes
   useEffect(() => {
     loadSkills();
-  }, []);
+  }, [currentVault?.id]); // Reload when vault changes
 
   const loadSkills = async () => {
     setLoading(true);
@@ -240,7 +242,7 @@ export function SkillsPanel() {
               </a>
               {" "}with SKILL.md files containing YAML frontmatter and markdown instructions. Skills are stored in{" "}
               <code className="bg-white/10 px-1.5 py-0.5 rounded text-blue-200">
-                ~/.config/zeroagent/skills/
+                {currentVault?.path || "~/.config/zeroagent"}/skills/
               </code>
             </p>
           </CardContent>

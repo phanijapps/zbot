@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use tokio::process::Command as AsyncCommand;
+extern crate dirs;
 
 /// Transcript segment with speaker information
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -65,15 +66,19 @@ pub struct TranscriptionService {
 }
 
 impl TranscriptionService {
-    /// Create new transcription service using existing venv
+    /// Create new transcription service using shared venv at ~/.config/zeroagent/venv
     pub fn new() -> Result<Self> {
         use crate::settings::AppDirs;
 
-        // Get Python from existing venv (same as get_python_venv in commands/settings.rs)
-        let dirs = AppDirs::get()
+        // Get AppDirs for utils_dir (still vault-specific for scripts)
+        let app_dirs = AppDirs::get()
             .map_err(|_e| TranscriptionError::PythonNotFound)?;
 
-        let venv_path = dirs.config_dir.join("venv");
+        // Get Python from shared venv at ~/.config/zeroagent/venv
+        let config_dir = dirs::config_dir()
+            .ok_or_else(|| TranscriptionError::PythonNotFound)?
+            .join("zeroagent");
+        let venv_path = config_dir.join("venv");
 
         #[cfg(target_os = "windows")]
         let python_path = venv_path.join("Scripts").join("python.exe");
@@ -86,7 +91,7 @@ impl TranscriptionService {
         }
 
         // Script is stored in utils directory (user-accessible)
-        let utils_dir = dirs.utils_dir;
+        let utils_dir = app_dirs.utils_dir;
 
         Ok(Self {
             python_path,

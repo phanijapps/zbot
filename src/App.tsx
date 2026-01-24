@@ -6,7 +6,7 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppShell } from "./core";
-import { VaultSelector } from "./features/vaults";
+import { VaultSelector, VaultSwitchingLoader, useVaults } from "./features/vaults";
 import type { Vault } from "@/shared/types";
 
 import {
@@ -22,6 +22,7 @@ import {
 function App() {
   const [vault, setVault] = useState<Vault | null>(null);
   const [isCheckingVault, setIsCheckingVault] = useState(true);
+  const { isSwitchingVault } = useVaults(); // Get vault switching state
 
   useEffect(() => {
     checkVaultStatus();
@@ -72,19 +73,22 @@ function App() {
 
   // Show main app when vault is ready
   return (
-    <BrowserRouter>
-      <AppShell>
-        <Routes>
-          <Route path="/" element={<AgentChannelPanel />} />
-          <Route path="/agents" element={<AgentsPanel />} />
-          <Route path="/providers" element={<ProvidersPanel />} />
-          <Route path="/mcp" element={<MCPServersPanel />} />
-          <Route path="/skills" element={<SkillsPanel />} />
-          <Route path="/settings" element={<SettingsPanel />} />
-          <Route path="/search" element={<SearchPanel />} />
-        </Routes>
-      </AppShell>
-    </BrowserRouter>
+    <>
+      <VaultSwitchingLoader show={isSwitchingVault} />
+      <BrowserRouter>
+        <AppShell>
+          <Routes>
+            <Route path="/" element={<AgentChannelPanel />} />
+            <Route path="/agents" element={<AgentsPanel />} />
+            <Route path="/providers" element={<ProvidersPanel />} />
+            <Route path="/mcp" element={<MCPServersPanel />} />
+            <Route path="/skills" element={<SkillsPanel />} />
+            <Route path="/settings" element={<SettingsPanel />} />
+            <Route path="/search" element={<SearchPanel />} />
+          </Routes>
+        </AppShell>
+      </BrowserRouter>
+    </>
   );
 }
 
