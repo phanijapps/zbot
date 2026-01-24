@@ -111,6 +111,78 @@ pub fn create_default_vault_configs(vault_path: &PathBuf) -> Result<(), String> 
         .map_err(|e| format!("Failed to save settings: {}", e))?;
     }
 
+    // Copy builtin skills to the vault
+    copy_builtin_skills(vault_path)?;
+
+    Ok(())
+}
+
+/// List of builtin skills that should be available in every vault
+pub const BUILTIN_SKILLS: &[&str] = &[
+    "zero-entity-extract",  // Entity extraction from transcripts
+];
+
+/// Copy builtin skills from templates to the vault's skills directory
+pub fn copy_builtin_skills(vault_path: &PathBuf) -> Result<(), String> {
+    use std::fs;
+
+    let skills_dir = vault_path.join("skills");
+    
+    // Get the path to the templates directory (relative to this crate)
+    // The templates are in src-tauri/templates/default-skills/
+    let crate_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let templates_dir = std::path::PathBuf::from(crate_dir)
+        .join("templates")
+        .join("default-skills");
+
+    for skill_id in BUILTIN_SKILLS {
+        let source_dir = templates_dir.join(skill_id);
+        let target_dir = skills_dir.join(skill_id);
+
+        // Skip if source doesn't exist (e.g., running from a different location)
+        if !source_dir.exists() {
+            tracing::warn!("Builtin skill not found in templates: {}", skill_id);
+            continue;
+        }
+
+        // Skip if target already exists (don't overwrite user customizations)
+        if target_dir.exists() {
+            continue;
+        }
+
+        // Create target directory
+        fs::create_dir_all(&target_dir)
+            .map_err(|e| format!("Failed to create skill directory: {}", e))?;
+
+        // Copy all files from source to target
+        copy_dir_recursive(&source_dir, &target_dir)?;
+    }
+
+    Ok(())
+}
+
+/// Recursively copy a directory's contents
+fn copy_dir_recursive(source: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    use std::fs;
+
+    for entry in fs::read_dir(source)
+        .map_err(|e| format!("Failed to read source directory: {}", e))?
+    {
+        let entry = entry.map_err(|e| format!("Failed to read directory entry: {}", e))?;
+        let source_path = entry.path();
+        let target_path = target.join(entry.file_name());
+
+        if source_path.is_dir() {
+            fs::create_dir_all(&target_path)
+                .map_err(|e| format!("Failed to create directory: {}", e))?;
+            copy_dir_recursive(&source_path, &target_path)?;
+        } else {
+            fs::copy(&source_path, &target_path)
+                .map_err(|e| format!("Failed to copy file: {}", e))?;
+        }
+    }
+
     Ok(())
 }
 

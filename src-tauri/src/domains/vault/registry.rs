@@ -70,7 +70,20 @@ pub fn save_vault_registry(registry: &VaultRegistry) -> Result<()> {
 /// This is used for migrating existing users to the vault system
 pub fn initialize_default_vault() -> Result<VaultRegistry> {
     if vault_registry_exists() {
-        return load_vault_registry();
+        let registry = load_vault_registry()?;
+        
+        // Ensure builtin skills exist in all vaults (for upgrades)
+        for vault in &registry.vaults {
+            let vault_path = std::path::PathBuf::from(&vault.vault_path);
+            if vault_path.exists() {
+                // Copy builtin skills (won't overwrite existing)
+                if let Err(e) = super::manager::copy_builtin_skills(&vault_path) {
+                    tracing::warn!("Failed to copy builtin skills to {}: {}", vault.id, e);
+                }
+            }
+        }
+        
+        return Ok(registry);
     }
 
     // Check if existing installation at ~/.config/zeroagent
@@ -99,6 +112,12 @@ pub fn initialize_default_vault() -> Result<VaultRegistry> {
             true,
         )
     };
+
+    let vault_path = std::path::PathBuf::from(&default_vault.vault_path);
+    
+    // Create default vault configs including builtin skills
+    super::manager::create_default_vault_configs(&vault_path)
+        .map_err(|e| anyhow::anyhow!("Failed to create default vault configs: {}", e))?;
 
     let registry = VaultRegistry::new("default".to_string(), vec![default_vault]);
     save_vault_registry(&registry)?;
