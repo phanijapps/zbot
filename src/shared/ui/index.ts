@@ -43,3 +43,4 @@ export {
 } from "./select";
 export { ScrollArea, ScrollBar } from "./scroll-area";
 export { Separator } from "./separator";
+export { ModalOverlay } from "./modal-overlay";

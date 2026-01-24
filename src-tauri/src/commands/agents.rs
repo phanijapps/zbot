@@ -663,4 +663,53 @@ fn is_binary_file(filename: &str) -> bool {
 }
 
 // ============================================================================
+// FLOW CONFIG COMMANDS
+// ============================================================================
+
+/// Get the flow configuration for an agent
+#[tauri::command]
+pub async fn get_agent_flow_config(agent_id: String) -> Result<Option<String>, String> {
+    let agents_dir = get_agents_dir()?;
+    let agent_dir = agents_dir.join(&agent_id);
+
+    if !agent_dir.exists() {
+        return Err(format!("Agent not found: {}", agent_id));
+    }
+
+    let flow_path = agent_dir.join("flow.json");
+
+    if !flow_path.exists() {
+        // No flow config exists yet
+        return Ok(None);
+    }
+
+    let flow_config = fs::read_to_string(&flow_path)
+        .map_err(|e| format!("Failed to read flow.json: {}", e))?;
+
+    Ok(Some(flow_config))
+}
+
+/// Save the flow configuration for an agent
+#[tauri::command]
+pub async fn save_agent_flow_config(agent_id: String, config: String) -> Result<(), String> {
+    let agents_dir = get_agents_dir()?;
+    let agent_dir = agents_dir.join(&agent_id);
+
+    if !agent_dir.exists() {
+        return Err(format!("Agent not found: {}", agent_id));
+    }
+
+    let flow_path = agent_dir.join("flow.json");
+
+    // Validate that the config is valid JSON before writing
+    let _parsed: serde_json::Value = serde_json::from_str(&config)
+        .map_err(|e| format!("Invalid JSON in flow config: {}", e))?;
+
+    fs::write(&flow_path, config)
+        .map_err(|e| format!("Failed to write flow.json: {}", e))?;
+
+    Ok(())
+}
+
+// ============================================================================
 // AGENT CREATOR INITIALIZATION

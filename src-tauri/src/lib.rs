@@ -106,6 +106,8 @@ pub fn run() {
             commands::create_agent_folder,
             commands::delete_agent_file,
             commands::upload_agent_file,
+            commands::get_agent_flow_config,
+            commands::save_agent_flow_config,
             // Agent Channel commands (NEW)
             commands::get_or_create_today_session,
             commands::list_previous_days,
