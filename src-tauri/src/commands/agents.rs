@@ -9,6 +9,24 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 
+// ============================================================================
+// DEFAULT FUNCTIONS
+// ============================================================================
+
+/// Default value for maxTokens
+fn default_max_tokens() -> u32 {
+    2000
+}
+
+/// Default value for voiceRecordingEnabled (true = enabled by default)
+fn default_voice_recording_enabled() -> bool {
+    true
+}
+
+// ============================================================================
+// AGENT STRUCTS
+// ============================================================================
+
 /// Agent data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Agent {
@@ -27,6 +45,8 @@ pub struct Agent {
     pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled", default)]
     pub thinking_enabled: bool,
+    #[serde(rename = "voiceRecordingEnabled", default = "default_voice_recording_enabled")]
+    pub voice_recording_enabled: bool,
     #[serde(rename = "systemInstruction", default, skip_serializing_if = "Option::is_none")]
     pub system_instruction: Option<String>,
     pub instructions: String,
@@ -37,11 +57,6 @@ pub struct Agent {
     pub middleware: Option<String>,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
-}
-
-/// Default value for maxTokens
-fn default_max_tokens() -> u32 {
-    2000
 }
 
 /// Agent configuration stored in config.yaml
@@ -61,6 +76,8 @@ struct AgentConfig {
     max_tokens: u32,
     #[serde(rename = "thinkingEnabled", default)]
     thinking_enabled: bool,
+    #[serde(rename = "voiceRecordingEnabled", default = "default_voice_recording_enabled")]
+    voice_recording_enabled: bool,
     skills: Vec<String>,
     mcps: Vec<String>,
     #[serde(rename = "systemInstruction", default, skip_serializing_if = "Option::is_none")]
@@ -154,6 +171,7 @@ pub async fn create_agent(agent: Agent) -> Result<Agent, String> {
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
         thinking_enabled: agent.thinking_enabled,
+        voice_recording_enabled: agent.voice_recording_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
         agent_type: agent.agent_type.clone(),
@@ -228,6 +246,7 @@ pub async fn update_agent(id: String, agent: Agent) -> Result<Agent, String> {
         temperature: agent.temperature,
         max_tokens: agent.max_tokens,
         thinking_enabled: agent.thinking_enabled,
+        voice_recording_enabled: agent.voice_recording_enabled,
         skills: agent.skills.clone(),
         mcps: agent.mcps.clone(),
         agent_type: agent.agent_type.clone(),
@@ -314,6 +333,7 @@ fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
         temperature: config.temperature,
         max_tokens: config.max_tokens,
         thinking_enabled: config.thinking_enabled,
+        voice_recording_enabled: config.voice_recording_enabled,
         system_instruction: config.system_instruction,
         instructions,
         mcps: config.mcps,
@@ -437,6 +457,7 @@ pub async fn list_agent_files(agent_id: String) -> Result<Vec<AgentFile>, String
                 temperature: 0.7,
                 max_tokens: 2000,
                 thinking_enabled: false,
+                voice_recording_enabled: true,  // Enabled by default
                 skills: vec![],
                 mcps: vec![],
                 system_instruction: None,

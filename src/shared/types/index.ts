@@ -163,6 +163,7 @@ export interface Agent {
   temperature: number;
   maxTokens: number;
   thinkingEnabled?: boolean;
+  voiceRecordingEnabled?: boolean;
   instructions: string;
   mcps: string[];
   skills: string[];

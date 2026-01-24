@@ -374,8 +374,17 @@ pub async fn get_transcript_attachment_info(
     let transcript = service.get_transcript(&transcript_path)
         .map_err(|e| e.to_string())?;
 
+    // Build the plain text file path for agent to use with grep/rg
+    let segments_path = dirs.config_dir
+        .join("agents_data")
+        .join(&agent_id)
+        .join("media")
+        .join(&year_month)
+        .join(format!("{}_segments.txt", audio_name));
+
     Ok(TranscriptAttachmentInfo {
         filename: filename.clone(),
+        file_path: segments_path.to_string_lossy().to_string(),
         audio_file: transcript.audio_file.clone(),
         duration_seconds: transcript.duration_seconds,
         speaker_count: transcript.speakers.len(),
@@ -388,6 +397,7 @@ pub async fn get_transcript_attachment_info(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TranscriptAttachmentInfo {
     pub filename: String,
+    pub file_path: String,  // Full path to plain text file for grep/rg
     pub audio_file: String,
     pub duration_seconds: f32,
     pub speaker_count: usize,
@@ -446,6 +456,190 @@ async fn add_transcript_to_kg(
         .map_err(|e| format!("Failed to store entity: {}", e))?;
 
     tracing::info!("Added transcript to knowledge graph: agent={}", agent_id);
+
+    Ok(())
+}
+
+// ============================================================================
+// ATTACHMENT COMMANDS
+// ============================================================================
+
+/// Attachment metadata for listing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentInfo {
+    pub id: String,
+    pub r#type: String,  // "transcript" or "file"
+    pub filename: String,
+    pub file_path: String,
+    pub created_at: i64,
+    pub duration_seconds: Option<f32>,
+    pub speaker_count: Option<usize>,
+}
+
+/// List all attachments for an agent
+#[tauri::command]
+pub async fn list_attachments(
+    agent_id: String,
+) -> Result<Vec<AttachmentInfo>, String> {
+    let dirs = crate::settings::AppDirs::get()
+        .map_err(|e| e.to_string())?;
+
+    let media_base_dir = dirs.config_dir
+        .join("agents_data")
+        .join(&agent_id)
+        .join("media");
+
+    if !media_base_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut attachments = Vec::new();
+
+    // Scan all YYYY-MM directories
+    let entries = fs::read_dir(&media_base_dir)
+        .map_err(|e| format!("Failed to read media directory: {}", e))?;
+
+    for entry in entries.flatten() {
+        let year_month_dir = entry.path();
+        if !year_month_dir.is_dir() {
+            continue;
+        }
+
+        // Scan for .json transcript files
+        let transcript_entries = fs::read_dir(&year_month_dir)
+            .map_err(|e| format!("Failed to read year-month directory: {}", e))?;
+
+        for transcript_entry in transcript_entries.flatten() {
+            let path = transcript_entry.path();
+            let filename = transcript_entry.file_name();
+
+            // Only process .json transcript files
+            if filename.to_string_lossy().ends_with(".json") {
+                // Get metadata without loading full transcript
+                let metadata = fs::metadata(&path)
+                    .map_err(|e| format!("Failed to get file metadata: {}", e))?;
+                let created_at = metadata.created()
+                    .ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+                    .unwrap_or(0);
+
+                // Get transcript info
+                let service = crate::transcription::TranscriptionService::new()
+                    .map_err(|e| e.to_string())?;
+
+                if let Ok(transcript) = service.get_transcript(&path) {
+                    // Build plain text file path
+                    let filename_str = filename.to_string_lossy();
+                    let audio_name = filename_str
+                        .trim_end_matches(".json");
+                    let file_path = year_month_dir.join(format!("{}_segments.txt", audio_name));
+
+                    attachments.push(AttachmentInfo {
+                        id: format!("transcript-{}", filename.to_string_lossy()),
+                        r#type: "transcript".to_string(),
+                        filename: filename.to_string_lossy().to_string(),
+                        file_path: file_path.to_string_lossy().to_string(),
+                        created_at,
+                        duration_seconds: Some(transcript.duration_seconds),
+                        speaker_count: Some(transcript.speakers.len()),
+                    });
+                }
+            }
+        }
+    }
+
+    // Sort by creation date (newest first)
+    attachments.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+
+    Ok(attachments)
+}
+
+/// Get attachment details with full transcript
+#[tauri::command]
+pub async fn get_attachment(
+    agent_id: String,
+    attachment_id: String,
+) -> Result<crate::transcription::Transcript, String> {
+    let dirs = crate::settings::AppDirs::get()
+        .map_err(|e| e.to_string())?;
+
+    // Extract filename from attachment_id (format: transcript-<filename>.json)
+    let filename = attachment_id.trim_start_matches("transcript-");
+
+    // Parse the filename to get year_month
+    // Format: recording-YYYYMMDD-HHMMSS.json
+    let year = &filename.get(10..14).unwrap_or("2024");
+    let month = &filename.get(14..16).unwrap_or("01");
+    let year_month = format!("{}-{}", year, month);
+
+    let transcript_path = dirs.config_dir
+        .join("agents_data")
+        .join(&agent_id)
+        .join("media")
+        .join(&year_month)
+        .join(filename);
+
+    if !transcript_path.exists() {
+        return Err(format!("Transcript not found: {}", filename));
+    }
+
+    let service = crate::transcription::TranscriptionService::new()
+        .map_err(|e| e.to_string())?;
+
+    service.get_transcript(&transcript_path)
+        .map_err(|e| e.to_string())
+}
+
+/// Delete an attachment (audio, transcript JSON, and plain text files)
+#[tauri::command]
+pub async fn delete_attachment(
+    agent_id: String,
+    attachment_id: String,
+) -> Result<(), String> {
+    let dirs = crate::settings::AppDirs::get()
+        .map_err(|e| e.to_string())?;
+
+    // Extract filename from attachment_id
+    let filename = attachment_id.trim_start_matches("transcript-");
+    let audio_name = filename.trim_end_matches(".json");
+
+    // Parse year_month from filename
+    let year = filename.get(10..14).unwrap_or("2024");
+    let month = filename.get(14..16).unwrap_or("01");
+    let year_month = format!("{}-{}", year, month);
+
+    let media_dir = dirs.config_dir
+        .join("agents_data")
+        .join(&agent_id)
+        .join("media")
+        .join(&year_month);
+
+    // Delete audio file (could be .wav, .mp3, or .webm)
+    for ext in &["wav", "mp3", "webm"] {
+        let audio_path = media_dir.join(format!("{}.{}", audio_name, ext));
+        if audio_path.exists() {
+            fs::remove_file(&audio_path)
+                .map_err(|e| format!("Failed to delete audio file: {}", e))?;
+            tracing::info!("Deleted audio file: {:?}", audio_path);
+        }
+    }
+
+    // Delete transcript JSON
+    let transcript_path = media_dir.join(filename);
+    if transcript_path.exists() {
+        fs::remove_file(&transcript_path)
+            .map_err(|e| format!("Failed to delete transcript: {}", e))?;
+        tracing::info!("Deleted transcript: {:?}", transcript_path);
+    }
+
+    // Delete plain text segments file
+    let segments_path = media_dir.join(format!("{}_segments.txt", audio_name));
+    if segments_path.exists() {
+        fs::remove_file(&segments_path)
+            .map_err(|e| format!("Failed to delete segments file: {}", e))?;
+        tracing::info!("Deleted segments file: {:?}", segments_path);
+    }
 
     Ok(())
 }

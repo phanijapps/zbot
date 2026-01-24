@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback, startTransition } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic, FileText } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -28,7 +28,8 @@ import { ClearHistoryDialog } from "./ClearHistoryDialog";
 import { DaySeparator } from "./DaySeparator";
 import { KnowledgeGraphVisualizer } from "./KnowledgeGraphVisualizer";
 import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
-import type { TranscriptAttachmentInfo } from "./types";
+import { TranscriptCommentDialog, type TranscriptAttachmentInfo } from "./TranscriptCommentDialog";
+import { AttachmentsPanel, type Attachment } from "./AttachmentsPanel";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -98,8 +99,16 @@ export function AgentChannelPanel() {
   // Clear History Dialog state
   const [showClearHistoryDialog, setShowClearHistoryDialog] = useState(false);
 
-  // Voice Recording Dialog state
+  // Voice Recording state
   const [voiceRecordingOpen, setVoiceRecordingOpen] = useState(false);
+
+  // Transcript Comment Dialog state
+  const [commentDialogOpen, setCommentDialogOpen] = useState(false);
+  const [pendingTranscript, setPendingTranscript] = useState<TranscriptAttachmentInfo | null>(null);
+
+  // Attachments Panel state
+  const [attachmentsPanelOpen, setAttachmentsPanelOpen] = useState(false);
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
 
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
@@ -750,7 +759,7 @@ export function AgentChannelPanel() {
   };
 
   /**
-   * Handle transcript complete - add attachment and prompt user for context
+   * Handle transcript complete - open comment dialog for user to add context
    */
   const handleTranscriptComplete = async (filename: string) => {
     if (!selectedAgent || !currentSession) return;
@@ -763,28 +772,107 @@ export function AgentChannelPanel() {
 
       debugLog("Transcript complete:", info);
 
-      // TODO: Add transcript as attachment to the chat
-      // TODO: Trigger agent to ask user for context
-      // TODO: Use entity-extract skill when user provides context
-
-      // For now, add a user message with the transcript info to trigger agent response
-      const contextMessage: MessageWithThinking = {
-        id: crypto.randomUUID(),
-        conversationId: currentSession.id,
-        role: "user",
-        content: `Transcription complete! The recording has been transcribed.\n\n**Duration:** ${Math.round(info.duration_seconds)}s\n**Speakers:** ${info.speaker_count}\n\nWhat was this recording about? I can extract entities and relationships from your description to add to the knowledge graph.`,
-        timestamp: Date.now(),
-      };
-      setMessages((prev) => [...prev, contextMessage]);
-      setLoadedDays((prev) => prev.map((day) =>
-        day.sessionId === currentSession.id
-          ? { ...day, messages: [...day.messages, contextMessage], messageCount: day.messages.length + 1 }
-          : day
-      ));
+      // Set pending transcript and open comment dialog
+      setPendingTranscript(info);
+      setCommentDialogOpen(true);
 
     } catch (err) {
       console.error("Failed to get transcript info:", err);
     }
+  };
+
+  /**
+   * Handle sending transcript with comments to agent
+   */
+  const handleSendTranscript = async (comments: string) => {
+    if (!pendingTranscript || !selectedAgent || !currentSession) return;
+
+    try {
+      // Create message content with file path for agent to scan
+      const messageContent = `TRANSCRIPT_FILE: ${pendingTranscript.file_path}\nUSER_COMMENTS: ${comments}\n\nPlease analyze this transcript, extract entities to the knowledge graph, provide a summary, and suggest actions.`;
+
+      // Create message object for UI
+      const transcriptMessage: MessageWithThinking = {
+        id: crypto.randomUUID(),
+        conversationId: currentSession.id,
+        role: "user",
+        content: messageContent,
+        timestamp: Date.now(),
+      };
+
+      // Add message to UI
+      setMessages((prev) => [...prev, transcriptMessage]);
+      setLoadedDays((prev) => prev.map((day) =>
+        day.sessionId === currentSession.id
+          ? { ...day, messages: [...day.messages, transcriptMessage], messageCount: day.messages.length + 1 }
+          : day
+      ));
+
+      // Add to attachments
+      const newAttachment: Attachment = {
+        id: crypto.randomUUID(),
+        type: "transcript",
+        filename: pendingTranscript.filename,
+        filePath: pendingTranscript.file_path,
+        createdAt: Date.now(),
+        metadata: {
+          duration: pendingTranscript.duration_seconds,
+          speakerCount: pendingTranscript.speaker_count,
+        },
+      };
+      setAttachments((prev) => [...prev, newAttachment]);
+
+      // Execute agent with this message
+      await executeAgentWithMessage(messageContent);
+
+      // Close dialog and clear pending transcript
+      setCommentDialogOpen(false);
+      setPendingTranscript(null);
+
+    } catch (err) {
+      console.error("Failed to send transcript:", err);
+    }
+  };
+
+  /**
+   * Handle attachment actions
+   */
+  const handleViewAttachment = async (attachment: Attachment) => {
+    // TODO: Open transcript viewer dialog
+    debugLog("View attachment:", attachment);
+  };
+
+  const handleSendAttachment = async (attachment: Attachment) => {
+    if (!selectedAgent || !currentSession) return;
+
+    try {
+      const messageContent = `TRANSCRIPT_FILE: ${attachment.filePath}\n\nPlease analyze this transcript, extract entities to the knowledge graph, provide a summary, and suggest actions.`;
+
+      const message: MessageWithThinking = {
+        id: crypto.randomUUID(),
+        conversationId: currentSession.id,
+        role: "user",
+        content: messageContent,
+        timestamp: Date.now(),
+      };
+
+      setMessages((prev) => [...prev, message]);
+      setLoadedDays((prev) => prev.map((day) =>
+        day.sessionId === currentSession.id
+          ? { ...day, messages: [...day.messages, message], messageCount: day.messages.length + 1 }
+          : day
+      ));
+
+      await executeAgentWithMessage(messageContent);
+    } catch (err) {
+      console.error("Failed to send attachment:", err);
+    }
+  };
+
+  const handleDeleteAttachment = async (attachmentId: string) => {
+    // TODO: Implement delete
+    debugLog("Delete attachment:", attachmentId);
+    setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
   };
 
   return (
@@ -829,13 +917,23 @@ export function AgentChannelPanel() {
                   <Network className="size-5" />
                 </button>
                 <button
-                  onClick={() => setVoiceRecordingOpen(true)}
-                  disabled={isLoading}
-                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:opacity-50"
-                  aria-label="Record voice note"
+                  onClick={() => setAttachmentsPanelOpen(true)}
+                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  aria-label="Show attachments"
                 >
-                  <Mic className="size-5" />
+                  <FileText className="size-5" />
                 </button>
+                {/* Only show voice recording if enabled in agent config */}
+                {selectedAgent.voiceRecordingEnabled !== false && (
+                  <button
+                    onClick={() => setVoiceRecordingOpen(true)}
+                    disabled={isLoading}
+                    className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:opacity-50"
+                    aria-label="Record voice note"
+                  >
+                    <Mic className="size-5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -1250,6 +1348,32 @@ export function AgentChannelPanel() {
           agentId={selectedAgent.id}
           agentName={selectedAgent.displayName}
           onTranscriptComplete={handleTranscriptComplete}
+        />
+      )}
+
+      {/* Transcript Comment Dialog */}
+      {pendingTranscript && selectedAgent && (
+        <TranscriptCommentDialog
+          open={commentDialogOpen}
+          transcript={pendingTranscript}
+          agentName={selectedAgent.displayName}
+          onSend={handleSendTranscript}
+          onCancel={() => {
+            setCommentDialogOpen(false);
+            setPendingTranscript(null);
+          }}
+        />
+      )}
+
+      {/* Attachments Panel */}
+      {selectedAgent && (
+        <AttachmentsPanel
+          open={attachmentsPanelOpen}
+          onClose={() => setAttachmentsPanelOpen(false)}
+          attachments={attachments}
+          onView={handleViewAttachment}
+          onSend={handleSendAttachment}
+          onDelete={handleDeleteAttachment}
         />
       )}
     </div>

@@ -192,6 +192,10 @@ pub fn run() {
             commands::get_recording_transcript,
             commands::has_transcript,
             commands::get_transcript_attachment_info,
+            // Attachment commands
+            commands::list_attachments,
+            commands::get_attachment,
+            commands::delete_attachment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
