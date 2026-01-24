@@ -128,14 +128,9 @@ pub fn copy_builtin_skills(vault_path: &PathBuf) -> Result<(), String> {
 
     let skills_dir = vault_path.join("skills");
     
-    // Get the path to the templates directory (relative to this crate)
-    // The templates are in src-tauri/templates/default-skills/
-    let crate_dir = std::env::var("CARGO_MANIFEST_DIR")
-        .unwrap_or_else(|_| ".".to_string());
-    let templates_dir = std::path::PathBuf::from(crate_dir)
-        .join("templates")
-        .join("default-skills");
-
+    // Try multiple approaches to find the templates directory
+    let templates_dir = find_templates_dir()?;
+    
     for skill_id in BUILTIN_SKILLS {
         let source_dir = templates_dir.join(skill_id);
         let target_dir = skills_dir.join(skill_id);
@@ -157,9 +152,73 @@ pub fn copy_builtin_skills(vault_path: &PathBuf) -> Result<(), String> {
 
         // Copy all files from source to target
         copy_dir_recursive(&source_dir, &target_dir)?;
+        
+        tracing::info!("Copied builtin skill '{}' to vault", skill_id);
     }
 
     Ok(())
+}
+
+/// Find the templates directory using multiple fallback approaches
+fn find_templates_dir() -> Result<std::path::PathBuf, String> {
+    use std::fs;
+    
+    // Approach 1: Try CARGO_MANIFEST_DIR (set during build)
+    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
+        let path = std::path::PathBuf::from(manifest_dir)
+            .join("templates")
+            .join("default-skills");
+        if path.exists() {
+            tracing::info!("Found templates via CARGO_MANIFEST_DIR: {:?}", path);
+            return Ok(path);
+        }
+    }
+    
+    // Approach 2: Try relative to current exe (dev: target/debug/ -> ../../templates/)
+    if let Ok(exe_path) = std::env::current_exe() {
+        // In development: exe is in src-tauri/target/debug/
+        // Templates are in src-tauri/templates/
+        if let Some(parent) = exe_path.parent() {
+            // target/debug -> target -> src-tauri -> templates
+            if let Some(target_dir) = parent.parent() {
+                let src_tauri = target_dir.join("src-tauri");
+                let path = src_tauri.join("templates").join("default-skills");
+                if path.exists() {
+                    tracing::info!("Found templates via exe path: {:?}", path);
+                    return Ok(path);
+                }
+            }
+        }
+    }
+    
+    // Approach 3: Try current directory (for production installs)
+    let current_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to get current directory: {}", e))?;
+    let path = current_dir.join("templates").join("default-skills");
+    if path.exists() {
+        tracing::info!("Found templates via current directory: {:?}", path);
+        return Ok(path);
+    }
+    
+    // Approach 4: Try src-tauri subdirectory (common development setup)
+    let path = current_dir.join("src-tauri").join("templates").join("default-skills");
+    if path.exists() {
+        tracing::info!("Found templates via src-tauri subdirectory: {:?}", path);
+        return Ok(path);
+    }
+    
+    Err(format!(
+        "Could not find templates directory. Searched in:\n\
+         - CARGO_MANIFEST_DIR/templates\n\
+         - Exe path/../../src-tauri/templates\n\
+         - ./templates\n\
+         - ./src-tauri/templates\n\
+         \n\
+         Current directory: {:?}\n\
+         Exe path: {:?}",
+         current_dir,
+         std::env::current_exe()
+    ))
 }
 
 /// Recursively copy a directory's contents
