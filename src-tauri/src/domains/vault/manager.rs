@@ -118,10 +118,56 @@ pub fn create_default_vault_configs(vault_path: &PathBuf) -> Result<(), String> 
             .map_err(|e| format!("Failed to create mcps.json: {}", e))?;
     }
 
-    // Create empty providers.json (users will add their own providers with API keys)
+    // Create default providers.json with common providers (dummy API keys)
     let providers_path = vault_path.join("providers.json");
     if !providers_path.exists() {
-        let default_providers = serde_json::json!([]);
+        let default_providers = serde_json::json!([
+          {
+            "id": "openai",
+            "name": "OpenAI",
+            "description": "OpenAI - GPT-4, GPT-3.5, and more",
+            "apiKey": "",
+            "baseUrl": "https://api.openai.com/v1",
+            "models": ["gpt-4o", "gpt-4o-mini", "gpt-3.5-turbo", "o1-mini", "o1-preview"],
+            "verified": false
+          },
+          {
+            "id": "anthropic",
+            "name": "Anthropic",
+            "description": "Anthropic - Claude and other models",
+            "apiKey": "",
+            "baseUrl": "https://api.anthropic.com",
+            "models": ["claude-sonnet-4-20250514", "claude-3-5-sonnet-20241022", "claude-3-haiku-20240307"],
+            "verified": false
+          },
+          {
+            "id": "openrouter",
+            "name": "OpenRouter",
+            "description": "OpenRouter - Access to multiple LLMs",
+            "apiKey": "",
+            "baseUrl": "https://openrouter.ai/api/v1",
+            "models": ["anthropic/claude-opus", "openai/gpt-4-turbo", "google/gemini-pro"],
+            "verified": false
+          },
+          {
+            "id": "ollama",
+            "name": "Ollama",
+            "description": "Ollama - Run local LLMs (no API key needed)",
+            "apiKey": "ollama",
+            "baseUrl": "http://localhost:11434/v1",
+            "models": ["llama3.2", "llama3.1", "deepseek-r1", "qwen2.5", "mistral"],
+            "verified": false
+          },
+          {
+            "id": "groq",
+            "name": "Groq",
+            "description": "Groq - Fast inference with free API",
+            "apiKey": "",
+            "baseUrl": "https://api.groq.com/openai/v1",
+            "models": ["llama-3.3-70b-versatile", "mixtral-8x7b-32768"],
+            "verified": false
+          }
+        ]);
         fs::write(&providers_path, serde_json::to_string_pretty(&default_providers).unwrap())
             .map_err(|e| format!("Failed to create providers.json: {}", e))?;
     }
