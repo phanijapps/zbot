@@ -7,6 +7,7 @@ use super::types::Vault;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+extern crate dirs;
 
 /// Thread-safe global vault path
 /// This stores the currently active vault's path
@@ -82,19 +83,46 @@ pub fn validate_vault_path(path: &PathBuf) -> Result<(), String> {
 pub fn create_default_vault_configs(vault_path: &PathBuf) -> Result<(), String> {
     use std::fs;
 
-    // Create empty mcps.json if it doesn't exist
+    // Create default mcps.json with common MCP servers (no sensitive data)
     let mcps_path = vault_path.join("mcps.json");
     if !mcps_path.exists() {
-        let empty_mcps = serde_json::json!([]);
-        fs::write(&mcps_path, serde_json::to_string_pretty(&empty_mcps).unwrap())
+        let default_mcps = serde_json::json!([
+          {
+            "type": "stdio",
+            "id": "filesystem",
+            "name": "Filesystem",
+            "description": "Access and manipulate files in specified directories",
+            "command": "npx",
+            "args": ["-y", "@modelcontextprotocol/server-filesystem", "{HOME}/Downloads"],
+            "enabled": false,
+            "validated": false
+          },
+          {
+            "type": "stdio",
+            "id": "time",
+            "name": "Time",
+            "description": "Get current time and perform time calculations",
+            "command": "uvx",
+            "args": ["mcp-server-time"],
+            "enabled": false,
+            "validated": false
+          }
+        ]);
+        // Replace {HOME} placeholder with actual home directory
+        let mcps_content = serde_json::to_string_pretty(&default_mcps)
+            .map_err(|e| format!("Failed to serialize mcps.json: {}", e))?;
+        let mcps_content = mcps_content.replace("{HOME}", &dirs::home_dir()
+            .unwrap_or_else(|| PathBuf::from("~"))
+            .to_string_lossy());
+        fs::write(&mcps_path, mcps_content)
             .map_err(|e| format!("Failed to create mcps.json: {}", e))?;
     }
 
-    // Create empty providers.json if it doesn't exist
+    // Create empty providers.json (users will add their own providers with API keys)
     let providers_path = vault_path.join("providers.json");
     if !providers_path.exists() {
-        let empty_providers = serde_json::json!({});
-        fs::write(&providers_path, serde_json::to_string_pretty(&empty_providers).unwrap())
+        let default_providers = serde_json::json!([]);
+        fs::write(&providers_path, serde_json::to_string_pretty(&default_providers).unwrap())
             .map_err(|e| format!("Failed to create providers.json: {}", e))?;
     }
 
@@ -114,35 +142,95 @@ pub fn create_default_vault_configs(vault_path: &PathBuf) -> Result<(), String> 
     // Copy builtin skills to the vault
     copy_builtin_skills(vault_path)?;
 
+    // Deploy default agents (e.g., agent-creator)
+    deploy_default_agents(vault_path)?;
+
     Ok(())
 }
 
-/// List of builtin skills that should be available in every vault
-pub const BUILTIN_SKILLS: &[&str] = &[
-    "zero-entity-extract",  // Entity extraction from transcripts
-];
+/// Deploy default agents from templates to the vault
+fn deploy_default_agents(vault_path: &PathBuf) -> Result<(), String> {
+    use std::fs;
 
-/// Copy builtin skills from templates to the vault's skills directory
+    let agents_dir = vault_path.join("agents");
+    let agent_creator_dir = agents_dir.join("agent-creator");
+
+    // Skip if agent-creator already exists
+    if agent_creator_dir.exists() {
+        tracing::debug!("agent-creator already exists in vault");
+        return Ok(());
+    }
+
+    // Get the path to the templates directory (relative to crate root)
+    let crate_dir = std::env::var("CARGO_MANIFEST_DIR")
+        .unwrap_or_else(|_| ".".to_string());
+    let templates_dir = std::path::PathBuf::from(crate_dir)
+        .join("templates")
+        .join("default-agents")
+        .join("agent-creator");
+    
+    // If templates directory doesn't exist, skip deployment
+    if !templates_dir.exists() {
+        tracing::warn!("Agent templates directory not found at {:?}, skipping agent deployment", templates_dir);
+        return Ok(());
+    }
+
+    // Create agent directory
+    fs::create_dir_all(&agent_creator_dir)
+        .map_err(|e| format!("Failed to create agent directory: {}", e))?;
+
+    // Copy config.yaml
+    let config_src = templates_dir.join("config.yaml");
+    let config_dst = agent_creator_dir.join("config.yaml");
+    fs::copy(&config_src, &config_dst)
+        .map_err(|e| format!("Failed to copy config.yaml: {}", e))?;
+
+    // Copy AGENTS.md
+    let agents_md_src = templates_dir.join("AGENTS.md");
+    let agents_md_dst = agent_creator_dir.join("AGENTS.md");
+    fs::copy(&agents_md_src, &agents_md_dst)
+        .map_err(|e| format!("Failed to copy AGENTS.md: {}", e))?;
+
+    tracing::info!("Deployed agent-creator to vault");
+
+    Ok(())
+}
+
+/// Builtin skills embedded in the binary
+/// Each skill has its content embedded at compile time
+pub struct BuiltinSkill {
+    pub id: &'static str,
+    pub skill_md: &'static str,
+}
+
+/// List of builtin skills that should be available in every vault
+/// The skill content is embedded directly into the binary using include_str!
+pub fn get_builtin_skills() -> Vec<BuiltinSkill> {
+    vec![
+        BuiltinSkill {
+            id: "zero-entity-extract",
+            skill_md: include_str!("../../../templates/default-skills/zero-entity-extract/SKILL.md"),
+        },
+        BuiltinSkill {
+            id: "zero-agent-creator",
+            skill_md: include_str!("../../../templates/default-skills/zero-agent-creator/SKILL.md"),
+        },
+    ]
+}
+
+/// Copy builtin skills from embedded content to the vault's skills directory
 pub fn copy_builtin_skills(vault_path: &PathBuf) -> Result<(), String> {
     use std::fs;
 
     let skills_dir = vault_path.join("skills");
     
-    // Try multiple approaches to find the templates directory
-    let templates_dir = find_templates_dir()?;
-    
-    for skill_id in BUILTIN_SKILLS {
-        let source_dir = templates_dir.join(skill_id);
-        let target_dir = skills_dir.join(skill_id);
-
-        // Skip if source doesn't exist (e.g., running from a different location)
-        if !source_dir.exists() {
-            tracing::warn!("Builtin skill not found in templates: {}", skill_id);
-            continue;
-        }
+    for skill in get_builtin_skills() {
+        let target_dir = skills_dir.join(skill.id);
+        let target_file = target_dir.join("SKILL.md");
 
         // Skip if target already exists (don't overwrite user customizations)
-        if target_dir.exists() {
+        if target_file.exists() {
+            tracing::debug!("Builtin skill '{}' already exists in vault, skipping", skill.id);
             continue;
         }
 
@@ -150,75 +238,14 @@ pub fn copy_builtin_skills(vault_path: &PathBuf) -> Result<(), String> {
         fs::create_dir_all(&target_dir)
             .map_err(|e| format!("Failed to create skill directory: {}", e))?;
 
-        // Copy all files from source to target
-        copy_dir_recursive(&source_dir, &target_dir)?;
+        // Write the embedded skill content
+        fs::write(&target_file, skill.skill_md)
+            .map_err(|e| format!("Failed to write skill file: {}", e))?;
         
-        tracing::info!("Copied builtin skill '{}' to vault", skill_id);
+        tracing::info!("Installed builtin skill '{}' to vault", skill.id);
     }
 
     Ok(())
-}
-
-/// Find the templates directory using multiple fallback approaches
-fn find_templates_dir() -> Result<std::path::PathBuf, String> {
-    use std::fs;
-    
-    // Approach 1: Try CARGO_MANIFEST_DIR (set during build)
-    if let Ok(manifest_dir) = std::env::var("CARGO_MANIFEST_DIR") {
-        let path = std::path::PathBuf::from(manifest_dir)
-            .join("templates")
-            .join("default-skills");
-        if path.exists() {
-            tracing::info!("Found templates via CARGO_MANIFEST_DIR: {:?}", path);
-            return Ok(path);
-        }
-    }
-    
-    // Approach 2: Try relative to current exe (dev: target/debug/ -> ../../templates/)
-    if let Ok(exe_path) = std::env::current_exe() {
-        // In development: exe is in src-tauri/target/debug/
-        // Templates are in src-tauri/templates/
-        if let Some(parent) = exe_path.parent() {
-            // target/debug -> target -> src-tauri -> templates
-            if let Some(target_dir) = parent.parent() {
-                let src_tauri = target_dir.join("src-tauri");
-                let path = src_tauri.join("templates").join("default-skills");
-                if path.exists() {
-                    tracing::info!("Found templates via exe path: {:?}", path);
-                    return Ok(path);
-                }
-            }
-        }
-    }
-    
-    // Approach 3: Try current directory (for production installs)
-    let current_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to get current directory: {}", e))?;
-    let path = current_dir.join("templates").join("default-skills");
-    if path.exists() {
-        tracing::info!("Found templates via current directory: {:?}", path);
-        return Ok(path);
-    }
-    
-    // Approach 4: Try src-tauri subdirectory (common development setup)
-    let path = current_dir.join("src-tauri").join("templates").join("default-skills");
-    if path.exists() {
-        tracing::info!("Found templates via src-tauri subdirectory: {:?}", path);
-        return Ok(path);
-    }
-    
-    Err(format!(
-        "Could not find templates directory. Searched in:\n\
-         - CARGO_MANIFEST_DIR/templates\n\
-         - Exe path/../../src-tauri/templates\n\
-         - ./templates\n\
-         - ./src-tauri/templates\n\
-         \n\
-         Current directory: {:?}\n\
-         Exe path: {:?}",
-         current_dir,
-         std::env::current_exe()
-    ))
 }
 
 /// Recursively copy a directory's contents

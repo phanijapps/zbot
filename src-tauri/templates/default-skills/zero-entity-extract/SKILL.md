@@ -1,3 +1,10 @@
+---
+name: zero-entity-extract
+displayName: Entity Extractor
+description: Extract entities, action items, and summaries from transcripts
+category: analysis
+---
+
 # Entity Extraction from Transcript
 
 When a user provides a transcript file path (via TRANSCRIPT_FILE annotation):
