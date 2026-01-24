@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Entity type classification
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum EntityType {
     /// Person (e.g., "John Doe")
     Person,
@@ -23,6 +23,26 @@ pub enum EntityType {
     Project,
     /// Custom entity type
     Custom(String),
+}
+
+// Custom serialization to serialize as string instead of {Custom: "value"} format
+impl Serialize for EntityType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EntityType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(EntityType::from_str(&s))
+    }
 }
 
 impl EntityType {
@@ -54,7 +74,7 @@ impl EntityType {
 }
 
 /// Relationship type classification
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum RelationshipType {
     /// Works for/at
     WorksFor,
@@ -72,6 +92,26 @@ pub enum RelationshipType {
     Mentions,
     /// Custom relationship type
     Custom(String),
+}
+
+// Custom serialization to serialize as string instead of {Custom: "value"} format
+impl Serialize for RelationshipType {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for RelationshipType {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(RelationshipType::from_str(&s))
+    }
 }
 
 impl RelationshipType {

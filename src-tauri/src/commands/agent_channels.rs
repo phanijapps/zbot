@@ -747,59 +747,141 @@ impl SqliteSessionRepository {
         let mut count = 0;
         if let Ok(mut sess) = session.0.lock() {
             for msg in messages {
-                let mut parts = Vec::new();
+                let has_tool_calls = msg.tool_calls.as_ref()
+                    .and_then(|v| v.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
 
-                // Add text part
-                parts.push(Part::Text { text: msg.content });
+                let has_tool_results = msg.tool_results.as_ref()
+                    .and_then(|v| v.as_array())
+                    .map(|a| !a.is_empty())
+                    .unwrap_or(false);
 
-                // Add tool calls if present
-                if let Some(tool_calls) = &msg.tool_calls {
-                    if let Some(calls_array) = tool_calls.as_array() {
-                        for call in calls_array {
-                            if let (Some(id), Some(name), Some(args)) = (
-                                call.get("id").and_then(|v| v.as_str()),
-                                call.get("name").and_then(|v| v.as_str()),
-                                call.get("arguments"),
-                            ) {
-                                parts.push(Part::FunctionCall {
-                                    id: Some(id.to_string()),
-                                    name: name.to_string(),
-                                    args: args.clone(),
-                                });
+                // If the message has both tool_calls AND tool_results, we need to split it
+                // into TWO separate Content objects to match OpenAI's expected format:
+                // 1. Assistant message with tool_calls
+                // 2. Separate tool messages for each result
+                if has_tool_calls && has_tool_results {
+                    // First Content: Assistant message with text + tool_calls
+                    let mut assistant_parts = Vec::new();
+                    assistant_parts.push(Part::Text { text: msg.content.clone() });
+
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        if let Some(calls_array) = tool_calls.as_array() {
+                            for call in calls_array {
+                                if let (Some(id), Some(name), Some(args)) = (
+                                    call.get("id").and_then(|v| v.as_str()),
+                                    call.get("name").and_then(|v| v.as_str()),
+                                    call.get("arguments"),
+                                ) {
+                                    assistant_parts.push(Part::FunctionCall {
+                                        id: Some(id.to_string()),
+                                        name: name.to_string(),
+                                        args: args.clone(),
+                                    });
+                                }
                             }
                         }
                     }
-                }
 
-                // Add tool results if present
-                if let Some(tool_results) = &msg.tool_results {
-                    if let Some(results_array) = tool_results.as_array() {
-                        for result in results_array {
-                            if let (Some(id), Some(output)) = (
-                                result.get("tool_call_id").and_then(|v| v.as_str()),
-                                result.get("output"),
-                            ) {
-                                let response = if let Some(s) = output.as_str() {
-                                    s.to_string()
-                                } else {
-                                    output.to_string()
-                                };
-                                parts.push(Part::FunctionResponse {
-                                    id: id.to_string(),
-                                    response,
-                                });
+                    let assistant_content = Content {
+                        role: msg.role.clone(),
+                        parts: assistant_parts,
+                    };
+                    sess.add_content(assistant_content);
+                    count += 1;
+
+                    // Second Content: Tool results (becomes "tool" role in OpenAI format)
+                    // Group all tool results into a single Content with multiple FunctionResponse parts
+                    let mut tool_result_parts = Vec::new();
+                    if let Some(tool_results) = &msg.tool_results {
+                        if let Some(results_array) = tool_results.as_array() {
+                            for result in results_array {
+                                if let (Some(id), Some(output)) = (
+                                    result.get("tool_call_id").and_then(|v| v.as_str()),
+                                    result.get("output"),
+                                ) {
+                                    let response = if let Some(s) = output.as_str() {
+                                        s.to_string()
+                                    } else {
+                                        output.to_string()
+                                    };
+                                    tool_result_parts.push(Part::FunctionResponse {
+                                        id: id.to_string(),
+                                        response,
+                                    });
+                                }
                             }
                         }
                     }
+
+                    // Create a separate content for tool results
+                    // The OpenAI converter will handle splitting multiple FunctionResponse parts
+                    // into separate "tool" role messages
+                    if !tool_result_parts.is_empty() {
+                        let tool_results_content = Content {
+                            role: "tool".to_string(),  // Mark as tool role
+                            parts: tool_result_parts,
+                        };
+                        sess.add_content(tool_results_content);
+                        count += 1;
+                    }
+                } else {
+                    // Normal case: message has only text, only tool_calls, or only tool_results
+                    let mut parts = Vec::new();
+
+                    // Add text part
+                    parts.push(Part::Text { text: msg.content });
+
+                    // Add tool calls if present
+                    if let Some(tool_calls) = &msg.tool_calls {
+                        if let Some(calls_array) = tool_calls.as_array() {
+                            for call in calls_array {
+                                if let (Some(id), Some(name), Some(args)) = (
+                                    call.get("id").and_then(|v| v.as_str()),
+                                    call.get("name").and_then(|v| v.as_str()),
+                                    call.get("arguments"),
+                                ) {
+                                    parts.push(Part::FunctionCall {
+                                        id: Some(id.to_string()),
+                                        name: name.to_string(),
+                                        args: args.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    // Add tool results if present
+                    if let Some(tool_results) = &msg.tool_results {
+                        if let Some(results_array) = tool_results.as_array() {
+                            for result in results_array {
+                                if let (Some(id), Some(output)) = (
+                                    result.get("tool_call_id").and_then(|v| v.as_str()),
+                                    result.get("output"),
+                                ) {
+                                    let response = if let Some(s) = output.as_str() {
+                                        s.to_string()
+                                    } else {
+                                        output.to_string()
+                                    };
+                                    parts.push(Part::FunctionResponse {
+                                        id: id.to_string(),
+                                        response,
+                                    });
+                                }
+                            }
+                        }
+                    }
+
+                    let content = Content {
+                        role: msg.role,
+                        parts,
+                    };
+
+                    sess.add_content(content);
+                    count += 1;
                 }
-
-                let content = Content {
-                    role: msg.role,
-                    parts,
-                };
-
-                sess.add_content(content);
-                count += 1;
             }
         }
 

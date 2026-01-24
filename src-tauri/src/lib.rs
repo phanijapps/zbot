@@ -7,9 +7,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // Modules
+mod audio_recorder;
 mod commands;
 mod settings;
 mod domains;
+mod transcription;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -172,6 +174,24 @@ pub fn run() {
             commands::create_agent_conversation,
             commands::get_or_create_conversation,
             commands::clear_executor_cache,
+            // Knowledge Graph commands
+            commands::get_knowledge_graph,
+            commands::get_knowledge_graph_entities,
+            commands::get_knowledge_graph_relationships,
+            // Media commands
+            commands::get_audio_input_devices,
+            commands::start_audio_recording,
+            commands::stop_audio_recording,
+            commands::is_recording_audio,
+            commands::save_audio_recording,
+            commands::add_recording_to_kg,
+            // Transcription commands
+            commands::install_transcription_script,
+            commands::check_transcription_dependencies,
+            commands::transcribe_recording,
+            commands::get_recording_transcript,
+            commands::has_transcript,
+            commands::get_transcript_attachment_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

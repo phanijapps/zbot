@@ -15,7 +15,7 @@ use zero_app::{Tool, ToolContext, Result as ZeroResult, ZeroError, Toolset, Mute
 use crate::settings::AppDirs;
 use crate::domains::agent_runtime::{
     config_adapter::{AgentYamlConfig, ConfigAdapter},
-    middleware_integration::{MiddlewareFactory, MiddlewareExecutor, convert_middleware_config},
+    middleware_integration::{MiddlewareFactory, MiddlewareExecutor},
     filesystem::TauriFileSystemContext,
     McpManager,
     state_keys,
@@ -39,7 +39,6 @@ pub struct ZeroExecutorConfig {
     pub provider_id: String,
     pub llm_config: LlmConfig,
     pub conversation_id: Option<String>,
-    pub middleware_config: Option<MiddlewareConfig>,
 }
 
 // ============================================================================
@@ -318,19 +317,26 @@ impl ZeroAppExecutor {
                 );
             }
             // Set db_path for knowledge graph tools (always set, not in saved state)
-            let db_path_str = db_path.to_string_lossy().to_string();
+            // Note: This is the path to the knowledge graph database, not the agent channels database
+            let kg_db_path = dirs.db_dir.join("knowledge-graph.db");
+            let kg_db_path_str = kg_db_path.to_string_lossy().to_string();
             session.state_mut().set(
                 state_keys::state_keys::DB_PATH.to_string(),
-                json!(db_path_str),
+                json!(kg_db_path_str),
             );
-            tracing::info!("Session ready: conversation_id={}, agent_id={}, provider_id={}",
-                conversation_id, config.agent_id, config.provider_id);
+            tracing::info!("Session ready: conversation_id={}, agent_id={}, provider_id={}, kg_db_path={}",
+                conversation_id, config.agent_id, config.provider_id, kg_db_path_str);
         }
 
-        // Create middleware executor with minimal pipeline
-        let middleware_executor = Arc::new(MiddlewareExecutor::new(
-            Arc::new(MiddlewarePipeline::new())
-        ));
+        // Create middleware executor from config
+        let factory = MiddlewareFactory::new(llm.clone(), config.provider_id.clone());
+        let middleware_executor = factory.create_executor(config.agent_config.middleware.as_ref())
+            .await
+            .unwrap_or_else(|e| {
+                // If middleware creation fails, use minimal pipeline
+                tracing::warn!("Failed to create middleware from config: {}, using minimal pipeline", e);
+                Arc::new(MiddlewareExecutor::new(Arc::new(MiddlewarePipeline::new())))
+            });
 
         Ok(Self {
             config,
@@ -345,14 +351,42 @@ impl ZeroAppExecutor {
 
     /// Run the agent with a user message
     pub async fn run(&self, user_message: String) -> TResult<Vec<Event>> {
-        // Apply middleware preprocessing if needed
-        let user_content = Content::user(&user_message);
+        // Apply middleware preprocessing to conversation history
+        let history = {
+            let session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
+            session.conversation_history()
+        };
 
-        // Add user content to session (synchronous)
+        // Build messages array for middleware (history + new user message)
+        let mut messages = Vec::new();
+        messages.extend(history);
+        messages.push(Content::user(&user_message));
+
+        // Estimate tokens and get context window
+        let estimated_tokens = self.middleware_executor.estimate_tokens(&messages);
+        let context_window = self.middleware_executor.get_context_window(&self.config.llm_config.model);
+
+        // Apply middleware preprocessing
+        let processed_messages = self.middleware_executor.apply_preprocessing(
+            messages.clone(),
+            messages.len(),
+            estimated_tokens,
+            context_window,
+        ).await.unwrap_or_else(|e| {
+            tracing::warn!("Middleware preprocessing failed: {}, using original messages", e);
+            messages
+        });
+
+        // Add processed messages to session
         {
             let mut session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
-            session.add_content(user_content.clone());
+            for msg in &processed_messages {
+                session.add_content(msg.clone());
+            }
         }
+
+        // Create invocation context with the last processed message (user message)
+        let user_content = processed_messages.into_iter().last().unwrap_or_else(|| Content::user(&user_message));
 
         // Create invocation context with user content
         let ctx = self.create_invocation_context(user_content)?;
@@ -917,10 +951,6 @@ pub async fn create_zero_executor(
         max_tokens: agent_config.max_tokens,
     };
 
-    // Create middleware config
-    let middleware_config = agent_config.middleware.as_ref()
-        .and_then(|m| convert_middleware_config(Some(m)));
-
     // Create executor config
     let executor_config = ZeroExecutorConfig {
         agent_id: agent_id.to_string(),
@@ -928,7 +958,6 @@ pub async fn create_zero_executor(
         provider_id: provider_id.clone(),
         llm_config,
         conversation_id,
-        middleware_config,
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await

@@ -73,17 +73,30 @@ impl OpenAiLlm {
 
         // Add contents as messages
         for content in &request.contents {
-            let (text_parts, tool_calls, tool_response_id, tool_response_content) = self.extract_parts(content);
+            let (text_parts, tool_calls, tool_responses) = self.extract_parts(content);
 
-            // Check if this is a tool response (has tool_response_id)
-            if let Some(response_id) = tool_response_id {
-                // This is a tool response message
-                messages.push(OpenAiMessage {
-                    role: "tool".to_string(),
-                    content: tool_response_content,
-                    tool_calls: None,
-                    tool_call_id: Some(response_id),
-                });
+            // Special handling for role="tool" with multiple FunctionResponse parts
+            // Create one OpenAI message per FunctionResponse
+            if content.role == "tool" && !tool_responses.is_empty() {
+                for (response_id, response_content) in tool_responses {
+                    messages.push(OpenAiMessage {
+                        role: "tool".to_string(),
+                        content: Some(response_content),
+                        tool_calls: None,
+                        tool_call_id: Some(response_id),
+                    });
+                }
+            } else if !tool_responses.is_empty() {
+                // Content with tool responses but role != "tool"
+                // Create tool messages for each response
+                for (response_id, response_content) in tool_responses {
+                    messages.push(OpenAiMessage {
+                        role: "tool".to_string(),
+                        content: Some(response_content),
+                        tool_calls: None,
+                        tool_call_id: Some(response_id),
+                    });
+                }
             } else {
                 // Regular user/assistant message
                 messages.push(OpenAiMessage {
@@ -99,12 +112,12 @@ impl OpenAiLlm {
     }
 
     /// Extract text and tool calls from Content parts.
-    /// Returns (text_parts, tool_calls, tool_response_id, tool_response_content)
-    fn extract_parts(&self, content: &zero_core::types::Content) -> (Vec<String>, Vec<OpenAiToolCall>, Option<String>, Option<String>) {
+    /// Returns (text_parts, tool_calls, tool_responses)
+    /// where tool_responses is a Vec of (tool_call_id, response_content) tuples
+    fn extract_parts(&self, content: &zero_core::types::Content) -> (Vec<String>, Vec<OpenAiToolCall>, Vec<(String, String)>) {
         let mut text_parts = Vec::new();
         let mut tool_calls = Vec::new();
-        let mut tool_response_id: Option<String> = None;
-        let mut tool_response_content: Option<String> = None;
+        let mut tool_responses = Vec::new();
 
         for part in &content.parts {
             match part {
@@ -121,9 +134,8 @@ impl OpenAiLlm {
                     });
                 }
                 Part::FunctionResponse { id, response } => {
-                    // For tool responses, we need to capture the ID and content
-                    tool_response_id = Some(id.clone());
-                    tool_response_content = Some(response.clone());
+                    // Collect all tool responses (not just one)
+                    tool_responses.push((id.clone(), response.clone()));
                 }
                 Part::Binary { .. } => {
                     // Binary parts are ignored for now
@@ -131,7 +143,7 @@ impl OpenAiLlm {
             }
         }
 
-        (text_parts, tool_calls, tool_response_id, tool_response_content)
+        (text_parts, tool_calls, tool_responses)
     }
 
     /// Convert OpenAI response to our format.
@@ -217,7 +229,7 @@ impl OpenAiLlm {
             .cloned()
             .unwrap_or_default();
 
-        tracing::info!("from_openai_response: Extracted text with len={}, text='{}'", text.len(), text);
+        tracing::debug!("from_openai_response: Extracted text with len={}, text='{}'", text.len(), text);
 
         let usage = response.usage.map(|u| TokenUsage {
             prompt_tokens: u.prompt_tokens,
@@ -293,15 +305,15 @@ impl Llm for OpenAiLlm {
         let openai_request = self.to_openai_request(&request);
 
         // Debug: Log the request being sent
-        tracing::info!("OpenAI LLM Request:");
-        tracing::info!("  model: {}", openai_request.model);
-        tracing::info!("  system_instruction: {}", request.system_instruction.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string()));
-        tracing::info!("  messages.count: {}", openai_request.messages.len());
+        tracing::debug!("OpenAI LLM Request:");
+        tracing::debug!("  model: {}", openai_request.model);
+        tracing::debug!("  system_instruction: {}", request.system_instruction.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string()));
+        tracing::debug!("  messages.count: {}", openai_request.messages.len());
         for (i, msg) in openai_request.messages.iter().enumerate() {
-            tracing::info!("  message[{}]: role={}, content.len={:?}, tool_calls={}",
+            tracing::debug!("  message[{}]: role={}, content.len={:?}, tool_calls={}",
                 i, msg.role, msg.content.as_ref().map(|c| c.len()), msg.tool_calls.is_some());
         }
-        tracing::info!("  tools: {:?}", openai_request.tools.as_ref().map(|t| t.len()));
+        tracing::debug!("  tools: {:?}", openai_request.tools.as_ref().map(|t| t.len()));
 
         let response = self
             .client
@@ -325,15 +337,16 @@ impl Llm for OpenAiLlm {
             .map_err(|e| ZeroError::Llm(format!("Response parse failed: {}", e)))?;
 
         // Debug: Log the API response
-        tracing::info!("OpenAI LLM Response:");
-        tracing::info!("  choices.count: {}", openai_response.choices.len());
+        tracing::debug!("OpenAI LLM Response:");
+        tracing::debug!("  choices.count: {}", openai_response.choices.len());
         if let Some(choice) = openai_response.choices.first() {
-            tracing::info!("  choice[0].message.content: {}",
+            tracing::debug!("  choice[0].message.content: {}",
                 choice.message.content.as_ref().map(|c| format!("{} chars", c.len())).as_deref().unwrap_or("None"));
-            tracing::info!("  choice[0].message.tool_calls: {:?}", choice.message.tool_calls);
-            tracing::info!("  choice[0].finish_reason: {:?}", choice.finish_reason);
+            // Redacted: tool_calls may contain sensitive arguments
+            tracing::debug!("  choice[0].message.tool_calls.count: {:?}", choice.message.tool_calls.as_ref().map(|t| t.len()));
+            tracing::debug!("  choice[0].finish_reason: {:?}", choice.finish_reason);
         }
-        tracing::info!("  usage: {:?}", openai_response.usage);
+        tracing::debug!("  usage: {:?}", openai_response.usage);
 
         Ok(self.from_openai_response(openai_response))
     }

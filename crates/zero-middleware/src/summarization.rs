@@ -77,16 +77,29 @@ impl PreProcessMiddleware for SummarizationMiddleware {
         let _to_summarize_msgs = &messages[..to_summarize];
         let keep_msgs = &messages[keep_start..];
 
+        tracing::info!(
+            "SUMMARIZATION: Compressing conversation - original: {} messages, summarizing: {}, keeping: {} (estimated tokens: {}, context window: {})",
+            messages.len(),
+            to_summarize,
+            to_keep,
+            context.estimated_tokens,
+            context.context_window
+        );
+
         // Create a summary placeholder
         // In a real implementation, this would call an LLM to summarize
+        let summary_text = format!(
+            "{} [{} previous messages were summarized]",
+            self.config.summary_prefix,
+            to_summarize
+        );
+
+        tracing::info!("SUMMARIZATION: Summary content: {}", summary_text);
+
         let summary_content = Content {
             role: "system".to_string(),
             parts: vec![zero_core::Part::Text {
-                text: format!(
-                    "{} [{} previous messages were summarized]",
-                    self.config.summary_prefix,
-                    to_summarize
-                ),
+                text: summary_text,
             }],
         };
 

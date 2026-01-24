@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback, startTransition } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -26,6 +26,9 @@ import {
 } from "@/domains/agent-runtime/components";
 import { ClearHistoryDialog } from "./ClearHistoryDialog";
 import { DaySeparator } from "./DaySeparator";
+import { KnowledgeGraphVisualizer } from "./KnowledgeGraphVisualizer";
+import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
+import type { TranscriptAttachmentInfo } from "./types";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -89,8 +92,14 @@ export function AgentChannelPanel() {
   // History Panel state
   const [historyPanelOpen, setHistoryPanelOpen] = useState(false);
 
+  // Knowledge Graph Panel state
+  const [knowledgeGraphOpen, setKnowledgeGraphOpen] = useState(false);
+
   // Clear History Dialog state
   const [showClearHistoryDialog, setShowClearHistoryDialog] = useState(false);
+
+  // Voice Recording Dialog state
+  const [voiceRecordingOpen, setVoiceRecordingOpen] = useState(false);
 
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
@@ -174,14 +183,31 @@ export function AgentChannelPanel() {
             ? msg.toolCalls as any[]
             : Object.values(msg.toolCalls);
 
+          // Convert toolResults array to a map for easy lookup by tool_call_id
+          const toolResultsMap = new Map<string, string>();
+          if (Array.isArray(msg.toolResults)) {
+            for (const tr of msg.toolResults) {
+              if (tr.tool_call_id && tr.output) {
+                toolResultsMap.set(tr.tool_call_id, tr.output);
+              }
+            }
+          }
+
           toolCalls = {
             toolCount: toolCallsArray.length,
-            toolCalls: toolCallsArray.map((tc: any) => ({
-              id: tc.id || tc.tool_call_id || `tool-${Date.now()}-${Math.random()}`,
-              name: tc.name || tc.function?.name || 'unknown',
-              status: 'completed' as "completed" | "failed",
-              result: msg.toolResults?.[tc.id || tc.tool_call_id] as string | undefined,
-            }))
+            toolCalls: toolCallsArray.map((tc: any) => {
+              // Ensure id is a string
+              const id = tc.id || tc.tool_call_id || `tool-${Date.now()}-${Math.random()}`;
+              // Find matching result from the map
+              const result = toolResultsMap.get(id || tc.tool_call_id);
+              
+              return {
+                id: String(id), // Ensure id is always a string
+                name: tc.name || tc.function?.name || 'unknown',
+                status: 'completed' as "completed" | "failed",
+                result: result,
+              };
+            })
           };
         } catch (e) {
           console.warn('[AgentChannelPanel] Failed to parse tool calls:', e);
@@ -723,6 +749,44 @@ export function AgentChannelPanel() {
     await executeAgentWithMessage(userMessage);
   };
 
+  /**
+   * Handle transcript complete - add attachment and prompt user for context
+   */
+  const handleTranscriptComplete = async (filename: string) => {
+    if (!selectedAgent || !currentSession) return;
+
+    try {
+      const info = await invoke<TranscriptAttachmentInfo>("get_transcript_attachment_info", {
+        agentId: selectedAgent.id,
+        filename,
+      });
+
+      debugLog("Transcript complete:", info);
+
+      // TODO: Add transcript as attachment to the chat
+      // TODO: Trigger agent to ask user for context
+      // TODO: Use entity-extract skill when user provides context
+
+      // For now, add a user message with the transcript info to trigger agent response
+      const contextMessage: MessageWithThinking = {
+        id: crypto.randomUUID(),
+        conversationId: currentSession.id,
+        role: "user",
+        content: `Transcription complete! The recording has been transcribed.\n\n**Duration:** ${Math.round(info.duration_seconds)}s\n**Speakers:** ${info.speaker_count}\n\nWhat was this recording about? I can extract entities and relationships from your description to add to the knowledge graph.`,
+        timestamp: Date.now(),
+      };
+      setMessages((prev) => [...prev, contextMessage]);
+      setLoadedDays((prev) => prev.map((day) =>
+        day.sessionId === currentSession.id
+          ? { ...day, messages: [...day.messages, contextMessage], messageCount: day.messages.length + 1 }
+          : day
+      ));
+
+    } catch (err) {
+      console.error("Failed to get transcript info:", err);
+    }
+  };
+
   return (
     <div className="flex h-full bg-[#313338]">
       {/* Sidebar - Agent Channels */}
@@ -756,6 +820,21 @@ export function AgentChannelPanel() {
                   aria-label="Show history"
                 >
                   <History className="size-5" />
+                </button>
+                <button
+                  onClick={() => setKnowledgeGraphOpen(true)}
+                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  aria-label="Show knowledge graph"
+                >
+                  <Network className="size-5" />
+                </button>
+                <button
+                  onClick={() => setVoiceRecordingOpen(true)}
+                  disabled={isLoading}
+                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:opacity-50"
+                  aria-label="Record voice note"
+                >
+                  <Mic className="size-5" />
                 </button>
               </div>
             </div>
@@ -1151,6 +1230,26 @@ export function AgentChannelPanel() {
           onClose={() => setShowClearHistoryDialog(false)}
           agentId={selectedAgent.id}
           agentName={selectedAgent.displayName}
+        />
+      )}
+
+      {/* Knowledge Graph Visualizer */}
+      {knowledgeGraphOpen && selectedAgent && (
+        <KnowledgeGraphVisualizer
+          agentId={selectedAgent.id}
+          agentName={selectedAgent.displayName}
+          onClose={() => setKnowledgeGraphOpen(false)}
+        />
+      )}
+
+      {/* Voice Recording Dialog */}
+      {selectedAgent && (
+        <VoiceRecordingDialog
+          open={voiceRecordingOpen}
+          onClose={() => setVoiceRecordingOpen(false)}
+          agentId={selectedAgent.id}
+          agentName={selectedAgent.displayName}
+          onTranscriptComplete={handleTranscriptComplete}
         />
       )}
     </div>

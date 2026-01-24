@@ -35,16 +35,30 @@ impl MiddlewareBuilder {
         // Add summarization middleware if configured
         if let Some(summarization) = &yaml_config.summarization {
             if summarization.enabled.unwrap_or(false) {
-                let middleware = self.build_summarization_middleware(summarization)?;
-                pipeline = pipeline.add_pre_processor(middleware);
+                match self.build_summarization_middleware(summarization) {
+                    Ok(middleware) => {
+                        tracing::info!("Summarization middleware added to pipeline");
+                        pipeline = pipeline.add_pre_processor(middleware);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to build summarization middleware: {}, skipping", e);
+                    }
+                }
             }
         }
 
         // Add context editing middleware if configured
         if let Some(context_editing) = &yaml_config.context_editing {
             if context_editing.enabled.unwrap_or(false) {
-                let middleware = self.build_context_editing_middleware(context_editing)?;
-                pipeline = pipeline.add_pre_processor(middleware);
+                match self.build_context_editing_middleware(context_editing) {
+                    Ok(middleware) => {
+                        tracing::info!("Context editing middleware added to pipeline");
+                        pipeline = pipeline.add_pre_processor(middleware);
+                    }
+                    Err(e) => {
+                        tracing::warn!("Failed to build context editing middleware: {}, skipping", e);
+                    }
+                }
             }
         }
 
@@ -56,7 +70,7 @@ impl MiddlewareBuilder {
         &self,
         config: &crate::domains::agent_runtime::config_adapter::SummarizationYamlConfig,
     ) -> TResult<Box<dyn PreProcessMiddleware>> {
-        let _summarization_config = SummarizationConfig {
+        let summarization_config = SummarizationConfig {
             enabled: config.enabled.unwrap_or(true),
             model: None, // Use agent's model
             provider: config.provider.clone(),
@@ -76,10 +90,8 @@ impl MiddlewareBuilder {
             custom_token_counter: None,
         };
 
-        // Create the middleware
-        // Note: This requires async initialization for LLM client
-        // For now, we'll create a placeholder
-        Err("Summarization middleware requires async initialization".to_string())
+        // Create the middleware - it uses placeholder summaries without needing an LLM
+        Ok(Box::new(SummarizationMiddleware::new(summarization_config)))
     }
 
     /// Build context editing middleware from config

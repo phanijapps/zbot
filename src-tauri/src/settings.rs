@@ -19,6 +19,8 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     /// Privacy settings
     pub privacy: PrivacySettings,
+    /// Transcription settings
+    pub transcription: TranscriptionSettings,
     /// Default provider settings
     pub default_provider: String,
 }
@@ -61,6 +63,21 @@ pub struct PrivacySettings {
     pub analytics: bool,
 }
 
+/// Transcription settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptionSettings {
+    /// Transcription feature enabled
+    pub enabled: bool,
+    /// Automatically transcribe recordings after saving
+    pub auto_transcribe: bool,
+    /// Whisper model size (tiny, base, small, medium, large)
+    pub model_size: String,
+    /// Minimum speaker duration in seconds
+    pub min_speaker_duration: f32,
+    /// Number of speakers (None for auto-detect)
+    pub num_speakers: Option<u32>,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -80,6 +97,13 @@ impl Default for Settings {
             privacy: PrivacySettings {
                 save_chat_history: true,
                 analytics: false,
+            },
+            transcription: TranscriptionSettings {
+                enabled: true,
+                auto_transcribe: false,
+                model_size: "base".to_string(),
+                min_speaker_duration: 1.0,
+                num_speakers: None,
             },
             default_provider: "openai".to_string(),
         }
@@ -102,6 +126,8 @@ pub struct AppDirs {
     pub db_dir: PathBuf,
     /// Skills directory
     pub skills_dir: PathBuf,
+    /// Utils directory (user-accessible scripts like transcribe.py)
+    pub utils_dir: PathBuf,
     /// Python virtual environment directory
     pub venv_dir: PathBuf,
     /// Conversation logs directory (logs/<conv-id>/) - legacy
@@ -122,6 +148,8 @@ impl AppDirs {
             .context("Failed to create agents directory")?;
         fs::create_dir_all(vault_root.join("skills"))
             .context("Failed to create skills directory")?;
+        fs::create_dir_all(vault_root.join("utils"))
+            .context("Failed to create utils directory")?;
         fs::create_dir_all(vault_root.join("agents_data"))
             .context("Failed to create agents_data directory")?;
         fs::create_dir_all(vault_root.join("db"))
@@ -141,6 +169,7 @@ impl AppDirs {
             agents_data_dir: vault_root.join("agents_data"),
             db_dir: vault_root.join("db"),
             skills_dir: vault_root.join("skills"),
+            utils_dir: vault_root.join("utils"),
             venv_dir: vault_root.join("venv"),
             conversation_logs_dir: vault_root.join("logs"),
             outputs_dir,
@@ -200,6 +229,10 @@ impl AppDirs {
         // Create skills directory
         fs::create_dir_all(&self.skills_dir)
             .context("Failed to create skills directory")?;
+
+        // Create utils directory
+        fs::create_dir_all(&self.utils_dir)
+            .context("Failed to create utils directory")?;
 
         // Create venv directory
         fs::create_dir_all(&self.venv_dir)

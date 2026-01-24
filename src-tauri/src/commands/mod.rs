@@ -17,6 +17,8 @@ pub mod agents_runtime;
 pub mod vaults;
 pub mod deletion;
 pub mod search;
+pub mod knowledge_graph;
+pub mod media;
 
 // Re-export all commands
 pub use core::*;
@@ -33,3 +35,5 @@ pub use agents_runtime::*;
 pub use vaults::*;
 pub use deletion::*;
 pub use search::*;
+pub use knowledge_graph::*;
+pub use media::*;

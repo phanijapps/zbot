@@ -338,4 +338,65 @@ const result = await validateJSON({
 // Returns: { valid: true/false, errors: [...] }
 \`\`\``,
   },
+  {
+    name: 'entity-extract',
+    description: 'Extract entities and relationships from text and add them to the knowledge graph. Use when the user provides context about a conversation, meeting, document, or recording that should be stored as knowledge.',
+    category: 'Natural Language',
+    license: 'Apache-2.0',
+    content: `# Entity Extraction
+
+Extract entities and relationships from text and add them to the knowledge graph.
+
+## Input
+- text: The text to extract entities from (e.g., transcript, user's description, meeting notes)
+- context: Optional context about the source (e.g., "voice recording transcript", "meeting notes")
+
+## Output
+Add the following to the knowledge graph:
+1. **Entities**: People, organizations, concepts, locations, events mentioned
+2. **Relationships**: Connections between entities
+3. **Source reference**: Link back to the transcript or original source if provided
+
+## Process
+1. Analyze the input text for key entities
+2. Categorize entities by type (person, organization, concept, location, event)
+3. Identify relationships between entities
+4. Store in knowledge graph with clear entity names and relationship types
+
+## Entity Types
+- **person**: People mentioned (e.g., "John Smith", "Dr. Johnson")
+- **organization**: Companies, institutions (e.g., "Acme Corp", "MIT")
+- **concept**: Ideas, topics, projects (e.g., "Q4 roadmap", "Project Phoenix")
+- **location**: Places (e.g., "New York", "Conference Room B")
+- **event**: Meetings, milestones (e.g., "Sprint review", "Product launch")
+
+## Relationship Types
+- works_at: Person → Organization
+- related_to: Entity → Entity (general relationship)
+- part_of: Entity → Entity (containment)
+- mentioned_in: Entity → Source
+- discussed_at: Event → Location
+
+## Example
+User: "The meeting with John from Acme Corp about the Q4 roadmap went well."
+
+Extracted entities:
+- John (person)
+- Acme Corp (organization)
+- Q4 roadmap (concept)
+- meeting (event)
+
+Relationships:
+- John → works_at → Acme Corp
+- Q4 roadmap → discussed_in → meeting
+- John → mentioned_in → meeting
+
+## Instructions
+When the user provides context about a recording or conversation:
+1. Use the knowledge_graph tool to store extracted entities
+2. Create entities with descriptive names
+3. Add relationships with clear, meaningful types
+4. Include the source reference if a transcript filename is provided
+5. Summarize what was extracted for the user`,
+  },
 ];
