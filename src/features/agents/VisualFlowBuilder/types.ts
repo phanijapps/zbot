@@ -1,21 +1,17 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - TYPES
-// TypeScript types for the visual workflow builder
+// ZERO IDE - TYPES
+// TypeScript types for the Zero IDE Orchestrator workflow builder
 // ============================================================================
 
 // -----------------------------------------------------------------------------
-// Node Types
+// Node Types (Orchestrator Architecture - BPMN-style)
 // -----------------------------------------------------------------------------
 
 export type NodeType =
-  | "trigger"      // Start/Trigger node
-  | "agent"        // Agent node
-  | "parallel"     // Parallel split node
-  | "sequential"   // Sequential flow node
-  | "conditional"  // Conditional router node
-  | "loop"         // Loop node
-  | "aggregator"   // Merge/Aggregator node
-  | "subtask";     // Subtask node
+  | "start"        // Start Event (BPMN thin circle)
+  | "end"          // End Event (BPMN thick circle)
+  | "subagent"     // Subagent task (inline, created as tools for orchestrator)
+  | "conditional"; // Conditional router node (for future use)
 
 // -----------------------------------------------------------------------------
 // Base Node Interface
@@ -31,114 +27,158 @@ export interface BaseNode {
 }
 
 // -----------------------------------------------------------------------------
-// Node Data by Type
+// Orchestrator Config (Flow-level LLM Configuration)
+// The Orchestrator is the ONE agent that manages the entire flow
 // -----------------------------------------------------------------------------
 
-export type NodeData =
-  | TriggerNodeData
-  | AgentNodeData
-  | ParallelNodeData
-  | SequentialNodeData
-  | ConditionalNodeData
-  | LoopNodeData
-  | AggregatorNodeData
-  | SubtaskNodeData;
-
-// -----------------------------------------------------------------------------
-// Trigger Node Data
-// -----------------------------------------------------------------------------
-
-export interface TriggerNodeData {
-  displayName: string;
-  triggerType: "manual" | "scheduled";
-  schedule?: string; // cron expression for scheduled triggers
-}
-
-// -----------------------------------------------------------------------------
-// Agent Node Data
-// -----------------------------------------------------------------------------
-
-export interface AgentNodeData {
+export interface OrchestratorConfig {
   displayName: string;
   description?: string;
+
+  // LLM Configuration
   providerId: string;
   model: string;
   temperature: number;
   maxTokens: number;
-  tools: string[];
+
+  // Tools (categorized selection)
+  tools: ToolSelection;
+
+  // MCPs (server IDs from mcps.json)
   mcps: string[];
+
+  // Skills (skill names from vault/skills/)
   skills: string[];
-  systemInstructions?: string;
-  middleware?: string[];
+
+  // Middleware
+  middleware: MiddlewareConfig;
+
+  // System Instructions
+  systemInstructions: string;
+}
+
+// Default orchestrator config
+export const DEFAULT_ORCHESTRATOR_CONFIG: OrchestratorConfig = {
+  displayName: "My Agent",
+  description: "",
+  providerId: "",
+  model: "",
+  temperature: 0.7,
+  maxTokens: 4096,
+  tools: {
+    fsTools: { enabled: false, tools: {} },
+    kgTools: { enabled: false, tools: {} },
+    execTools: { enabled: false, tools: {} },
+    uiTools: { enabled: false, tools: {} },
+    agentTools: { enabled: false, tools: {} },
+  },
+  mcps: [],
+  skills: [],
+  middleware: {},
+  systemInstructions: "",
+};
+
+// -----------------------------------------------------------------------------
+// Node Data by Type
+// -----------------------------------------------------------------------------
+
+export type NodeData =
+  | StartNodeData
+  | EndNodeData
+  | SubagentNodeData
+  | ConditionalNodeData;
+
+// -----------------------------------------------------------------------------
+// Tool Selection (Categorized)
+// -----------------------------------------------------------------------------
+
+export interface ToolSelection {
+  // File System Tools
+  fsTools?: ToolCategory;
+  // Knowledge Graph Tools
+  kgTools?: ToolCategory;
+  // Execution Tools
+  execTools?: ToolCategory;
+  // UI Tools
+  uiTools?: ToolCategory;
+  // Agent Tools
+  agentTools?: ToolCategory;
+}
+
+export interface ToolCategory {
+  enabled: boolean;
+  tools: Record<string, boolean>;
+}
+
+// Built-in tool definitions
+export const BUILT_IN_TOOLS = {
+  fsTools: ["read", "write", "edit", "grep", "glob"],
+  kgTools: ["list_entities", "search_entities", "get_relationships", "add_entity", "add_relationship"],
+  execTools: ["python", "load_skill"],
+  uiTools: ["request_input", "show_content"],
+  agentTools: ["create_agent"],
+} as const;
+
+// -----------------------------------------------------------------------------
+// Middleware Configuration
+// -----------------------------------------------------------------------------
+
+export interface MiddlewareConfig {
+  summarization?: {
+    enabled: boolean;
+    triggerTokens?: number;
+    keepMessages?: number;
+  };
+  contextEditing?: {
+    enabled: boolean;
+    triggerTokens?: number;
+    keepToolResults?: number;
+  };
 }
 
 // -----------------------------------------------------------------------------
-// Parallel Node Data
+// Start Event Node Data (BPMN-style)
 // -----------------------------------------------------------------------------
 
-export interface ParallelNodeData {
+export interface StartNodeData {
   displayName: string;
-  mergeStrategy: "all" | "first" | "majority" | "concatenate";
-  subagents: string[]; // Agent node IDs
+  triggerType: "manual" | "scheduled" | "webhook";
+  schedule?: string; // cron expression for scheduled triggers
 }
 
 // -----------------------------------------------------------------------------
-// Sequential Node Data
+// End Event Node Data (BPMN-style)
 // -----------------------------------------------------------------------------
 
-export interface SequentialNodeData {
+export interface EndNodeData {
   displayName: string;
-  subtasks: string[]; // Agent node IDs in order
 }
 
 // -----------------------------------------------------------------------------
-// Conditional Node Data
+// Subagent Node Data
+// Subagents are mini-agents stored in .subagents/ folder
+// -----------------------------------------------------------------------------
+
+export interface SubagentNodeData {
+  subagentId: string;     // Reference to subagent (e.g., "research_agent")
+  displayName: string;    // Display name for the node in the flow
+}
+
+// -----------------------------------------------------------------------------
+// Conditional Node Data (Orchestrator only)
 // -----------------------------------------------------------------------------
 
 export interface ConditionalNodeData {
   displayName: string;
   conditions: ConditionalRoute[];
+  defaultTargetNodeId?: string; // Optional default route
 }
 
 export interface ConditionalRoute {
   id: string;
   label: string;
-  expression: string; // JavaScript expression for evaluation
-  targetNodeId: string;
-}
-
-// -----------------------------------------------------------------------------
-// Loop Node Data
-// -----------------------------------------------------------------------------
-
-export interface LoopNodeData {
-  displayName: string;
-  exitCondition: string; // JavaScript expression for exit
-  maxIterations: number;
-  bodyNodeId: string; // Agent node ID to loop
-}
-
-// -----------------------------------------------------------------------------
-// Aggregator Node Data
-// -----------------------------------------------------------------------------
-
-export interface AggregatorNodeData {
-  displayName: string;
-  strategy: "concatenate" | "template" | "custom";
-  template?: string; // For template-based aggregation
-  customInstructions?: string; // For custom aggregation
-}
-
-// -----------------------------------------------------------------------------
-// Subtask Node Data
-// -----------------------------------------------------------------------------
-
-export interface SubtaskNodeData {
-  displayName: string;
-  context?: string; // Optional context from parent
-  tasks: string[]; // List of tasks to accomplish
-  goal: string; // What needs to be done
-  agentNodeId: string; // Reference to agent configuration
+  expression: string;    // JavaScript expression for evaluation
+  targetNodeId: string;  // Target Subtask Node
 }
 
 // -----------------------------------------------------------------------------
@@ -184,6 +224,7 @@ export interface CanvasState {
   connections: Connection[];
   selectedNodeId: string | null;
   viewport: Viewport;
+  orchestratorConfig: OrchestratorConfig; // Flow-level LLM configuration
   validation: ValidationResult[];
 }
 
@@ -201,7 +242,8 @@ export type CanvasAction =
   | { type: "SET_VIEWPORT"; viewport: Viewport }
   | { type: "PAN_VIEWPORT"; deltaX: number; deltaY: number }
   | { type: "ZOOM_VIEWPORT"; zoom: number; centerX?: number; centerY?: number }
-  | { type: "SET_VALIDATION"; validation: ValidationResult[] };
+  | { type: "SET_VALIDATION"; validation: ValidationResult[] }
+  | { type: "UPDATE_ORCHESTRATOR"; updates: Partial<OrchestratorConfig> };
 
 // -----------------------------------------------------------------------------
 // Validation
@@ -273,11 +315,15 @@ export interface NodeProps {
   onSelect: () => void;
   onUpdate: (updates: Partial<BaseNode>) => void;
   onDelete: () => void;
+  onPortMouseDown?: (nodeId: string, port: string, portType: "input" | "output", position: { x: number; y: number }) => void;
 }
 
 export interface PropertiesPanelProps {
+  agentId?: string;
   node: BaseNode | null;
+  orchestratorConfig: OrchestratorConfig;
   onClose: () => void;
   onUpdate: (updates: Partial<BaseNode>) => void;
+  onUpdateOrchestrator: (updates: Partial<OrchestratorConfig>) => void;
   validationResults?: ValidationResult[];
 }

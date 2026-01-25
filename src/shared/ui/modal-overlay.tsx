@@ -19,6 +19,7 @@ export interface ModalOverlayProps {
   footer?: React.ReactNode;
   className?: string;
   showCloseButton?: boolean;
+  showHeader?: boolean;
   closeOnEscape?: boolean;
   closeOnBackdropClick?: boolean;
 }
@@ -46,6 +47,7 @@ export const ModalOverlay = memo(({
   footer,
   className,
   showCloseButton = true,
+  showHeader = true,
   closeOnEscape = true,
   closeOnBackdropClick = false,
 }: ModalOverlayProps) => {
@@ -114,25 +116,27 @@ export const ModalOverlay = memo(({
         aria-labelledby="modal-title"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
-          <div>
-            <h2 id="modal-title" className="text-lg font-semibold text-white">
-              {title}
-            </h2>
-            {subtitle && (
-              <p className="text-sm text-gray-400 mt-0.5">{subtitle}</p>
+        {showHeader && (
+          <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
+            <div>
+              <h2 id="modal-title" className="text-lg font-semibold text-white">
+                {title}
+              </h2>
+              {subtitle && (
+                <p className="text-sm text-gray-400 mt-0.5">{subtitle}</p>
+              )}
+            </div>
+            {showCloseButton && (
+              <button
+                onClick={onClose}
+                className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
+                aria-label="Close"
+              >
+                <XIcon />
+              </button>
             )}
           </div>
-          {showCloseButton && (
-            <button
-              onClick={onClose}
-              className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
-              aria-label="Close"
-            >
-              <XIcon />
-            </button>
-          )}
-        </div>
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-hidden">

@@ -108,6 +108,11 @@ pub fn run() {
             commands::upload_agent_file,
             commands::get_agent_flow_config,
             commands::save_agent_flow_config,
+            // Subagent commands
+            commands::list_subagents,
+            commands::get_subagent,
+            commands::save_subagent,
+            commands::delete_subagent,
             // Agent Channel commands (NEW)
             commands::get_or_create_today_session,
             commands::list_previous_days,

@@ -1,11 +1,12 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - CANVAS STATE HOOK
+// ZERO IDE - CANVAS STATE HOOK
 // Hook for managing canvas state with reducer
 // ============================================================================
 
 import { useReducer, useCallback, useEffect } from "react";
-import type { CanvasState, CanvasAction, BaseNode, Connection, ValidationResult } from "../types";
+import type { CanvasState, CanvasAction, BaseNode, Connection, ValidationResult, OrchestratorConfig } from "../types";
 import { CANVAS_CONFIG } from "../constants";
+import { DEFAULT_ORCHESTRATOR_CONFIG } from "../types";
 
 // -----------------------------------------------------------------------------
 // Initial State
@@ -16,6 +17,7 @@ const createInitialState = (): CanvasState => ({
   connections: [],
   selectedNodeId: null,
   viewport: { ...CANVAS_CONFIG.DEFAULT_VIEWPORT },
+  orchestratorConfig: DEFAULT_ORCHESTRATOR_CONFIG,
   validation: [],
 });
 
@@ -137,6 +139,16 @@ function canvasReducer(state: CanvasState, action: CanvasAction): CanvasState {
       };
     }
 
+    case "UPDATE_ORCHESTRATOR": {
+      return {
+        ...state,
+        orchestratorConfig: {
+          ...state.orchestratorConfig,
+          ...action.updates,
+        },
+      };
+    }
+
     default:
       return state;
   }
@@ -229,6 +241,14 @@ export function useCanvasState(initialState?: Partial<CanvasState>) {
 
   const setValidation = useCallback((validation: ValidationResult[]) => {
     dispatch({ type: "SET_VALIDATION", validation });
+  }, []);
+
+  // -----------------------------------------------------------------------------
+  // Orchestrator Config Actions
+  // -----------------------------------------------------------------------------
+
+  const updateOrchestratorConfig = useCallback((updates: Partial<OrchestratorConfig>) => {
+    dispatch({ type: "UPDATE_ORCHESTRATOR", updates });
   }, []);
 
   // -----------------------------------------------------------------------------
@@ -325,6 +345,9 @@ export function useCanvasState(initialState?: Partial<CanvasState>) {
 
     // Validation actions
     setValidation,
+
+    // Orchestrator config actions
+    updateOrchestratorConfig,
 
     // Utility
     clearCanvas,

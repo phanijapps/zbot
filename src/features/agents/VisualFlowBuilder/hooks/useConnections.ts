@@ -26,7 +26,7 @@ export interface ConnectionValidation {
 // -----------------------------------------------------------------------------
 
 function canHaveInput(nodeType: string): boolean {
-  return ["agent", "sequential", "conditional", "loop", "aggregator", "subtask"].includes(nodeType);
+  return ["subagent", "conditional", "end"].includes(nodeType);
 }
 
 // -----------------------------------------------------------------------------
@@ -43,25 +43,18 @@ function validateConnection(
     return { isValid: false, reason: "Cannot connect to same node" };
   }
 
-  // Trigger nodes only have outputs
-  if (sourceNode.type === "trigger") {
+  // Start nodes only have outputs
+  if (sourceNode.type === "start") {
     // Can connect to any node with input
     if (!canHaveInput(targetNode.type)) {
       return { isValid: false, reason: "Target node cannot receive input" };
     }
   }
 
-  // Agent nodes can connect to most nodes
-  if (sourceNode.type === "agent") {
+  // Subagent nodes can connect to most nodes
+  if (sourceNode.type === "subagent") {
     if (!canHaveInput(targetNode.type)) {
       return { isValid: false, reason: "Target node cannot receive input" };
-    }
-  }
-
-  // Parallel nodes connect to multiple subagent nodes
-  if (sourceNode.type === "parallel") {
-    if (targetNode.type !== "subtask" && targetNode.type !== "agent") {
-      return { isValid: false, reason: "Parallel nodes connect to agents or subtasks" };
     }
   }
 
@@ -70,25 +63,6 @@ function validateConnection(
     if (!canHaveInput(targetNode.type)) {
       return { isValid: false, reason: "Target node cannot receive input" };
     }
-  }
-
-  // Loop nodes can connect to nodes that will be repeated
-  if (sourceNode.type === "loop") {
-    if (!canHaveInput(targetNode.type)) {
-      return { isValid: false, reason: "Target node cannot receive input" };
-    }
-  }
-
-  // Subtask nodes typically connect to an agent node
-  if (sourceNode.type === "subtask") {
-    if (targetNode.type !== "agent") {
-      return { isValid: false, reason: "Subtask should connect to an agent" };
-    }
-  }
-
-  // Aggregator nodes don't have outputs (they're terminal)
-  if (sourceNode.type === "aggregator") {
-    return { isValid: false, reason: "Aggregator nodes cannot have output connections" };
   }
 
   // Check for duplicate connections
@@ -205,14 +179,20 @@ export function useConnections(state: CanvasState) {
 
       if (!sourceNode || !targetNode) return null;
 
-      // Calculate port positions (right side of source, left side of target)
-      const nodeWidth = 240; // NODE_DIMENSIONS.WIDTH
-      const nodeHeight = 120; // NODE_DIMENSIONS.HEIGHT
+      // Start and End event nodes are circular (64x64)
+      // Subagent and Conditional nodes are rectangular (240x120)
+      const isSourceEventNode = sourceNode.type === "start" || sourceNode.type === "end";
+      const isTargetEventNode = targetNode.type === "start" || targetNode.type === "end";
 
-      const startX = sourceNode.position.x + nodeWidth;
-      const startY = sourceNode.position.y + nodeHeight / 2;
+      const sourceWidth = isSourceEventNode ? 64 : 240;
+      const sourceHeight = isSourceEventNode ? 64 : 120;
+      const targetHeight = isTargetEventNode ? 64 : 120;
+
+      // Calculate port positions (right side of source, left side of target)
+      const startX = sourceNode.position.x + sourceWidth;
+      const startY = sourceNode.position.y + sourceHeight / 2;
       const endX = targetNode.position.x;
-      const endY = targetNode.position.y + nodeHeight / 2;
+      const endY = targetNode.position.y + targetHeight / 2;
 
       return { startX, startY, endX, endY };
     },

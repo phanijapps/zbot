@@ -6,7 +6,7 @@
 import { memo } from "react";
 import { BaseNode } from "./BaseNode";
 import { NODE_COLORS } from "../constants";
-import type { BaseNode as BaseNodeType } from "../types";
+import type { NodeProps } from "../types";
 
 // -----------------------------------------------------------------------------
 // Icons
@@ -56,21 +56,13 @@ function getConditionalData(data: unknown): {
 // Conditional Node Component
 // -----------------------------------------------------------------------------
 
-interface ConditionalNodeProps {
-  node: BaseNodeType;
-  isSelected: boolean;
-  onSelect: () => void;
-  onUpdate: (updates: Partial<BaseNodeType>) => void;
-  onDelete: () => void;
-}
-
-export const ConditionalNode = memo(({ node, isSelected, onSelect, onUpdate, onDelete }: ConditionalNodeProps) => {
+export const ConditionalNode = memo(({ node, isSelected, onSelect, onUpdate, onDelete, onPortMouseDown }: NodeProps) => {
   const conditionalData = getConditionalData(node.data);
   const conditions = conditionalData?.conditions ?? [];
   const conditionCount = conditions.length;
 
   return (
-    <BaseNode node={node} isSelected={isSelected} onSelect={onSelect} onUpdate={onUpdate} onDelete={onDelete}>
+    <BaseNode node={node} isSelected={isSelected} onSelect={onSelect} onUpdate={onUpdate} onDelete={onDelete} onPortMouseDown={onPortMouseDown}>
       {/* Header */}
       <div className="flex items-center gap-2 mb-2">
         <div className={`p-1.5 rounded ${NODE_COLORS.conditional.icon} bg-white/10`}>

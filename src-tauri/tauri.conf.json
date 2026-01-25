@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "agentzero-temp",
+  "productName": "Zero",
   "version": "0.1.0",
-  "identifier": "com.videogamer.agentzero-temp",
+  "identifier": "com.videogamer.zero",
   "build": {
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "agentzero-temp",
+        "title": "Zero",
         "width": 800,
         "height": 600
       }

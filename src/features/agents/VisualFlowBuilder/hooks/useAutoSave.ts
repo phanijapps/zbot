@@ -81,6 +81,7 @@ export function useAutoSave(
           nodes: state.nodes,
           connections: state.connections,
           viewport: state.viewport,
+          orchestratorConfig: state.orchestratorConfig,
           timestamp: Date.now(),
         };
         localStorage.setItem(SAVE_CONFIG.STORAGE_KEY, JSON.stringify(saveData));
@@ -185,6 +186,7 @@ export function loadSavedState(): Partial<CanvasState> | null {
       nodes: data.nodes || [],
       connections: data.connections || [],
       viewport: data.viewport || { x: 0, y: 0, zoom: 1 },
+      orchestratorConfig: data.orchestratorConfig,
     };
   } catch (error) {
     console.error("Failed to load saved state:", error);

@@ -6,7 +6,7 @@
 import { memo } from "react";
 import { BaseNode } from "./BaseNode";
 import { NODE_COLORS } from "../constants";
-import type { BaseNode as BaseNodeType } from "../types";
+import type { NodeProps } from "../types";
 
 // -----------------------------------------------------------------------------
 // Icons
@@ -41,25 +41,17 @@ function getTriggerData(data: unknown): { triggerType: string; schedule?: string
 // Trigger Node Component
 // -----------------------------------------------------------------------------
 
-interface TriggerNodeProps {
-  node: BaseNodeType;
-  isSelected: boolean;
-  onSelect: () => void;
-  onUpdate: (updates: Partial<BaseNodeType>) => void;
-  onDelete: () => void;
-}
-
-export const TriggerNode = memo(({ node, isSelected, onSelect, onUpdate, onDelete }: TriggerNodeProps) => {
+export const TriggerNode = memo(({ node, isSelected, onSelect, onUpdate, onDelete, onPortMouseDown }: NodeProps) => {
   const triggerData = getTriggerData(node.data);
   const triggerType = triggerData?.triggerType ?? "manual";
 
   const isScheduled = triggerType === "scheduled";
 
   return (
-    <BaseNode node={node} isSelected={isSelected} onSelect={onSelect} onUpdate={onUpdate} onDelete={onDelete}>
+    <BaseNode node={node} isSelected={isSelected} onSelect={onSelect} onUpdate={onUpdate} onDelete={onDelete} onPortMouseDown={onPortMouseDown}>
       {/* Header */}
       <div className="flex items-center gap-2 mb-2">
-        <div className={`p-1.5 rounded ${NODE_COLORS.trigger.icon} bg-white/10`}>
+        <div className={`p-1.5 rounded ${NODE_COLORS.start.icon} bg-white/10`}>
           {isScheduled ? <ClockIcon /> : <PlayIcon />}
         </div>
         <div className="flex-1 min-w-0">

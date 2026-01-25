@@ -3,7 +3,7 @@
 // Renders bezier curve connections between nodes
 // ============================================================================
 
-import React, { memo, useMemo } from "react";
+import React, { memo, useMemo, useState } from "react";
 import type { Connection, BaseNode } from "../types";
 import { CONNECTION_CONFIG, NODE_DIMENSIONS } from "../constants";
 import { calculateBezierPath } from "../utils";
@@ -18,6 +18,7 @@ interface ConnectionLinesProps {
   onConnectionClick?: (connectionId: string) => void;
   onConnectionDoubleClick?: (connectionId: string) => void;
   onConnectionRightClick?: (connectionId: string, e: React.MouseEvent) => void;
+  onConnectionDelete?: (connectionId: string) => void;
 }
 
 // -----------------------------------------------------------------------------
@@ -29,8 +30,11 @@ function getPortPosition(
   _port: string,
   isSource: boolean
 ): { x: number; y: number } {
-  const width = NODE_DIMENSIONS.WIDTH;
-  const height = NODE_DIMENSIONS.HEIGHT;
+  // Start and End event nodes are circular (64x64)
+  // Subagent and Conditional nodes are rectangular (240x120)
+  const isEventNode = node.type === "start" || node.type === "end";
+  const width = isEventNode ? 64 : NODE_DIMENSIONS.WIDTH;
+  const height = isEventNode ? 64 : NODE_DIMENSIONS.HEIGHT;
 
   // Default positions (left side for input, right side for output)
   if (isSource) {
@@ -63,6 +67,7 @@ interface ConnectionLineProps {
   onClick?: () => void;
   onDoubleClick?: () => void;
   onRightClick?: (e: React.MouseEvent) => void;
+  onDelete?: () => void;
 }
 
 const ConnectionLine = memo(({
@@ -76,7 +81,10 @@ const ConnectionLine = memo(({
   onClick,
   onDoubleClick,
   onRightClick,
+  onDelete,
 }: ConnectionLineProps) => {
+  const [isHovered, setIsHovered] = useState(false);
+
   // Calculate port positions
   const sourcePos = getPortPosition(sourceNode, connection.sourcePort, true);
   const targetPos = getPortPosition(targetNode, connection.targetPort, false);
@@ -89,8 +97,19 @@ const ConnectionLine = memo(({
 
   // Calculate bezier path
   const path = calculateBezierPath(startX, startY, endX, endY, CONNECTION_CONFIG.CONTROL_POINT_RATIO * zoom);
-  const lineWidth = isSelected ? CONNECTION_CONFIG.LINE_WIDTH_SELECTED : CONNECTION_CONFIG.LINE_WIDTH;
-  const color = isSelected ? CONNECTION_CONFIG.COLOR_SELECTED : CONNECTION_CONFIG.COLOR_DEFAULT;
+
+  // Determine line width and color based on state
+  const lineWidth = isSelected
+    ? CONNECTION_CONFIG.LINE_WIDTH_SELECTED
+    : isHovered
+      ? CONNECTION_CONFIG.LINE_WIDTH + 1
+      : CONNECTION_CONFIG.LINE_WIDTH;
+
+  const color = isSelected
+    ? CONNECTION_CONFIG.COLOR_SELECTED
+    : isHovered
+      ? "#a78bfa" // Light violet on hover
+      : CONNECTION_CONFIG.COLOR_DEFAULT;
 
   return (
     <g className="connection-line">
@@ -99,11 +118,13 @@ const ConnectionLine = memo(({
         d={path}
         fill="none"
         stroke="transparent"
-        strokeWidth={lineWidth + 10}
-        style={{ cursor: "pointer" }}
+        strokeWidth={lineWidth + 16}
+        style={{ cursor: "pointer", pointerEvents: "stroke" }}
         onClick={onClick}
         onDoubleClick={onDoubleClick}
         onContextMenu={onRightClick}
+        onMouseEnter={() => setIsHovered(true)}
+        onMouseLeave={() => setIsHovered(false)}
       />
 
       {/* Visible connection line */}
@@ -114,7 +135,7 @@ const ConnectionLine = memo(({
         strokeWidth={lineWidth}
         strokeLinecap="round"
         style={{
-          transition: "stroke 0.2s, stroke-width 0.2s",
+          transition: "stroke 0.15s, stroke-width 0.15s",
           pointerEvents: "none",
         }}
       />
@@ -145,7 +166,42 @@ const ConnectionLine = memo(({
       )}
 
       {/* Animated flow indicator (for active connections) */}
-      {/* {isSelected && <FlowIndicator path={path} />} */}
+      {/* {isSelected && <FlowIndicator path={path />} */}
+
+      {/* Delete button (shown when selected or hovered) */}
+      {(isSelected || isHovered) && onDelete && (
+        <g
+          transform={`translate(${(startX + endX) / 2}, ${(startY + endY) / 2})`}
+          style={{ cursor: "pointer", pointerEvents: "all" }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
+          onMouseEnter={(e) => {
+            e.stopPropagation();
+            setIsHovered(true);
+          }}
+          onMouseLeave={(e) => {
+            e.stopPropagation();
+            setIsHovered(false);
+          }}
+        >
+          {/* Background circle */}
+          <circle
+            r={10}
+            fill="rgba(239, 68, 68, 0.9)"
+            stroke="white"
+            strokeWidth={1}
+          />
+          {/* X icon */}
+          <path
+            d="M-3 -3 L3 3 M3 -3 L-3 3"
+            stroke="white"
+            strokeWidth={1.5}
+            strokeLinecap="round"
+          />
+        </g>
+      )}
     </g>
   );
 });
@@ -166,6 +222,7 @@ export const ConnectionLines = memo(({
   onConnectionClick,
   onConnectionDoubleClick,
   onConnectionRightClick,
+  onConnectionDelete,
 }: ConnectionLinesProps) => {
   // Create a map of nodes for quick lookup
   const nodeMap = useMemo(() => {
@@ -189,10 +246,10 @@ export const ConnectionLines = memo(({
 
   return (
     <svg
-      className="absolute inset-0 pointer-events-none"
+      className="absolute inset-0"
       width="100%"
       height="100%"
-      style={{ overflow: "visible" }}
+      style={{ overflow: "visible", pointerEvents: "none" }}
     >
       {/* Define arrow marker */}
       <defs>
@@ -241,6 +298,7 @@ export const ConnectionLines = memo(({
             onClick={() => onConnectionClick?.(connection.id)}
             onDoubleClick={() => onConnectionDoubleClick?.(connection.id)}
             onRightClick={(e) => onConnectionRightClick?.(connection.id, e)}
+            onDelete={() => onConnectionDelete?.(connection.id)}
           />
         );
       })}

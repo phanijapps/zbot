@@ -1,10 +1,10 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - YAML PREVIEW
-// YAML preview and edit component for agent configuration
+// ZERO IDE - YAML PREVIEW
+// YAML preview and edit component for node configuration
 // ============================================================================
 
 import { memo, useState, useEffect, useMemo } from "react";
-import type { BaseNode, AgentNodeData, TriggerNodeData, ParallelNodeData, SequentialNodeData, ConditionalNodeData, LoopNodeData, AggregatorNodeData, SubtaskNodeData } from "../types";
+import type { BaseNode, StartNodeData, EndNodeData, ConditionalNodeData, SubagentNodeData } from "../types";
 
 // -----------------------------------------------------------------------------
 // Types
@@ -61,103 +61,27 @@ function nodeToYaml(node: BaseNode): string {
 
   // Node-specific data
   switch (node.type) {
-    case "agent":
-      lines.push(...agentNodeToYaml(node.data as AgentNodeData));
+    case "start":
+      lines.push(...startNodeToYaml(node.data as StartNodeData));
       break;
-    case "trigger":
-      lines.push(...triggerNodeToYaml(node.data as TriggerNodeData));
-      break;
-    case "parallel":
-      lines.push(...parallelNodeToYaml(node.data as ParallelNodeData));
-      break;
-    case "sequential":
-      lines.push(...sequentialNodeToYaml(node.data as SequentialNodeData));
+    case "end":
+      lines.push(...endNodeToYaml(node.data as EndNodeData));
       break;
     case "conditional":
       lines.push(...conditionalNodeToYaml(node.data as ConditionalNodeData));
       break;
-    case "loop":
-      lines.push(...loopNodeToYaml(node.data as LoopNodeData));
-      break;
-    case "aggregator":
-      lines.push(...aggregatorNodeToYaml(node.data as AggregatorNodeData));
-      break;
-    case "subtask":
-      lines.push(...subtaskNodeToYaml(node.data as SubtaskNodeData));
+    case "subagent":
+      lines.push(...subagentNodeToYaml(node.data as SubagentNodeData));
       break;
   }
 
   return lines.join("\n");
 }
 
-function agentNodeToYaml(data: AgentNodeData): string[] {
+function startNodeToYaml(data: StartNodeData): string[] {
   const lines: string[] = [];
 
-  lines.push(`name: ${data.displayName || "Unnamed Agent"}`);
-  if (data.description) {
-    lines.push(`description: ${data.description}`);
-  }
-
-  lines.push("");
-  lines.push(`# Model Configuration`);
-  lines.push(`model:`);
-  lines.push(`  provider: ${data.providerId || "openai"}`);
-  lines.push(`  name: ${data.model || "gpt-4o"}`);
-  lines.push(`  temperature: ${data.temperature ?? 0.7}`);
-  lines.push(`  max_tokens: ${data.maxTokens ?? 4096}`);
-
-  if (data.tools && data.tools.length > 0) {
-    lines.push("");
-    lines.push(`# Tools`);
-    lines.push(`tools:`);
-    for (const tool of data.tools) {
-      lines.push(`  - ${tool}`);
-    }
-  }
-
-  if (data.mcps && data.mcps.length > 0) {
-    lines.push("");
-    lines.push(`# MCP Servers`);
-    lines.push(`mcps:`);
-    for (const mcp of data.mcps) {
-      lines.push(`  - ${mcp}`);
-    }
-  }
-
-  if (data.skills && data.skills.length > 0) {
-    lines.push("");
-    lines.push(`# Skills`);
-    lines.push(`skills:`);
-    for (const skill of data.skills) {
-      lines.push(`  - ${skill}`);
-    }
-  }
-
-  if (data.middleware && data.middleware.length > 0) {
-    lines.push("");
-    lines.push(`# Middleware`);
-    lines.push(`middleware:`);
-    for (const mw of data.middleware) {
-      lines.push(`  - ${mw}`);
-    }
-  }
-
-  if (data.systemInstructions) {
-    lines.push("");
-    lines.push(`# System Instructions`);
-    lines.push(`system_instructions: |`);
-    for (const line of data.systemInstructions.split("\n")) {
-      lines.push(`  ${line}`);
-    }
-  }
-
-  return lines;
-}
-
-function triggerNodeToYaml(data: TriggerNodeData): string[] {
-  const lines: string[] = [];
-
-  lines.push(`name: ${data.displayName || "Trigger"}`);
+  lines.push(`name: ${data.displayName || "Start"}`);
   lines.push(`trigger_type: ${data.triggerType}`);
   if (data.schedule) {
     lines.push(`schedule: ${data.schedule}`);
@@ -166,31 +90,10 @@ function triggerNodeToYaml(data: TriggerNodeData): string[] {
   return lines;
 }
 
-function parallelNodeToYaml(data: ParallelNodeData): string[] {
+function endNodeToYaml(data: EndNodeData): string[] {
   const lines: string[] = [];
 
-  lines.push(`name: ${data.displayName || "Parallel"}`);
-  lines.push(`merge_strategy: ${data.mergeStrategy}`);
-  if (data.subagents && data.subagents.length > 0) {
-    lines.push(`subagents:`);
-    for (const agent of data.subagents) {
-      lines.push(`  - ${agent}`);
-    }
-  }
-
-  return lines;
-}
-
-function sequentialNodeToYaml(data: SequentialNodeData): string[] {
-  const lines: string[] = [];
-
-  lines.push(`name: ${data.displayName || "Sequential"}`);
-  if (data.subtasks && data.subtasks.length > 0) {
-    lines.push(`subtasks:`);
-    for (const task of data.subtasks) {
-      lines.push(`  - ${task}`);
-    }
-  }
+  lines.push(`name: ${data.displayName || "End"}`);
 
   return lines;
 }
@@ -213,56 +116,24 @@ function conditionalNodeToYaml(data: ConditionalNodeData): string[] {
   return lines;
 }
 
-function loopNodeToYaml(data: LoopNodeData): string[] {
+function subagentNodeToYaml(data: SubagentNodeData): string[] {
   const lines: string[] = [];
 
-  lines.push(`name: ${data.displayName || "Loop"}`);
-  lines.push(`exit_condition: ${data.exitCondition}`);
-  lines.push(`max_iterations: ${data.maxIterations}`);
-  if (data.bodyNodeId) {
-    lines.push(`body_node: ${data.bodyNodeId}`);
+  lines.push(`displayName: ${data.displayName || "Subagent"}`);
+  if (data.subagentId) {
+    lines.push(`subagentId: ${data.subagentId}`);
   }
 
-  return lines;
-}
+  const dataRecord = data as unknown as Record<string, unknown>;
+  const hasConfig = !!dataRecord.config;
 
-function aggregatorNodeToYaml(data: AggregatorNodeData): string[] {
-  const lines: string[] = [];
-
-  lines.push(`name: ${data.displayName || "Aggregator"}`);
-  lines.push(`strategy: ${data.strategy}`);
-  if (data.template) {
-    lines.push(`template: |`);
-    for (const line of data.template.split("\n")) {
-      lines.push(`  ${line}`);
-    }
-  }
-  if (data.customInstructions) {
-    lines.push(`custom_instructions: |`);
-    for (const line of data.customInstructions.split("\n")) {
-      lines.push(`  ${line}`);
-    }
-  }
-
-  return lines;
-}
-
-function subtaskNodeToYaml(data: SubtaskNodeData): string[] {
-  const lines: string[] = [];
-
-  lines.push(`name: ${data.displayName || "Subtask"}`);
-  if (data.context) {
-    lines.push(`context: ${data.context}`);
-  }
-  lines.push(`goal: ${data.goal}`);
-  if (data.tasks && data.tasks.length > 0) {
-    lines.push(`tasks:`);
-    for (const task of data.tasks) {
-      lines.push(`  - ${task}`);
-    }
-  }
-  if (data.agentNodeId) {
-    lines.push(`agent_node: ${data.agentNodeId}`);
+  if (hasConfig) {
+    lines.push(``);
+    lines.push(`# Subagent Configuration`);
+    lines.push(`# The full config will be created in .subagents/${data.subagentId}/ when saved`);
+  } else {
+    lines.push(``);
+    lines.push(`# Configure this subagent in the properties panel`);
   }
 
   return lines;

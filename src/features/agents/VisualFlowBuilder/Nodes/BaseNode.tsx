@@ -6,6 +6,7 @@
 import React, { memo, useRef, useState, useCallback } from "react";
 import type { NodeProps } from "../types";
 import { NODE_COLORS, NODE_ICONS, NODE_DIMENSIONS, CANVAS_CONFIG } from "../constants";
+import { NodeActions } from "./NodeActions";
 
 // -----------------------------------------------------------------------------
 // Icons (using Lucide React style components)
@@ -15,6 +16,11 @@ const Icons: Record<string, React.FC<{ className?: string }>> = {
   Play: ({ className }) => (
     <svg className={className} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
       <polygon points="5 3 19 12 5 21 5 3" />
+    </svg>
+  ),
+  Circle: ({ className }) => (
+    <svg className={className} fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
     </svg>
   ),
   Bot: ({ className }) => (
@@ -60,17 +66,26 @@ const Icons: Record<string, React.FC<{ className?: string }>> = {
 
 interface PortProps {
   type: "input" | "output";
+  nodeId: string;
+  port: string;
   onClick?: (e: React.MouseEvent) => void;
   onHover?: (isHovering: boolean) => void;
+  onMouseDown?: (e: React.MouseEvent) => void;
 }
 
-const Port = memo(({ type, onClick, onHover }: PortProps) => {
+const Port = memo(({ type, nodeId, port, onClick, onHover, onMouseDown }: PortProps) => {
   return (
     <div
       className={`absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 border-white/30 bg-white/80 hover:bg-violet-400 hover:border-violet-300 hover:scale-125 cursor-crosshair transition-all duration-150 ${
         type === "input" ? "-left-1.5" : "-right-1.5"
       }`}
+      data-port="true"
+      data-node-id={nodeId}
+      data-port-type={type}
+      data-port-position={type === "input" ? "left" : "right"}
+      data-port-id={port}
       onClick={onClick}
+      onMouseDown={onMouseDown}
       onMouseEnter={() => onHover?.(true)}
       onMouseLeave={() => onHover?.(false)}
     />
@@ -89,6 +104,7 @@ export const BaseNode = memo(({
   onSelect,
   onUpdate,
   onDelete,
+  onPortMouseDown,
   children,
 }: NodeProps & { children?: React.ReactNode }) => {
   const nodeRef = useRef<HTMLDivElement>(null);
@@ -98,7 +114,7 @@ export const BaseNode = memo(({
   const [initialNodePos, setInitialNodePos] = useState<{ x: number; y: number } | null>(null);
 
   // Get node styling based on type
-  const nodeStyle = NODE_COLORS[node.type] || NODE_COLORS.agent;
+  const nodeStyle = NODE_COLORS[node.type] || NODE_COLORS.subagent;
   const IconComponent = Icons[NODE_ICONS[node.type]] || Icons.Bot;
 
   // -----------------------------------------------------------------------------
@@ -183,7 +199,7 @@ export const BaseNode = memo(({
   // -----------------------------------------------------------------------------
 
   const nodeClass = `
-    absolute rounded-xl cursor-pointer transition-all duration-200
+    absolute rounded-xl cursor-pointer pointer-events-auto transition-all duration-200
     bg-gradient-to-br ${nodeStyle.bg}
     border ${nodeStyle.border}
     ${isSelected ? "ring-2 ring-violet-500 ring-offset-2 ring-offset-[#0d0d0d]" : ""}
@@ -208,10 +224,32 @@ export const BaseNode = memo(({
       }}
     >
       {/* Input Port */}
-      <Port type="input" data-port="true" />
+      <Port
+        type="input"
+        nodeId={node.id}
+        port="input"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onPortMouseDown?.(node.id, "input", "input", {
+            x: node.position.x,
+            y: node.position.y + NODE_DIMENSIONS.HEIGHT / 2,
+          });
+        }}
+      />
 
       {/* Output Port */}
-      <Port type="output" data-port="true" />
+      <Port
+        type="output"
+        nodeId={node.id}
+        port="output"
+        onMouseDown={(e) => {
+          e.stopPropagation();
+          onPortMouseDown?.(node.id, "output", "output", {
+            x: node.position.x + NODE_DIMENSIONS.WIDTH,
+            y: node.position.y + NODE_DIMENSIONS.HEIGHT / 2,
+          });
+        }}
+      />
 
       {/* Node Header */}
       <div
@@ -237,19 +275,19 @@ export const BaseNode = memo(({
       <div className="absolute top-[40px] left-0 right-0 bottom-0 p-3">
         {children || (
           <div className="text-xs text-gray-400">
-            {node.type === "agent" && (
-              <div className="space-y-1">
-                <p>Configure this agent...</p>
-              </div>
-            )}
-            {node.type === "trigger" && (
+            {node.type === "start" && (
               <div className="space-y-1">
                 <p className="text-green-400">Workflow starts here</p>
               </div>
             )}
-            {node.type === "parallel" && (
+            {node.type === "end" && (
               <div className="space-y-1">
-                <p className="text-blue-400">Execute in parallel</p>
+                <p className="text-red-400">Workflow ends here</p>
+              </div>
+            )}
+            {node.type === "subagent" && (
+              <div className="space-y-1">
+                <p className="text-indigo-400">Task definition</p>
               </div>
             )}
             {node.type === "conditional" && (
@@ -257,43 +295,16 @@ export const BaseNode = memo(({
                 <p className="text-pink-400">Route by condition</p>
               </div>
             )}
-            {node.type === "loop" && (
-              <div className="space-y-1">
-                <p className="text-yellow-400">Repeat until...</p>
-              </div>
-            )}
-            {node.type === "aggregator" && (
-              <div className="space-y-1">
-                <p className="text-teal-400">Merge responses</p>
-              </div>
-            )}
-            {node.type === "subtask" && (
-              <div className="space-y-1">
-                <p className="text-indigo-400">Parallel subtask</p>
-              </div>
-            )}
-            {node.type === "sequential" && (
-              <div className="space-y-1">
-                <p className="text-orange-400">Execute in sequence</p>
-              </div>
-            )}
           </div>
         )}
       </div>
 
-      {/* Delete button (on hover when selected) */}
+      {/* Node Actions (shown when selected) */}
       {isSelected && (
-        <button
-          className="absolute -top-2 -right-2 w-6 h-6 rounded-full bg-red-500 text-white flex items-center justify-center hover:bg-red-600 shadow-lg transition-colors"
-          onClick={(e) => {
-            e.stopPropagation();
-            handleDelete();
-          }}
-        >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" strokeWidth="2.5" viewBox="0 0 24 24">
-            <path d="M18 6 6 18M6 6l12 12" />
-          </svg>
-        </button>
+        <NodeActions
+          onDelete={handleDelete}
+          className="absolute -top-2 -right-2"
+        />
       )}
     </div>
   );

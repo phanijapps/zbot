@@ -1,6 +1,6 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - CONSTANTS
-// Configuration constants for the visual workflow builder
+// ZERO IDE - CONSTANTS
+// Configuration constants for the Zero IDE Orchestrator workflow builder
 // ============================================================================
 
 import type { NodeTemplate, NodeType } from "./types";
@@ -63,53 +63,29 @@ export const NODE_DIMENSIONS = {
 // -----------------------------------------------------------------------------
 
 export const NODE_COLORS = {
-  trigger: {
+  start: {
     bg: "from-green-500/20 to-emerald-600/20",
     border: "border-green-500/30",
     icon: "text-green-400",
     accent: "#22c55e",
   },
-  agent: {
-    bg: "from-violet-500/20 to-purple-600/20",
-    border: "border-violet-500/30",
-    icon: "text-violet-400",
-    accent: "#8b5cf6",
+  end: {
+    bg: "from-red-500/20 to-rose-600/20",
+    border: "border-red-500/30",
+    icon: "text-red-400",
+    accent: "#ef4444",
   },
-  parallel: {
-    bg: "from-blue-500/20 to-cyan-600/20",
-    border: "border-blue-500/30",
-    icon: "text-blue-400",
-    accent: "#3b82f6",
-  },
-  sequential: {
-    bg: "from-orange-500/20 to-amber-600/20",
-    border: "border-orange-500/30",
-    icon: "text-orange-400",
-    accent: "#f97316",
+  subagent: {
+    bg: "from-indigo-500/20 to-blue-600/20",
+    border: "border-indigo-500/30",
+    icon: "text-indigo-400",
+    accent: "#6366f1",
   },
   conditional: {
     bg: "from-pink-500/20 to-rose-600/20",
     border: "border-pink-500/30",
     icon: "text-pink-400",
     accent: "#ec4899",
-  },
-  loop: {
-    bg: "from-yellow-500/20 to-lime-600/20",
-    border: "border-yellow-500/30",
-    icon: "text-yellow-400",
-    accent: "#eab308",
-  },
-  aggregator: {
-    bg: "from-teal-500/20 to-cyan-600/20",
-    border: "border-teal-500/30",
-    icon: "text-teal-400",
-    accent: "#14b8a6",
-  },
-  subtask: {
-    bg: "from-indigo-500/20 to-blue-600/20",
-    border: "border-indigo-500/30",
-    icon: "text-indigo-400",
-    accent: "#6366f1",
   },
 } as const;
 
@@ -118,14 +94,10 @@ export const NODE_COLORS = {
 // -----------------------------------------------------------------------------
 
 export const NODE_ICONS: Record<NodeType, string> = {
-  trigger: "Play",
-  agent: "Bot",
-  parallel: "Zap",
-  sequential: "ArrowRight",
+  start: "Play",
+  end: "Circle",
+  subagent: "ListChecks",
   conditional: "GitBranch",
-  loop: "Repeat",
-  aggregator: "Merge",
-  subtask: "ListChecks",
 };
 
 // -----------------------------------------------------------------------------
@@ -135,10 +107,10 @@ export const NODE_ICONS: Record<NodeType, string> = {
 export const NODE_TEMPLATES: NodeTemplate[] = [
   // Basic Nodes
   {
-    type: "trigger",
+    type: "start",
     label: "Start",
     icon: "Play",
-    description: "Manual or scheduled trigger",
+    description: "Workflow entry point (manual, scheduled, or webhook)",
     category: "basic",
     defaultData: {
       displayName: "Start",
@@ -147,101 +119,40 @@ export const NODE_TEMPLATES: NodeTemplate[] = [
     },
   },
   {
-    type: "agent",
-    label: "Agent",
-    icon: "Bot",
-    description: "AI agent with model and tools",
+    type: "end",
+    label: "End",
+    icon: "Circle",
+    description: "Workflow exit point",
     category: "basic",
     defaultData: {
-      displayName: "New Agent",
-      description: "",
-      providerId: "",
-      model: "",
-      temperature: 0.7,
-      maxTokens: 4096,
-      tools: [],
-      mcps: [],
-      skills: [],
-      systemInstructions: "",
-      middleware: [],
+      displayName: "End",
     },
   },
 
-  // Flow Control Nodes
+  // Subagent Nodes (tasks that the orchestrator can delegate to)
   {
-    type: "parallel",
-    label: "Parallel",
-    icon: "Zap",
-    description: "Execute multiple agents concurrently",
-    category: "flow",
+    type: "subagent",
+    label: "Subagent",
+    icon: "ListChecks",
+    description: "Task that the orchestrator can delegate to",
+    category: "basic",
     defaultData: {
-      displayName: "Parallel Split",
-      mergeStrategy: "all",
-      subagents: [],
+      subagentId: "",           // Will be set when selecting/creating subagent
+      displayName: "Subagent",
     },
   },
-  {
-    type: "sequential",
-    label: "Sequential",
-    icon: "ArrowRight",
-    description: "Execute agents in order",
-    category: "flow",
-    defaultData: {
-      displayName: "Sequential Flow",
-      subtasks: [],
-    },
-  },
+
+  // Flow Control Nodes (for future use)
   {
     type: "conditional",
     label: "Conditional",
     icon: "GitBranch",
-    description: "Route based on conditions",
+    description: "Route workflow based on conditions",
     category: "flow",
     defaultData: {
       displayName: "Conditional Router",
       conditions: [],
-    },
-  },
-  {
-    type: "loop",
-    label: "Loop",
-    icon: "Repeat",
-    description: "Repeat until condition met",
-    category: "flow",
-    defaultData: {
-      displayName: "Loop",
-      exitCondition: "",
-      maxIterations: 3,
-      bodyNodeId: "",
-    },
-  },
-  {
-    type: "aggregator",
-    label: "Merge",
-    icon: "Merge",
-    description: "Combine multiple responses",
-    category: "flow",
-    defaultData: {
-      displayName: "Aggregator",
-      strategy: "concatenate",
-      template: "",
-      customInstructions: "",
-    },
-  },
-
-  // Advanced Nodes
-  {
-    type: "subtask",
-    label: "Subtask",
-    icon: "ListChecks",
-    description: "Parallel subtask with own context",
-    category: "advanced",
-    defaultData: {
-      displayName: "Subtask",
-      context: "",
-      tasks: [],
-      goal: "",
-      agentNodeId: "",
+      defaultTargetNodeId: undefined,
     },
   },
 ];
@@ -281,12 +192,9 @@ export const CONNECTION_CONFIG = {
 export const VALIDATION_MESSAGES = {
   NO_PROVIDER: "No provider selected",
   NO_MODEL: "No model selected",
-  NO_TOOLS: "No tools selected (agent will have limited capabilities)",
   EMPTY_DISPLAY_NAME: "Display name cannot be empty",
   DUPLICATE_NAME: "Display name must be unique",
-  NO_SUBAGENTS: "Parallel node must have at least 2 subagents",
-  NO_CONDITIONS: "Conditional node must have at least 2 conditions",
-  NO_EXIT_CONDITION: "Loop node must have an exit condition",
+  NO_CONDITIONS: "Conditional node must have at least 1 condition",
   INVALID_CONDITION: "Invalid condition expression",
 } as const;
 
@@ -333,4 +241,66 @@ export const EXPORT_OPTIONS = {
 
   // Default export scale
   DEFAULT_EXPORT_SCALE: 2,
+} as const;
+
+// -----------------------------------------------------------------------------
+// Tool Categories (for Agent Node Properties)
+// -----------------------------------------------------------------------------
+
+export const TOOL_CATEGORIES_CONFIG = {
+  fsTools: {
+    label: "File System",
+    icon: "📁",
+    color: "text-yellow-400",
+    description: "Read, write, and manipulate files",
+    tools: {
+      read: { name: "Read", description: "Read file contents" },
+      write: { name: "Write", description: "Write content to files" },
+      edit: { name: "Edit", description: "Edit file contents" },
+      grep: { name: "Grep", description: "Search file contents" },
+      glob: { name: "Glob", description: "Find files by pattern" },
+    },
+  },
+  kgTools: {
+    label: "Knowledge Graph",
+    icon: "🕸️",
+    color: "text-orange-400",
+    description: "Query and manage knowledge graphs",
+    tools: {
+      list_entities: { name: "List Entities", description: "List all entities" },
+      search_entities: { name: "Search Entities", description: "Search entities by query" },
+      get_relationships: { name: "Get Relationships", description: "Get entity relationships" },
+      add_entity: { name: "Add Entity", description: "Add a new entity" },
+      add_relationship: { name: "Add Relationship", description: "Add entity relationship" },
+    },
+  },
+  execTools: {
+    label: "Execution",
+    icon: "💻",
+    color: "text-purple-400",
+    description: "Execute code and load skills",
+    tools: {
+      python: { name: "Python", description: "Execute Python code" },
+      load_skill: { name: "Load Skill", description: "Load a custom skill" },
+    },
+  },
+  uiTools: {
+    label: "UI",
+    icon: "🖥️",
+    color: "text-cyan-400",
+    description: "User interaction tools",
+    tools: {
+      request_input: { name: "Request Input", description: "Request user input" },
+      show_content: { name: "Show Content", description: "Display content to user" },
+    },
+  },
+  agentTools: {
+    label: "Agent",
+    icon: "🤖",
+    color: "text-violet-400",
+    description: "Agent management tools",
+    tools: {
+      create_agent: { name: "Create Agent", description: "Create a sub-agent" },
+    },
+  },
 } as const;

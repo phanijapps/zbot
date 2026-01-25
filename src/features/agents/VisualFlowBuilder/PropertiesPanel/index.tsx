@@ -1,20 +1,17 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - PROPERTIES PANEL
-// Right panel for configuring selected node properties
+// ZERO IDE - PROPERTIES PANEL
+// Right panel for configuring selected node properties or Orchestrator config
 // ============================================================================
 
 import { memo, useState } from "react";
 import type { PropertiesPanelProps } from "../types";
 import { NODE_COLORS } from "../constants";
 import { Button } from "@/shared/ui/button";
-import { AgentProperties } from "./AgentProperties";
-import { TriggerProperties } from "./TriggerProperties";
-import { ParallelProperties } from "./ParallelProperties";
-import { SequentialProperties } from "./SequentialProperties";
+import { OrchestratorProperties } from "./OrchestratorProperties";
+import { StartProperties } from "./StartProperties";
+import { EndProperties } from "./EndProperties";
+import { SubagentProperties } from "./SubagentProperties";
 import { ConditionalProperties } from "./ConditionalProperties";
-import { LoopProperties } from "./LoopProperties";
-import { AggregatorProperties } from "./AggregatorProperties";
-import { SubtaskProperties } from "./SubtaskProperties";
 import { ValidationPanel } from "./ValidationPanel";
 import { YamlPreview } from "./YamlPreview";
 
@@ -41,33 +38,9 @@ const PlayIcon = () => (
   </svg>
 );
 
-const ZapIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-  </svg>
-);
-
-const ArrowRightIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-    <path d="M5 12h14" /><path d="m12 5 7 7-7 7" />
-  </svg>
-);
-
 const GitBranchIcon = () => (
   <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
     <path d="M6 3v12" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" />
-  </svg>
-);
-
-const RepeatIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-    <path d="m17 2 4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" /><path d="m7 22-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
-  </svg>
-);
-
-const MergeIcon = () => (
-  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-    <path d="m6 8 6 6-6 6" /><path d="m18 8-6 6 6 6" />
   </svg>
 );
 
@@ -80,14 +53,10 @@ const ListChecksIcon = () => (
 // Get icon for node type
 function getNodeIcon(nodeType: string): React.ReactElement {
   const icons: Record<string, React.ReactElement> = {
-    agent: <BotIcon />,
-    trigger: <PlayIcon />,
-    parallel: <ZapIcon />,
-    sequential: <ArrowRightIcon />,
+    start: <PlayIcon />,
+    end: <BotIcon />, // Using BotIcon as Circle for end
+    subagent: <ListChecksIcon />,
     conditional: <GitBranchIcon />,
-    loop: <RepeatIcon />,
-    aggregator: <MergeIcon />,
-    subtask: <ListChecksIcon />,
   };
   return icons[nodeType] || <BotIcon />;
 }
@@ -97,49 +66,47 @@ function getNodeIcon(nodeType: string): React.ReactElement {
 // -----------------------------------------------------------------------------
 
 export const PropertiesPanel = memo(({
+  agentId,
   node,
+  orchestratorConfig,
   onClose,
   onUpdate,
+  onUpdateOrchestrator,
   validationResults = [],
 }: PropertiesPanelProps) => {
   const [activeTab, setActiveTab] = useState<"properties" | "yaml">("properties");
+
+  // When no node selected, show Orchestrator configuration
   if (!node) {
     return (
-      <div className="w-[280px] bg-[#141414] border-l border-white/10 flex flex-col">
+      <div className="w-[400px] bg-[#141414] border-l border-white/10 flex flex-col">
         <div className="p-4 border-b border-white/10">
-          <h2 className="text-sm font-semibold text-white">Properties</h2>
+          <h2 className="text-sm font-semibold text-white">Orchestrator</h2>
         </div>
-        <div className="flex-1 flex items-center justify-center p-6">
-          <p className="text-sm text-gray-500 text-center">
-            Select a node to view its properties
-          </p>
+        <div className="flex-1 overflow-y-auto p-4">
+          <OrchestratorProperties
+            config={orchestratorConfig!}
+            onUpdate={onUpdateOrchestrator!}
+          />
         </div>
       </div>
     );
   }
 
-  const nodeStyle = NODE_COLORS[node.type] || NODE_COLORS.agent;
+  const nodeStyle = NODE_COLORS[node.type] || NODE_COLORS.subagent;
   const nodeIcon = getNodeIcon(node.type);
 
   // Render properties based on node type
   const renderProperties = () => {
     switch (node.type) {
-      case "agent":
-        return <AgentProperties node={node} onUpdate={onUpdate} />;
-      case "trigger":
-        return <TriggerProperties node={node} onUpdate={onUpdate} />;
-      case "parallel":
-        return <ParallelProperties node={node} onUpdate={onUpdate} />;
-      case "sequential":
-        return <SequentialProperties node={node} onUpdate={onUpdate} />;
+      case "start":
+        return <StartProperties node={node} onUpdate={onUpdate} />;
+      case "end":
+        return <EndProperties node={node} onUpdate={onUpdate} />;
+      case "subagent":
+        return <SubagentProperties agentId={agentId} node={node} onUpdate={onUpdate} />;
       case "conditional":
         return <ConditionalProperties node={node} onUpdate={onUpdate} />;
-      case "loop":
-        return <LoopProperties node={node} onUpdate={onUpdate} />;
-      case "aggregator":
-        return <AggregatorProperties node={node} onUpdate={onUpdate} />;
-      case "subtask":
-        return <SubtaskProperties node={node} onUpdate={onUpdate} />;
       default:
         return (
           <div className="space-y-4">
@@ -162,7 +129,7 @@ export const PropertiesPanel = memo(({
   };
 
   return (
-    <div className="w-[280px] bg-[#141414] border-l border-white/10 flex flex-col">
+    <div className="w-[400px] bg-[#141414] border-l border-white/10 flex flex-col">
       {/* Header */}
       <div className="p-4 border-b border-white/10 flex items-center justify-between">
         <div className="flex items-center gap-2">

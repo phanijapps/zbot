@@ -1,97 +1,48 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - VALIDATION HOOK
+// ZERO IDE - VALIDATION HOOK
 // Hook for real-time validation of canvas state
 // ============================================================================
 
 import { useCallback, useMemo } from "react";
-import type { CanvasState, BaseNode, ValidationResult, NodeData, AgentNodeData } from "../types";
-import { VALIDATION_MESSAGES } from "../constants";
+import type { CanvasState, BaseNode, ValidationResult, NodeData, SubagentNodeData } from "../types";
 
 // -----------------------------------------------------------------------------
-// Helper: Validate agent node
+// Helper: Validate subagent node
 // -----------------------------------------------------------------------------
 
-function validateAgentNode(node: BaseNode, data: NodeData): ValidationResult[] {
+function validateSubagentNode(node: BaseNode, data: NodeData): ValidationResult[] {
   const results: ValidationResult[] = [];
 
-  if (node.type !== "agent") {
+  if (node.type !== "subagent") {
     return results;
   }
 
-  const agentData = data as AgentNodeData;
+  const subagentData = data as SubagentNodeData;
 
-  // Check display name
-  if (!agentData.displayName || agentData.displayName.trim() === "") {
+  // Check display name (subagentId is auto-generated from displayName)
+  if (!subagentData.displayName || subagentData.displayName.trim() === "") {
     results.push({
       nodeId: node.id,
       type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
+      message: "Display name cannot be empty",
     });
   }
 
-  // Check provider
-  if (!agentData.providerId) {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.NO_PROVIDER,
-    });
-  }
-
-  // Check model
-  if (!agentData.model) {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.NO_MODEL,
-    });
-  }
-
-  // Warning: no tools
-  if (!agentData.tools || agentData.tools.length === 0) {
+  // Check if subagent has been configured (has config object)
+  const nodeDataRecord = data as unknown as Record<string, unknown>;
+  const hasConfig = !!nodeDataRecord.config;
+  if (!hasConfig) {
     results.push({
       nodeId: node.id,
       type: "warning",
-      message: VALIDATION_MESSAGES.NO_TOOLS,
+      message: "Subagent not configured - fill in the properties panel",
     });
   }
 
   return results;
 }
 
-// -----------------------------------------------------------------------------
-// Helper: Validate parallel node
-// -----------------------------------------------------------------------------
-
-function validateParallelNode(node: BaseNode, data: NodeData): ValidationResult[] {
-  const results: ValidationResult[] = [];
-
-  if (node.type !== "parallel") {
-    return results;
-  }
-
-  const parallelData = data as unknown as Record<string, unknown>;
-
-  // Check display name
-  if (!parallelData.displayName || (parallelData.displayName as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
-    });
-  }
-
-  // Check subagents count
-  if (!parallelData.subagents || (parallelData.subagents as string[]).length < 2) {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.NO_SUBAGENTS,
-    });
-  }
-
-  return results;
-}
+// This function is called in the validateState switch statement, so it's used
 
 // -----------------------------------------------------------------------------
 // Helper: Validate conditional node
@@ -111,16 +62,16 @@ function validateConditionalNode(node: BaseNode, data: NodeData): ValidationResu
     results.push({
       nodeId: node.id,
       type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
+      message: "Display name cannot be empty",
     });
   }
 
   // Check conditions count
-  if (!conditionalData.conditions || (conditionalData.conditions as unknown[]).length < 2) {
+  if (!conditionalData.conditions || (conditionalData.conditions as unknown[]).length < 1) {
     results.push({
       nodeId: node.id,
       type: "error",
-      message: VALIDATION_MESSAGES.NO_CONDITIONS,
+      message: "Conditional node must have at least 1 condition",
     });
   }
 
@@ -128,165 +79,32 @@ function validateConditionalNode(node: BaseNode, data: NodeData): ValidationResu
 }
 
 // -----------------------------------------------------------------------------
-// Helper: Validate loop node
+// Helper: Validate start node
 // -----------------------------------------------------------------------------
 
-function validateLoopNode(node: BaseNode, data: NodeData): ValidationResult[] {
+function validateStartNode(node: BaseNode): ValidationResult[] {
   const results: ValidationResult[] = [];
 
-  if (node.type !== "loop") {
+  if (node.type !== "start") {
     return results;
   }
 
-  const loopData = data as unknown as Record<string, unknown>;
-
-  // Check display name
-  if (!loopData.displayName || (loopData.displayName as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
-    });
-  }
-
-  // Check exit condition
-  if (!loopData.exitCondition || (loopData.exitCondition as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.NO_EXIT_CONDITION,
-    });
-  }
-
-  // Validate max iterations
-  if (loopData.maxIterations !== undefined && (loopData.maxIterations as number) < 1) {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: "Max iterations must be at least 1",
-    });
-  }
-
+  // Start nodes don't need much validation
   return results;
 }
 
 // -----------------------------------------------------------------------------
-// Helper: Validate sequential node
+// Helper: Validate end node
 // -----------------------------------------------------------------------------
 
-function validateSequentialNode(node: BaseNode, data: NodeData): ValidationResult[] {
+function validateEndNode(node: BaseNode): ValidationResult[] {
   const results: ValidationResult[] = [];
 
-  if (node.type !== "sequential") {
+  if (node.type !== "end") {
     return results;
   }
 
-  const sequentialData = data as unknown as Record<string, unknown>;
-
-  // Check display name
-  if (!sequentialData.displayName || (sequentialData.displayName as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
-    });
-  }
-
-  // Check subtasks count
-  if (!sequentialData.subtasks || (sequentialData.subtasks as string[]).length === 0) {
-    results.push({
-      nodeId: node.id,
-      type: "warning",
-      message: "Sequential node has no subtasks defined",
-    });
-  }
-
-  return results;
-}
-
-// -----------------------------------------------------------------------------
-// Helper: Validate aggregator node
-// -----------------------------------------------------------------------------
-
-function validateAggregatorNode(node: BaseNode, data: NodeData): ValidationResult[] {
-  const results: ValidationResult[] = [];
-
-  if (node.type !== "aggregator") {
-    return results;
-  }
-
-  const aggregatorData = data as unknown as Record<string, unknown>;
-
-  // Check display name
-  if (!aggregatorData.displayName || (aggregatorData.displayName as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
-    });
-  }
-
-  // Check strategy
-  if (!aggregatorData.strategy) {
-    results.push({
-      nodeId: node.id,
-      type: "warning",
-      message: "No merge strategy selected",
-    });
-  }
-
-  return results;
-}
-
-// -----------------------------------------------------------------------------
-// Helper: Validate subtask node
-// -----------------------------------------------------------------------------
-
-function validateSubtaskNode(node: BaseNode, data: NodeData): ValidationResult[] {
-  const results: ValidationResult[] = [];
-
-  if (node.type !== "subtask") {
-    return results;
-  }
-
-  const subtaskData = data as unknown as Record<string, unknown>;
-
-  // Check display name
-  if (!subtaskData.displayName || (subtaskData.displayName as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: VALIDATION_MESSAGES.EMPTY_DISPLAY_NAME,
-    });
-  }
-
-  // Check tasks
-  if (!subtaskData.tasks || (subtaskData.tasks as string[]).length === 0) {
-    results.push({
-      nodeId: node.id,
-      type: "warning",
-      message: "Subtask has no tasks defined",
-    });
-  }
-
-  // Check goal
-  if (!subtaskData.goal || (subtaskData.goal as string).trim() === "") {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: "Subtask must have a goal defined",
-    });
-  }
-
-  // Check agent reference
-  if (!subtaskData.agentNodeId) {
-    results.push({
-      nodeId: node.id,
-      type: "error",
-      message: "Subtask must reference an agent configuration",
-    });
-  }
-
+  // End nodes don't need validation
   return results;
 }
 
@@ -321,7 +139,7 @@ export function useValidation(state: CanvasState) {
           results.push({
             nodeId,
             type: "error",
-            message: VALIDATION_MESSAGES.DUPLICATE_NAME,
+            message: "Display name must be unique",
           });
         });
       }
@@ -330,32 +148,38 @@ export function useValidation(state: CanvasState) {
     // Validate each node based on its type
     state.nodes.forEach((node) => {
       switch (node.type) {
-        case "agent":
-          results.push(...validateAgentNode(node, node.data));
+        case "start":
+          results.push(...validateStartNode(node));
           break;
-        case "parallel":
-          results.push(...validateParallelNode(node, node.data));
+        case "end":
+          results.push(...validateEndNode(node));
           break;
         case "conditional":
           results.push(...validateConditionalNode(node, node.data));
           break;
-        case "loop":
-          results.push(...validateLoopNode(node, node.data));
-          break;
-        case "sequential":
-          results.push(...validateSequentialNode(node, node.data));
-          break;
-        case "aggregator":
-          results.push(...validateAggregatorNode(node, node.data));
-          break;
-        case "subtask":
-          results.push(...validateSubtaskNode(node, node.data));
-          break;
-        case "trigger":
-          // Trigger nodes don't need validation
+        case "subagent":
+          results.push(...validateSubagentNode(node, node.data));
           break;
       }
     });
+
+    // Check that flow has start and end nodes
+    const hasStartNode = state.nodes.some((n) => n.type === "start");
+    const hasEndNode = state.nodes.some((n) => n.type === "end");
+
+    if (!hasStartNode) {
+      results.push({
+        type: "error",
+        message: "Flow must have a Start event",
+      });
+    }
+
+    if (!hasEndNode) {
+      results.push({
+        type: "warning",
+        message: "Flow should have an End event",
+      });
+    }
 
     return results;
   }, [state.nodes]);

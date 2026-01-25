@@ -1,6 +1,6 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - MAIN COMPONENT
-// Entry point for the visual workflow builder
+// ZERO IDE - MAIN COMPONENT
+// Entry point for the Zero IDE workflow builder
 // ============================================================================
 
 import { useCallback, useEffect } from "react";
@@ -11,7 +11,7 @@ import { InfiniteCanvas } from "./Canvas/InfiniteCanvas";
 import { AssetsPanel } from "./Sidebar/AssetsPanel";
 import { PropertiesPanel } from "./PropertiesPanel";
 import { NODE_TEMPLATES } from "./constants";
-import type { NodeType, BaseNode } from "./types";
+import { DEFAULT_ORCHESTRATOR_CONFIG, type NodeType, BaseNode, Connection } from "./types";
 
 // -----------------------------------------------------------------------------
 // Icons
@@ -20,6 +20,12 @@ import type { NodeType, BaseNode } from "./types";
 const FloppyIcon = () => (
   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
     <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" /><path d="M17 21v-8H7v8" /><path d="M7 3v5h8" />
+  </svg>
+);
+
+const XIcon = () => (
+  <svg className="w-4 h-4" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
+    <path d="M18 6 6 18M6 6l12 12" />
   </svg>
 );
 
@@ -35,10 +41,14 @@ function generateId(prefix: string): string {
 // Main Component Props
 // -----------------------------------------------------------------------------
 
-interface VisualFlowBuilderProps {
+interface ZeroIDEProps {
   agentId?: string;
+  agentDisplayName?: string;
   onSave?: (state: ReturnType<typeof useCanvasState>["state"]) => Promise<void> | void;
+  onClose?: () => void;
   initialNodes?: BaseNode[];
+  initialConnections?: Connection[];
+  initialOrchestratorConfig?: typeof DEFAULT_ORCHESTRATOR_CONFIG;
   readOnly?: boolean;
 }
 
@@ -46,23 +56,28 @@ interface VisualFlowBuilderProps {
 // Main Component
 // -----------------------------------------------------------------------------
 
-export function VisualFlowBuilder({
+export function ZeroIDE({
   agentId,
+  agentDisplayName,
   onSave,
+  onClose,
   initialNodes,
+  initialConnections,
+  initialOrchestratorConfig,
   readOnly = false,
-}: VisualFlowBuilderProps) {
+}: ZeroIDEProps) {
   // Initialize state with saved data if available
   const getInitialState = useCallback(() => {
     const saved = loadSavedState();
     return {
       nodes: saved?.nodes ?? initialNodes ?? [],
-      connections: saved?.connections ?? [],
+      connections: saved?.connections ?? initialConnections ?? [],
       selectedNodeId: null,
       viewport: saved?.viewport ?? { x: 0, y: 0, zoom: 1 },
+      orchestratorConfig: saved?.orchestratorConfig ?? initialOrchestratorConfig ?? DEFAULT_ORCHESTRATOR_CONFIG,
       validation: [],
     };
-  }, [initialNodes]);
+  }, [initialNodes, initialConnections, initialOrchestratorConfig]);
 
   const {
     state,
@@ -71,6 +86,9 @@ export function VisualFlowBuilder({
     deleteNode,
     selectNode,
     setViewport,
+    addConnection,
+    deleteConnection,
+    updateOrchestratorConfig,
   } = useCanvasState(getInitialState());
 
   // Auto-save hook
@@ -141,15 +159,15 @@ export function VisualFlowBuilder({
       {/* Top Bar */}
       <div className="h-12 border-b border-white/10 flex items-center justify-between px-4 bg-[#0d0d0d]">
         <div className="flex items-center gap-4">
-          <h1 className="text-sm font-semibold">Visual Workflow Builder</h1>
-          {agentId && (
-            <span className="text-xs text-gray-500">
-              Agent: {agentId}
+          <h1 className="text-sm font-semibold">Zero IDE</h1>
+          {agentDisplayName && (
+            <span className="text-xs text-gray-400">
+              {agentDisplayName}
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           {/* Validation Status */}
           {overallStatus === "error" && (
             <div className="flex items-center gap-1.5 text-xs text-red-400">
@@ -197,6 +215,17 @@ export function VisualFlowBuilder({
               Save
             </button>
           )}
+
+          {/* Close Button */}
+          {onClose && (
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
+              aria-label="Close"
+            >
+              <XIcon />
+            </button>
+          )}
         </div>
       </div>
 
@@ -215,13 +244,18 @@ export function VisualFlowBuilder({
           updateNode={updateNode}
           selectNode={selectNode}
           setViewport={setViewport}
+          addConnection={addConnection}
+          deleteConnection={deleteConnection}
           onAddNode={handleAddNode}
         />
 
         {/* Right Panel - Properties */}
         {!readOnly && (
           <PropertiesPanel
+            agentId={agentId}
             node={selectedNode}
+            orchestratorConfig={state.orchestratorConfig}
+            onUpdateOrchestrator={updateOrchestratorConfig}
             onClose={() => selectNode(null)}
             onUpdate={(updates) => {
               if (selectedNode) {
@@ -237,7 +271,9 @@ export function VisualFlowBuilder({
       <div className="absolute bottom-4 left-4 text-[10px] text-gray-600 space-y-0.5 pointer-events-none">
         <p>Space + Drag: Pan canvas</p>
         <p>Ctrl + Scroll: Zoom</p>
-        <p>Delete: Remove selected node</p>
+        <p>Delete: Remove selected node/connection</p>
+        <p>Drag from port: Create or reroute connection</p>
+        <p>Hover connection: Show delete button</p>
         <p>Escape: Deselect</p>
       </div>
     </div>
@@ -248,5 +284,5 @@ export function VisualFlowBuilder({
 // Export Component
 // -----------------------------------------------------------------------------
 
-export default VisualFlowBuilder;
+export default ZeroIDE;
 export { FlowBuilderModal } from "./FlowBuilderModal";

@@ -689,7 +689,42 @@ pub async fn get_agent_flow_config(agent_id: String) -> Result<Option<String>, S
     Ok(Some(flow_config))
 }
 
+// ============================================================================
+// FLOW CONFIG HELPERS
+// ============================================================================
+
+/// Parse middleware from flow config JSON into YAML format
+fn parse_middleware_from_config(middleware_value: Option<&serde_json::Value>) -> Option<String> {
+    let middleware_obj = match middleware_value {
+        Some(m) => m,
+        None => return None,
+    };
+
+    if !middleware_obj.is_object() {
+        return None;
+    }
+
+    let mut yaml_parts = Vec::new();
+
+    if let Some(obj) = middleware_obj.as_object() {
+        for (key, value) in obj {
+            if let Some(enabled) = value.get("enabled").and_then(|e| e.as_bool()) {
+                if enabled {
+                    yaml_parts.push(format!("  - {}", key));
+                }
+            }
+        }
+    }
+
+    if yaml_parts.is_empty() {
+        None
+    } else {
+        Some(format!("middleware:\n{}", yaml_parts.join("\n")))
+    }
+}
+
 /// Save the flow configuration for an agent
+/// Also creates/updates subagents from the flow nodes
 #[tauri::command]
 pub async fn save_agent_flow_config(agent_id: String, config: String) -> Result<(), String> {
     let agents_dir = get_agents_dir()?;
@@ -701,12 +736,254 @@ pub async fn save_agent_flow_config(agent_id: String, config: String) -> Result<
 
     let flow_path = agent_dir.join("flow.json");
 
-    // Validate that the config is valid JSON before writing
-    let _parsed: serde_json::Value = serde_json::from_str(&config)
+    // Validate and parse the config JSON
+    let parsed: serde_json::Value = serde_json::from_str(&config)
         .map_err(|e| format!("Invalid JSON in flow config: {}", e))?;
 
+    // Write the flow.json file
     fs::write(&flow_path, config)
         .map_err(|e| format!("Failed to write flow.json: {}", e))?;
+
+    // Process subagent nodes from the flow
+    if let Some(nodes) = parsed.get("nodes").and_then(|n| n.as_array()) {
+        for node in nodes {
+            // Only process subagent nodes with config
+            if node.get("type").and_then(|t| t.as_str()) != Some("subagent") {
+                continue;
+            }
+
+            let data = match node.get("data") {
+                Some(d) => d,
+                None => continue,
+            };
+
+            // Get the subagent ID (generated from display name)
+            let subagent_id = match data.get("subagentId").and_then(|s| s.as_str()) {
+                Some(id) if !id.is_empty() => id,
+                _ => continue,
+            };
+
+            // Get the config object
+            let config_obj = match data.get("config") {
+                Some(c) if c.is_object() => c,
+                _ => continue,
+            };
+
+            // Extract config values
+            let display_name = config_obj.get("displayName")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Subagent")
+                .to_string();
+
+            let description = config_obj.get("description")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let provider_id = config_obj.get("providerId")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let model = config_obj.get("model")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            let temperature = config_obj.get("temperature")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.7);
+
+            let max_tokens = config_obj.get("maxTokens")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(4096) as u32;
+
+            let system_instructions = config_obj.get("systemInstructions")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string();
+
+            // Parse tools from config (skip - tools are handled by orchestrator)
+            let _tools = config_obj.get("tools");
+
+            // Parse MCPs and Skills
+            let mcps = config_obj.get("mcps")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+
+            let skills = config_obj.get("skills")
+                .and_then(|v| v.as_array())
+                .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+                .unwrap_or_default();
+
+            // Parse middleware into YAML format
+            let middleware = parse_middleware_from_config(config_obj.get("middleware"));
+
+            // Create the subagent
+            let subagent = Agent {
+                id: String::new(), // Will be set by save_subagent
+                name: subagent_id.to_string(),
+                display_name,
+                description,
+                provider_id,
+                model,
+                temperature,
+                max_tokens,
+                thinking_enabled: false,
+                voice_recording_enabled: false,
+                instructions: system_instructions.clone(),
+                mcps,
+                skills,
+                middleware,
+                agent_type: Some("llm".to_string()),
+                system_instruction: Some(system_instructions),
+                created_at: None,
+            };
+
+            // Save the subagent
+            save_subagent(agent_id.clone(), subagent).await?;
+        }
+    }
+
+    Ok(())
+}
+
+// ============================================================================
+// SUBAGENT COMMANDS
+// ============================================================================
+
+/// Gets the .subagents directory path for an agent
+fn get_subagents_dir(agent_id: String) -> Result<PathBuf, String> {
+    let agents_dir = get_agents_dir()?;
+    let agent_dir = agents_dir.join(&agent_id);
+
+    if !agent_dir.exists() {
+        return Err(format!("Agent not found: {}", agent_id));
+    }
+
+    Ok(agent_dir.join(".subagents"))
+}
+
+/// Lists all subagents for an agent
+#[tauri::command]
+pub async fn list_subagents(agent_id: String) -> Result<Vec<Agent>, String> {
+    let subagents_dir = get_subagents_dir(agent_id)?;
+
+    if !subagents_dir.exists() {
+        return Ok(vec![]);
+    }
+
+    let mut subagents = Vec::new();
+
+    // Iterate through subdirectories in .subagents directory
+    let entries = fs::read_dir(&subagents_dir)
+        .map_err(|e| format!("Failed to read .subagents directory: {}", e))?;
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+
+        // Skip if not a directory
+        if !path.is_dir() {
+            continue;
+        }
+
+        // Look for config.yaml file
+        let config_yaml = path.join("config.yaml");
+        if !config_yaml.exists() {
+            continue;
+        }
+
+        // Read and parse subagent folder
+        if let Ok(subagent) = read_agent_folder(&path) {
+            subagents.push(subagent);
+        }
+    }
+
+    Ok(subagents)
+}
+
+/// Gets a specific subagent by ID
+#[tauri::command]
+pub async fn get_subagent(agent_id: String, subagent_id: String) -> Result<Agent, String> {
+    let subagents_dir = get_subagents_dir(agent_id)?;
+    let subagent_dir = subagents_dir.join(&subagent_id);
+
+    if !subagent_dir.exists() {
+        return Err(format!("Subagent not found: {}", subagent_id));
+    }
+
+    read_agent_folder(&subagent_dir)
+}
+
+/// Creates or updates a subagent
+#[tauri::command]
+pub async fn save_subagent(agent_id: String, subagent: Agent) -> Result<Agent, String> {
+    let subagents_dir = get_subagents_dir(agent_id)?;
+
+    // Ensure .subagents directory exists
+    fs::create_dir_all(&subagents_dir)
+        .map_err(|e| format!("Failed to create .subagents directory: {}", e))?;
+
+    // Create subagent directory
+    let subagent_dir = subagents_dir.join(&subagent.name);
+    fs::create_dir_all(&subagent_dir)
+        .map_err(|e| format!("Failed to create subagent directory: {}", e))?;
+
+    // Write config.yaml
+    let config = AgentConfig {
+        name: subagent.name.clone(),
+        display_name: subagent.display_name.clone(),
+        description: subagent.description.clone(),
+        provider_id: subagent.provider_id.clone(),
+        model: subagent.model.clone(),
+        temperature: subagent.temperature,
+        max_tokens: subagent.max_tokens,
+        thinking_enabled: subagent.thinking_enabled,
+        voice_recording_enabled: subagent.voice_recording_enabled,
+        skills: subagent.skills.clone(),
+        mcps: subagent.mcps.clone(),
+        agent_type: subagent.agent_type.clone(),
+        system_instruction: subagent.system_instruction.clone(),
+    };
+    let config_yaml = serde_yaml::to_string(&config)
+        .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;
+
+    // Append middleware YAML if provided
+    let final_yaml = if let Some(middleware_yaml) = &subagent.middleware {
+        format!("{}\n{}", config_yaml.trim_end(), middleware_yaml.trim_end())
+    } else {
+        config_yaml
+    };
+
+    fs::write(subagent_dir.join("config.yaml"), final_yaml)
+        .map_err(|e| format!("Failed to write config.yaml: {}", e))?;
+
+    // Write AGENTS.md (just the instructions, no frontmatter)
+    let agents_md_content = format!("{}\n", subagent.instructions);
+    fs::write(subagent_dir.join("AGENTS.md"), agents_md_content)
+        .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
+
+    // Return the created subagent
+    Ok(Agent {
+        id: subagent.name.clone(),
+        created_at: Some(chrono::Utc::now().to_rfc3339()),
+        ..subagent
+    })
+}
+
+/// Deletes a subagent by removing its directory
+#[tauri::command]
+pub async fn delete_subagent(agent_id: String, subagent_id: String) -> Result<(), String> {
+    let subagents_dir = get_subagents_dir(agent_id)?;
+    let subagent_path = subagents_dir.join(&subagent_id);
+
+    if !subagent_path.exists() {
+        return Err(format!("Subagent not found: {}", subagent_id));
+    }
+
+    fs::remove_dir_all(&subagent_path)
+        .map_err(|e| format!("Failed to delete subagent directory: {}", e))?;
 
     Ok(())
 }

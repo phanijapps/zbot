@@ -106,7 +106,7 @@ const CategorySection = memo(({
       {expanded && (
         <div className="space-y-1.5 px-2 pb-2">
           {templates.map((template) => {
-            const nodeStyle = NODE_COLORS[template.type] || NODE_COLORS.agent;
+            const nodeStyle = NODE_COLORS[template.type] || NODE_COLORS.subagent;
             const IconComponent = Icons[template.icon] || Icons.Bot;
 
             return (
@@ -216,7 +216,6 @@ export const AssetsPanel = memo(({
 
         {/* Search */}
         <div className="relative">
-          <SearchIcon />
           <input
             type="text"
             value={searchQuery}

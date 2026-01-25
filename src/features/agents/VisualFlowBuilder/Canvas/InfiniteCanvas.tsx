@@ -1,20 +1,17 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - INFINITE CANVAS
+// ZERO IDE - INFINITE CANVAS
 // Main canvas component with pan/zoom, grid, nodes, and connections
 // ============================================================================
 
-import React, { memo, useRef, useCallback, useEffect } from "react";
+import React, { memo, useRef, useCallback, useEffect, useState } from "react";
 import { GridPattern } from "./BackgroundGrid";
+import { ConnectionLines, ConnectionCreationLine } from "./ConnectionLines";
 import { BaseNode } from "../Nodes/BaseNode";
-import { AgentNode } from "../Nodes/AgentNode";
-import { TriggerNode } from "../Nodes/TriggerNode";
-import { ParallelNode } from "../Nodes/ParallelNode";
-import { SequentialNode } from "../Nodes/SequentialNode";
+import { StartNode } from "../Nodes/StartNode";
+import { EndNode } from "../Nodes/EndNode";
+import { SubagentNode } from "../Nodes/SubagentNode";
 import { ConditionalNode } from "../Nodes/ConditionalNode";
-import { LoopNode } from "../Nodes/LoopNode";
-import { AggregatorNode } from "../Nodes/AggregatorNode";
-import { SubtaskNode } from "../Nodes/SubtaskNode";
-import type { CanvasState, BaseNode as BaseNodeType, NodeType } from "../types";
+import type { CanvasState, BaseNode as BaseNodeType, NodeType, Connection } from "../types";
 
 interface InfiniteCanvasProps {
   state: CanvasState;
@@ -23,6 +20,8 @@ interface InfiniteCanvasProps {
   updateNode: (id: string, updates: Partial<BaseNodeType>) => void;
   selectNode: (id: string | null) => void;
   setViewport: (viewport: { x: number; y: number; zoom: number }) => void;
+  addConnection: (connection: Connection) => void;
+  deleteConnection: (id: string) => void;
   onAddNode?: (type: NodeType, position: { x: number; y: number }) => void;
   className?: string;
 }
@@ -37,12 +36,40 @@ const CanvasContent = memo(({
   updateNode,
   selectNode,
   setViewport,
+  addConnection,
+  deleteConnection,
   onAddNode,
 }: Omit<InfiniteCanvasProps, "className">) => {
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Track space bar for panning
   const isSpacePressedRef = useRef(false);
+
+  // -----------------------------------------------------------------------------
+  // Connection Creation State
+  // -----------------------------------------------------------------------------
+
+  const [connectionCreation, setConnectionCreation] = useState<{
+    isCreating: boolean;
+    sourceNodeId: string | null;
+    sourcePort: string | null;
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+    connectionsToReplace: string[]; // IDs of connections to replace when rerouting
+  }>({
+    isCreating: false,
+    sourceNodeId: null,
+    sourcePort: null,
+    startX: 0,
+    startY: 0,
+    currentX: 0,
+    currentY: 0,
+    connectionsToReplace: [],
+  });
+
+  const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
 
   // -----------------------------------------------------------------------------
   // Mouse wheel handling for zoom
@@ -141,6 +168,132 @@ const CanvasContent = memo(({
   }, [onAddNode, state.viewport]);
 
   // -----------------------------------------------------------------------------
+  // Connection Creation Handlers
+  // -----------------------------------------------------------------------------
+
+  // Start creating a connection from a port
+  const handlePortMouseDown = useCallback((
+    nodeId: string,
+    port: string,
+    portType: "input" | "output",
+    position: { x: number; y: number }
+  ) => {
+    // Only allow starting from output ports
+    if (portType !== "output") return;
+
+    const startX = position.x;
+    const startY = position.y;
+
+    // Find existing connections from this output port (for rerouting)
+    const existingConnections = state.connections.filter(
+      c => c.sourceNodeId === nodeId && c.sourcePort === port
+    );
+    const connectionsToReplace = existingConnections.map(c => c.id);
+
+    setConnectionCreation({
+      isCreating: true,
+      sourceNodeId: nodeId,
+      sourcePort: port,
+      startX,
+      startY,
+      currentX: startX,
+      currentY: startY,
+      connectionsToReplace,
+    });
+  }, [state.connections]);
+
+  // Update connection creation line while dragging
+  useEffect(() => {
+    if (!connectionCreation.isCreating) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+
+      // Convert screen coordinates to canvas coordinates
+      const x = (e.clientX - rect.left - state.viewport.x) / state.viewport.zoom;
+      const y = (e.clientY - rect.top - state.viewport.y) / state.viewport.zoom;
+
+      setConnectionCreation(prev => ({
+        ...prev,
+        currentX: x,
+        currentY: y,
+      }));
+    };
+
+    const handleMouseUp = (e: MouseEvent) => {
+      // Check if we released over a port
+      const target = e.target as HTMLElement;
+      const portData = target.dataset;
+
+      if (portData.port === "true" && portData.nodeId && portData.portType && portData.portPosition) {
+        const targetNodeId = portData.nodeId;
+        const targetPort = portData.port;
+        const portType = portData.portType as "input" | "output";
+
+        // Only connect output to input
+        if (portType === "input" && connectionCreation.sourceNodeId) {
+          // Delete old connections if rerouting
+          if (connectionCreation.connectionsToReplace.length > 0) {
+            connectionCreation.connectionsToReplace.forEach(connId => {
+              deleteConnection(connId);
+            });
+          }
+
+          // Create the new connection
+          const connectionId = `conn-${connectionCreation.sourceNodeId}-${targetNodeId}-${Date.now()}`;
+          addConnection({
+            id: connectionId,
+            sourceNodeId: connectionCreation.sourceNodeId,
+            sourcePort: connectionCreation.sourcePort || "output",
+            targetNodeId: targetNodeId,
+            targetPort: targetPort,
+          });
+        }
+      }
+
+      // Reset connection creation state
+      setConnectionCreation({
+        isCreating: false,
+        sourceNodeId: null,
+        sourcePort: null,
+        startX: 0,
+        startY: 0,
+        currentX: 0,
+        currentY: 0,
+        connectionsToReplace: [],
+      });
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [connectionCreation.isCreating, connectionCreation.connectionsToReplace, state.viewport, containerRef, addConnection, deleteConnection]);
+
+  // Connection click handlers
+  const handleConnectionClick = useCallback((connectionId: string) => {
+    setSelectedConnectionId(connectionId);
+    selectNode(null); // Deselect any node
+  }, [selectNode]);
+
+  const handleConnectionRightClick = useCallback((connectionId: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    if (confirm("Delete this connection?")) {
+      deleteConnection(connectionId);
+      setSelectedConnectionId(null);
+    }
+  }, [deleteConnection]);
+
+  const handleConnectionDelete = useCallback((connectionId: string) => {
+    deleteConnection(connectionId);
+    setSelectedConnectionId(null);
+  }, [deleteConnection]);
+
+  // -----------------------------------------------------------------------------
   // Keyboard handling
   // -----------------------------------------------------------------------------
 
@@ -194,48 +347,40 @@ const CanvasContent = memo(({
 
     // Render based on node type
     switch (node.type) {
-      case "agent":
+      case "start":
         return (
-          <AgentNode
+          <StartNode
             key={nodeId}
             node={node}
             isSelected={isSelected}
             onSelect={handleSelect}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
+            onPortMouseDown={handlePortMouseDown}
           />
         );
-      case "trigger":
+      case "end":
         return (
-          <TriggerNode
+          <EndNode
             key={nodeId}
             node={node}
             isSelected={isSelected}
             onSelect={handleSelect}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
+            onPortMouseDown={handlePortMouseDown}
           />
         );
-      case "parallel":
+      case "subagent":
         return (
-          <ParallelNode
+          <SubagentNode
             key={nodeId}
             node={node}
             isSelected={isSelected}
             onSelect={handleSelect}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
-          />
-        );
-      case "sequential":
-        return (
-          <SequentialNode
-            key={nodeId}
-            node={node}
-            isSelected={isSelected}
-            onSelect={handleSelect}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
+            onPortMouseDown={handlePortMouseDown}
           />
         );
       case "conditional":
@@ -247,42 +392,11 @@ const CanvasContent = memo(({
             onSelect={handleSelect}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
-          />
-        );
-      case "loop":
-        return (
-          <LoopNode
-            key={nodeId}
-            node={node}
-            isSelected={isSelected}
-            onSelect={handleSelect}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-          />
-        );
-      case "aggregator":
-        return (
-          <AggregatorNode
-            key={nodeId}
-            node={node}
-            isSelected={isSelected}
-            onSelect={handleSelect}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
-          />
-        );
-      case "subtask":
-        return (
-          <SubtaskNode
-            key={nodeId}
-            node={node}
-            isSelected={isSelected}
-            onSelect={handleSelect}
-            onUpdate={handleUpdate}
-            onDelete={handleDelete}
+            onPortMouseDown={handlePortMouseDown}
           />
         );
       default:
+        // Fallback for unknown/deprecated node types
         return (
           <BaseNode
             key={nodeId}
@@ -291,10 +405,11 @@ const CanvasContent = memo(({
             onSelect={handleSelect}
             onUpdate={handleUpdate}
             onDelete={handleDelete}
+            onPortMouseDown={handlePortMouseDown}
           />
         );
     }
-  }, [state.nodes, state.selectedNodeId, updateNode, deleteNode, selectNode]);
+  }, [state.nodes, state.selectedNodeId, updateNode, deleteNode, selectNode, handlePortMouseDown]);
 
   // -----------------------------------------------------------------------------
   // Render
@@ -319,23 +434,35 @@ const CanvasContent = memo(({
         height={containerRef.current?.clientHeight || 0}
       />
 
-      {/* SVG layer for connections */}
-      <svg
-        className="absolute inset-0 pointer-events-none"
-        width="100%"
-        height="100%"
-        style={{ overflow: "visible" }}
-      >
-        <g
-          transform={`translate(${state.viewport.x}, ${state.viewport.y}) scale(${state.viewport.zoom})`}
-        >
-          {/* Connections will be rendered here */}
-        </g>
-      </svg>
+      {/* Connections Layer */}
+      <ConnectionLines
+        connections={state.connections}
+        nodes={state.nodes}
+        viewportX={state.viewport.x}
+        viewportY={state.viewport.y}
+        zoom={state.viewport.zoom}
+        selectedConnectionId={selectedConnectionId}
+        onConnectionClick={handleConnectionClick}
+        onConnectionRightClick={handleConnectionRightClick}
+        onConnectionDelete={handleConnectionDelete}
+      />
+
+      {/* Connection Creation Line (when dragging) */}
+      {connectionCreation.isCreating && (
+        <ConnectionCreationLine
+          startX={connectionCreation.startX}
+          startY={connectionCreation.startY}
+          currentX={connectionCreation.currentX}
+          currentY={connectionCreation.currentY}
+          viewportX={state.viewport.x}
+          viewportY={state.viewport.y}
+          zoom={state.viewport.zoom}
+        />
+      )}
 
       {/* Nodes Layer */}
       <div
-        className="absolute inset-0"
+        className="absolute inset-0 pointer-events-none"
         style={{
           transform: `translate(${state.viewport.x}px, ${state.viewport.y}px) scale(${state.viewport.zoom})`,
           transformOrigin: "0 0",

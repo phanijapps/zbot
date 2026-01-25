@@ -1,13 +1,13 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - FLOW BUILDER MODAL
-// Full-screen modal wrapper for VisualFlowBuilder
+// ZERO IDE - FLOW BUILDER MODAL
+// Full-screen modal wrapper for Zero IDE
 // ============================================================================
 
 import { memo, useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import type { BaseNode, CanvasState } from "./types";
+import type { BaseNode, CanvasState, OrchestratorConfig } from "./types";
 import { ModalOverlay } from "@/shared/ui/modal-overlay";
-import { VisualFlowBuilder } from "./index";
+import { ZeroIDE } from "./index";
 import type { Agent } from "@/shared/types";
 
 // -----------------------------------------------------------------------------
@@ -26,13 +26,16 @@ export interface FlowBuilderModalProps {
 
 export const FlowBuilderModal = memo(({ open, onClose, agent }: FlowBuilderModalProps) => {
   const [initialNodes, setInitialNodes] = useState<BaseNode[]>([]);
+  const [initialConnections, setInitialConnections] = useState<CanvasState["connections"]>([]);
+  const [initialOrchestratorConfig, setInitialOrchestratorConfig] = useState<OrchestratorConfig | undefined>(undefined);
   const [isLoading, setIsLoading] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<"idle" | "saving" | "saved" | "error">("idle");
 
   // Load existing flow when agent changes or modal opens
   useEffect(() => {
     if (!open || !agent) {
       setInitialNodes([]);
+      setInitialConnections([]);
+      setInitialOrchestratorConfig(undefined);
       return;
     }
 
@@ -45,16 +48,27 @@ export const FlowBuilderModal = memo(({ open, onClose, agent }: FlowBuilderModal
         });
 
         if (flowConfig) {
-          const parsed = JSON.parse(flowConfig) as { nodes: BaseNode[]; connections: CanvasState["connections"] };
+          const parsed = JSON.parse(flowConfig) as {
+            nodes: BaseNode[];
+            connections: CanvasState["connections"];
+            viewport?: { x: number; y: number; zoom: number };
+            orchestratorConfig?: OrchestratorConfig;
+          };
           setInitialNodes(parsed.nodes || []);
+          setInitialConnections(parsed.connections || []);
+          setInitialOrchestratorConfig(parsed.orchestratorConfig);
         } else {
           // No existing flow - start fresh
           setInitialNodes([]);
+          setInitialConnections([]);
+          setInitialOrchestratorConfig(undefined);
         }
       } catch (error) {
         console.error("Failed to load flow config:", error);
         // Start with empty flow on error
         setInitialNodes([]);
+        setInitialConnections([]);
+        setInitialOrchestratorConfig(undefined);
       } finally {
         setIsLoading(false);
       }
@@ -67,25 +81,21 @@ export const FlowBuilderModal = memo(({ open, onClose, agent }: FlowBuilderModal
   const handleSave = useCallback(async (state: CanvasState) => {
     if (!agent) return;
 
-    setSaveStatus("saving");
     try {
       const flowConfig = JSON.stringify({
         nodes: state.nodes,
         connections: state.connections,
         viewport: state.viewport,
+        orchestratorConfig: state.orchestratorConfig,
       });
 
       await invoke("save_agent_flow_config", {
         agentId: agent.id,
         config: flowConfig,
       });
-
-      setSaveStatus("saved");
-      setTimeout(() => setSaveStatus("idle"), 2000);
     } catch (error) {
       console.error("Failed to save flow config:", error);
-      setSaveStatus("error");
-      setTimeout(() => setSaveStatus("idle"), 3000);
+      throw error;
     }
   }, [agent]);
 
@@ -101,11 +111,12 @@ export const FlowBuilderModal = memo(({ open, onClose, agent }: FlowBuilderModal
     <ModalOverlay
       open={open}
       onClose={handleClose}
-      title="Visual Workflow Builder"
-      subtitle={agent.displayName}
+      title=""
       closeOnEscape={true}
       closeOnBackdropClick={false}
       className="!p-0 !max-h-screen"
+      showCloseButton={false}
+      showHeader={false}
     >
       {isLoading ? (
         <div className="flex items-center justify-center h-full">
@@ -115,45 +126,16 @@ export const FlowBuilderModal = memo(({ open, onClose, agent }: FlowBuilderModal
           </div>
         </div>
       ) : (
-        <VisualFlowBuilder
+        <ZeroIDE
           agentId={agent.id}
+          agentDisplayName={agent.displayName}
           onSave={handleSave}
+          onClose={handleClose}
           initialNodes={initialNodes}
+          initialConnections={initialConnections}
+          initialOrchestratorConfig={initialOrchestratorConfig}
           readOnly={false}
         />
-      )}
-
-      {/* Save Status Indicator */}
-      {saveStatus !== "idle" && (
-        <div className="absolute bottom-4 right-4 flex items-center gap-2 px-4 py-2 rounded-lg bg-[#141414] border border-white/10 shadow-xl z-10">
-          {saveStatus === "saving" && (
-            <>
-              <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
-              <span className="text-sm text-blue-400">Saving...</span>
-            </>
-          )}
-          {saveStatus === "saved" && (
-            <>
-              <div className="w-4 h-4 text-green-400">
-                <svg className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <path d="M20 6 9 17l-5-5" />
-                </svg>
-              </div>
-              <span className="text-sm text-green-400">Saved</span>
-            </>
-          )}
-          {saveStatus === "error" && (
-            <>
-              <div className="w-4 h-4 text-red-400">
-                <svg className="w-full h-full" fill="none" stroke="currentColor" strokeWidth="2" viewBox="0 0 24 24">
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M12 8v4M12 16h.01" />
-                </svg>
-              </div>
-              <span className="text-sm text-red-400">Save failed</span>
-            </>
-          )}
-        </div>
       )}
     </ModalOverlay>
   );

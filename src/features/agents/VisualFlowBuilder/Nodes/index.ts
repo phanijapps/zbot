@@ -1,13 +1,10 @@
 // ============================================================================
-// VISUAL FLOW BUILDER - NODES EXPORTS
+// ZERO IDE - NODES EXPORTS
 // ============================================================================
 
 export { BaseNode } from "./BaseNode";
-export { AgentNode } from "./AgentNode";
-export { TriggerNode } from "./TriggerNode";
-export { ParallelNode } from "./ParallelNode";
-export { SequentialNode } from "./SequentialNode";
+export { StartNode } from "./StartNode";
+export { EndNode } from "./EndNode";
+export { SubagentNode } from "./SubagentNode";
 export { ConditionalNode } from "./ConditionalNode";
-export { LoopNode } from "./LoopNode";
-export { AggregatorNode } from "./AggregatorNode";
-export { SubtaskNode } from "./SubtaskNode";
+export { NodeActions } from "./NodeActions";
