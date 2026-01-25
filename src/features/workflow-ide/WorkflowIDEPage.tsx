@@ -1,8 +1,11 @@
-import React, { useEffect, useCallback } from 'react';
+import React, { useEffect, useCallback, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2 } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Play } from 'lucide-react';
+import { listen } from '@tauri-apps/api/event';
+import { invoke } from '@tauri-apps/api/core';
 import { WorkflowEditor } from './components/WorkflowEditor';
 import { useWorkflowStore } from './stores/workflowStore';
+import { useWorkflowExecution } from './hooks/useWorkflowExecution';
 import * as workflowService from '@/services/workflow';
 
 export const WorkflowIDEPage: React.FC = () => {
@@ -11,7 +14,14 @@ export const WorkflowIDEPage: React.FC = () => {
   const { nodes, edges, orchestratorConfig, setNodes, setEdges, isDirty, setIsDirty, setOrchestratorConfig } = useWorkflowStore();
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
+  const [executing, setExecuting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  const unlistenRef = useRef<(() => void) | null>(null);
+  const isMountedRef = useRef(true);
+
+  // Execution tracking hook
+  const { handleEvent: handleExecutionEvent, clearExecution } = useWorkflowExecution(nodes);
 
   // Load workflow from backend
   const loadWorkflow = useCallback(async () => {
@@ -96,6 +106,108 @@ export const WorkflowIDEPage: React.FC = () => {
     loadWorkflow();
   }, [loadWorkflow]);
 
+  // Listen to agent execution events for visualization
+  useEffect(() => {
+    if (!agentId) return;
+
+    const setupEventListener = async () => {
+      try {
+        const unlisten = await listen('agent-stream-event', (event) => {
+          if (!isMountedRef.current) return;
+
+          const payload = event.payload as { type: string; [key: string]: any };
+          if (!payload) return;
+
+          // Map to AgentStreamEvent format
+          const streamEvent: any = { type: payload.type };
+
+          switch (payload.type) {
+            case 'metadata':
+              streamEvent.agentId = payload.agentId;
+              streamEvent.timestamp = payload.timestamp;
+              streamEvent.model = payload.model;
+              streamEvent.provider = payload.provider;
+              break;
+            case 'token':
+              streamEvent.content = payload.content;
+              streamEvent.timestamp = payload.timestamp;
+              break;
+            case 'tool_call_start':
+              streamEvent.toolId = payload.toolId;
+              streamEvent.toolName = payload.toolName;
+              streamEvent.args = payload.args;
+              streamEvent.timestamp = payload.timestamp;
+              break;
+            case 'tool_result':
+              streamEvent.toolId = payload.toolId;
+              streamEvent.toolName = payload.toolName;
+              streamEvent.result = payload.result;
+              streamEvent.error = payload.error;
+              streamEvent.timestamp = payload.timestamp;
+              break;
+            case 'done':
+              streamEvent.finalMessage = payload.finalMessage;
+              streamEvent.tokenCount = payload.tokenCount;
+              streamEvent.timestamp = payload.timestamp;
+              break;
+            case 'error':
+              streamEvent.error = payload.error;
+              streamEvent.recoverable = payload.recoverable;
+              streamEvent.timestamp = payload.timestamp;
+              break;
+          }
+
+          // Pass to execution handler
+          handleExecutionEvent(streamEvent);
+        });
+
+        if (isMountedRef.current) {
+          unlistenRef.current = unlisten;
+        }
+      } catch (err) {
+        console.error('Failed to setup event listener:', err);
+      }
+    };
+
+    setupEventListener();
+
+    return () => {
+      isMountedRef.current = false;
+      if (unlistenRef.current) {
+        unlistenRef.current();
+      }
+    };
+  }, [agentId, handleExecutionEvent]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  // Execute workflow (send a message to the orchestrator)
+  const executeWorkflow = useCallback(async () => {
+    if (!agentId || executing) return;
+
+    setExecuting(true);
+    setError(null);
+    clearExecution();
+
+    try {
+      // Start the agent execution - this will emit events we listen to
+      await invoke('execute_agent_stream', {
+        agentId: agentId,
+        message: "Please demonstrate your workflow by performing your task.", // Default message
+      });
+    } catch (err) {
+      console.error('Failed to execute workflow:', err);
+      setError(err instanceof Error ? err.message : 'Failed to execute workflow');
+    } finally {
+      setExecuting(false);
+    }
+  }, [agentId, executing, clearExecution]);
+
   if (!agentId) {
     return (
       <div className="flex items-center justify-center h-full">
@@ -128,6 +240,23 @@ export const WorkflowIDEPage: React.FC = () => {
           {isDirty && (
             <span className="text-sm text-yellow-400">Unsaved changes</span>
           )}
+          <button
+            onClick={executeWorkflow}
+            disabled={executing || loading}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg transition-colors"
+          >
+            {executing ? (
+              <>
+                <Loader2 size={16} className="animate-spin" />
+                Running...
+              </>
+            ) : (
+              <>
+                <Play size={16} />
+                Test Run
+              </>
+            )}
+          </button>
           <button
             onClick={saveWorkflow}
             disabled={saving || loading || !isDirty}

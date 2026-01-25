@@ -40,12 +40,12 @@ function findNodeIdBySubagentId(
 
 /**
  * Hook for tracking workflow execution from agent stream events
- * 
+ *
  * @param nodes - The workflow nodes to track execution for
  * @returns Object with handleEvent function for processing stream events
  */
 export function useWorkflowExecution(
-  nodes: Array<{ id: string; data: Record<string, unknown> }>
+  nodes: Array<{ id: string; type?: string; data: Record<string, unknown> }>
 ) {
   const { setNodeExecutionStatus, clearExecution, execution } = useWorkflowStore();
 
@@ -64,7 +64,7 @@ export function useWorkflowExecution(
       switch (event.type) {
         case 'metadata':
           // Agent started - mark orchestrator as running
-          const orchestratorNode = nodes.find(n => n.data.type === 'orchestrator');
+          const orchestratorNode = nodes.find(n => n.type === 'orchestrator');
           if (orchestratorNode) {
             setNodeExecutionStatus(orchestratorNode.id, 'running');
           }
@@ -102,9 +102,9 @@ export function useWorkflowExecution(
                 setNodeExecutionStatus(nodeId, 'completed');
               }
             });
-          
+
           // Mark orchestrator as completed
-          const orchNode = nodes.find(n => n.data.type === 'orchestrator');
+          const orchNode = nodes.find(n => n.type === 'orchestrator');
           if (orchNode) {
             setNodeExecutionStatus(orchNode.id, 'completed');
           }
