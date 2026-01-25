@@ -8,7 +8,7 @@ import * as workflowService from '@/services/workflow';
 export const WorkflowIDEPage: React.FC = () => {
   const { agentId } = useParams<{ agentId: string }>();
   const navigate = useNavigate();
-  const { nodes, edges, setNodes, setEdges, isDirty, setIsDirty, setOrchestratorConfig } = useWorkflowStore();
+  const { nodes, edges, orchestratorConfig, setNodes, setEdges, isDirty, setIsDirty, setOrchestratorConfig } = useWorkflowStore();
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -58,10 +58,10 @@ export const WorkflowIDEPage: React.FC = () => {
   // Save workflow to backend
   const saveWorkflow = useCallback(async () => {
     if (!agentId) return;
-    
+
     setSaving(true);
     setError(null);
-    
+
     try {
       const graph: workflowService.WorkflowGraph = {
         nodes: nodes
@@ -78,8 +78,9 @@ export const WorkflowIDEPage: React.FC = () => {
           target: edge.target as string,
           label: edge.label as string | undefined,
         })),
+        orchestrator: orchestratorConfig,
       };
-      
+
       await workflowService.saveOrchestratorStructure(agentId, graph);
       setIsDirty(false);
     } catch (err) {
@@ -88,7 +89,7 @@ export const WorkflowIDEPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  }, [agentId, nodes, edges, setIsDirty]);
+  }, [agentId, nodes, edges, orchestratorConfig, setIsDirty]);
 
   // Load workflow on mount
   useEffect(() => {
