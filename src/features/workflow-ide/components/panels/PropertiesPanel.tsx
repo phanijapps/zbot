@@ -4,6 +4,7 @@ import { useWorkflowStore, selectSelectedNode } from '../../stores/workflowStore
 import type { SubagentNodeData } from '../../types/workflow';
 import * as providerService from '@/services/provider';
 import type { Provider } from '@/shared/types';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select';
 
 export const PropertiesPanel: React.FC = () => {
   const selectedNode = useWorkflowStore(selectSelectedNode);
@@ -126,25 +127,27 @@ export const PropertiesPanel: React.FC = () => {
                   Loading providers...
                 </div>
               ) : (
-                <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
+                <Select
                   value={(selectedNode.data as SubagentNodeData).providerId || ''}
-                  onChange={(e) => {
-                    handleUpdate('providerId', e.target.value);
-                    // Clear model if it's not in the new provider's models
-                    const newProvider = providers.find(p => p.id === e.target.value);
+                  onValueChange={(value) => {
+                    handleUpdate('providerId', value);
+                    const newProvider = providers.find(p => p.id === value);
                     if (newProvider && !newProvider.models.includes(nodeData.model || '')) {
                       handleUpdate('model', '');
                     }
                   }}
                 >
-                  <option value="">Select provider...</option>
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+                    <SelectValue placeholder="Select provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providers.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             </div>
 
@@ -153,18 +156,21 @@ export const PropertiesPanel: React.FC = () => {
                 Model
               </label>
               {availableModels.length > 0 ? (
-                <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
+                <Select
                   value={(selectedNode.data as SubagentNodeData).model || ''}
-                  onChange={(e) => handleUpdate('model', e.target.value)}
+                  onValueChange={(value) => handleUpdate('model', value)}
                 >
-                  <option value="">Select model...</option>
-                  {availableModels.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model.length > 30 ? model.substring(0, 30) + '...' : model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               ) : (
                 <input
                   type="text"
@@ -187,7 +193,7 @@ export const PropertiesPanel: React.FC = () => {
                   min="0"
                   max="2"
                   step="0.1"
-                  className="flex-1"
+                  className="flex-1 h-1.5 bg-gray-700 rounded-lg appearance-none cursor-pointer accent-purple-500"
                   value={(selectedNode.data as SubagentNodeData).temperature || 0.7}
                   onChange={(e) => handleUpdate('temperature', parseFloat(e.target.value))}
                 />
@@ -225,24 +231,27 @@ export const PropertiesPanel: React.FC = () => {
                   Loading providers...
                 </div>
               ) : (
-                <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
+                <Select
                   value={nodeData.providerId || ''}
-                  onChange={(e) => {
-                    handleUpdate('providerId', e.target.value);
-                    const newProvider = providers.find(p => p.id === e.target.value);
+                  onValueChange={(value) => {
+                    handleUpdate('providerId', value);
+                    const newProvider = providers.find(p => p.id === value);
                     if (newProvider && !newProvider.models.includes(nodeData.model || '')) {
                       handleUpdate('model', '');
                     }
                   }}
                 >
-                  <option value="">Select provider...</option>
-                  {providers.map((provider) => (
-                    <option key={provider.id} value={provider.id}>
-                      {provider.name}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+                    <SelectValue placeholder="Select provider" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {providers.map((provider) => (
+                      <SelectItem key={provider.id} value={provider.id}>
+                        {provider.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               )}
             </div>
 
@@ -251,18 +260,21 @@ export const PropertiesPanel: React.FC = () => {
                 Model
               </label>
               {availableModels.length > 0 ? (
-                <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
+                <Select
                   value={nodeData.model || ''}
-                  onChange={(e) => handleUpdate('model', e.target.value)}
+                  onValueChange={(value) => handleUpdate('model', value)}
                 >
-                  <option value="">Select model...</option>
-                  {availableModels.map((model) => (
-                    <option key={model} value={model}>
-                      {model}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+                    <SelectValue placeholder="Select model" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableModels.map((model) => (
+                      <SelectItem key={model} value={model}>
+                        {model.length > 30 ? model.substring(0, 30) + '...' : model}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               ) : (
                 <input
                   type="text"
