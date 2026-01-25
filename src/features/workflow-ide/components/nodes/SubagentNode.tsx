@@ -1,7 +1,9 @@
 import { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Bot, Wrench, Server } from 'lucide-react';
+import { Bot, Wrench, Server, Loader2, CheckCircle2, XCircle } from 'lucide-react';
 import { cn } from '@/core/utils/cn';
+
+type ExecutionStatus = 'idle' | 'running' | 'completed' | 'failed';
 
 export const SubagentNode = memo(({ data, selected }: NodeProps) => {
   const hasTools = ((data.skills as string[])?.length ?? 0) > 0 || ((data.mcps as string[])?.length ?? 0) > 0;
@@ -11,13 +13,47 @@ export const SubagentNode = memo(({ data, selected }: NodeProps) => {
   const model = data.model as string | undefined;
   const skills = data.skills as string[] | undefined;
   const mcps = data.mcps as string[] | undefined;
+  const status = (data._executionStatus as ExecutionStatus) || 'idle';
+
+  // Status styles
+  const getStatusStyles = () => {
+    switch (status) {
+      case 'running':
+        return {
+          border: 'border-blue-500 ring-2 ring-blue-200',
+          header: 'from-blue-500 to-blue-600',
+          icon: <Loader2 size={14} className="animate-spin" />,
+        };
+      case 'completed':
+        return {
+          border: 'border-green-500 ring-2 ring-green-200',
+          header: 'from-green-500 to-green-600',
+          icon: <CheckCircle2 size={14} />,
+        };
+      case 'failed':
+        return {
+          border: 'border-red-500 ring-2 ring-red-200',
+          header: 'from-red-500 to-red-600',
+          icon: <XCircle size={14} />,
+        };
+      default:
+        return {
+          border: selected ? 'border-blue-500' : 'border-gray-200',
+          header: 'from-purple-500 to-purple-600',
+          icon: null,
+        };
+    }
+  };
+
+  const statusStyles = getStatusStyles();
 
   return (
     <div
       className={cn(
         'rounded-lg border-2 bg-white shadow-md min-w-[200px]',
         'transition-all duration-200',
-        selected ? 'border-blue-500 shadow-lg' : 'border-gray-200',
+        selected && !statusStyles.border.includes('border-') && 'border-blue-500 shadow-lg',
+        statusStyles.border,
       )}
     >
       {/* Input Handle */}
@@ -28,11 +64,18 @@ export const SubagentNode = memo(({ data, selected }: NodeProps) => {
       />
 
       {/* Header */}
-      <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-purple-500 to-purple-600 text-white rounded-t-md">
-        <Bot size={16} />
-        <span className="font-medium text-sm truncate">
-          {displayName || subagentId}
-        </span>
+      <div className={cn(
+        'flex items-center justify-between gap-2 px-3 py-2 text-white rounded-t-md',
+        'bg-gradient-to-r',
+        statusStyles.header
+      )}>
+        <div className="flex items-center gap-2">
+          <Bot size={16} />
+          <span className="font-medium text-sm truncate">
+            {displayName || subagentId}
+          </span>
+        </div>
+        {statusStyles.icon}
       </div>
 
       {/* Body */}
@@ -66,6 +109,15 @@ export const SubagentNode = memo(({ data, selected }: NodeProps) => {
                 {mcps.length}
               </span>
             )}
+          </div>
+        )}
+
+        {/* Status text */}
+        {status !== 'idle' && (
+          <div className="text-xs font-medium text-center">
+            {status === 'running' && <span className="text-blue-600">Running...</span>}
+            {status === 'completed' && <span className="text-green-600">Completed</span>}
+            {status === 'failed' && <span className="text-red-600">Failed</span>}
           </div>
         )}
       </div>

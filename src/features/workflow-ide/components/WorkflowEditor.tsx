@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { useCallback, useRef, useMemo } from 'react';
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -34,7 +34,22 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
     addNode,
     setSelectedNodeId,
     setSelectedEdgeId,
+    execution,
   } = useWorkflowStore();
+
+  // Enhance nodes with execution status for visualization
+  const enhancedNodes = useMemo(() => {
+    return nodes.map(node => {
+      const nodeState = execution.nodeStates?.[node.id];
+      return {
+        ...node,
+        data: {
+          ...node.data,
+          _executionStatus: nodeState?.status || 'idle',
+        },
+      };
+    });
+  }, [nodes, execution.nodeStates]);
 
   // Handle drag over (for node palette)
   const onDragOver = useCallback((event: React.DragEvent) => {
@@ -97,7 +112,7 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
       {/* Center: Canvas */}
       <div className="flex-1 h-full" ref={reactFlowWrapper}>
         <ReactFlow
-          nodes={nodes}
+          nodes={enhancedNodes}
           edges={edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
@@ -117,6 +132,12 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
           <Controls />
           <MiniMap
             nodeColor={(node) => {
+              // Check execution status for color
+              const nodeState = execution.nodeStates?.[node.id];
+              if (nodeState?.status === 'running') return '#3b82f6';
+              if (nodeState?.status === 'completed') return '#22c55e';
+              if (nodeState?.status === 'failed') return '#ef4444';
+              
               switch (node.type) {
                 case 'orchestrator':
                   return '#f59e0b';
