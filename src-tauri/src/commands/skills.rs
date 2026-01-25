@@ -27,10 +27,11 @@ pub struct Skill {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SkillFrontmatter {
     name: String,
-    #[serde(rename = "displayName")]
-    display_name: String,
+    #[serde(rename = "displayName", default)]
+    display_name: Option<String>,
     description: String,
-    category: String,
+    #[serde(default)]
+    category: Option<String>,
 }
 
 /// Gets the skills directory path
@@ -129,9 +130,9 @@ pub async fn create_skill(skill: Skill) -> Result<Skill, String> {
     // Write SKILL.md with frontmatter
     let frontmatter = SkillFrontmatter {
         name: skill.name.clone(),
-        display_name: skill.display_name.clone(),
+        display_name: if skill.display_name.is_empty() { None } else { Some(skill.display_name.clone()) },
         description: skill.description.clone(),
-        category: skill.category.clone(),
+        category: if skill.category.is_empty() { None } else { Some(skill.category.clone()) },
     };
     let skill_md_content = format!("---\n{}\n---\n\n{}\n",
         serde_yaml::to_string(&frontmatter)
@@ -179,9 +180,9 @@ pub async fn update_skill(id: String, skill: Skill) -> Result<Skill, String> {
     // Write SKILL.md with frontmatter
     let frontmatter = SkillFrontmatter {
         name: skill.name.clone(),
-        display_name: skill.display_name.clone(),
+        display_name: if skill.display_name.is_empty() { None } else { Some(skill.display_name.clone()) },
         description: skill.description.clone(),
-        category: skill.category.clone(),
+        category: if skill.category.is_empty() { None } else { Some(skill.category.clone()) },
     };
     let skill_md_content = format!("---\n{}\n---\n\n{}\n",
         serde_yaml::to_string(&frontmatter)
@@ -232,12 +233,15 @@ fn read_skill_folder(skill_dir: &PathBuf) -> Result<Skill, String> {
         .unwrap_or("unknown")
         .to_string();
 
+    // Compute display name before moving name
+    let display_name = frontmatter.display_name.clone().unwrap_or_else(|| format_name(&name));
+
     Ok(Skill {
         id: Some(name.clone()),
         name,
-        display_name: frontmatter.display_name,
+        display_name: display_name,
         description: frontmatter.description,
-        category: frontmatter.category,
+        category: frontmatter.category.unwrap_or_else(|| "general".to_string()),
         instructions,
         created_at: Some("1970-01-01T00:00:00Z".to_string()), // TODO: get from file metadata
     })
@@ -292,9 +296,9 @@ pub async fn list_skill_files(skill_id: String) -> Result<Vec<SkillFile>, String
         if !skill_md_path.exists() {
             let default_frontmatter = SkillFrontmatter {
                 name: "my-skill".to_string(),
-                display_name: "My Skill".to_string(),
+                display_name: Some("My Skill".to_string()),
                 description: "A helpful skill".to_string(),
-                category: "utility".to_string(),
+                category: Some("utility".to_string()),
             };
             let default_content = format!("---\n{}\n---\n\nYou are a helpful skill.\n",
                 serde_yaml::to_string(&default_frontmatter)
@@ -550,12 +554,28 @@ pub async fn get_skill_metadata(id: String) -> Result<SkillMetadata, String> {
         .to_string();
 
     Ok(SkillMetadata {
-        name: frontmatter.name,
-        display_name: frontmatter.display_name,
+        name: frontmatter.name.clone(),
+        display_name: frontmatter.display_name.unwrap_or_else(|| format_name(&frontmatter.name)),
         description: frontmatter.description,
-        category: frontmatter.category,
+        category: frontmatter.category.unwrap_or_else(|| "general".to_string()),
         location: skill_path,
     })
+}
+
+/// Format a skill name to a display name (kebab-case to Title Case)
+fn format_name(name: &str) -> String {
+    name.split('-')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                None => String::new(),
+                Some(first) => {
+                    first.to_uppercase().collect::<String>() + chars.as_str()
+                }
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Skill metadata for system prompt generation

@@ -7,9 +7,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 // Modules
+mod audio_recorder;
 mod commands;
 mod settings;
 mod domains;
+mod transcription;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -55,6 +57,32 @@ pub fn run() {
             // Core commands
             commands::greet,
             commands::get_app_info,
+            // Vault commands
+            commands::list_vaults,
+            commands::get_active_vault,
+            commands::create_vault,
+            commands::switch_vault,
+            commands::delete_vault,
+            commands::get_vault_info,
+            commands::initialize_vault_system,
+            commands::get_vault_status,
+            commands::set_default_vault,
+            // Deletion & Cache commands (NEW)
+            commands::delete_session,
+            commands::delete_agent_history_with_scope,
+            commands::get_cache_stats,
+            commands::clear_cache,
+            commands::invalidate_session_cache,
+            commands::invalidate_agent_cache,
+            // Search commands (NEW)
+            commands::initialize_search_index,
+            commands::search_messages,
+            commands::index_message,
+            commands::index_messages,
+            commands::rebuild_search_index,
+            commands::delete_session_from_index,
+            commands::delete_agent_from_index,
+            commands::clear_search_index,
             // Conversation commands
             commands::list_conversations,
             commands::get_conversation,
@@ -78,6 +106,25 @@ pub fn run() {
             commands::create_agent_folder,
             commands::delete_agent_file,
             commands::upload_agent_file,
+            commands::get_agent_flow_config,
+            commands::save_agent_flow_config,
+            // Subagent commands
+            commands::list_subagents,
+            commands::get_subagent,
+            commands::save_subagent,
+            commands::delete_subagent,
+            // Workflow commands (NEW - XY Flow integration)
+            commands::get_orchestrator_structure,
+            commands::save_orchestrator_structure,
+            commands::validate_workflow,
+            // Agent Channel commands (NEW)
+            commands::get_or_create_today_session,
+            commands::list_previous_days,
+            commands::load_session_messages,
+            commands::delete_agent_history,
+            commands::record_session_message,
+            commands::generate_session_summary,
+            commands::list_agent_channels,
             // Provider commands
             commands::list_providers,
             commands::get_provider,
@@ -134,11 +181,32 @@ pub fn run() {
             commands::read_attachment_file,
             // Agent Runtime commands
             commands::execute_agent_stream,
-            commands::execute_agent_zero_stream,
             commands::get_agent_execution_config,
             commands::create_agent_conversation,
             commands::get_or_create_conversation,
             commands::clear_executor_cache,
+            // Knowledge Graph commands
+            commands::get_knowledge_graph,
+            commands::get_knowledge_graph_entities,
+            commands::get_knowledge_graph_relationships,
+            // Media commands
+            commands::get_audio_input_devices,
+            commands::start_audio_recording,
+            commands::stop_audio_recording,
+            commands::is_recording_audio,
+            commands::save_audio_recording,
+            commands::add_recording_to_kg,
+            // Transcription commands
+            commands::install_transcription_script,
+            commands::check_transcription_dependencies,
+            commands::transcribe_recording,
+            commands::get_recording_transcript,
+            commands::has_transcript,
+            commands::get_transcript_attachment_info,
+            // Attachment commands
+            commands::list_attachments,
+            commands::get_attachment,
+            commands::delete_attachment,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

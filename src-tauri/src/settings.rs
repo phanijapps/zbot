@@ -19,6 +19,8 @@ pub struct Settings {
     pub notifications: NotificationSettings,
     /// Privacy settings
     pub privacy: PrivacySettings,
+    /// Transcription settings
+    pub transcription: TranscriptionSettings,
     /// Default provider settings
     pub default_provider: String,
 }
@@ -61,6 +63,21 @@ pub struct PrivacySettings {
     pub analytics: bool,
 }
 
+/// Transcription settings
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TranscriptionSettings {
+    /// Transcription feature enabled
+    pub enabled: bool,
+    /// Automatically transcribe recordings after saving
+    pub auto_transcribe: bool,
+    /// Whisper model size (tiny, base, small, medium, large)
+    pub model_size: String,
+    /// Minimum speaker duration in seconds
+    pub min_speaker_duration: f32,
+    /// Number of speakers (None for auto-detect)
+    pub num_speakers: Option<u32>,
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -81,6 +98,13 @@ impl Default for Settings {
                 save_chat_history: true,
                 analytics: false,
             },
+            transcription: TranscriptionSettings {
+                enabled: true,
+                auto_transcribe: false,
+                model_size: "base".to_string(),
+                min_speaker_duration: 1.0,
+                num_speakers: None,
+            },
             default_provider: "openai".to_string(),
         }
     }
@@ -92,39 +116,86 @@ pub struct AppDirs {
     pub config_dir: PathBuf,
     /// Settings file path
     pub settings_file: PathBuf,
-    /// LanceDB database path
+    /// LanceDB database path (legacy, kept for compatibility)
     pub database_path: PathBuf,
-    /// Agents directory
+    /// Agents directory (configs)
     pub agents_dir: PathBuf,
+    /// Agents data directory (attachments, documents, archives)
+    pub agents_data_dir: PathBuf,
+    /// Database directory for Agent Channel SQLite database
+    pub db_dir: PathBuf,
     /// Skills directory
     pub skills_dir: PathBuf,
+    /// Utils directory (user-accessible scripts like transcribe.py)
+    pub utils_dir: PathBuf,
     /// Python virtual environment directory
     pub venv_dir: PathBuf,
-    /// Conversation logs directory (logs/<conv-id>/)
+    /// Conversation logs directory (logs/<conv-id>/) - legacy
     pub conversation_logs_dir: PathBuf,
     /// Outputs directory (~/Documents/ZeroAgent/outputs/)
     pub outputs_dir: PathBuf,
 }
 
 impl AppDirs {
-    /// Get the application directories for the current platform
-    pub fn get() -> Result<Self> {
-        let config_dir = Self::get_config_dir()?;
+    /// Get AppDirs for a specific vault path
+    /// This creates all necessary directories and returns AppDirs pointing to the vault
+    pub fn for_vault(vault_path: &std::path::Path) -> Result<Self> {
+        let vault_root = vault_path.to_path_buf();
 
-        // Get documents directory for outputs
+        // Ensure all directories exist
+        fs::create_dir_all(&vault_root).context("Failed to create vault directory")?;
+        fs::create_dir_all(vault_root.join("agents"))
+            .context("Failed to create agents directory")?;
+        fs::create_dir_all(vault_root.join("skills"))
+            .context("Failed to create skills directory")?;
+        fs::create_dir_all(vault_root.join("utils"))
+            .context("Failed to create utils directory")?;
+        fs::create_dir_all(vault_root.join("agents_data"))
+            .context("Failed to create agents_data directory")?;
+        fs::create_dir_all(vault_root.join("db"))
+            .context("Failed to create db directory")?;
+        fs::create_dir_all(vault_root.join("logs"))
+            .context("Failed to create logs directory")?;
+
+        // Get documents directory for outputs (not vault-specific)
         let documents_dir = dirs::document_dir()
-            .unwrap_or_else(|| config_dir.clone());
+            .unwrap_or_else(|| vault_root.clone());
         let outputs_dir = documents_dir.join("ZeroAgent").join("outputs");
 
         Ok(Self {
-            settings_file: config_dir.join("settings.yaml"),
-            database_path: config_dir.join("zero_lance.db"),
-            agents_dir: config_dir.join("agents"),
-            skills_dir: config_dir.join("skills"),
-            venv_dir: config_dir.join("venv"),
-            conversation_logs_dir: config_dir.join("logs"),
+            settings_file: vault_root.join("settings.yaml"),
+            database_path: vault_root.join("zero_lance.db"),
+            agents_dir: vault_root.join("agents"),
+            agents_data_dir: vault_root.join("agents_data"),
+            db_dir: vault_root.join("db"),
+            skills_dir: vault_root.join("skills"),
+            utils_dir: vault_root.join("utils"),
+            venv_dir: vault_root.join("venv"),
+            conversation_logs_dir: vault_root.join("logs"),
             outputs_dir,
-            config_dir,
+            config_dir: vault_root,
+        })
+    }
+
+    /// Get the application directories for the current platform
+    /// This uses the active vault path if set, otherwise falls back to default
+    pub fn get() -> Result<Self> {
+        // Try to get active vault path from global state
+        if let Ok(vault_path) = get_active_vault_path_blocking() {
+            return Self::for_vault(&vault_path);
+        }
+
+        // Fall back to default config directory
+        let config_dir = Self::get_config_dir()?;
+        Self::for_vault(&config_dir)
+    }
+
+    /// Get the default vault path (for backward compatibility)
+    pub fn get_default_vault_path() -> std::path::PathBuf {
+        Self::get_config_dir().unwrap_or_else(|_| {
+            dirs::config_dir()
+                .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+                .join("zeroagent")
         })
     }
 
@@ -147,9 +218,21 @@ impl AppDirs {
         fs::create_dir_all(&self.agents_dir)
             .context("Failed to create agents directory")?;
 
+        // Create agents data directory
+        fs::create_dir_all(&self.agents_data_dir)
+            .context("Failed to create agents data directory")?;
+
+        // Create database directory
+        fs::create_dir_all(&self.db_dir)
+            .context("Failed to create database directory")?;
+
         // Create skills directory
         fs::create_dir_all(&self.skills_dir)
             .context("Failed to create skills directory")?;
+
+        // Create utils directory
+        fs::create_dir_all(&self.utils_dir)
+            .context("Failed to create utils directory")?;
 
         // Create venv directory
         fs::create_dir_all(&self.venv_dir)
@@ -417,6 +500,60 @@ impl AppDirs {
 
         Ok(())
     }
+
+    // =========================================================================
+    // Agent Data Directory Helpers (Agent Channel Model)
+    // =========================================================================
+
+    /// Get the data directory for a specific agent
+    pub fn agent_data_dir(&self, agent_id: &str) -> PathBuf {
+        self.agents_data_dir.join(agent_id)
+    }
+
+    /// Get the attachments directory for a specific agent
+    /// Organized by month: agents_data/{agent_id}/attachments/YYYY-MM/
+    pub fn agent_attachments_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("attachments")
+    }
+
+    /// Get the attachments directory for a specific agent and month
+    pub fn agent_attachments_month_dir(&self, agent_id: &str, year_month: &str) -> PathBuf {
+        self.agent_attachments_dir(agent_id).join(year_month)
+    }
+
+    /// Get the documents directory for a specific agent
+    pub fn agent_documents_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("documents")
+    }
+
+    /// Get the knowledge graph directory for a specific agent
+    pub fn agent_knowledge_graph_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("knowledge_graph")
+    }
+
+    /// Get the archive directory for a specific agent (Parquet archives)
+    pub fn agent_archive_dir(&self, agent_id: &str) -> PathBuf {
+        self.agent_data_dir(agent_id).join("archive")
+    }
+
+    /// Create the directory structure for a new agent
+    /// Creates the base agent data directory only.
+    /// Subdirectories (attachments/, documents/, etc.) are created by tools as needed.
+    pub fn create_agent_data_dirs(&self, agent_id: &str) -> Result<()> {
+        let agent_dir = self.agent_data_dir(agent_id);
+
+        // Create main agent data directory only
+        // Subdirectories will be created by tools when writing files
+        fs::create_dir_all(&agent_dir)
+            .context("Failed to create agent data directory")?;
+
+        Ok(())
+    }
+
+    /// Get the Agent Channel database path
+    pub fn agent_channels_db_path(&self) -> PathBuf {
+        self.db_dir.join("agent_channels.db")
+    }
 }
 
 /// Storage information
@@ -453,4 +590,31 @@ mod tests {
         assert_eq!(settings.appearance.dark_mode, deserialized.appearance.dark_mode);
         assert_eq!(settings.appearance.theme, deserialized.appearance.theme);
     }
+}
+
+// ============================================================================
+// VAULT INTEGRATION
+// Blocking wrapper for async vault path functions
+// ============================================================================
+
+/// Blocking version of get_active_vault_path
+/// Used from sync code (like AppDirs::get)
+fn get_active_vault_path_blocking() -> Result<std::path::PathBuf, String> {
+    use crate::domains::vault::manager::CURRENT_VAULT_PATH;
+
+    // Use try_read to avoid blocking if there's a write in progress
+    if let Ok(vault_path) = CURRENT_VAULT_PATH.try_read() {
+        if let Some(path) = vault_path.as_ref() {
+            return Ok(path.clone());
+        }
+    }
+
+    // Try to load from registry if global state isn't set yet
+    if let Ok(registry) = crate::domains::vault::registry::load_vault_registry() {
+        if let Some(vault) = registry.active_vault() {
+            return Ok(std::path::PathBuf::from(&vault.vault_path));
+        }
+    }
+
+    Err("No active vault set".to_string())
 }

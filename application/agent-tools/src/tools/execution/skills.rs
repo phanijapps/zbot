@@ -14,7 +14,7 @@ use zero_core::FileSystemContext;
 // LOAD SKILL TOOL
 // ============================================================================
 
-/// Tool for loading skills
+/// Tool for loading skills and skill files
 pub struct LoadSkillTool {
     /// File system context
     fs: Arc<dyn FileSystemContext>,
@@ -26,6 +26,40 @@ impl LoadSkillTool {
     pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
         Self { fs }
     }
+
+    /// Parse skill file path
+    /// Returns (skill_name, relative_path, is_explicit)
+    /// Supports formats:
+    /// - "@skill:skill-name/path/to/file" -> ("skill-name", "path/to/file", true)
+    /// - "@skill:skill-name" -> ("skill-name", "SKILL.md", true) - loads SKILL.md explicitly
+    /// - "@skill:FILENAME.md" -> ("", "FILENAME.md", false) (uses current skill)
+    /// - "path/to/file" -> ("", "path/to/file", false) (uses current skill)
+    fn parse_skill_path(&self, file_path: &str) -> (String, String, bool) {
+        const FILE_EXTENSIONS: &[&str] = &[
+            ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
+            ".html", ".css", ".js", ".ts", ".py", ".rs",
+            ".pdf", ".png", ".jpg", ".jpeg", ".gif"
+        ];
+
+        if file_path.starts_with("@skill:") {
+            let path = &file_path[7..]; // Skip "@skill:"
+            if path.contains('/') {
+                let parts: Vec<&str> = path.splitn(2, '/').collect();
+                return (parts[0].to_string(), parts[1].to_string(), true);
+            }
+            // @skill:skill-name or @skill:FILENAME.md
+            // Check if it has a file extension
+            let has_file_extension = FILE_EXTENSIONS.iter().any(|ext| path.ends_with(ext));
+            if has_file_extension {
+                // It's a filename, use current skill
+                return (String::new(), path.to_string(), false);
+            }
+            // It's a skill name, load SKILL.md
+            return (path.to_string(), "SKILL.md".to_string(), true);
+        }
+        // Relative path - will use current skill from context
+        (String::new(), file_path.to_string(), false)
+    }
 }
 
 #[async_trait]
@@ -35,7 +69,7 @@ impl Tool for LoadSkillTool {
     }
 
     fn description(&self) -> &str {
-        "Load a skill from the skill registry."
+        "Load a skill or files from a skill's directory. Use 'skill' parameter to load SKILL.md, or 'file' parameter with @skill: prefix (e.g., '@skill:rust-development' loads that skill's SKILL.md, '@skill:rust-development/REFERENCE.md' loads a specific file)."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -44,20 +78,41 @@ impl Tool for LoadSkillTool {
             "properties": {
                 "skill": {
                     "type": "string",
-                    "description": "Name of the skill to load"
+                    "description": "Name of the skill to load (loads SKILL.md)"
+                },
+                "file": {
+                    "type": "string",
+                    "description": "Path to file within skill directory. Use '@skill:' prefix. Examples: '@skill:rust-development' (loads SKILL.md), '@skill:rust-development/REFERENCE.md', '@skill:assets/config.json' (after loading skill)"
                 }
-            },
-            "required": ["skill"]
+            }
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Check if loading main skill file or specific file
+        let has_skill = args.get("skill").and_then(|v| v.as_str()).is_some();
+        let has_file = args.get("file").and_then(|v| v.as_str()).is_some();
+
+        if has_skill && !has_file {
+            // Load main SKILL.md
+            self.load_main_skill(ctx, args).await
+        } else if has_file {
+            // Load specific file from skill directory
+            self.load_skill_file(ctx, args).await
+        } else {
+            Err(zero_core::ZeroError::Tool(
+                "Either 'skill' or 'file' parameter must be provided".to_string()
+            ))
+        }
+    }
+}
+
+impl LoadSkillTool {
+    /// Load the main SKILL.md file for a skill
+    async fn load_main_skill(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let skill_name = args.get("skill")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'skill' parameter".to_string()))?;
-
-        // Note: available_skills checking removed since ToolContext doesn't expose it
-        // in the new trait. This should be handled at the tool registry level.
 
         let skills_dir = self.fs.skills_dir()
             .ok_or_else(|| zero_core::ZeroError::Tool("Skills directory not configured".to_string()))?;
@@ -75,15 +130,86 @@ impl Tool for LoadSkillTool {
         // Parse YAML frontmatter
         let (metadata, instructions) = self.parse_skill_frontmatter(&content)?;
 
+        // Store current skill in state for subsequent convenience file loads
+        ctx.set_state("skill:current_skill".to_string(), json!(skill_name));
+
         Ok(json!({
             "name": skill_name,
             "metadata": metadata,
             "instructions": instructions,
         }))
     }
-}
 
-impl LoadSkillTool {
+    /// Load a specific file from a skill's directory
+    async fn load_skill_file(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let file_path = args.get("file")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'file' parameter".to_string()))?;
+
+        let skills_dir = self.fs.skills_dir()
+            .ok_or_else(|| zero_core::ZeroError::Tool("Skills directory not configured".to_string()))?;
+
+        // Parse path and get skill name
+        let (skill_name_from_path, relative_path, is_explicit) = self.parse_skill_path(file_path);
+
+        // Get skill name - use explicit skill from path, or fall back to context
+        let skill_name = if !skill_name_from_path.is_empty() {
+            skill_name_from_path
+        } else {
+            ctx.get_state("skill:current_skill")
+                .ok_or_else(|| zero_core::ZeroError::Tool(
+                    "No skill context. Either use @skill:skill-name/path format or load a skill first using the 'skill' parameter.".to_string()
+                ))?
+                .as_str()
+                .ok_or_else(|| zero_core::ZeroError::Tool("Invalid skill state".to_string()))?
+                .to_string()
+        };
+
+        let skill_dir = skills_dir.join(&skill_name);
+        let full_path = skill_dir.join(&relative_path);
+
+        // Security: Ensure path doesn't escape skill directory
+        if !full_path.starts_with(&skill_dir) {
+            return Err(zero_core::ZeroError::Tool(
+                "Invalid path: cannot access files outside skill directory".to_string()
+            ));
+        }
+
+        if !full_path.exists() {
+            return Err(zero_core::ZeroError::Tool(format!(
+                "Skill file not found: {} (searched in skill: {})",
+                relative_path, skill_name
+            )));
+        }
+
+        // Check for binary file
+        if is_binary_file(&relative_path) {
+            return Ok(json!({
+                "skill": skill_name,
+                "path": relative_path,
+                "content": null,
+                "is_binary": true,
+                "message": "Binary file - content not displayed"
+            }));
+        }
+
+        // Read file content
+        let content = std::fs::read_to_string(&full_path)
+            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read skill file: {}", e)))?;
+
+        // Update current skill in state if we explicitly loaded a different skill
+        if is_explicit && relative_path == "SKILL.md" {
+            ctx.set_state("skill:current_skill".to_string(), json!(skill_name));
+        }
+
+        Ok(json!({
+            "skill": skill_name,
+            "path": relative_path,
+            "content": content,
+            "is_binary": false
+        }))
+    }
+
     fn parse_skill_frontmatter(&self, content: &str) -> Result<(Value, String)> {
         // Simple parser for YAML frontmatter between --- delimiters
         let parts: Vec<&str> = content.splitn(3, "---").collect();
@@ -100,5 +226,23 @@ impl LoadSkillTool {
             // No frontmatter, return empty metadata
             Ok((json!({}), content.to_string()))
         }
+    }
+}
+
+/// Check if a file is binary based on its extension
+fn is_binary_file(filename: &str) -> bool {
+    const BINARY_EXTENSIONS: &[&str] = &[
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
+        "zip", "tar", "gz", "rar", "7z",
+        "exe", "dll", "so", "dylib",
+        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
+        "mp3", "mp4", "wav", "avi", "mov", "mkv",
+        "ttf", "otf", "woff", "woff2",
+    ];
+
+    if let Some(ext) = filename.rsplit('.').next() {
+        BINARY_EXTENSIONS.contains(&ext.to_lowercase().as_str())
+    } else {
+        false
     }
 }

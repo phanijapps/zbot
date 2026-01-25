@@ -300,6 +300,118 @@ Agent Zero uses a modern design system featuring:
 - `from-blue-500 to-purple-600` - Primary actions
 - `from-orange-500 to-pink-600` - Accent
 
+### Dark Mode CSS Variables
+
+**Critical**: The app uses CSS variables (`--background`, `--muted`, `--foreground`, etc.) in UI components, but these variables only work correctly when the `.dark` class is applied to the document.
+
+**Root Cause**: The `.dark` class was never applied to `document.body`, causing all CSS variables to resolve to their light mode (`:root`) values instead of dark mode (`.dark`) values. This resulted in white backgrounds throughout the app.
+
+**Solution**: Apply `.dark` class on app mount in `App.tsx`:
+```typescript
+useEffect(() => {
+  document.body.classList.add('dark');
+  document.documentElement.setAttribute('data-theme', 'dark');
+}, []);
+```
+
+**CSS Variables in `index.css`**:
+```css
+:root {
+  /* Light theme (DEFAULT - used without .dark class) */
+  --background: 0 0% 100%;  /* WHITE */
+  --foreground: 240 10% 3.9%;
+  --muted: 240 4.8% 95.9%;  /* ALMOST WHITE */
+  --muted-foreground: 240 3.8% 46.1%;
+}
+
+.dark {
+  /* Dark theme (only active with .dark class) */
+  --background: 240 10% 3.9%;  /* DARK */
+  --foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;  /* DARK GRAY */
+  --muted-foreground: 240 5% 64.9%;
+}
+```
+
+**Impact**: This fix affects ALL components using CSS variables:
+- `SelectContent` from `@/shared/ui/select` uses `bg-[#1a1a1a]` but also CSS variables for text
+- `TabsList` uses `bg-muted` (now dark gray instead of white)
+- `Dialog` components use various CSS variables
+
+**Key Learning**: When an app uses explicit dark colors (`bg-[#141414]`) everywhere but also has CSS variables in shared components, you MUST ensure the `.dark` class is applied, OR replace all CSS variables with explicit colors.
+
+### Dropdown Pattern: Radix UI Select vs Native Select
+
+**Standard Pattern**: Use Radix UI `<Select>` component from `@/shared/ui/select` instead of native `<select>` elements for consistency.
+
+**Why Radix UI Select?**
+- Consistent dark mode styling (native select dropdowns are hard to style consistently)
+- Better accessibility (keyboard navigation, ARIA attributes)
+- Portal rendering (dropdowns escape overflow containers)
+- Custom trigger styling
+- Consistent with other components (Dialog, Tabs, etc.)
+
+**Implementation Example** (from `ConfigYamlForm.tsx`):
+```typescript
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select';
+
+// Usage
+<Select value={providerId} onValueChange={setProviderId}>
+  <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+    <SelectValue placeholder="Select provider" />
+  </SelectTrigger>
+  <SelectContent>
+    {providers.map((provider) => (
+      <SelectItem key={provider.id} value={provider.id}>
+        {provider.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+```
+
+**Key Differences from Native Select**:
+| Feature | Native `<select>` | Radix UI `<Select>` |
+|---------|-------------------|---------------------|
+| Styling | Limited browser support | Full control with className |
+| onChange | `onChange(e => setValue(e.target.value))` | `onValueChange(value => setValue(value))` |
+| Options | `<option value="...">` | `<SelectItem value="...">` |
+| Placeholder | First option with empty value | `<SelectValue placeholder="..." />` |
+| Dropdown styling | `[&>option]:bg-gray-800` hack needed | `SelectContent` handles it |
+
+**Model Name Truncation Pattern**:
+```typescript
+<SelectItem key={model} value={model}>
+  {model.length > 30 ? model.substring(0, 30) + '...' : model}
+</SelectItem>
+```
+
+**Dynamic Model Selection** (when provider changes):
+```typescript
+const [availableModels, setAvailableModels] = useState<string[]>([]);
+const selectedProvider = providers.find(p => p.id === providerId);
+
+useEffect(() => {
+  if (selectedProvider) {
+    setAvailableModels(selectedProvider.models || []);
+  } else {
+    setAvailableModels([]);
+  }
+}, [providerId, providers]);
+
+// Clear model if not in new provider's models
+<Select
+  value={providerId}
+  onValueChange={(value) => {
+    setProviderId(value);
+    const newProvider = providers.find(p => p.id === value);
+    if (newProvider && !newProvider.models.includes(model)) {
+      setModel('');  // Clear invalid model
+    }
+  }}
+>
+```
+
 ### Component Patterns
 
 **Button with Variants (CVA)**
@@ -334,6 +446,176 @@ const buttonVariants = cva(
 - **Development**: Easier testing and debugging
 
 ## Recent Session Learnings
+
+### State-Based Conversation ID Propagation
+
+**Problem**: Tools (`WriteTool`, `EditTool`) needed `conversation_id` to resolve file paths, but storing it in tool instances created tight coupling and made tools non-idempotent.
+
+**Solution**: Use session state for runtime context instead of baking it into tools.
+
+**Before** (Baked-in conversation_id):
+```rust
+// Tool creation
+let write_tool = WriteTool::with_conversation(fs, Some(conv_id.clone()));
+
+// Tool execution
+let conv_id = self.conversation_id.lock().unwrap().clone();
+let conv_dir = self.fs.conversation_dir(conv_id);
+```
+
+**After** (State-based):
+```rust
+// Application layer defines state keys
+pub const CONVERSATION_ID: &str = "app:conversation_id";
+
+// Executor sets state during initialization
+session.state_mut().set("app:conversation_id", json!(conversation_id));
+
+// Tool reads from context during execution
+let conv_id = ctx.get_state("app:conversation_id")
+    .and_then(|v| v.as_str().map(|s| s.to_string()));
+```
+
+**Benefits**:
+1. **Stateless Tools**: Same tool instance works for any conversation
+2. **Single Source of Truth**: conversation_id lives in session state only
+3. **Scalable**: Migrating to persistent state (FS/SQLite/Parquet) only requires changing the `State` implementation
+4. **Clean Separation**: Framework (`zero-*`) provides infrastructure, application defines state keys
+
+**Key Design Principle**: Runtime state (conversation_id, user_id, agent_id) should flow through the `ToolContext`'s state mechanism, not be baked into tool instances.
+
+### Dynamic Subagent Tool System
+
+**Overview**: Orchestrator agents can automatically discover and register subagents as callable tools. Subagents are stored in `.subagents/` subdirectory, each with their own config.yaml, and are exposed to the orchestrator's LLM as tools with context/task/goal parameters.
+
+**Architecture**:
+
+1. **SubagentTool** (`src-tauri/src/domains/agent_runtime/subagent_tool.rs`)
+   - Implements `Tool` trait with `&'static str` lifetime for name/description
+   - Uses `Box::leak()` to convert owned Strings to `'static` lifetime
+   - Parameters: `context` (summary), `task` (specific work), `goal` (overall vision)
+
+2. **create_subagent_executor()** - Creates isolated executor for subagent
+   - Loads subagent config from `.subagents/{subagent_id}/config.yaml`
+   - Injects context+task+goal into system instruction
+   - Creates FRESH session (new conversation_id, no history from parent)
+   - Returns only final text result (bidirectional isolation)
+
+3. **register_subagent_tools()** - Auto-discovery and registration
+   - Scans `.subagents/` folder during executor initialization
+   - Parses each subagent's config.yaml
+   - Creates `SubagentTool` instance for each
+   - Registers in tool registry before wrapping in Arc
+
+**Bidirectional Isolation Pattern**:
+- **Orchestrator → Subagent**: Only context/task/goal passed (no conversation history)
+- **Subagent → Orchestrator**: Only final result returned (no conversation history exposed)
+- **Fresh Session**: Each subagent execution gets new conversation_id
+- **Context Injection**: System prompt enhanced with orchestrator's context/task/goal
+
+**Code Example**:
+
+```rust
+// subagent_tool.rs
+pub struct SubagentTool {
+    name: &'static str,
+    description: &'static str,
+    parent_agent_id: String,
+    subagent_id: String,
+}
+
+impl SubagentTool {
+    pub fn new(parent_agent_id: String, subagent_id: String, description: String) -> Self {
+        // Box::leak for 'static lifetime required by Tool trait
+        let name = Box::leak(subagent_id.clone().into_boxed_str());
+        let desc = Box::leak(description.into_boxed_str());
+        Self { name, description: desc, parent_agent_id, subagent_id }
+    }
+}
+
+#[async_trait]
+impl Tool for SubagentTool {
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "context": {"type": "string", "description": "Summary of relevant information"},
+                "task": {"type": "string", "description": "Specific task to accomplish"},
+                "goal": {"type": "string", "description": "Overall goal/vision"}
+            },
+            "required": ["context", "task", "goal"]
+        }))
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let context: String = serde_json::from_value(args["context"].clone())?;
+        let task: String = serde_json::from_value(args["task"].clone())?;
+        let goal: String = serde_json::from_value(args["goal"].clone())?;
+
+        // Create fresh executor with isolated context
+        let executor = create_subagent_executor(
+            &self.parent_agent_id,
+            &self.subagent_id,
+            context,
+            task,
+            goal,
+        ).await?;
+
+        // Execute and return only final result
+        let result = executor.execute_with_tools_loop(messages, on_event).await?;
+        Ok(json!(result))
+    }
+}
+```
+
+**Integration in Executor**:
+
+```rust
+// executor_v2.rs - ZeroAppExecutor::new()
+impl ZeroAppExecutor {
+    pub async fn new(config: AgentConfig, dirs: Arc<AppDirs>) -> Result<Self> {
+        let mut tool_registry = ToolRegistry::new();
+
+        // Register built-in tools
+        Self::register_builtin_tools(&mut tool_registry, &dirs);
+
+        // Register MCP tools
+        Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
+
+        // Register subagent tools from .subagents/ folder
+        Self::register_subagent_tools(&mut tool_registry, &config.agent_id, &dirs).await;
+
+        // ...
+    }
+}
+```
+
+**Verification**: Query `messages` table in `conversations.db` for `tool_calls` field to see subagent tools being called:
+```sql
+SELECT id, role, content, tool_calls FROM messages WHERE tool_calls IS NOT NULL;
+```
+
+**Example Output**:
+```json
+{
+  "tool_calls": [
+    {
+      "name": "inventory-checker",
+      "arguments": {
+        "context": "User has eggs, spinach, tomatoes...",
+        "task": "Validate and categorize these ingredients",
+        "goal": "Prepare organized ingredient list for recipe matching"
+      }
+    }
+  ]
+}
+```
+
+**Benefits**:
+1. **Automatic Discovery**: No manual tool registration required
+2. **Isolation**: Bidirectional conversation history isolation
+3. **Scalability**: Add subagents by adding folder + config
+4. **LLM-Driven**: Orchestrator decides which subagent to call based on context
 
 ### Agent Executor with Tool Calling Loop
 

@@ -1,0 +1,45 @@
+<svg width="512" height="512" viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer glow effect -->
+  <circle cx="256" cy="256" r="192" fill="url(#radGrad1)" opacity="0.2"/>
+  
+  <!-- Main zero ring -->
+  <circle cx="256" cy="256" r="154" stroke="url(#grad1)" stroke-width="26" fill="none" stroke-linecap="round"/>
+  
+  <!-- Inner portal effect -->
+  <circle cx="256" cy="256" r="115" fill="url(#radGrad2)" opacity="0.4"/>
+  <circle cx="256" cy="256" r="90" fill="url(#radGrad3)" opacity="0.3"/>
+  <circle cx="256" cy="256" r="64" fill="url(#radGrad4)" opacity="0.3"/>
+  
+  <!-- Center point -->
+  <circle cx="256" cy="256" r="15" fill="#ffffff"/>
+  
+  <!-- Minimal agent indicators -->
+  <circle cx="256" cy="102" r="13" fill="#a78bfa" opacity="0.8"/>
+  <circle cx="410" cy="256" r="13" fill="#6ee7b7" opacity="0.8"/>
+  <circle cx="256" cy="410" r="13" fill="#f472b6" opacity="0.8"/>
+  <circle cx="102" cy="256" r="13" fill="#fbbf24" opacity="0.8"/>
+  
+  <defs>
+    <linearGradient id="grad1" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#6366f1;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </linearGradient>
+    <radialGradient id="radGrad1">
+      <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#a78bfa;stop-opacity:0" />
+    </radialGradient>
+    <radialGradient id="radGrad2">
+      <stop offset="0%" style="stop-color:#8b5cf6;stop-opacity:0" />
+      <stop offset="100%" style="stop-color:#8b5cf6;stop-opacity:1" />
+    </radialGradient>
+    <radialGradient id="radGrad3">
+      <stop offset="0%" style="stop-color:#6366f1;stop-opacity:0" />
+      <stop offset="100%" style="stop-color:#6366f1;stop-opacity:1" />
+    </radialGradient>
+    <radialGradient id="radGrad4">
+      <stop offset="0%" style="stop-color:#a78bfa;stop-opacity:0" />
+      <stop offset="100%" style="stop-color:#a78bfa;stop-opacity:1" />
+    </radialGradient>
+  </defs>
+</svg>

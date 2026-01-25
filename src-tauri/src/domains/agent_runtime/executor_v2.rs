@@ -15,11 +15,14 @@ use zero_app::{Tool, ToolContext, Result as ZeroResult, ZeroError, Toolset, Mute
 use crate::settings::AppDirs;
 use crate::domains::agent_runtime::{
     config_adapter::{AgentYamlConfig, ConfigAdapter},
-    middleware_integration::{MiddlewareFactory, MiddlewareExecutor, convert_middleware_config},
+    middleware_integration::{MiddlewareFactory, MiddlewareExecutor},
     filesystem::TauriFileSystemContext,
     McpManager,
+    state_keys,
 };
+use crate::commands::agent_channels::SqliteSessionRepository;
 use agent_tools::builtin_tools_with_fs;
+use serde_json::json;
 
 // Type alias for Result with String error type (for Tauri compatibility)
 type TResult<T> = std::result::Result<T, String>;
@@ -36,7 +39,6 @@ pub struct ZeroExecutorConfig {
     pub provider_id: String,
     pub llm_config: LlmConfig,
     pub conversation_id: Option<String>,
-    pub middleware_config: Option<MiddlewareConfig>,
 }
 
 // ============================================================================
@@ -224,7 +226,7 @@ impl ZeroAppExecutor {
         let llm = Self::create_llm(&config.llm_config)?;
 
         // Create tool registry with builtin tools (mutable)
-        let mut tool_registry = Self::create_tool_registry(dirs.clone(), &config.conversation_id)?;
+        let mut tool_registry = Self::create_tool_registry(dirs.clone())?;
 
         // Create MCP manager
         let mcp_manager = Arc::new(McpManager::default());
@@ -243,6 +245,9 @@ impl ZeroAppExecutor {
         // Register MCP tools in the tool registry (before wrapping in Arc)
         Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
 
+        // Register subagent tools from .subagents/ folder
+        Self::register_subagent_tools(&mut tool_registry, &config.agent_id, &dirs).await;
+
         // Now wrap in Arc
         let tool_registry = Arc::new(tool_registry);
 
@@ -253,16 +258,88 @@ impl ZeroAppExecutor {
         let agent = adapter.build_agent(&config.agent_config)?;
 
         // Create session using MutexSession for shared access
+        let conversation_id = config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let session = Arc::new(MutexSession::with_params(
-            config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+            conversation_id.clone(),
             "agentzero".to_string(),
             "user".to_string(),
         ));
 
-        // Create middleware executor with minimal pipeline
-        let middleware_executor = Arc::new(MiddlewareExecutor::new(
-            Arc::new(MiddlewarePipeline::new())
-        ));
+        // Load conversation history and session state from SQLite
+        let db_path = dirs.agent_channels_db_path();
+        let repo = SqliteSessionRepository::new(db_path.clone())
+            .map_err(|e| format!("Failed to create session repository: {}", e))?;
+
+        // Load session state first (this contains things the agent learned)
+        if let Ok(Some(saved_state)) = repo.load_session_state(&config.agent_id).await {
+            tracing::info!("Loading saved session state for agent: {} ({} keys)",
+                config.agent_id, saved_state.len());
+
+            if let Ok(mut session) = session.lock().map_err(|e| format!("Session lock error: {}", e)) {
+                // Merge saved state into session state
+                for (key, value) in saved_state {
+                    session.state_mut().set(key, value);
+                }
+            }
+        } else {
+            tracing::info!("No saved session state found for agent: {}", config.agent_id);
+        }
+
+        // Load conversation history from today's session
+        match repo.load_conversation_history_into_session(&config.agent_id, &session).await {
+            Ok(count) => {
+                tracing::info!("Loaded {} messages from history for agent: {}", count, config.agent_id);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to load conversation history: {}", e);
+            }
+        }
+
+        // Set conversation_id in session state so tools can access it
+        {
+            let mut session = session.lock().map_err(|e| format!("Session lock error: {}", e))?;
+            // Only set if not already in state (don't override loaded state)
+            if session.state().get(state_keys::state_keys::CONVERSATION_ID).is_none() {
+                session.state_mut().set(
+                    state_keys::state_keys::CONVERSATION_ID.to_string(),
+                    json!(conversation_id),
+                );
+            }
+            // Only set if not already in state (don't override loaded state)
+            if session.state().get(state_keys::state_keys::AGENT_ID).is_none() {
+                session.state_mut().set(
+                    state_keys::state_keys::AGENT_ID.to_string(),
+                    json!(config.agent_id),
+                );
+            }
+            // Only set if not already in state (don't override loaded state)
+            if session.state().get(state_keys::state_keys::PROVIDER_ID).is_none() {
+                session.state_mut().set(
+                    state_keys::state_keys::PROVIDER_ID.to_string(),
+                    json!(config.provider_id),
+                );
+            }
+            // Set db_path for knowledge graph tools (always set, not in saved state)
+            // Note: This is the path to the knowledge graph database, not the agent channels database
+            let kg_db_path = dirs.db_dir.join("knowledge-graph.db");
+            let kg_db_path_str = kg_db_path.to_string_lossy().to_string();
+            session.state_mut().set(
+                state_keys::state_keys::DB_PATH.to_string(),
+                json!(kg_db_path_str),
+            );
+            tracing::info!("Session ready: conversation_id={}, agent_id={}, provider_id={}, kg_db_path={}",
+                conversation_id, config.agent_id, config.provider_id, kg_db_path_str);
+        }
+
+        // Create middleware executor from config
+        let factory = MiddlewareFactory::new(llm.clone(), config.provider_id.clone());
+        let middleware_executor = factory.create_executor(config.agent_config.middleware.as_ref())
+            .await
+            .unwrap_or_else(|e| {
+                // If middleware creation fails, use minimal pipeline
+                tracing::warn!("Failed to create middleware from config: {}, using minimal pipeline", e);
+                Arc::new(MiddlewareExecutor::new(Arc::new(MiddlewarePipeline::new())))
+            });
 
         Ok(Self {
             config,
@@ -277,14 +354,42 @@ impl ZeroAppExecutor {
 
     /// Run the agent with a user message
     pub async fn run(&self, user_message: String) -> TResult<Vec<Event>> {
-        // Apply middleware preprocessing if needed
-        let user_content = Content::user(&user_message);
+        // Apply middleware preprocessing to conversation history
+        let history = {
+            let session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
+            session.conversation_history()
+        };
 
-        // Add user content to session (synchronous)
+        // Build messages array for middleware (history + new user message)
+        let mut messages = Vec::new();
+        messages.extend(history);
+        messages.push(Content::user(&user_message));
+
+        // Estimate tokens and get context window
+        let estimated_tokens = self.middleware_executor.estimate_tokens(&messages);
+        let context_window = self.middleware_executor.get_context_window(&self.config.llm_config.model);
+
+        // Apply middleware preprocessing
+        let processed_messages = self.middleware_executor.apply_preprocessing(
+            messages.clone(),
+            messages.len(),
+            estimated_tokens,
+            context_window,
+        ).await.unwrap_or_else(|e| {
+            tracing::warn!("Middleware preprocessing failed: {}, using original messages", e);
+            messages
+        });
+
+        // Add processed messages to session
         {
             let mut session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
-            session.add_content(user_content.clone());
+            for msg in &processed_messages {
+                session.add_content(msg.clone());
+            }
         }
+
+        // Create invocation context with the last processed message (user message)
+        let user_content = processed_messages.into_iter().last().unwrap_or_else(|| Content::user(&user_message));
 
         // Create invocation context with user content
         let ctx = self.create_invocation_context(user_content)?;
@@ -346,7 +451,20 @@ impl ZeroAppExecutor {
                     // Convert event to stream event and emit it
                     let stream_event = ZeroAppStreamEvent::from_event(&event);
                     tracing::info!("Stream event: {:?}", std::mem::discriminant(&stream_event));
+
+                    // Check if we need to emit an additional Complete event after the Content event
+                    let needs_complete_event = event.turn_complete && matches!(stream_event, ZeroAppStreamEvent::Content { .. });
+
                     callback(stream_event);
+
+                    // If the event has turn_complete=true and we emitted a Content event,
+                    // also emit a Complete event so the frontend knows the turn is done
+                    if needs_complete_event {
+                        tracing::info!("Event has turn_complete=true, emitting additional Complete event");
+                        callback(ZeroAppStreamEvent::Complete {
+                            turn_complete: true,
+                        });
+                    }
                 }
                 Err(e) => {
                     tracing::error!("Event error: {}", e);
@@ -419,19 +537,15 @@ impl ZeroAppExecutor {
     }
 
     /// Create tool registry with builtin tools (returns non-Arc for mutation)
-    fn create_tool_registry(_dirs: Arc<AppDirs>, conversation_id: &Option<String>) -> TResult<ToolRegistry> {
+    fn create_tool_registry(_dirs: Arc<AppDirs>) -> TResult<ToolRegistry> {
         // Get a fresh AppDirs instance since we can't clone from Arc
         let app_dirs = AppDirs::get().map_err(|e| e.to_string())?;
 
-        // Create file system context
-        let fs_context = if let Some(conv_id) = conversation_id {
-            TauriFileSystemContext::new(app_dirs).with_conversation(conv_id.clone())
-        } else {
-            TauriFileSystemContext::new(app_dirs)
-        };
+        // Create file system context (no conversation_id needed - tools read from state)
+        let fs_context = TauriFileSystemContext::new(app_dirs);
 
-        // Get tools from zerotools (now using zero_core::Tool)
-        let tools = builtin_tools_with_fs(Arc::new(fs_context), conversation_id.clone());
+        // Get tools from agent-tools (conversation_id now read from session state by tools)
+        let tools = builtin_tools_with_fs(Arc::new(fs_context));
 
         // Register tools
         let mut tool_registry = ToolRegistry::new();
@@ -502,6 +616,89 @@ impl ZeroAppExecutor {
         None
     }
 
+    /// Register subagent tools from the .subagents folder
+    ///
+    /// Scans the .subagents directory for subagent configurations and
+    /// registers each as a tool that the orchestrator can call.
+    async fn register_subagent_tools(
+        tool_registry: &mut ToolRegistry,
+        agent_id: &str,
+        dirs: &Arc<AppDirs>,
+    ) {
+        use super::subagent_tool::SubagentTool;
+
+        let subagents_dir = dirs.config_dir.join("agents").join(agent_id).join(".subagents");
+
+        if !subagents_dir.exists() {
+            tracing::info!("No .subagents directory found for agent: {}", agent_id);
+            return;
+        }
+
+        tracing::info!("Scanning for subagents in: {:?}", subagents_dir);
+
+        let entries = match std::fs::read_dir(&subagents_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!("Failed to read .subagents directory: {}", e);
+                return;
+            }
+        };
+
+        let mut count = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            // Skip if not a directory
+            if !path.is_dir() {
+                continue;
+            }
+
+            let config_path = path.join("config.yaml");
+            if !config_path.exists() {
+                continue;
+            }
+
+            // Parse config for description
+            let (subagent_id, description) = match std::fs::read_to_string(&config_path) {
+                Ok(config_content) => {
+                    match ConfigAdapter::parse_config(&config_content) {
+                        Ok(_agent_config) => {
+                            let id = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            // AgentYamlConfig doesn't have description field,
+                            // generate a default description from the name
+                            let desc = format!("Subagent: {}", id);
+                            (id, desc)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to parse subagent config {:?}: {}", path, e);
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read subagent config {:?}: {}", path, e);
+                    continue;
+                }
+            };
+
+            // Create and register SubagentTool
+            let tool = SubagentTool::new(
+                agent_id.to_string(),
+                subagent_id.clone(),
+                description,
+            );
+
+            tracing::info!("Registering subagent tool: {}", subagent_id);
+            tool_registry.register(Arc::new(tool));
+            count += 1;
+        }
+
+        tracing::info!("Registered {} subagent tools for agent: {}", count, agent_id);
+    }
+
     fn create_invocation_context(&self, user_content: Content) -> TResult<Arc<dyn InvocationContext>> {
         Ok(Arc::new(ZeroInvocationContext::new(
             self.agent.clone(),
@@ -543,14 +740,20 @@ pub enum ZeroAppStreamEvent {
 impl ZeroAppStreamEvent {
     fn from_event(event: &Event) -> Self {
         if let Some(content) = &event.content {
-            tracing::info!("from_event: content.role={}, parts.len()={}", content.role, content.parts.len());
+            tracing::info!("from_event: content.role={}, parts.len()={}, turn_complete={}", content.role, content.parts.len(), event.turn_complete);
 
             for (idx, part) in content.parts.iter().enumerate() {
                 tracing::info!("from_event: part #{} = {:?}", idx, std::mem::discriminant(part));
 
                 match part {
                     Part::Text { text } => {
-                        tracing::info!("from_event: Text part with text.len()={}, text='{}'", text.len(), text);
+                        // Truncate text in logs to avoid spamming console with full prompts/responses
+                        let preview = if text.len() > 100 {
+                            format!("{}... ({} chars total)", &text[..100], text.len())
+                        } else {
+                            format!("{} ({} chars)", text, text.len())
+                        };
+                        tracing::info!("from_event: Text part with text='{}'", preview);
                         return Self::Content {
                             delta: text.clone(),
                         };
@@ -566,13 +769,13 @@ impl ZeroAppStreamEvent {
                         }
                     }
                     Part::FunctionResponse { id, response } => {
-                        if let Ok(response_str) = serde_json::to_string(response) {
-                            tracing::info!("from_event: FunctionResponse id={}", id);
-                            return Self::ToolResponse {
-                                id: id.clone(),
-                                response: response_str,
-                            };
-                        }
+                        // response is already a JSON string from the tool, no need to serialize again
+                        tracing::info!("from_event: FunctionResponse id={}, response.len={}", id, response.len());
+
+                        return Self::ToolResponse {
+                            id: id.clone(),
+                            response: response.clone(),
+                        };
                     }
                     // Binary parts are not yet supported in stream events
                     Part::Binary { .. } => {
@@ -730,9 +933,17 @@ impl InvocationContext for ZeroInvocationContext {
 /// Create a zero-app executor from an agent ID and conversation ID
 ///
 /// This is the main entry point for creating executors in the Tauri app
+///
+/// # Arguments
+/// * `agent_id` - The ID of the agent to load
+/// * `conversation_id` - Optional conversation/session ID
+/// * `provider_id_override` - Optional override for the provider ID (instead of config)
+/// * `model_override` - Optional override for the model (instead of config)
 pub async fn create_zero_executor(
     agent_id: &str,
     conversation_id: Option<String>,
+    provider_id_override: Option<&str>,
+    model_override: Option<&str>,
 ) -> TResult<ZeroAppExecutor> {
     let dirs = Arc::new(AppDirs::get().map_err(|e| e.to_string())?);
 
@@ -752,7 +963,7 @@ pub async fn create_zero_executor(
 
     // Read AGENTS.md for system instruction
     let agents_md_file = agent_dir.join("AGENTS.md");
-    let system_instruction = if agents_md_file.exists() {
+    let mut system_instruction = if agents_md_file.exists() {
         std::fs::read_to_string(&agents_md_file)
             .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?
             .trim()
@@ -761,32 +972,70 @@ pub async fn create_zero_executor(
         String::new()
     };
 
-    // Override system_instruction with AGENTS.md content
+    // Load skills and append their name/description to the system instruction
+    // Full skill content is lazy-loaded via load_skill tool when needed
+    let skills_dir = dirs.skills_dir.clone();
+    for skill_id in &agent_config.skills {
+        let skill_dir = skills_dir.join(skill_id);
+        let skill_md_file = skill_dir.join("SKILL.md");
+
+        if skill_md_file.exists() {
+            match std::fs::read_to_string(&skill_md_file) {
+                Ok(skill_content) => {
+                    // Parse the YAML frontmatter to extract name and description
+                    if let Some(pos) = skill_content.find("---") {
+                        let frontmatter = &skill_content[0..pos].trim();
+                        // Just add skill name/description - full content is lazy-loaded
+                        system_instruction.push_str(&format!("\n\n## Available Skill: {}\nYAML: {}", skill_id, frontmatter.trim()));
+                    } else {
+                        // No frontmatter, just mention the skill exists
+                        system_instruction.push_str(&format!("\n\n## Available Skill: {}\n(Use load_skill to load this skill)", skill_id));
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read skill {}: {}", skill_id, e);
+                }
+            }
+        } else {
+            tracing::warn!("Skill not found: {}", skill_id);
+        }
+    }
+
+    // For agent-creator, inject available providers, skills, and MCPs into system instruction
+    if agent_id == "agent-creator" {
+        let available_context = load_available_context(&dirs).await.unwrap_or_default();
+        system_instruction.push_str(&available_context);
+    }
+
+    // Override system_instruction with AGENTS.md content + skills
     let agent_config = AgentYamlConfig {
         system_instruction: if system_instruction.is_empty() { None } else { Some(system_instruction) },
         ..agent_config
     };
 
-    // Load provider credentials
-    let provider_id = agent_config.provider_id.as_ref()
-        .ok_or_else(|| format!("Agent missing providerId"))?
-        .clone();
+    // Use provider override if provided, otherwise use config
+    let provider_id = provider_id_override
+        .map(|p| p.to_string())
+        .or_else(|| agent_config.provider_id.clone())
+        .ok_or_else(|| format!("Agent missing providerId"))?;
 
     let (api_key, base_url) = load_provider_credentials(&provider_id).await?;
+
+    // Use model override if provided, otherwise use config
+    let model = model_override
+        .map(|m| m.to_string())
+        .or_else(|| agent_config.model.clone())
+        .unwrap_or_else(|| "gpt-4".to_string());
 
     // Create LLM config
     let llm_config = LlmConfig {
         api_key,
         base_url: Some(base_url),
-        model: agent_config.model.clone().unwrap_or_else(|| "gpt-4".to_string()),
+        model,
         organization_id: None, // Optional: can be added to config if needed
         temperature: agent_config.temperature.map(|t| t as f32),
         max_tokens: agent_config.max_tokens,
     };
-
-    // Create middleware config
-    let middleware_config = agent_config.middleware.as_ref()
-        .and_then(|m| convert_middleware_config(Some(m)));
 
     // Create executor config
     let executor_config = ZeroExecutorConfig {
@@ -795,7 +1044,101 @@ pub async fn create_zero_executor(
         provider_id: provider_id.clone(),
         llm_config,
         conversation_id,
-        middleware_config,
+    };
+
+    ZeroAppExecutor::new(executor_config, dirs).await
+}
+
+/// Create a zero-app executor for a subagent with isolated context
+///
+/// This function creates a fresh executor for a subagent with:
+/// - A NEW session (isolated from parent orchestrator)
+/// - Injected context+task+goal in the system prompt
+/// - No access to parent's conversation history
+///
+/// # Arguments
+/// * `parent_agent_id` - The parent/orchestrator agent ID
+/// * `subagent_id` - The subagent ID (folder name in .subagents/)
+/// * `context` - Summary of relevant information from orchestrator
+/// * `task` - Specific task for the subagent
+/// * `goal` - Overall goal for context
+pub async fn create_subagent_executor(
+    parent_agent_id: &str,
+    subagent_id: &str,
+    context: String,
+    task: String,
+    goal: String,
+) -> TResult<ZeroAppExecutor> {
+    let dirs = Arc::new(AppDirs::get().map_err(|e| e.to_string())?);
+
+    // Load subagent config from .subagents/{subagent_id}/
+    let agent_dir = dirs.config_dir.join("agents").join(parent_agent_id).join(".subagents").join(subagent_id);
+    let config_file = agent_dir.join("config.yaml");
+
+    if !config_file.exists() {
+        return Err(format!("Subagent config not found: {}", config_file.display()));
+    }
+
+    let config_content = std::fs::read_to_string(&config_file)
+        .map_err(|e| format!("Failed to read subagent config: {}", e))?;
+
+    // Parse config
+    let agent_config = ConfigAdapter::parse_config(&config_content)?;
+
+    // Read AGENTS.md for system instruction
+    let agents_md_file = agent_dir.join("AGENTS.md");
+    let mut system_instruction = if agents_md_file.exists() {
+        std::fs::read_to_string(&agents_md_file)
+            .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?
+            .trim()
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    // Inject context+task+goal into subagent's system instruction
+    let enhanced_instruction = format!(
+        "{}\n\n## Context from Orchestrator\n{}\n\n## Your Task\n{}\n\n## Overall Goal\n{}",
+        system_instruction, context, task, goal
+    );
+
+    // Override system_instruction with enhanced version
+    let agent_config = AgentYamlConfig {
+        system_instruction: if enhanced_instruction.is_empty() { None } else { Some(enhanced_instruction) },
+        ..agent_config
+    };
+
+    // Use provider_id from subagent config
+    let provider_id = agent_config.provider_id.clone()
+        .ok_or_else(|| format!("Subagent missing providerId"))?;
+
+    let (api_key, base_url) = load_provider_credentials(&provider_id).await?;
+
+    // Use model from subagent config
+    let model = agent_config.model.clone()
+        .unwrap_or_else(|| "gpt-4".to_string());
+
+    // Create LLM config
+    let llm_config = LlmConfig {
+        api_key,
+        base_url: Some(base_url),
+        model,
+        organization_id: None,
+        temperature: agent_config.temperature.map(|t| t as f32),
+        max_tokens: agent_config.max_tokens,
+    };
+
+    // IMPORTANT: Create FRESH session (new conversation_id, no history from parent)
+    // This ensures isolation - the subagent has no access to orchestrator's conversation
+    let conversation_id = format!("subagent-{}-{}", parent_agent_id, subagent_id);
+
+    // Create executor config
+    let executor_config = ZeroExecutorConfig {
+        agent_id: format!("{}.{}", parent_agent_id, subagent_id),
+        agent_config,
+        provider_id: provider_id.clone(),
+        llm_config,
+        conversation_id: Some(conversation_id),
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await
@@ -827,6 +1170,80 @@ async fn load_provider_credentials(provider_id: &str) -> TResult<(String, String
         .to_string();
 
     Ok((api_key, base_url))
+}
+
+/// Load available context (providers, skills, MCPs) for agent-creator
+async fn load_available_context(dirs: &AppDirs) -> TResult<String> {
+    let mut context = String::from("\n\n# Available Options\n\n");
+
+    // Load providers
+    let providers_file = dirs.config_dir.join("providers.json");
+    if providers_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&providers_file) {
+            if let Ok(providers) = serde_json::from_str::<Vec<serde_json::Value>>(&content) {
+                context.push_str("## Available Providers\n\n");
+                for provider in providers {
+                    let id = provider.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let name = provider.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    context.push_str(&format!("- **{}** (id: `{}`)\n", name, id));
+                }
+                context.push_str("\n");
+            }
+        }
+    }
+
+    // Load skills
+    let skills_dir = dirs.skills_dir.clone();
+    if skills_dir.exists() {
+        context.push_str("## Available Skills\n\n");
+        if let Ok(entries) = std::fs::read_dir(&skills_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let skill_file = path.join("SKILL.md");
+                    if skill_file.exists() {
+                        if let Ok(content) = std::fs::read_to_string(&skill_file) {
+                            // Extract name from frontmatter
+                            let name = content.lines()
+                                .skip_while(|line| !line.starts_with("name:"))
+                                .next()
+                                .and_then(|line| line.split(':').nth(1))
+                                .map(|s| s.trim().trim_matches('\'').trim_matches('"').to_string())
+                                .unwrap_or_else(|| path.file_name().unwrap_or_default().to_string_lossy().to_string());
+
+                            let id = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                            context.push_str(&format!("- **{}** (id: `{}`)\n", name, id));
+                        }
+                    }
+                }
+            }
+            context.push_str("\n");
+        }
+    }
+
+    // Load MCP servers
+    let mcps_file = dirs.config_dir.join("mcps.json");
+    if mcps_file.exists() {
+        if let Ok(content) = std::fs::read_to_string(&mcps_file) {
+            let mcps: Vec<serde_json::Value> = if content.trim().starts_with('[') {
+                serde_json::from_str(&content).unwrap_or_default()
+            } else {
+                vec![serde_json::from_str(&content).unwrap_or_default()]
+            };
+
+            if !mcps.is_empty() {
+                context.push_str("## Available MCP Servers\n\n");
+                for mcp in mcps {
+                    let id = mcp.get("id").and_then(|v| v.as_str()).unwrap_or("unknown");
+                    let name = mcp.get("name").and_then(|v| v.as_str()).unwrap_or(id);
+                    context.push_str(&format!("- **{}** (id: `{}`)\n", name, id));
+                }
+                context.push_str("\n");
+            }
+        }
+    }
+
+    Ok(context)
 }
 
 /// Load and start MCP servers from the config file

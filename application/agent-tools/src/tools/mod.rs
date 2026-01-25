@@ -6,6 +6,8 @@ mod file;
 mod search;
 mod execution;
 mod ui;
+mod knowledge_graph;
+mod agent;
 
 use std::sync::Arc;
 
@@ -17,6 +19,14 @@ pub use search::{GrepTool, GlobTool};
 pub use execution::PythonTool;
 pub use execution::skills::LoadSkillTool;
 pub use ui::{RequestInputTool, ShowContentTool};
+pub use knowledge_graph::{
+    ListEntitiesTool,
+    SearchEntitiesTool,
+    GetEntityRelationshipsTool,
+    AddEntityTool,
+    AddRelationshipTool,
+};
+pub use agent::CreateAgentTool;
 
 // ============================================================================
 // BUILT-IN TOOLS FACTORY
@@ -30,32 +40,30 @@ pub use ui::{RequestInputTool, ShowContentTool};
 ///
 /// # Arguments
 /// * `fs` - File system context
-/// * `conversation_id` - Optional conversation ID for tools that need it
+///
+/// # Note
+/// Conversation ID is no longer passed to tools. Tools that need it
+/// (like WriteTool, EditTool) will read it from the ToolContext's state
+/// using the state key "app:conversation_id".
 #[must_use]
-pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>, conversation_id: Option<String>) -> Vec<Arc<dyn Tool>> {
-    // Create WriteTool with conversation_id if provided
-    let write_tool = if let Some(ref conv_id) = conversation_id {
-        Arc::new(WriteTool::with_conversation(fs.clone(), Some(conv_id.clone())))
-    } else {
-        Arc::new(WriteTool::new(fs.clone()))
-    };
-
-    // Create EditTool with conversation_id if provided
-    let edit_tool = if let Some(ref conv_id) = conversation_id {
-        Arc::new(EditTool::with_context(fs.clone(), Some(conv_id.clone())))
-    } else {
-        Arc::new(EditTool::new(fs.clone()))
-    };
-
+pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
     vec![
         Arc::new(ReadTool),
-        write_tool,
-        edit_tool,
+        Arc::new(WriteTool::new(fs.clone())),
+        Arc::new(EditTool::new(fs.clone())),
         Arc::new(GrepTool),
         Arc::new(GlobTool),
         Arc::new(PythonTool::new(fs.clone())),
         Arc::new(LoadSkillTool::new(fs.clone())),
         Arc::new(RequestInputTool),
         Arc::new(ShowContentTool),
+        // Knowledge Graph tools
+        Arc::new(ListEntitiesTool),
+        Arc::new(SearchEntitiesTool),
+        Arc::new(GetEntityRelationshipsTool),
+        Arc::new(AddEntityTool),
+        Arc::new(AddRelationshipTool),
+        // Agent tools
+        Arc::new(CreateAgentTool::new(fs.clone())),
     ]
 }

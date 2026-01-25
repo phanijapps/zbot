@@ -34,6 +34,47 @@ export default defineConfig(async () => ({
       "langchain",
     ],
   },
+  // Build optimizations
+  build: {
+    target: 'esnext',
+    minify: 'terser',
+    terserOptions: {
+      compress: {
+        drop_console: true, // Remove console.logs in production
+        drop_debugger: true,
+        pure_funcs: ['console.log', 'console.info', 'console.debug'],
+      },
+    },
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          // Separate vendor chunks for better caching
+          'radix-ui': [
+            '@radix-ui/react-dialog',
+            '@radix-ui/react-dropdown-menu',
+            '@radix-ui/react-label',
+            '@radix-ui/react-scroll-area',
+            '@radix-ui/react-select',
+            '@radix-ui/react-separator',
+            '@radix-ui/react-slot',
+            '@radix-ui/react-switch',
+            '@radix-ui/react-tabs',
+            '@radix-ui/react-tooltip',
+          ],
+          'markdown': [
+            '@uiw/react-md-editor',
+            'react-markdown',
+            'remark-gfm',
+          ],
+          'tauri': [
+            '@tauri-apps/api',
+            '@tauri-apps/plugin-opener',
+          ],
+        },
+      },
+    },
+    chunkSizeWarningLimit: 1000,
+  },
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

@@ -14,6 +14,10 @@ Check Installation section in `AGENTS.md` at workspace level.
 
 ### Agents & Skills
 You have access to various agents and skills and use them as needed.
+#### Skills
+/rust-desktop-applications - for rust desktop applications
+/rust-development - for rust development
+/documenting-rust-code - for docuemnting rust code.
 
 ## Architecture
 

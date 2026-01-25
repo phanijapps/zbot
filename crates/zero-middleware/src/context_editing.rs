@@ -113,6 +113,14 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
             }
         }
 
+        tracing::info!(
+            "CONTEXT EDITING: Cleared {} old tool results, reclaimed ~{} tokens (estimated tokens: {}, trigger: {})",
+            cleared,
+            tokens_reclaimed,
+            context.estimated_tokens,
+            self.config.trigger_tokens
+        );
+
         // Check if we reclaimed enough tokens
         if tokens_reclaimed < self.config.min_reclaim {
             return Ok(MiddlewareEffect::ModifiedMessages(messages));

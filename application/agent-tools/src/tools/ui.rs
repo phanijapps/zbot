@@ -24,7 +24,10 @@ impl Tool for RequestInputTool {
     }
 
     fn description(&self) -> &str {
-        "IMPORTANT: Use this tool whenever you need to collect 2+ pieces of related information from the user. Instead of asking multiple separate questions in plain text, use this tool to request all information at once via a form. This provides a better user experience."
+        "CRITICAL: MUST use this tool whenever you need to collect 2+ pieces of related information from the user. \
+        NEVER ask multiple separate questions in plain text - ALWAYS use this tool to request all information at once via a form. \
+        This is REQUIRED for better user experience. \
+        Examples: collecting input details (name, age, address), form data, configuration details, etc."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -147,23 +150,40 @@ impl Tool for ShowContentTool {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
+        // Normalize file_path: if it's an absolute path, extract just the filename
+        // This handles cases where write tool returns full path
+        let normalized_file_path = if let Some(ref fp) = file_path {
+            if fp.starts_with('/') || fp.starts_with('\\') {
+                // Extract filename from absolute path
+                fp.split('/').last().or_else(|| fp.split('\\').last()).map(|s| s.to_string())
+            } else {
+                // Already a relative path, use as-is
+                Some(fp.clone())
+            }
+        } else {
+            None
+        };
+
         let metadata = args.get("metadata").cloned();
 
+        // Auto-detect is_attachment: true when file_path is provided
         let is_attachment = args.get("is_attachment")
-            .and_then(|v| v.as_bool());
+            .and_then(|v| v.as_bool())
+            .unwrap_or(normalized_file_path.is_some());
 
         let base64 = args.get("base64")
             .and_then(|v| v.as_bool());
 
-        tracing::debug!("Showing content: type={}, title={}", content_type, title);
+        tracing::debug!("Showing content: type={}, title={}, is_attachment={}, file_path={:?}, normalized={:?}", content_type, title, is_attachment, file_path, normalized_file_path);
 
         // Return the content display request with the special marker
+        // Pass normalized_file_path (just filename) for frontend's read_attachment_file
         Ok(json!({
             "__show_content": true,
             "content_type": content_type,
             "title": title,
             "content": content.unwrap_or_default(),
-            "file_path": file_path,
+            "file_path": normalized_file_path,
             "metadata": metadata,
             "is_attachment": is_attachment,
             "base64": base64

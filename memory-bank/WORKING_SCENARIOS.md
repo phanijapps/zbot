@@ -5,11 +5,12 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 ## Table of Contents
 
 1. [Agent Management](#agent-management)
-2. [Provider Configuration](#provider-configuration)
-3. [MCP Server Integration](#mcp-server-integration)
-4. [Skills Management](#skills-management)
-5. [Conversation Management](#conversation-management)
-6. [Middleware Configuration](#middleware-configuration)
+2. [Zero IDE - Orchestrator Agent Workflows](#zero-ide---orchestrator-agent-workflows)
+3. [Provider Configuration](#provider-configuration)
+4. [MCP Server Integration](#mcp-server-integration)
+5. [Skills Management](#skills-management)
+6. [Conversation Management](#conversation-management)
+7. [Middleware Configuration](#middleware-configuration)
 
 ---
 
@@ -88,9 +89,82 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 ---
 
+## Zero IDE - Orchestrator Agent Workflows
+
+### Scenario 5: Create an Orchestrator Agent with Subagents
+
+**Use case**: Build a multi-agent system where one orchestrator coordinates specialized subagents.
+
+**Steps**:
+1. Create a new agent (e.g., "chef-bot")
+2. Open the agent in **Zero IDE**
+3. Create subagents in the file explorer:
+   - Click **"+ New Folder"** and name it `.subagents`
+   - Inside `.subagents`, create folders for each subagent:
+     - `.subagents/inventory-checker/`
+     - `.subagents/recipe-finder/`
+     - `.subagents/substituter/`
+     - `.subagents/instruction-formatter/`
+4. For each subagent, create:
+   - `config.yaml` - Subagent configuration (provider, model, etc.)
+   - `AGENTS.md` - Subagent instructions
+5. In the orchestrator's `AGENTS.md`, explain how to use subagents:
+   ```markdown
+   You work with a team of specialized assistants:
+   1. **inventory-checker** - Validates ingredients
+   2. **recipe-finder** - Finds matching recipes
+   3. **substituter** - Suggests substitutions
+   4. **instruction-formatter** - Formats cooking instructions
+
+   Call the appropriate subagent tools based on user needs.
+   ```
+
+**Result**: Orchestrator agent can now call subagents as tools automatically.
+
+### Scenario 6: Create a Subagent Configuration
+
+**Use case**: Configure a subagent with different model than orchestrator.
+
+**Steps**:
+1. Navigate to `.subagents/my-subagent/`
+2. Create `config.yaml`:
+   ```yaml
+   name: my-subagent
+   displayName: My Subagent
+   description: Specialized task handler
+   providerId: deepseek
+   model: deepseek-chat
+   temperature: 0.5
+   maxTokens: 2000
+   ```
+3. Create `AGENTS.md` with subagent instructions
+
+**Result**: Subagent configured with its own LLM settings.
+
+### Scenario 7: Test Orchestrator Agent
+
+**Use case**: Verify orchestrator correctly delegates to subagents.
+
+**Steps**:
+1. Select orchestrator agent
+2. Send a message that requires multiple steps:
+   ```
+   I have eggs, spinach, and tomatoes. What can I make?
+   ```
+3. Watch as orchestrator:
+   - Calls `inventory-checker` to validate ingredients
+   - Calls `recipe-finder` to find recipes
+   - Calls `substituter` if needed
+   - Calls `instruction-formatter` for final output
+4. Each subagent tool call appears in the tool calls section
+
+**Result**: Orchestrator coordinates subagents to produce final response.
+
+---
+
 ## Provider Configuration
 
-### Scenario 5: Add OpenAI-Compatible Provider
+### Scenario 8: Add OpenAI-Compatible Provider
 
 **Use case**: Add a custom LLM provider (OpenAI, Azure, local model, etc.).
 
@@ -106,7 +180,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Provider available for use in agents.
 
-### Scenario 6: Add Local Model Provider
+### Scenario 9: Add Local Model Provider
 
 **Use case**: Use a local LLM (Ollama, LM Studio, etc.).
 
@@ -129,7 +203,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 ## MCP Server Integration
 
-### Scenario 7: Add Filesystem MCP Server
+### Scenario 10: Add Filesystem MCP Server
 
 **Use case**: Allow agent to read/write files on your system.
 
@@ -148,7 +222,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Agent can read/write files in allowed path.
 
-### Scenario 8: Add Search MCP Server
+### Scenario 11: Add Search MCP Server
 
 **Use case**: Allow agent to search the web.
 
@@ -165,7 +239,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Agent can search the web using Brave Search API.
 
-### Scenario 9: Add HTTP MCP Server
+### Scenario 12: Add HTTP MCP Server
 
 **Use case**: Connect to hosted MCP server.
 
@@ -183,7 +257,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 ## Skills Management
 
-### Scenario 10: Create Custom Skill
+### Scenario 13: Create Custom Skill
 
 **Use case**: Create a reusable skill with parameters.
 
@@ -222,7 +296,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Skill available for agents to use.
 
-### Scenario 11: Add Skill to Agent
+### Scenario 14: Add Skill to Agent
 
 **Use case**: Enable a skill for a specific agent.
 
@@ -239,7 +313,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 ## Conversation Management
 
-### Scenario 12: Start New Conversation
+### Scenario 15: Start New Conversation
 
 **Use case**: Start chatting with an agent.
 
@@ -251,7 +325,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: New conversation created with agent response.
 
-### Scenario 13: Continue Existing Conversation
+### Scenario 16: Continue Existing Conversation
 
 **Use case**: Resume a previous conversation.
 
@@ -263,7 +337,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Conversation history preserved and continued.
 
-### Scenario 14: Delete Conversation
+### Scenario 17: Delete Conversation
 
 **Use case**: Remove a conversation.
 
@@ -279,7 +353,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 ## Middleware Configuration
 
-### Scenario 15: Enable Summarization Middleware
+### Scenario 18: Enable Summarization Middleware
 
 **Use case**: Automatically compress long conversations to fit in context window.
 
@@ -308,7 +382,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 - Recent messages kept intact
 - Event emitted: `[Summarized 24 messages into 456 characters]`
 
-### Scenario 16: Enable Context Editing Middleware
+### Scenario 19: Enable Context Editing Middleware
 
 **Use case**: Clear old tool results to free up tokens.
 
@@ -335,7 +409,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 - Clears older results with placeholder text
 - Event emitted: `[Cleared 15 tool results (reclaimed ~18234 tokens)]`
 
-### Scenario 17: Use Custom Model for Summarization
+### Scenario 20: Use Custom Model for Summarization
 
 **Use case**: Use cheaper/faster model for summarization while main agent uses premium model.
 
@@ -359,7 +433,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Agent uses GPT-4o for responses, but GPT-3.5-turbo for summarization (cheaper).
 
-### Scenario 18: Exclude Specific Tools from Context Editing
+### Scenario 21: Exclude Specific Tools from Context Editing
 
 **Use case**: Always preserve search results, but clear other tool outputs.
 
@@ -381,7 +455,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Search and database results always preserved, other tools cleared.
 
-### Scenario 19: Combined Middleware Setup
+### Scenario 22: Combined Middleware Setup
 
 **Use case**: Use both summarization and context editing together.
 
@@ -418,7 +492,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 ## Advanced Scenarios
 
-### Scenario 20: Agent with File Upload
+### Scenario 23: Agent with File Upload
 
 **Use case**: Agent needs reference documents.
 
@@ -436,7 +510,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Agent can access uploaded files through file explorer.
 
-### Scenario 21: Debug Agent with Thinking Mode
+### Scenario 24: Debug Agent with Thinking Mode
 
 **Use case**: See agent's reasoning process (DeepSeek, GLM models).
 
@@ -450,7 +524,7 @@ This document covers all working scenarios in AgentZero, providing step-by-step 
 
 **Result**: Agent's thinking process displayed in chat.
 
-### Scenario 22: Test Agent Different Configuration
+### Scenario 25: Test Agent Different Configuration
 
 **Use case**: Compare agent behavior with different temperatures.
 

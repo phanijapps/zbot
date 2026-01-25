@@ -92,7 +92,7 @@ export class ConversationService {
 
     try {
       // Call Rust backend command - this will start execution and emit events
-      await invoke<any>("execute_agent_zero_stream", {
+      await invoke<any>("execute_agent_stream", {
         conversationId,
         agentId,
         message: userMessage,
@@ -126,7 +126,7 @@ export class ConversationService {
     toolResults?: ToolResult[];
   }> {
     // Call Rust backend command
-    const result = await invoke<any>("execute_agent_zero_stream", {
+    const result = await invoke<any>("execute_agent_stream", {
       conversationId,
       agentId,
       message: userMessage,

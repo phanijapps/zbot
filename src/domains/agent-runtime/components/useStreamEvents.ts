@@ -21,6 +21,14 @@ import type {
   UseStreamEventsReturn,
 } from "./types";
 
+// Conditional logging - only log in development mode
+const isDev = import.meta.env.DEV;
+const debugLog = (...args: unknown[]) => {
+  if (isDev) {
+    console.log("[useStreamEvents]", ...args);
+  }
+};
+
 /**
  * Detect content type from file extension
  */
@@ -44,7 +52,11 @@ function parseWriteAttachment(toolName: string, result: string): AttachmentInfo 
 
   try {
     const parsed = JSON.parse(result);
-    if (!parsed.success || !parsed.path) return null;
+    // WriteTool returns {path, bytes_written} - no success field needed
+    if (!parsed.path) {
+      console.warn("[parseWriteAttachment] No path in result:", result);
+      return null;
+    }
 
     const fullPath = parsed.path;
     const filename = fullPath.split('/').pop() || fullPath.split('\\').pop() || "file";
@@ -83,8 +95,8 @@ function parseWriteAttachment(toolName: string, result: string): AttachmentInfo 
  * Hook for managing thinking panel state from stream events
  */
 export function useStreamEvents(
-  autoOpen = true,
-  autoCollapse = true
+  _autoOpen = true,
+  _autoCollapse = true
 ): UseStreamEventsReturn {
   const [state, setState] = useState<ThinkingPanelState>({
     isOpen: false,
@@ -134,38 +146,37 @@ export function useStreamEvents(
   const handleEvent = useCallback(
     (event: AgentStreamEvent) => {
       setState((prev) => {
-        console.log("[useStreamEvents] Processing event:", event.type, "Current state:", { isOpen: prev.isOpen, isActive: prev.isActive });
-
+        // Only log significant events (not every token)
         switch (event.type) {
           case "metadata":
-            // Agent started working - auto-open panel
-            console.log("[useStreamEvents] Metadata event, opening panel");
+            // Agent started working - mark as active but don't open panel yet
+            // Panel will open when there's actual thinking content (tools, reasoning, etc)
             return {
               ...prev,
               isActive: true,
-              isOpen: true, // Always open on metadata
+              // Don't open panel on metadata - wait for actual thinking content
               currentMessageId: event.agentId,
             };
 
           case "token":
-            // Still active - also ensure panel is open
-            console.log("[useStreamEvents] Token event, ensuring panel is open");
+            // Still active - but don't open panel unless there's thinking content
             return {
               ...prev,
               isActive: true,
-              isOpen: true, // Keep panel open during streaming
+              // Don't open panel on token events - only when there's thinking content
             };
 
           case "reasoning":
-            // Add to reasoning blocks
+            // Add to reasoning blocks and open panel
+            debugLog("reasoning");
             return {
               ...prev,
               reasoning: [...prev.reasoning, event.content],
+              isOpen: true, // Open panel when there's reasoning
             };
 
           case "tool_call_start":
-            // New tool call starting - ensure panel is open
-            console.log("[useStreamEvents] Tool call start:", event.toolName);
+            // New tool call starting - open panel
             const newTool: ToolCallDisplay = {
               id: event.toolId,
               name: event.toolName,
@@ -174,7 +185,7 @@ export function useStreamEvents(
             return {
               ...prev,
               isActive: true,
-              isOpen: true, // Ensure panel is open when tools are running
+              isOpen: true, // Open panel when tools are running
               toolCalls: [...prev.toolCalls, newTool],
             };
 
@@ -204,7 +215,7 @@ export function useStreamEvents(
               ),
             };
 
-          case "tool_result":
+          case "tool_result": {
             // Tool execution finished - check if it's a write tool that created an attachment
             const toolCall = prev.toolCalls.find(t => t.id === event.toolId);
             const attachment = toolCall && !event.error
@@ -225,13 +236,14 @@ export function useStreamEvents(
               ),
               ...(attachment ? { attachments: [...prev.attachments, attachment] } : {}),
             };
+          }
 
           case "done":
-            // Agent finished - auto-collapse if enabled
+            // Agent finished - always collapse panel and reset state
             return {
               ...prev,
               isActive: false,
-              isOpen: autoCollapse ? false : prev.isOpen,
+              isOpen: false, // Always close panel when done
             };
 
           case "error":
@@ -244,14 +256,10 @@ export function useStreamEvents(
 
           case "show_content":
             // Show content in canvas - this is handled at a higher level
-            // Just log it for now
-            console.log("[useStreamEvents] Show content event:", event.contentType, event.title);
             return prev;
 
           case "request_input":
             // Request input via form - this is handled at a higher level
-            // Just log it for now
-            console.log("[useStreamEvents] Request input event:", event.formId, event.title);
             return prev;
 
           default:
@@ -259,7 +267,7 @@ export function useStreamEvents(
         }
       });
     },
-    [autoOpen, autoCollapse]
+    []
   );
 
   /**

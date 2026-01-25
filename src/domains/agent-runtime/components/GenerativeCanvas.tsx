@@ -60,20 +60,16 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
 
         setIsLoadingContent(true);
         try {
-          // Parse file path to get filename
-          // Format: "conv_id/attachments/filename"
-          const parts = filePath.split("/");
-          const filename = parts[parts.length - 1];
-
           console.log("[GenerativeCanvas] Loading attachment:", {
             conversationId,
-            filename,
             filePath,
           });
 
+          // Use the new API that takes relative_path directly
+          // New format: agent_id/attachments/YYYY-MM/filename
+          // Old format: conv_id/attachments/filename (for backward compatibility)
           const data = await invoke<string>("read_attachment_file", {
-            conversationId,
-            filename,
+            relativePath: filePath,
           });
 
           console.log("[GenerativeCanvas] Attachment loaded successfully, length:", data.length);

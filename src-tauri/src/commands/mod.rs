@@ -6,6 +6,7 @@
 pub mod core;
 pub mod conversations;
 pub mod agents;
+pub mod agent_channels;
 pub mod providers;
 pub mod mcp;
 pub mod skills;
@@ -13,11 +14,18 @@ pub mod settings;
 pub mod windows;
 pub mod tools;
 pub mod agents_runtime;
+pub mod vaults;
+pub mod deletion;
+pub mod search;
+pub mod knowledge_graph;
+pub mod media;
+pub mod workflow;
 
 // Re-export all commands
 pub use core::*;
 pub use conversations::*;
 pub use agents::*;
+pub use agent_channels::*;
 pub use providers::*;
 pub use mcp::*;
 pub use skills::*;
@@ -25,3 +33,9 @@ pub use settings::*;
 pub use windows::*;
 pub use tools::*;
 pub use agents_runtime::*;
+pub use vaults::*;
+pub use deletion::*;
+pub use search::*;
+pub use knowledge_graph::*;
+pub use media::*;
+pub use workflow::*;

@@ -14,6 +14,15 @@ use agent_tools::builtin_tools_with_fs;
 type TResult<T> = std::result::Result<T, String>;
 
 // ============================================================================
+// DEFAULT FUNCTIONS
+// ============================================================================
+
+/// Default value for voiceRecordingEnabled (true = enabled by default)
+fn default_voice_recording_enabled() -> Option<bool> {
+    Some(true)
+}
+
+// ============================================================================
 // AGENT CONFIG STRUCTURES (from YAML)
 // ============================================================================
 
@@ -30,6 +39,8 @@ pub struct AgentYamlConfig {
     pub max_tokens: Option<u32>,
     #[serde(rename = "thinkingEnabled")]
     pub thinking_enabled: Option<bool>,
+    #[serde(rename = "voiceRecordingEnabled", default = "default_voice_recording_enabled")]
+    pub voice_recording_enabled: Option<bool>,
     #[serde(default)]
     pub mcps: Vec<String>,
     #[serde(default)]

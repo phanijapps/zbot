@@ -27,6 +27,13 @@ export {
 } from "./ConversationView";
 export { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 
+// Inline components (for message stream)
+export { InlineToolCard, type InlineToolCardProps } from "./InlineToolCard";
+export { InlineToolCallsList } from "./InlineToolCallsList";
+
+// Agent Channel components
+export { AgentChannelList } from "./AgentChannelList";
+
 // Hooks
 export { useStreamEvents, usePlanItems } from "./useStreamEvents";
 

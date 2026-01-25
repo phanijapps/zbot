@@ -4,15 +4,19 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import { Bot, Plus, Trash2, Loader2, RefreshCw, Edit } from "lucide-react";
+import { Bot, Plus, Trash2, Loader2, RefreshCw, Edit, Workflow } from "lucide-react";
 import { Button } from "@/shared/ui/button";
+import { useNavigate } from "react-router-dom";
 import { AgentIDEPage } from "./AgentIDEPage";
 import * as agentService from "@/services/agent";
 import * as providerService from "@/services/provider";
 import type { Agent } from "@/shared/types";
 import type { Provider } from "@/shared/types";
+import { useVaults } from "@/features/vaults/useVaults";
 
 export function AgentsPanel() {
+  const { currentVault } = useVaults();
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -20,17 +24,18 @@ export function AgentsPanel() {
   const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
-  // Load agents and providers on mount
+  // Load agents and providers on mount and when vault changes
   useEffect(() => {
     loadAgents();
     loadProviders();
-  }, []);
+  }, [currentVault?.id]); // Reload when vault changes
 
   const loadAgents = async () => {
     setLoading(true);
     try {
       const loaded = await agentService.listAgents();
-      setAgents(loaded);
+      // Filter out agent-creator - it's only accessible via + button in agent channels
+      setAgents(loaded.filter(agent => agent.id !== "agent-creator"));
     } catch (error) {
       console.error("Failed to load agents:", error);
     } finally {
@@ -163,14 +168,25 @@ export function AgentsPanel() {
                       size="sm"
                       onClick={() => handleOpenEditEditor(agent)}
                       className="text-gray-400 hover:text-white h-7 w-7 p-0"
+                      title="Edit agent"
                     >
                       <Edit className="size-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
+                      onClick={() => navigate(`/workflow/${agent.id}`, { state: { from: '/agents' } })}
+                      className="text-gray-400 hover:text-purple-400 h-7 w-7 p-0"
+                      title="Open Workflow IDE"
+                    >
+                      <Workflow className="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => handleDeleteAgent(agent.id)}
                       className="text-gray-400 hover:text-red-400 h-7 w-7 p-0"
+                      title="Delete agent"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
