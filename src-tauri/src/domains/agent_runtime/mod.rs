@@ -40,6 +40,7 @@ pub mod config_adapter;
 pub mod types;
 pub mod middleware_integration;
 pub mod executor_v2;
+pub mod subagent_tool;
 pub mod state_keys;
 
 // Re-export zero-app executor
@@ -47,6 +48,7 @@ pub use self::executor_v2::{
     ZeroAppExecutor,
     ZeroAppStreamEvent,
     create_zero_executor,
+    create_subagent_executor,
 };
 
 // Re-export Tauri-specific types

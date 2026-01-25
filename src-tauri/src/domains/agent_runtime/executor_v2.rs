@@ -245,6 +245,9 @@ impl ZeroAppExecutor {
         // Register MCP tools in the tool registry (before wrapping in Arc)
         Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
 
+        // Register subagent tools from .subagents/ folder
+        Self::register_subagent_tools(&mut tool_registry, &config.agent_id, &dirs).await;
+
         // Now wrap in Arc
         let tool_registry = Arc::new(tool_registry);
 
@@ -613,6 +616,89 @@ impl ZeroAppExecutor {
         None
     }
 
+    /// Register subagent tools from the .subagents folder
+    ///
+    /// Scans the .subagents directory for subagent configurations and
+    /// registers each as a tool that the orchestrator can call.
+    async fn register_subagent_tools(
+        tool_registry: &mut ToolRegistry,
+        agent_id: &str,
+        dirs: &Arc<AppDirs>,
+    ) {
+        use super::subagent_tool::SubagentTool;
+
+        let subagents_dir = dirs.config_dir.join("agents").join(agent_id).join(".subagents");
+
+        if !subagents_dir.exists() {
+            tracing::info!("No .subagents directory found for agent: {}", agent_id);
+            return;
+        }
+
+        tracing::info!("Scanning for subagents in: {:?}", subagents_dir);
+
+        let entries = match std::fs::read_dir(&subagents_dir) {
+            Ok(entries) => entries,
+            Err(e) => {
+                tracing::warn!("Failed to read .subagents directory: {}", e);
+                return;
+            }
+        };
+
+        let mut count = 0;
+        for entry in entries.flatten() {
+            let path = entry.path();
+
+            // Skip if not a directory
+            if !path.is_dir() {
+                continue;
+            }
+
+            let config_path = path.join("config.yaml");
+            if !config_path.exists() {
+                continue;
+            }
+
+            // Parse config for description
+            let (subagent_id, description) = match std::fs::read_to_string(&config_path) {
+                Ok(config_content) => {
+                    match ConfigAdapter::parse_config(&config_content) {
+                        Ok(_agent_config) => {
+                            let id = path.file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            // AgentYamlConfig doesn't have description field,
+                            // generate a default description from the name
+                            let desc = format!("Subagent: {}", id);
+                            (id, desc)
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to parse subagent config {:?}: {}", path, e);
+                            continue;
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to read subagent config {:?}: {}", path, e);
+                    continue;
+                }
+            };
+
+            // Create and register SubagentTool
+            let tool = SubagentTool::new(
+                agent_id.to_string(),
+                subagent_id.clone(),
+                description,
+            );
+
+            tracing::info!("Registering subagent tool: {}", subagent_id);
+            tool_registry.register(Arc::new(tool));
+            count += 1;
+        }
+
+        tracing::info!("Registered {} subagent tools for agent: {}", count, agent_id);
+    }
+
     fn create_invocation_context(&self, user_content: Content) -> TResult<Arc<dyn InvocationContext>> {
         Ok(Arc::new(ZeroInvocationContext::new(
             self.agent.clone(),
@@ -958,6 +1044,101 @@ pub async fn create_zero_executor(
         provider_id: provider_id.clone(),
         llm_config,
         conversation_id,
+    };
+
+    ZeroAppExecutor::new(executor_config, dirs).await
+}
+
+/// Create a zero-app executor for a subagent with isolated context
+///
+/// This function creates a fresh executor for a subagent with:
+/// - A NEW session (isolated from parent orchestrator)
+/// - Injected context+task+goal in the system prompt
+/// - No access to parent's conversation history
+///
+/// # Arguments
+/// * `parent_agent_id` - The parent/orchestrator agent ID
+/// * `subagent_id` - The subagent ID (folder name in .subagents/)
+/// * `context` - Summary of relevant information from orchestrator
+/// * `task` - Specific task for the subagent
+/// * `goal` - Overall goal for context
+pub async fn create_subagent_executor(
+    parent_agent_id: &str,
+    subagent_id: &str,
+    context: String,
+    task: String,
+    goal: String,
+) -> TResult<ZeroAppExecutor> {
+    let dirs = Arc::new(AppDirs::get().map_err(|e| e.to_string())?);
+
+    // Load subagent config from .subagents/{subagent_id}/
+    let agent_dir = dirs.config_dir.join("agents").join(parent_agent_id).join(".subagents").join(subagent_id);
+    let config_file = agent_dir.join("config.yaml");
+
+    if !config_file.exists() {
+        return Err(format!("Subagent config not found: {}", config_file.display()));
+    }
+
+    let config_content = std::fs::read_to_string(&config_file)
+        .map_err(|e| format!("Failed to read subagent config: {}", e))?;
+
+    // Parse config
+    let agent_config = ConfigAdapter::parse_config(&config_content)?;
+
+    // Read AGENTS.md for system instruction
+    let agents_md_file = agent_dir.join("AGENTS.md");
+    let mut system_instruction = if agents_md_file.exists() {
+        std::fs::read_to_string(&agents_md_file)
+            .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?
+            .trim()
+            .to_string()
+    } else {
+        String::new()
+    };
+
+    // Inject context+task+goal into subagent's system instruction
+    let enhanced_instruction = format!(
+        "{}\n\n## Context from Orchestrator\n{}\n\n## Your Task\n{}\n\n## Overall Goal\n{}",
+        system_instruction, context, task, goal
+    );
+
+    // Override system_instruction with enhanced version
+    let agent_config = AgentYamlConfig {
+        system_instruction: if enhanced_instruction.is_empty() { None } else { Some(enhanced_instruction) },
+        ..agent_config
+    };
+
+    // Use provider_id from subagent config
+    let provider_id = agent_config.provider_id.clone()
+        .ok_or_else(|| format!("Subagent missing providerId"))?;
+
+    let (api_key, base_url) = load_provider_credentials(&provider_id).await?;
+
+    // Use model from subagent config
+    let model = agent_config.model.clone()
+        .unwrap_or_else(|| "gpt-4".to_string());
+
+    // Create LLM config
+    let llm_config = LlmConfig {
+        api_key,
+        base_url: Some(base_url),
+        model,
+        organization_id: None,
+        temperature: agent_config.temperature.map(|t| t as f32),
+        max_tokens: agent_config.max_tokens,
+    };
+
+    // IMPORTANT: Create FRESH session (new conversation_id, no history from parent)
+    // This ensures isolation - the subagent has no access to orchestrator's conversation
+    let conversation_id = format!("subagent-{}-{}", parent_agent_id, subagent_id);
+
+    // Create executor config
+    let executor_config = ZeroExecutorConfig {
+        agent_id: format!("{}.{}", parent_agent_id, subagent_id),
+        agent_config,
+        provider_id: provider_id.clone(),
+        llm_config,
+        conversation_id: Some(conversation_id),
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await
