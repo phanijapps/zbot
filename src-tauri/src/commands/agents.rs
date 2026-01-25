@@ -61,37 +61,37 @@ pub struct Agent {
 
 /// Agent configuration stored in config.yaml
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct AgentConfig {
-    name: String,
+pub struct AgentConfig {
+    pub name: String,
     #[serde(rename = "displayName")]
-    display_name: String,
-    description: String,
+    pub display_name: String,
+    pub description: String,
     #[serde(rename = "agentType", default)]
-    agent_type: Option<String>,
+    pub agent_type: Option<String>,
     #[serde(rename = "providerId")]
-    provider_id: String,
-    model: String,
-    temperature: f64,
+    pub provider_id: String,
+    pub model: String,
+    pub temperature: f64,
     #[serde(rename = "maxTokens", default = "default_max_tokens")]
-    max_tokens: u32,
+    pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled", default)]
-    thinking_enabled: bool,
+    pub thinking_enabled: bool,
     #[serde(rename = "voiceRecordingEnabled", default = "default_voice_recording_enabled")]
-    voice_recording_enabled: bool,
-    skills: Vec<String>,
-    mcps: Vec<String>,
+    pub voice_recording_enabled: bool,
+    pub skills: Vec<String>,
+    pub mcps: Vec<String>,
     #[serde(rename = "systemInstruction", default, skip_serializing_if = "Option::is_none")]
-    system_instruction: Option<String>,
+    pub system_instruction: Option<String>,
 }
 
 /// Gets the agents directory path
-fn get_agents_dir() -> Result<PathBuf, String> {
+pub fn get_agents_dir() -> Result<PathBuf, String> {
     let dirs = AppDirs::get().map_err(|e| e.to_string())?;
     Ok(dirs.config_dir.join("agents"))
 }
 
 /// Gets the staging directory for new agents
-fn get_staging_dir() -> Result<PathBuf, String> {
+pub fn get_staging_dir() -> Result<PathBuf, String> {
     let dirs = AppDirs::get().map_err(|e| e.to_string())?;
     Ok(dirs.config_dir.join("staging"))
 }
@@ -293,7 +293,7 @@ pub async fn delete_agent(id: String) -> Result<(), String> {
 }
 
 /// Reads an agent folder and parses config.yaml and AGENTS.md
-fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
+pub fn read_agent_folder(agent_dir: &PathBuf) -> Result<Agent, String> {
     let config_path = agent_dir.join("config.yaml");
     let agents_md_path = agent_dir.join("AGENTS.md");
 

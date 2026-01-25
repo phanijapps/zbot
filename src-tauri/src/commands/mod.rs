@@ -19,6 +19,7 @@ pub mod deletion;
 pub mod search;
 pub mod knowledge_graph;
 pub mod media;
+pub mod workflow;
 
 // Re-export all commands
 pub use core::*;
@@ -37,3 +38,4 @@ pub use deletion::*;
 pub use search::*;
 pub use knowledge_graph::*;
 pub use media::*;
+pub use workflow::*;

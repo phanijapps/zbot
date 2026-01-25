@@ -4,8 +4,9 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import { Bot, Plus, Trash2, Loader2, RefreshCw, Edit } from "lucide-react";
+import { Bot, Plus, Trash2, Loader2, RefreshCw, Edit, Workflow } from "lucide-react";
 import { Button } from "@/shared/ui/button";
+import { useNavigate } from "react-router-dom";
 import { AgentIDEPage } from "./AgentIDEPage";
 import * as agentService from "@/services/agent";
 import * as providerService from "@/services/provider";
@@ -15,6 +16,7 @@ import { useVaults } from "@/features/vaults/useVaults";
 
 export function AgentsPanel() {
   const { currentVault } = useVaults();
+  const navigate = useNavigate();
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
@@ -166,14 +168,25 @@ export function AgentsPanel() {
                       size="sm"
                       onClick={() => handleOpenEditEditor(agent)}
                       className="text-gray-400 hover:text-white h-7 w-7 p-0"
+                      title="Edit agent"
                     >
                       <Edit className="size-3.5" />
                     </Button>
                     <Button
                       variant="ghost"
                       size="sm"
+                      onClick={() => navigate(`/workflow/${agent.id}`)}
+                      className="text-gray-400 hover:text-purple-400 h-7 w-7 p-0"
+                      title="Open Workflow IDE"
+                    >
+                      <Workflow className="size-3.5" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => handleDeleteAgent(agent.id)}
                       className="text-gray-400 hover:text-red-400 h-7 w-7 p-0"
+                      title="Delete agent"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>

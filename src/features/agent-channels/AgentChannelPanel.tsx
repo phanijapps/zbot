@@ -28,8 +28,8 @@ import { ClearHistoryDialog } from "./ClearHistoryDialog";
 import { DaySeparator } from "./DaySeparator";
 import { KnowledgeGraphVisualizer } from "./KnowledgeGraphVisualizer";
 import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
-import { FlowBuilderModal } from "@/features/agents/VisualFlowBuilder";
 import { TranscriptCommentDialog, type TranscriptAttachmentInfo } from "./TranscriptCommentDialog";
+import { useNavigate } from "react-router-dom";
 import { AttachmentsPanel, type Attachment } from "./AttachmentsPanel";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
@@ -57,6 +57,7 @@ type ExecutionStage = "idle" | "thinking" | "using_tools" | "generating" | "done
 
 export function AgentChannelPanel() {
   const { currentVault } = useVaults();
+  const navigate = useNavigate();
 
   // UI State
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -115,10 +116,6 @@ export function AgentChannelPanel() {
   const [attachmentsPanelOpen, setAttachmentsPanelOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
 
-  // Flow Builder Modal state
-  const [flowBuilderOpen, setFlowBuilderOpen] = useState(false);
-  const [hasFlowConfig, setHasFlowConfig] = useState(false);
-
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
 
@@ -175,22 +172,6 @@ export function AgentChannelPanel() {
     resetThinking();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAgent?.id, resetThinking]);
-
-  // Load flow config status when agent is selected
-  useEffect(() => {
-    if (selectedAgent) {
-      invoke<string | null>("get_agent_flow_config", { agentId: selectedAgent.id })
-        .then((config) => {
-          setHasFlowConfig(config !== null);
-        })
-        .catch((err) => {
-          debugLog("Failed to load flow config status:", err);
-          setHasFlowConfig(false);
-        });
-    } else {
-      setHasFlowConfig(false);
-    }
-  }, [selectedAgent?.id]);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -943,12 +924,6 @@ export function AgentChannelPanel() {
                 <h2 className="text-white font-semibold cursor-default" title={`${loadedDays.reduce((sum, d) => sum + d.messageCount, 0)} total messages across ${loadedDays.length} day${loadedDays.length !== 1 ? 's' : ''}`}>
                   {selectedAgent.displayName}
                 </h2>
-                {hasFlowConfig && (
-                  <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-500/20 text-violet-300 border border-violet-500/30" title="This agent has a visual workflow configured">
-                    <GitBranch className="size-3" />
-                    Flow
-                  </span>
-                )}
                 <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
                   {loadedDays.reduce((sum, d) => sum + d.messageCount, 0)}
                 </span>
@@ -987,8 +962,9 @@ export function AgentChannelPanel() {
                   </button>
                 )}
                 <button
-                  onClick={() => setFlowBuilderOpen(true)}
-                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  onClick={() => selectedAgent && navigate(`/workflow/${selectedAgent.id}`)}
+                  disabled={!selectedAgent}
+                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                   aria-label="Edit workflow"
                 >
                   <GitBranch className="size-5" />
@@ -1436,13 +1412,6 @@ export function AgentChannelPanel() {
           onDelete={handleDeleteAttachment}
         />
       )}
-
-      {/* Flow Builder Modal */}
-      <FlowBuilderModal
-        open={flowBuilderOpen}
-        onClose={() => setFlowBuilderOpen(false)}
-        agent={selectedAgent}
-      />
     </div>
   );
 }

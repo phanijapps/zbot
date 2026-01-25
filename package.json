@@ -25,6 +25,7 @@
     "@tauri-apps/plugin-opener": "^2",
     "@types/dagre": "^0.7.53",
     "@uiw/react-md-editor": "^4.0.11",
+    "@xyflow/react": "^12.10.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "dagre": "^0.8.5",

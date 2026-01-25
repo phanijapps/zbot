@@ -18,6 +18,7 @@ import {
   SettingsPanel,
   SearchPanel,
 } from "./features";
+import { WorkflowIDEPage } from "./features/workflow-ide";
 
 function App() {
   const [vault, setVault] = useState<Vault | null>(null);
@@ -80,6 +81,7 @@ function App() {
           <Routes>
             <Route path="/" element={<AgentChannelPanel />} />
             <Route path="/agents" element={<AgentsPanel />} />
+            <Route path="/workflow/:agentId" element={<WorkflowIDEPage />} />
             <Route path="/providers" element={<ProvidersPanel />} />
             <Route path="/mcp" element={<MCPServersPanel />} />
             <Route path="/skills" element={<SkillsPanel />} />

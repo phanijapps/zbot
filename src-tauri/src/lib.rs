@@ -113,6 +113,10 @@ pub fn run() {
             commands::get_subagent,
             commands::save_subagent,
             commands::delete_subagent,
+            // Workflow commands (NEW - XY Flow integration)
+            commands::get_orchestrator_structure,
+            commands::save_orchestrator_structure,
+            commands::validate_workflow,
             // Agent Channel commands (NEW)
             commands::get_or_create_today_session,
             commands::list_previous_days,
