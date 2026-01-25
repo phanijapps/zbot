@@ -372,6 +372,139 @@ let conv_id = ctx.get_state("app:conversation_id")
 
 **Key Design Principle**: Runtime state (conversation_id, user_id, agent_id) should flow through the `ToolContext`'s state mechanism, not be baked into tool instances.
 
+### Dynamic Subagent Tool System
+
+**Overview**: Orchestrator agents can automatically discover and register subagents as callable tools. Subagents are stored in `.subagents/` subdirectory, each with their own config.yaml, and are exposed to the orchestrator's LLM as tools with context/task/goal parameters.
+
+**Architecture**:
+
+1. **SubagentTool** (`src-tauri/src/domains/agent_runtime/subagent_tool.rs`)
+   - Implements `Tool` trait with `&'static str` lifetime for name/description
+   - Uses `Box::leak()` to convert owned Strings to `'static` lifetime
+   - Parameters: `context` (summary), `task` (specific work), `goal` (overall vision)
+
+2. **create_subagent_executor()** - Creates isolated executor for subagent
+   - Loads subagent config from `.subagents/{subagent_id}/config.yaml`
+   - Injects context+task+goal into system instruction
+   - Creates FRESH session (new conversation_id, no history from parent)
+   - Returns only final text result (bidirectional isolation)
+
+3. **register_subagent_tools()** - Auto-discovery and registration
+   - Scans `.subagents/` folder during executor initialization
+   - Parses each subagent's config.yaml
+   - Creates `SubagentTool` instance for each
+   - Registers in tool registry before wrapping in Arc
+
+**Bidirectional Isolation Pattern**:
+- **Orchestrator → Subagent**: Only context/task/goal passed (no conversation history)
+- **Subagent → Orchestrator**: Only final result returned (no conversation history exposed)
+- **Fresh Session**: Each subagent execution gets new conversation_id
+- **Context Injection**: System prompt enhanced with orchestrator's context/task/goal
+
+**Code Example**:
+
+```rust
+// subagent_tool.rs
+pub struct SubagentTool {
+    name: &'static str,
+    description: &'static str,
+    parent_agent_id: String,
+    subagent_id: String,
+}
+
+impl SubagentTool {
+    pub fn new(parent_agent_id: String, subagent_id: String, description: String) -> Self {
+        // Box::leak for 'static lifetime required by Tool trait
+        let name = Box::leak(subagent_id.clone().into_boxed_str());
+        let desc = Box::leak(description.into_boxed_str());
+        Self { name, description: desc, parent_agent_id, subagent_id }
+    }
+}
+
+#[async_trait]
+impl Tool for SubagentTool {
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "context": {"type": "string", "description": "Summary of relevant information"},
+                "task": {"type": "string", "description": "Specific task to accomplish"},
+                "goal": {"type": "string", "description": "Overall goal/vision"}
+            },
+            "required": ["context", "task", "goal"]
+        }))
+    }
+
+    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        let context: String = serde_json::from_value(args["context"].clone())?;
+        let task: String = serde_json::from_value(args["task"].clone())?;
+        let goal: String = serde_json::from_value(args["goal"].clone())?;
+
+        // Create fresh executor with isolated context
+        let executor = create_subagent_executor(
+            &self.parent_agent_id,
+            &self.subagent_id,
+            context,
+            task,
+            goal,
+        ).await?;
+
+        // Execute and return only final result
+        let result = executor.execute_with_tools_loop(messages, on_event).await?;
+        Ok(json!(result))
+    }
+}
+```
+
+**Integration in Executor**:
+
+```rust
+// executor_v2.rs - ZeroAppExecutor::new()
+impl ZeroAppExecutor {
+    pub async fn new(config: AgentConfig, dirs: Arc<AppDirs>) -> Result<Self> {
+        let mut tool_registry = ToolRegistry::new();
+
+        // Register built-in tools
+        Self::register_builtin_tools(&mut tool_registry, &dirs);
+
+        // Register MCP tools
+        Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
+
+        // Register subagent tools from .subagents/ folder
+        Self::register_subagent_tools(&mut tool_registry, &config.agent_id, &dirs).await;
+
+        // ...
+    }
+}
+```
+
+**Verification**: Query `messages` table in `conversations.db` for `tool_calls` field to see subagent tools being called:
+```sql
+SELECT id, role, content, tool_calls FROM messages WHERE tool_calls IS NOT NULL;
+```
+
+**Example Output**:
+```json
+{
+  "tool_calls": [
+    {
+      "name": "inventory-checker",
+      "arguments": {
+        "context": "User has eggs, spinach, tomatoes...",
+        "task": "Validate and categorize these ingredients",
+        "goal": "Prepare organized ingredient list for recipe matching"
+      }
+    }
+  ]
+}
+```
+
+**Benefits**:
+1. **Automatic Discovery**: No manual tool registration required
+2. **Isolation**: Bidirectional conversation history isolation
+3. **Scalability**: Add subagents by adding folder + config
+4. **LLM-Driven**: Orchestrator decides which subagent to call based on context
+
 ### Agent Executor with Tool Calling Loop
 
 **Tool Calling Loop Pattern**:
