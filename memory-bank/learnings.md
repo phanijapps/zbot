@@ -300,6 +300,118 @@ Agent Zero uses a modern design system featuring:
 - `from-blue-500 to-purple-600` - Primary actions
 - `from-orange-500 to-pink-600` - Accent
 
+### Dark Mode CSS Variables
+
+**Critical**: The app uses CSS variables (`--background`, `--muted`, `--foreground`, etc.) in UI components, but these variables only work correctly when the `.dark` class is applied to the document.
+
+**Root Cause**: The `.dark` class was never applied to `document.body`, causing all CSS variables to resolve to their light mode (`:root`) values instead of dark mode (`.dark`) values. This resulted in white backgrounds throughout the app.
+
+**Solution**: Apply `.dark` class on app mount in `App.tsx`:
+```typescript
+useEffect(() => {
+  document.body.classList.add('dark');
+  document.documentElement.setAttribute('data-theme', 'dark');
+}, []);
+```
+
+**CSS Variables in `index.css`**:
+```css
+:root {
+  /* Light theme (DEFAULT - used without .dark class) */
+  --background: 0 0% 100%;  /* WHITE */
+  --foreground: 240 10% 3.9%;
+  --muted: 240 4.8% 95.9%;  /* ALMOST WHITE */
+  --muted-foreground: 240 3.8% 46.1%;
+}
+
+.dark {
+  /* Dark theme (only active with .dark class) */
+  --background: 240 10% 3.9%;  /* DARK */
+  --foreground: 0 0% 98%;
+  --muted: 240 3.7% 15.9%;  /* DARK GRAY */
+  --muted-foreground: 240 5% 64.9%;
+}
+```
+
+**Impact**: This fix affects ALL components using CSS variables:
+- `SelectContent` from `@/shared/ui/select` uses `bg-[#1a1a1a]` but also CSS variables for text
+- `TabsList` uses `bg-muted` (now dark gray instead of white)
+- `Dialog` components use various CSS variables
+
+**Key Learning**: When an app uses explicit dark colors (`bg-[#141414]`) everywhere but also has CSS variables in shared components, you MUST ensure the `.dark` class is applied, OR replace all CSS variables with explicit colors.
+
+### Dropdown Pattern: Radix UI Select vs Native Select
+
+**Standard Pattern**: Use Radix UI `<Select>` component from `@/shared/ui/select` instead of native `<select>` elements for consistency.
+
+**Why Radix UI Select?**
+- Consistent dark mode styling (native select dropdowns are hard to style consistently)
+- Better accessibility (keyboard navigation, ARIA attributes)
+- Portal rendering (dropdowns escape overflow containers)
+- Custom trigger styling
+- Consistent with other components (Dialog, Tabs, etc.)
+
+**Implementation Example** (from `ConfigYamlForm.tsx`):
+```typescript
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select';
+
+// Usage
+<Select value={providerId} onValueChange={setProviderId}>
+  <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+    <SelectValue placeholder="Select provider" />
+  </SelectTrigger>
+  <SelectContent>
+    {providers.map((provider) => (
+      <SelectItem key={provider.id} value={provider.id}>
+        {provider.name}
+      </SelectItem>
+    ))}
+  </SelectContent>
+</Select>
+```
+
+**Key Differences from Native Select**:
+| Feature | Native `<select>` | Radix UI `<Select>` |
+|---------|-------------------|---------------------|
+| Styling | Limited browser support | Full control with className |
+| onChange | `onChange(e => setValue(e.target.value))` | `onValueChange(value => setValue(value))` |
+| Options | `<option value="...">` | `<SelectItem value="...">` |
+| Placeholder | First option with empty value | `<SelectValue placeholder="..." />` |
+| Dropdown styling | `[&>option]:bg-gray-800` hack needed | `SelectContent` handles it |
+
+**Model Name Truncation Pattern**:
+```typescript
+<SelectItem key={model} value={model}>
+  {model.length > 30 ? model.substring(0, 30) + '...' : model}
+</SelectItem>
+```
+
+**Dynamic Model Selection** (when provider changes):
+```typescript
+const [availableModels, setAvailableModels] = useState<string[]>([]);
+const selectedProvider = providers.find(p => p.id === providerId);
+
+useEffect(() => {
+  if (selectedProvider) {
+    setAvailableModels(selectedProvider.models || []);
+  } else {
+    setAvailableModels([]);
+  }
+}, [providerId, providers]);
+
+// Clear model if not in new provider's models
+<Select
+  value={providerId}
+  onValueChange={(value) => {
+    setProviderId(value);
+    const newProvider = providers.find(p => p.id === value);
+    if (newProvider && !newProvider.models.includes(model)) {
+      setModel('');  // Clear invalid model
+    }
+  }}
+>
+```
+
 ### Component Patterns
 
 **Button with Variants (CVA)**
