@@ -127,7 +127,7 @@ export const PropertiesPanel: React.FC = () => {
                 </div>
               ) : (
                 <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
                   value={(selectedNode.data as SubagentNodeData).providerId || ''}
                   onChange={(e) => {
                     handleUpdate('providerId', e.target.value);
@@ -154,7 +154,7 @@ export const PropertiesPanel: React.FC = () => {
               </label>
               {availableModels.length > 0 ? (
                 <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
                   value={(selectedNode.data as SubagentNodeData).model || ''}
                   onChange={(e) => handleUpdate('model', e.target.value)}
                 >
@@ -226,7 +226,7 @@ export const PropertiesPanel: React.FC = () => {
                 </div>
               ) : (
                 <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
                   value={nodeData.providerId || ''}
                   onChange={(e) => {
                     handleUpdate('providerId', e.target.value);
@@ -252,7 +252,7 @@ export const PropertiesPanel: React.FC = () => {
               </label>
               {availableModels.length > 0 ? (
                 <select
-                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none [&>option]:bg-gray-800 [&>option]:text-white"
                   value={nodeData.model || ''}
                   onChange={(e) => handleUpdate('model', e.target.value)}
                 >
