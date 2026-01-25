@@ -17,25 +17,25 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
     switch (status) {
       case 'running':
         return {
-          border: 'border-blue-500 ring-2 ring-blue-200',
+          border: 'border-blue-500 shadow-lg shadow-blue-500/30',
           header: 'from-blue-500 to-blue-600',
           icon: <Loader2 size={16} className="animate-spin" />,
         };
       case 'completed':
         return {
-          border: 'border-green-500 ring-2 ring-green-200',
+          border: 'border-green-500 shadow-lg shadow-green-500/30',
           header: 'from-green-500 to-green-600',
           icon: <CheckCircle2 size={16} />,
         };
       case 'failed':
         return {
-          border: 'border-red-500 ring-2 ring-red-200',
+          border: 'border-red-500 shadow-lg shadow-red-500/30',
           header: 'from-red-500 to-red-600',
           icon: <XCircle size={16} />,
         };
       default:
         return {
-          border: selected ? 'border-amber-500' : 'border-gray-200',
+          border: 'border-gray-700',
           header: 'from-amber-500 to-orange-500',
           icon: <Crown size={16} />,
         };
@@ -47,9 +47,10 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
   return (
     <div
       className={cn(
-        'rounded-lg border-2 bg-white shadow-md min-w-[220px]',
+        'rounded-lg border-2 min-w-[220px]',
         'transition-all duration-200',
-        selected && status === 'idle' && 'shadow-lg ring-2 ring-amber-200',
+        'bg-gray-800 border-gray-700',
+        selected && status === 'idle' && 'border-amber-500 shadow-lg shadow-amber-500/20',
         statusStyles.border,
       )}
     >
@@ -57,7 +58,7 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
       <Handle
         type="target"
         position={Position.Left}
-        className="!w-3 !h-3 !bg-blue-500 !border-2 !border-white"
+        className="!w-3 !h-3 !bg-amber-500 !border-2 !border-gray-800"
       />
 
       {/* Header - Distinguished styling for orchestrator with status */}
@@ -75,7 +76,7 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
       {/* Body */}
       <div className="px-3 py-2 space-y-2">
         {description && (
-          <p className="text-xs text-gray-500 line-clamp-2">
+          <p className="text-xs text-gray-400 line-clamp-2">
             {description}
           </p>
         )}
@@ -83,10 +84,10 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
         <div className="flex items-center gap-1">
           <span className={cn(
             'text-xs px-2 py-0.5 rounded font-medium',
-            status === 'idle' ? 'bg-amber-100 text-amber-700' :
-            status === 'running' ? 'bg-blue-100 text-blue-700' :
-            status === 'completed' ? 'bg-green-100 text-green-700' :
-            'bg-red-100 text-red-700'
+            status === 'idle' ? 'bg-amber-500/20 text-amber-300' :
+            status === 'running' ? 'bg-blue-500/20 text-blue-300' :
+            status === 'completed' ? 'bg-green-500/20 text-green-300' :
+            'bg-red-500/20 text-red-300'
           )}>
             {model || 'No model'}
           </span>
@@ -100,9 +101,9 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
         {/* Status text */}
         {status !== 'idle' && (
           <div className="text-xs font-medium text-center pt-1">
-            {status === 'running' && <span className="text-blue-600">Running...</span>}
-            {status === 'completed' && <span className="text-green-600">Completed</span>}
-            {status === 'failed' && <span className="text-red-600">Failed</span>}
+            {status === 'running' && <span className="text-blue-400">Running...</span>}
+            {status === 'completed' && <span className="text-green-400">Completed</span>}
+            {status === 'failed' && <span className="text-red-400">Failed</span>}
           </div>
         )}
       </div>
@@ -111,7 +112,7 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
       <Handle
         type="source"
         position={Position.Right}
-        className="!w-3 !h-3 !bg-green-500 !border-2 !border-white"
+        className="!w-3 !h-3 !bg-amber-500 !border-2 !border-gray-800"
       />
     </div>
   );
