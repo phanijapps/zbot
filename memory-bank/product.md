@@ -2,7 +2,7 @@
 
 ## Product Vision
 
-Agent Zero is a desktop application for creating and managing AI agents, similar to Claude Desktop. It enables users to build specialized AI assistants with custom instructions, integrate with multiple LLM providers, extend capabilities through skills, and connect to external tools via MCP (Model Context Protocol) servers.
+Agent Zero is a desktop application for creating and managing AI agents, similar to Claude Desktop. It enables users to build specialized AI assistants with custom instructions, integrate with multiple LLM providers, extend capabilities through skills, connect to external tools via MCP (Model Context Protocol) servers, and create multi-agent orchestrators with visual workflow editing.
 
 ## Target Users
 
@@ -17,6 +17,8 @@ Agent Zero is a desktop application for creating and managing AI agents, similar
 - Configure provider, model, temperature, max tokens
 - Associate MCP servers and skills with agents
 - Full IDE-style editor for agent development
+- **Zero IDE**: Visual workflow editor for orchestrator agents
+- **Subagent System**: Create subagents that orchestrators can delegate to
 
 ### 2. Skill System
 - Create reusable skills following Agent Skills specification
@@ -26,30 +28,42 @@ Agent Zero is a desktop application for creating and managing AI agents, similar
 
 ### 3. Provider Management
 - Configure OpenAI-compatible API providers
-- Support for multiple providers (OpenAI, Anthropic, local models)
+- Support for multiple providers (OpenAI, Anthropic, local models, DeepSeek, Z.AI)
 - Per-agent provider and model selection
 
 ### 4. MCP Server Integration
 - Add Model Context Protocol servers for external tools
-- Servers run as stdio processes
+- Servers run as stdio processes or HTTP/SSE
 - Test server connectivity
 - Associate multiple MCP servers with agents
 
-### 5. File Explorer (IDE Features)
+### 5. Agent Channels (New)
+- **Daily Sessions**: Conversations organized by date with automatic summaries
+- **Knowledge Graph**: Semantic memory for entities and relationships
+- **Expandable History**: Browse past sessions with full context
+- **Voice Recording**: Record voice inputs for agents
+
+### 6. File Explorer (IDE Features)
 - Hierarchical file tree for agents/skills
 - Create, edit, delete files and folders
 - Import files into agent/skill folders
 - Markdown editor for .md files with live preview
 - Auto-save with debouncing
 
+### 7. Middleware System
+- **Summarization**: Automatically compress long conversations to fit context window
+- **Context Editing**: Clear old tool results to free up tokens
+- Configurable triggers and keep parameters
+- Custom summary prompts for domain-specific needs
+
 ## Technical Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop Framework | Tauri 2.9 |
+| Desktop Framework | Tauri 2.x |
 | Frontend | React 19 + TypeScript |
 | Styling | Tailwind CSS v4 + Radix UI |
-| Backend | Rust |
+| Backend | Rust (Cargo workspace) |
 | Build | Vite |
 
 ## Storage Locations
@@ -58,6 +72,8 @@ Agent Zero is a desktop application for creating and managing AI agents, similar
 - **Skills**: `~/.config/zeroagent/skills/`
 - **Providers**: `~/.config/zeroagent/providers.json`
 - **MCP Servers**: `~/.config/zeroagent/mcps.json`
+- **Conversations**: `~/.config/zeroagent/conversations.db`
+- **Agent Channels**: `{vault_path}/db/agent_channels.db`
 
 ## Key Differentiators
 
@@ -66,54 +82,67 @@ Agent Zero is a desktop application for creating and managing AI agents, similar
 3. **IDE-like**: Full file management for agents and skills
 4. **Multi-provider**: Not locked into single LLM provider
 5. **Open Standards**: Uses Agent Skills and MCP specifications
+6. **Visual Workflow**: Zero IDE for orchestrator agents with BPMN-inspired design
+7. **Multi-Agent**: Dynamic subagent tool system for agent orchestration
+8. **Long-term Memory**: Knowledge graph for semantic memory across sessions
 
 ## User Journey
 
-1. Add providers (OpenAI, Anthropic, etc.)
+1. Add providers (OpenAI, Anthropic, DeepSeek, Z.AI, etc.)
 2. Create or import skills for specific capabilities
 3. Configure MCP servers for external tool access
-4. Create agents with instructions, associate skills/MCPs
+4. Create agents:
+   - Simple agents: Configure with instructions, skills, MCPs
+   - Orchestrator agents: Use Zero IDE to design workflows with subagents
 5. Run conversations with agents
+
+## Orchestrator Agent Pattern
+
+Agents can be designed as **orchestrators** that coordinate subagents:
+
+### File Structure
+```
+~/.config/zeroagent/agents/my-orchestrator/
+├── config.yaml       # Orchestrator LLM config
+├── AGENTS.md         # Orchestrator instructions
+├── flow.json         # Visual workflow definition (optional)
+└── .subagents/       # Subagent definitions
+    ├── subagent-1/
+    │   ├── config.yaml
+    │   └── AGENTS.md
+    └── subagent-2/
+        ├── config.yaml
+        └── AGENTS.md
+```
+
+### How It Works
+1. Orchestrator agent is created with subagents in `.subagents/` folder
+2. Each subagent is automatically registered as a callable tool
+3. Orchestrator's LLM can call subagents with context/task/goal parameters
+4. Bidirectional isolation: Orchestrator only gets final results, subagents only get injected context
+
+### Example: Chef Bot
+- **Orchestrator**: chef-bot (z.ai/glm-4.6)
+- **Subagents**:
+  - inventory-checker (deepseek/deepseek-chat) - Validates ingredients
+  - recipe-finder (deepseek/deepseek-chat) - Finds matching recipes
+  - substituter (z.ai/glm-4.6) - Suggests ingredient substitutions
+  - instruction-formatter (z.ai/glm-4.7) - Formats cooking instructions
 
 ## Future Roadmap
 
 ### High Priority
+- React Flow integration for Zero IDE (professional workflow editor)
+- Automatic entity extraction for Knowledge Graph
+- Graph visualization UI for knowledge graph browsing
 
-**1. Modular Domain Architecture**
-- Domain-driven design with clear separation
-- Domain 1: Agent Runtime (LangChain.js, tools, MCP)
-- Domain 2: Conversation Runtime (SQLite, memory, execution)
-- UI layer unchanged - integrates via service layer
-
-**2. LangChain.js Integration**
-- LangChain 1.2.6 with `createAgent`
-- LangGraph 1.0+ for complex workflows
-- Integration as plug-and-play library in `src/domains/agent-runtime/langchain/`
-
-**3. Basic Tools Implementation**
-- Read Tool - Read file contents with offset/limit
-- Write Tool - Write files with directory creation
-- Grep Tool - Regex search with context
-- Glob Tool - Find files by pattern
-- Bash Tool - Cross-platform shell execution
-  - Linux/macOS: bash
-  - Windows: PowerShell
-  - WSL fallback for Windows
-- Python Tool - Execute Python code using venv in config location
-
-**4. Conversation Management**
-- SQLite at `~/.config/zeroagent/conversations.db`
-- Conversation list per agent
-- Message persistence with indexing
-- CRUD operations for conversations
-
-**5. Multi-turn Conversations**
-- Memory management (buffer window, summarization)
-- LangGraph StateGraph for agent execution
-- Streaming responses
-- Tool call handling
-
-### Low Priority
+### Medium Priority
 - Agent composition (agents using other agents)
 - Import/Export via zip files
 - Skill marketplace
+- Enhanced episodic memory with vector search
+
+### Low Priority
+- Session persistence across app restarts
+- Voice output for agents
+- Multi-language support

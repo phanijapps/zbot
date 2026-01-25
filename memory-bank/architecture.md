@@ -49,6 +49,7 @@ agentzero/
 │   │   └── constants/         # Routes, constants
 │   ├── features/              # Feature-based modules
 │   │   ├── agents/            # Agent management UI (IDE, panels)
+│   │   ├── agent-channels/    # Agent Channels (daily sessions, knowledge graph)
 │   │   ├── providers/         # LLM provider management
 │   │   ├── mcp/               # MCP server management
 │   │   ├── skills/            # Skill editor and management
@@ -70,6 +71,7 @@ agentzero/
 ├── application/               # Application-specific crates
 │   ├── agent-runtime/         # Agent executor with config, MCP, skills
 │   ├── agent-tools/           # Built-in tools (read, write, grep, python, etc.)
+│   ├── agent-channels/        # Agent channels (daily sessions, knowledge graph)
 │   ├── daily-sessions/        # Daily session management for agent channels
 │   ├── search-index/          # Tantivy-based full-text search
 │   ├── session-archive/       # Parquet-based long-term message archival
@@ -78,7 +80,9 @@ agentzero/
 │   ├── architecture.md        # This file
 │   ├── learnings.md           # Architecture learnings
 │   ├── known_issues.md        # Known issues tracking
-│   └── product.md             # Product definition
+│   ├── product.md             # Product definition
+│   ├── knowledge-graph.md     # Knowledge Graph feature guide
+│   └── WORKING_SCENARIOS.md   # User guide for working scenarios
 └── src-tauri/                 # Tauri application
     ├── templates/             # Default agents and skills templates
     │   ├── default-agents/    # Pre-configured agents (shipped with app)
@@ -120,6 +124,7 @@ The **application crates** are tightly coupled to the Tauri app and its specific
 |-------|---------|
 | `agent-runtime` | YAML config, executor, MCP managers, skill loading |
 | `agent-tools` | Built-in tools: Read, Write, Edit, Grep, Glob, Python, Knowledge Graph |
+| `agent-channels` | Agent channels UI and backend coordination |
 | `daily-sessions` | Daily session management with SQLite storage |
 | `search-index` | Tantivy-based full-text search across messages |
 | `session-archive` | Parquet-based long-term message archival |
@@ -305,6 +310,10 @@ src/
 │   │   ├── AddAgentDialog.tsx     # Add agent dialog
 │   │   ├── ConfigYamlForm.tsx     # YAML config form
 │   │   └── AGENTS.md              # Agent management docs
+│   ├── agent-channels/     # Agent Channels (daily sessions, knowledge graph)
+│   │   ├── AgentChannelPanel.tsx  # Main agent channels panel
+│   │   ├── KnowledgeGraphVisualizer.tsx # Knowledge graph visualization
+│   │   └── VoiceRecordingDialog.tsx # Voice recording feature
 │   ├── providers/          # LLM provider management
 │   │   ├── ProvidersPanel.tsx
 │   │   └── AddProviderDialog.tsx
@@ -480,6 +489,11 @@ LlmAgent Execution Loop
 │   - mcps[]
 │
 ├── AGENTS.md             # Agent instructions (markdown)
+├── .subagents/           # Subagent folder (for orchestrator agents)
+│   ├── {subagent-name}/
+│   │   ├── config.yaml
+│   │   └── AGENTS.md
+│   └── ...
 └── [user files]          # Additional files/folders
 ```
 
@@ -532,6 +546,49 @@ messages:
   - tool_calls (TEXT - JSON)
   - tool_call_id (TEXT)
   - created_at (TEXT)
+```
+
+### Agent Channels Database
+
+```
+~/.config/zeroagent/agent_channels.db (SQLite)
+
+daily_sessions:
+  - id (TEXT PRIMARY KEY)
+  - agent_id (TEXT)
+  - session_date (TEXT)
+  - message_count (INTEGER)
+  - summary (TEXT)
+  - previous_session_ids (TEXT - JSON array)
+  - created_at (TEXT)
+  - updated_at (TEXT)
+
+messages:
+  - id (TEXT PRIMARY KEY)
+  - session_id (TEXT)
+  - role (TEXT)
+  - content (TEXT)
+  - tool_calls (TEXT - JSON)
+  - tool_call_id (TEXT)
+  - created_at (TEXT)
+
+kg_entities:
+  - id (TEXT PRIMARY KEY)
+  - agent_id (TEXT)
+  - entity_type (TEXT)
+  - name (TEXT)
+  - properties (TEXT - JSON)
+  - mention_count (INTEGER)
+  - first_seen_at (TEXT)
+  - last_seen_at (TEXT)
+
+kg_relationships:
+  - id (TEXT PRIMARY KEY)
+  - source_entity_id (TEXT)
+  - target_entity_id (TEXT)
+  - relationship_type (TEXT)
+  - properties (TEXT - JSON)
+  - mention_count (INTEGER)
 ```
 
 ## Configuration Files
