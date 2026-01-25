@@ -68,7 +68,7 @@ function SelectContent({
         <SelectScrollUpButton />
         <SelectPrimitive.Viewport
           className={cn(
-            "p-1",
+            "p-1 bg-[#1a1a1a]",
             position === "popper" &&
               "h-[var(--radix-select-trigger-height)] w-full min-w-[var(--radix-select-trigger-width)]",
           )}
@@ -90,7 +90,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm text-gray-200 outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-white/10 hover:text-white focus:bg-white/10 focus:text-white [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
+        "relative flex w-full cursor-default items-center gap-2 rounded-sm py-1.5 pr-8 pl-2 text-sm text-gray-200 outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-white/10 hover:text-white focus:bg-white/10 focus:text-white data-[state=checked]:bg-blue-600/30 data-[state=checked]:text-white [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2",
         className,
       )}
       {...props}
@@ -126,7 +126,7 @@ function SelectScrollUpButton({
     <SelectPrimitive.ScrollUpButton
       data-slot="select-scroll-up-button"
       className={cn(
-        "flex cursor-default items-center justify-center py-1 text-gray-400",
+        "flex cursor-default items-center justify-center py-1 text-gray-400 bg-[#1a1a1a] hover:bg-white/5",
         className,
       )}
       {...props}
@@ -144,7 +144,7 @@ function SelectScrollDownButton({
     <SelectPrimitive.ScrollDownButton
       data-slot="select-scroll-down-button"
       className={cn(
-        "flex cursor-default items-center justify-center py-1 text-gray-400",
+        "flex cursor-default items-center justify-center py-1 text-gray-400 bg-[#1a1a1a] hover:bg-white/5",
         className,
       )}
       {...props}
