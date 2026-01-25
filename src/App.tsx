@@ -25,6 +25,13 @@ function App() {
   const [isCheckingVault, setIsCheckingVault] = useState(true);
   const { isSwitchingVault } = useVaults(); // Get vault switching state
 
+  // Apply dark theme to document - this ensures CSS variables work correctly
+  useEffect(() => {
+    document.body.classList.add('dark');
+    // Also set data-theme attribute for completeness
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }, []);
+
   useEffect(() => {
     checkVaultStatus();
   }, []);
