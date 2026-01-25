@@ -8,6 +8,7 @@ use crate::commands::agents::save_subagent;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 // ============================================================================
@@ -24,7 +25,7 @@ pub struct WorkflowNode {
     pub data: WorkflowNodeData,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct WorkflowPosition {
     pub x: f64,
     pub y: f64,
@@ -117,6 +118,39 @@ pub struct ValidationWarning {
     pub message: String,
 }
 
+/// Node layout storage - persists node positions
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NodeLayout {
+    #[serde(default)]
+    positions: HashMap<String, WorkflowPosition>,
+}
+
+impl NodeLayout {
+    fn new() -> Self {
+        Self {
+            positions: HashMap::new(),
+        }
+    }
+
+    fn save(&self, path: &PathBuf) -> Result<(), String> {
+        let json = serde_json::to_string_pretty(self)
+            .map_err(|e| format!("Failed to serialize layout: {}", e))?;
+        fs::write(path, json)
+            .map_err(|e| format!("Failed to write layout file: {}", e))?;
+        Ok(())
+    }
+
+    fn load(path: &PathBuf) -> Result<Self, String> {
+        if !path.exists() {
+            return Ok(Self::new());
+        }
+        let content = fs::read_to_string(path)
+            .map_err(|e| format!("Failed to read layout file: {}", e))?;
+        serde_json::from_str(&content)
+            .map_err(|e| format!("Failed to parse layout file: {}", e))
+    }
+}
+
 // ============================================================================
 // WORKFLOW COMMANDS
 // ============================================================================
@@ -135,6 +169,10 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
     let subagents_dir = agent_dir.join(".subagents");
     let agents_md_path = agent_dir.join("AGENTS.md");
     let config_path = agent_dir.join("config.yaml");
+    let layout_path = agent_dir.join(".workflow-layout.json");
+
+    // Load saved layout positions
+    let layout = NodeLayout::load(&layout_path)?;
 
     // Read agent config for orchestrator settings
     let (orchestrator_config, display_name, description) = if config_path.exists() {
@@ -142,7 +180,7 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
             .map_err(|e| format!("Failed to read config.yaml: {}", e))?;
         let config: AgentConfig = serde_yaml::from_str(&config_content)
             .map_err(|e| format!("Failed to parse config.yaml: {}", e))?;
-        
+
         let orchestrator = OrchestratorConfig {
             display_name: config.display_name.clone(),
             description: config.description.clone(),
@@ -179,10 +217,13 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
 
     // Create orchestrator node
     let orchestrator_id = format!("orchestrator-{}", agent_id);
+    let orchestrator_position = layout.positions.get(&orchestrator_id)
+        .copied()
+        .unwrap_or(WorkflowPosition { x: 100.0, y: 100.0 });
     nodes.push(WorkflowNode {
         id: orchestrator_id.clone(),
         node_type: "orchestrator".to_string(),
-        position: WorkflowPosition { x: 100.0, y: 100.0 },
+        position: orchestrator_position,
         data: {
             let mut map = serde_json::Map::new();
             map.insert("label".to_string(), json!(display_name));
@@ -201,12 +242,12 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
         let entries = fs::read_dir(&subagents_dir)
             .map_err(|e| format!("Failed to read .subagents directory: {}", e))?;
 
-        let mut y_offset = 300.0;
+        let y_offset = 300.0;
         let x_offset = 100.0;
 
         for (index, entry) in entries.flatten().enumerate() {
             let path = entry.path();
-            
+
             if !path.is_dir() {
                 continue;
             }
@@ -219,10 +260,16 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
             // Read subagent config
             if let Ok(subagent) = read_agent_folder(&path) {
                 let subagent_id = format!("subagent-{}", subagent.name);
-                
-                // Create subagent node
-                let x = x_offset + (index as f64 % 3.0) * 250.0;
-                let y = y_offset + (index as f64 / 3.0).floor() * 200.0;
+
+                // Use saved position or calculate default
+                let saved_position = layout.positions.get(&subagent_id);
+                let position = if let Some(pos) = saved_position {
+                    *pos
+                } else {
+                    let x = x_offset + (index as f64 % 3.0) * 250.0;
+                    let y = y_offset + (index as f64 / 3.0).floor() * 200.0;
+                    WorkflowPosition { x, y }
+                };
 
                 let mut node_data = serde_json::Map::new();
                 node_data.insert("label".to_string(), json!(subagent.display_name.clone()));
@@ -240,7 +287,7 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
                 nodes.push(WorkflowNode {
                     id: subagent_id.clone(),
                     node_type: "subagent".to_string(),
-                    position: WorkflowPosition { x, y },
+                    position,
                     data: WorkflowNodeData {
                         label: subagent.display_name.clone(),
                         extra: node_data,
@@ -274,10 +321,18 @@ pub async fn save_orchestrator_structure(
 ) -> Result<(), String> {
     let agents_dir = get_agents_dir()?;
     let agent_dir = agents_dir.join(&agent_id);
+    let layout_path = agent_dir.join(".workflow-layout.json");
 
     if !agent_dir.exists() {
         return Err(format!("Agent not found: {}", agent_id));
     }
+
+    // Save node positions to layout file
+    let mut layout = NodeLayout::new();
+    for node in &graph.nodes {
+        layout.positions.insert(node.id.clone(), node.position.clone());
+    }
+    layout.save(&layout_path)?;
 
     // Update orchestrator config if provided
     if let Some(orchestrator) = &graph.orchestrator {
@@ -294,7 +349,7 @@ pub async fn save_orchestrator_structure(
 
         // Extract subagent config from node data
         let subagent_config = extract_subagent_config(&node.data)?;
-        
+
         // Track this subagent
         existing_subagents.insert(subagent_config.subagent_id.clone());
 
