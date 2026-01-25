@@ -188,3 +188,79 @@ OpenAI's API requires that after a `tool_calls` message, the next message MUST b
 ### Notes
 
 The executor cache (`EXECUTOR_CACHE`) maintains session across multiple message turns, allowing multi-turn conversations. The current conversational approach works well without requiring framework-level changes for pausing execution.
+
+---
+
+## ~~Agent Channel Navigation Loop After Workflow IDE~~ ✅ RESOLVED
+
+**Status:** Resolved
+**Priority:** Medium
+**Component:** Frontend / `AgentChannelPanel.tsx`
+**Resolution Date:** 2025-01-25
+
+### Description
+
+When returning from the Workflow IDE to the Agent Channel Panel, users could only select the agent they came from. Selecting any other agent would automatically revert back to the previously active agent. The issue would only resolve after reloading the application.
+
+### Root Cause
+
+In `AgentChannelPanel.tsx`, the `selectedAgent` state was included in the dependency array of the restoration useEffect hook. This caused a problematic loop:
+
+1. User navigates to Workflow IDE with `location.state.restoreAgentId = agentA`
+2. User returns to Agent Channel Panel
+3. Restoration useEffect runs, sets `selectedAgent = agentA`
+4. Because `selectedAgent` is in the dependency array, this triggers the useEffect again
+5. The useEffect sees `restoreAgentId` is still `agentA` and sets `selectedAgent = agentA` again
+6. When user tries to select a different agent, the restoration logic overwrites it
+
+### Solution
+
+Removed `selectedAgent` from the dependency array of the restoration useEffect. The restoration should only run when `location.state` changes (navigation) or when `agents` list changes, not when `selectedAgent` changes.
+
+**Before:**
+```typescript
+useEffect(() => {
+  const state = location.state as { restoreAgentId?: string } | null;
+  const restoreAgentId = state?.restoreAgentId;
+  // ... restoration logic
+}, [location.state, agents, selectedAgent]);  // selectedAgent caused the loop
+```
+
+**After:**
+```typescript
+useEffect(() => {
+  const state = location.state as { restoreAgentId?: string } | null;
+  const restoreAgentId = state?.restoreAgentId;
+  // ... restoration logic
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+}, [location.state, agents]);  // Removed selectedAgent from deps
+```
+
+### Changes Made
+
+- `src/features/agent-channels/AgentChannelPanel.tsx` - Removed `selectedAgent` from dependency array
+
+---
+
+## Draft Features
+
+The following features are marked as **DRAFT** and are not yet fully implemented:
+
+### Conditional Node
+- **Location:** `src/features/workflow-ide/components/nodes/ConditionalNode.tsx`
+- **Status:** DRAFT/PLACEHOLDER
+- **Purpose:** BPMN-style diamond gateway for branching logic in workflows
+- **TODO:** Implement conditional branching logic, condition evaluation, and routing
+
+## Current TODOs
+
+The following TODO comments exist in the codebase:
+
+1. **ConditionalNode.tsx**: Display condition on node
+2. **Workflow IDE execution visualization**: Complete execution flow visualization (see `WorkflowStore.ts`)
+
+## Known Limitations
+
+1. **Conditional Execution**: The Conditional node is a draft placeholder and does not yet execute conditional logic
+2. **Parallel Execution**: Workflow templates show parallel patterns, but execution is currently sequential
+3. **Workflow Execution**: Backend execution of workflow-defined orchestrators is not yet implemented

@@ -1,16 +1,20 @@
 import { memo } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Crown, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Crown, Loader2, CheckCircle2, XCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 import { cn } from '@/core/utils/cn';
+import { useWorkflowStore } from '../../stores/workflowStore';
 
 type ExecutionStatus = 'idle' | 'running' | 'completed' | 'failed';
 
-export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
+export const OrchestratorNode = memo(({ id, data, selected }: NodeProps) => {
   const description = data.description as string | undefined;
   const displayName = data.displayName as string | undefined;
   const model = data.model as string | undefined;
   const providerId = data.providerId as string | undefined;
   const status = (data._executionStatus as ExecutionStatus) || 'idle';
+
+  // Get validation state for this node
+  const validation = useWorkflowStore((s) => s.validation.nodes[id || '']);
 
   // Status styles
   const getStatusStyles = () => {
@@ -54,10 +58,10 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
         statusStyles.border,
       )}
     >
-      {/* Input Handle */}
+      {/* Input Handle - at top for incoming connections */}
       <Handle
         type="target"
-        position={Position.Left}
+        position={Position.Top}
         className="!w-3 !h-3 !bg-amber-500 !border-2 !border-gray-800"
       />
 
@@ -106,12 +110,30 @@ export const OrchestratorNode = memo(({ data, selected }: NodeProps) => {
             {status === 'failed' && <span className="text-red-400">Failed</span>}
           </div>
         )}
+
+        {/* Validation indicators */}
+        {validation && (validation.errors.length > 0 || validation.warnings.length > 0) && (
+          <div className="flex flex-col gap-1 pt-2 border-t border-gray-700">
+            {validation.errors.length > 0 && (
+              <div className="flex items-center gap-1 text-xs text-red-400">
+                <AlertCircle size={12} />
+                <span>{validation.errors.length} error{validation.errors.length > 1 ? 's' : ''}</span>
+              </div>
+            )}
+            {validation.warnings.length > 0 && (
+              <div className="flex items-center gap-1 text-xs text-amber-400">
+                <AlertTriangle size={12} />
+                <span>{validation.warnings.length} warning{validation.warnings.length > 1 ? 's' : ''}</span>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* Output Handle */}
+      {/* Output Handle - at bottom for outgoing connections */}
       <Handle
         type="source"
-        position={Position.Right}
+        position={Position.Bottom}
         className="!w-3 !h-3 !bg-amber-500 !border-2 !border-gray-800"
       />
     </div>

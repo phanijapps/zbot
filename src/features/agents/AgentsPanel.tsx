@@ -175,7 +175,7 @@ export function AgentsPanel() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => navigate(`/workflow/${agent.id}`)}
+                      onClick={() => navigate(`/workflow/${agent.id}`, { state: { from: '/agents' } })}
                       className="text-gray-400 hover:text-purple-400 h-7 w-7 p-0"
                       title="Open Workflow IDE"
                     >

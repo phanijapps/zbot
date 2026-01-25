@@ -22,7 +22,7 @@ interface WorkflowEditorProps {
 
 const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId }) => {
   const reactFlowWrapper = useRef<HTMLDivElement>(null);
-  const { screenToFlowPosition } = useReactFlow();
+  const { screenToFlowPosition, getNodes } = useReactFlow();
 
   // Store
   const {
@@ -32,22 +32,30 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
     onEdgesChange,
     onConnect,
     addNode,
+    setNodes,
     setSelectedNodeId,
     setSelectedEdgeId,
     execution,
   } = useWorkflowStore();
 
-  // Enhance nodes with execution status for visualization
+  // Enhance nodes with execution status for visualization (while preserving position references)
   const enhancedNodes = useMemo(() => {
     return nodes.map(node => {
       const nodeState = execution.nodeStates?.[node.id];
-      return {
-        ...node,
-        data: {
-          ...node.data,
-          _executionStatus: nodeState?.status || 'idle',
-        },
-      };
+
+      // Only create new data object if execution status exists, otherwise preserve original
+      if (nodeState?.status && nodeState.status !== 'idle') {
+        return {
+          ...node,
+          data: {
+            ...node.data,
+            _executionStatus: nodeState.status,
+          },
+        };
+      }
+
+      // Return original node reference to preserve position updates
+      return node;
     });
   }, [nodes, execution.nodeStates]);
 
@@ -104,6 +112,27 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
     setSelectedEdgeId(null);
   }, [setSelectedNodeId, setSelectedEdgeId]);
 
+  // Node drag stop - ensure positions are synced to store
+  const onNodeDragStop = useCallback(() => {
+    // Get the current nodes from ReactFlow's internal state (which has latest positions)
+    const reactFlowNodes = getNodes();
+
+    // Update store nodes with positions from ReactFlow's internal state
+    setNodes(
+      nodes.map((node) => {
+        const rfNode = reactFlowNodes.find((n) => n.id === node.id);
+        if (rfNode && rfNode.position) {
+          // Update position while preserving all other node properties
+          return {
+            ...node,
+            position: rfNode.position,
+          };
+        }
+        return node;
+      })
+    );
+  }, [getNodes, setNodes, nodes]);
+
   return (
     <div className="flex h-full">
       {/* Left: Node Palette */}
@@ -122,6 +151,7 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
           onNodeClick={onNodeClick}
           onEdgeClick={onEdgeClick}
           onPaneClick={onPaneClick}
+          onNodeDragStop={onNodeDragStop}
           nodeTypes={nodeTypes}
           fitView
           snapToGrid
@@ -129,7 +159,29 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
           deleteKeyCode={['Backspace', 'Delete']}
         >
           <Background variant={BackgroundVariant.Dots} gap={15} size={1} />
-          <Controls />
+          <Controls
+            style={{
+              display: 'flex',
+              gap: '4px',
+            }}
+          >
+            <style>{`
+              .react-flow__controls-button {
+                background: #374151 !important;
+                border: 1px solid #4b5563 !important;
+                color: #e5e7eb !important;
+              }
+              .react-flow__controls-button:hover {
+                background: #4b5563 !important;
+              }
+              .react-flow__controls-button svg {
+                fill: #e5e7eb !important;
+              }
+              .react-flow__minimap-mask {
+                fill: rgba(0, 0, 0, 0.6) !important;
+              }
+            `}</style>
+          </Controls>
           <MiniMap
             nodeColor={(node) => {
               // Check execution status for color
@@ -137,7 +189,7 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
               if (nodeState?.status === 'running') return '#3b82f6';
               if (nodeState?.status === 'completed') return '#22c55e';
               if (nodeState?.status === 'failed') return '#ef4444';
-              
+
               switch (node.type) {
                 case 'orchestrator':
                   return '#f59e0b';
@@ -149,6 +201,9 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
             }}
             zoomable
             pannable
+            style={{
+              backgroundColor: '#1f2937',
+            }}
           />
         </ReactFlow>
       </div>
@@ -162,6 +217,15 @@ const WorkflowEditorInner: React.FC<WorkflowEditorProps> = ({ agentId: _agentId 
 // Helper: Get default data for node type
 function getDefaultNodeData(type: string): Record<string, any> {
   switch (type) {
+    case 'start':
+      return {
+        label: 'Start',
+        triggerType: 'manual',
+      };
+    case 'end':
+      return {
+        label: 'End',
+      };
     case 'orchestrator':
       return {
         label: 'Orchestrator',
@@ -179,7 +243,7 @@ function getDefaultNodeData(type: string): Record<string, any> {
     case 'subagent':
       return {
         label: 'Subagent',
-        subagentId: `subagent-${Date.now()}`,
+        subagentId: `subagent_${Date.now()}`,
         displayName: 'New Subagent',
         description: '',
         providerId: '',

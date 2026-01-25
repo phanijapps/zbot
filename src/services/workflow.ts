@@ -118,6 +118,7 @@ export function generateEdgeId(source: string, target: string): string {
 
 /**
  * Create a new orchestrator node
+ * @deprecated Orchestrator is now flow-level config, not a node. Use for migration only.
  */
 export function createOrchestratorNode(config?: Partial<OrchestratorConfig>): WorkflowNode {
   return {

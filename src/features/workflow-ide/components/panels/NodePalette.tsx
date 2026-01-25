@@ -1,5 +1,5 @@
 import React from 'react';
-import { Crown, Bot } from 'lucide-react';
+import { Bot, Play, Square, HelpCircle } from 'lucide-react';
 
 interface NodeTypeDefinition {
   type: string;
@@ -11,11 +11,18 @@ interface NodeTypeDefinition {
 
 const nodeDefinitions: NodeTypeDefinition[] = [
   {
-    type: 'orchestrator',
-    label: 'Orchestrator',
-    icon: <Crown size={18} />,
-    description: 'Main coordinating agent',
-    color: 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20',
+    type: 'start',
+    label: 'Start',
+    icon: <Play size={18} fill="currentColor" />,
+    description: 'Workflow entry point',
+    color: 'bg-green-500/10 border-green-500/30 text-green-300 hover:bg-green-500/20',
+  },
+  {
+    type: 'end',
+    label: 'End',
+    icon: <Square size={18} fill="currentColor" />,
+    description: 'Workflow exit point',
+    color: 'bg-red-500/10 border-red-500/30 text-red-300 hover:bg-red-500/20',
   },
   {
     type: 'subagent',
@@ -24,13 +31,20 @@ const nodeDefinitions: NodeTypeDefinition[] = [
     description: 'Specialized worker agent',
     color: 'bg-purple-500/10 border-purple-500/30 text-purple-300 hover:bg-purple-500/20',
   },
+  {
+    type: 'conditional',
+    label: 'Conditional',
+    icon: <HelpCircle size={18} />,
+    description: 'Branching logic (draft)',
+    color: 'bg-amber-500/10 border-amber-500/30 text-amber-300 hover:bg-amber-500/20',
+  },
   // Future node types:
   // {
   //   type: 'tool',
   //   label: 'Tool',
   //   icon: <Wrench size={18} />,
   //   description: 'Built-in or MCP tool',
-  //   color: 'bg-green-500/10 border-green-500/30 text-green-300 hover:bg-green-500/20',
+  //   color: 'bg-blue-500/10 border-blue-500/30 text-blue-300 hover:bg-blue-500/20',
   // },
 ];
 
@@ -71,7 +85,7 @@ export const NodePalette: React.FC = () => {
         </h4>
         <p className="text-xs text-gray-500">
           Drag nodes onto the canvas to build your workflow. Connect nodes by
-          dragging from output handles (right) to input handles (left).
+          dragging from bottom handles to top handles for top-down flow.
         </p>
       </div>
     </div>

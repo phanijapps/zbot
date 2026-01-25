@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Settings, X, Loader2, Crown } from 'lucide-react';
-import { useWorkflowStore, selectSelectedNode } from '../../stores/workflowStore';
+import { Settings, X, Loader2, Crown, ArrowRight, Play, Square, HelpCircle } from 'lucide-react';
+import { useWorkflowStore, selectSelectedNode, selectSelectedEdge } from '../../stores/workflowStore';
 import type { SubagentNodeData } from '../../types/workflow';
 import * as providerService from '@/services/provider';
 import type { Provider } from '@/shared/types';
@@ -8,10 +8,13 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 
 export const PropertiesPanel: React.FC = () => {
   const selectedNode = useWorkflowStore(selectSelectedNode);
+  const selectedEdge = useWorkflowStore(selectSelectedEdge);
   const orchestratorConfig = useWorkflowStore((s) => s.orchestratorConfig);
   const updateNode = useWorkflowStore((s) => s.updateNode);
   const deleteNode = useWorkflowStore((s) => s.deleteNode);
   const updateOrchestratorConfig = useWorkflowStore((s) => s.updateOrchestratorConfig);
+  const updateEdge = useWorkflowStore((s) => s.updateEdge);
+  const setSelectedEdgeId = useWorkflowStore((s) => s.setSelectedEdgeId);
 
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loadingProviders, setLoadingProviders] = useState(true);
@@ -61,7 +64,58 @@ export const PropertiesPanel: React.FC = () => {
     updateOrchestratorConfig({ [field]: value });
   }, [updateOrchestratorConfig]);
 
-  // Show Orchestrator config panel when no node is selected
+  // Show Edge properties panel when edge is selected
+  if (selectedEdge) {
+    return (
+      <div className="w-80 border-l border-gray-800 bg-gray-900 overflow-y-auto">
+        {/* Header */}
+        <div className="flex items-center justify-between p-4 border-b border-gray-800 bg-gray-950">
+          <div className="flex items-center gap-2">
+            <ArrowRight size={18} className="text-blue-400" />
+            <h3 className="font-semibold text-white">Connection</h3>
+          </div>
+          <button
+            onClick={() => setSelectedEdgeId(null)}
+            className="p-1 text-gray-400 hover:text-white hover:bg-gray-800 rounded"
+            title="Deselect"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        {/* Edge Properties */}
+        <div className="p-4 space-y-4">
+          <div>
+            <label className="block text-xs font-medium text-gray-400 mb-1">
+              Label
+            </label>
+            <input
+              type="text"
+              className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white focus:border-blue-500 focus:outline-none"
+              value={(selectedEdge.label as string) || ''}
+              onChange={(e: React.ChangeEvent<HTMLInputElement>) => updateEdge(selectedEdge.id, { label: e.target.value })}
+              placeholder="Connection label (optional)"
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              Optional label to describe this connection
+            </p>
+          </div>
+
+          {/* Connection info */}
+          <div className="pt-4 border-t border-gray-800">
+            <p className="text-xs text-gray-500">
+              From: <span className="text-gray-300 font-mono">{selectedEdge.source}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              To: <span className="text-gray-300 font-mono">{selectedEdge.target}</span>
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Show Orchestrator config panel when no node or edge is selected
   if (!selectedNode) {
     return (
       <div className="w-80 border-l border-gray-800 bg-gray-900 overflow-y-auto">
@@ -238,6 +292,12 @@ export const PropertiesPanel: React.FC = () => {
   // Get node type info
   const getNodeTypeInfo = () => {
     switch (selectedNode.type) {
+      case 'start':
+        return { icon: <Play size={18} className="text-green-400" fill="currentColor" />, label: 'Start Event' };
+      case 'end':
+        return { icon: <Square size={18} className="text-red-400" fill="currentColor" />, label: 'End Event' };
+      case 'conditional':
+        return { icon: <HelpCircle size={18} className="text-amber-400" />, label: 'Conditional (Draft)' };
       case 'orchestrator':
         return { icon: <Crown size={18} className="text-amber-400" />, label: 'Orchestrator' };
       case 'subagent':
@@ -292,6 +352,160 @@ export const PropertiesPanel: React.FC = () => {
             onChange={(e) => handleUpdate('description', e.target.value)}
           />
         </div>
+
+        {/* Start node specific fields */}
+        {selectedNode.type === 'start' && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Trigger Type
+              </label>
+              <Select
+                value={nodeData.triggerType || 'manual'}
+                onValueChange={(value) => handleUpdate('triggerType', value)}
+              >
+                <SelectTrigger className="bg-white/5 border-white/10 text-white h-9 text-sm">
+                  <SelectValue placeholder="Select trigger type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="manual">Manual (via chat)</SelectItem>
+                  <SelectItem value="scheduled">Scheduled (cron)</SelectItem>
+                  <SelectItem value="webhook">Webhook</SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-gray-500 mt-1">
+                How this workflow is triggered
+              </p>
+            </div>
+
+            {nodeData.triggerType === 'scheduled' && (
+              <div>
+                <label className="block text-xs font-medium text-gray-400 mb-1">
+                  Schedule (Cron Expression)
+                </label>
+                <input
+                  type="text"
+                  className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm font-mono text-white focus:border-blue-500 focus:outline-none"
+                  value={nodeData.schedule || ''}
+                  onChange={(e) => handleUpdate('schedule', e.target.value)}
+                  placeholder="0 9 * * * (daily at 9am)"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Standard cron expression for scheduling
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* End node - minimal config */}
+        {selectedNode.type === 'end' && (
+          <div className="text-center py-4">
+            <p className="text-sm text-gray-400">
+              This is the workflow exit point. No configuration needed.
+            </p>
+          </div>
+        )}
+
+        {/* Conditional node - DRAFT */}
+        {selectedNode.type === 'conditional' && (
+          <>
+            <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 mb-4">
+              <div className="flex items-center gap-2 text-amber-300 text-sm font-medium mb-1">
+                <HelpCircle size={14} />
+                <span>DRAFT - Not Yet Implemented</span>
+              </div>
+              <p className="text-xs text-amber-200/70">
+                Conditional branching is a work in progress. This node will evaluate conditions and route to different branches.
+              </p>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-gray-400 mb-1">
+                Condition Expression
+              </label>
+              <textarea
+                className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-sm text-white font-mono focus:border-blue-500 focus:outline-none resize-none"
+                rows={3}
+                value={nodeData.condition || ''}
+                onChange={(e) => handleUpdate('condition', e.target.value)}
+                placeholder="data.inputType === 'premium'"
+              />
+              <p className="text-xs text-gray-500 mt-1">
+                JavaScript expression that evaluates to true/false
+              </p>
+            </div>
+
+            <div className="pt-4 border-t border-gray-800">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs font-medium text-gray-400">
+                  Branches
+                </label>
+                <button
+                  type="button"
+                  className="text-xs text-blue-400 hover:text-blue-300"
+                  onClick={() => {
+                    const branches = nodeData.branches || [];
+                    handleUpdate('branches', [
+                      ...branches,
+                      { id: crypto.randomUUID(), name: 'New Branch', condition: 'true' }
+                    ]);
+                  }}
+                >
+                  + Add Branch
+                </button>
+              </div>
+
+              {(!nodeData.branches || nodeData.branches.length === 0) ? (
+                <p className="text-xs text-gray-500 text-center py-4">
+                  No branches defined. Add branches to configure conditional paths.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {(nodeData.branches as Array<{ id: string; name: string; condition: string }>).map((branch, index) => (
+                    <div key={branch.id} className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-xs font-medium text-gray-300">Branch {index + 1}</span>
+                        <button
+                          type="button"
+                          className="text-xs text-red-400 hover:text-red-300"
+                          onClick={() => {
+                            const branches = nodeData.branches || [];
+                            handleUpdate('branches', branches.filter((_: any, i: number) => i !== index));
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-white mb-2 focus:border-blue-500 focus:outline-none"
+                        value={branch.name}
+                        onChange={(e) => {
+                          const branches = [...(nodeData.branches || [])];
+                          branches[index] = { ...branch, name: e.target.value };
+                          handleUpdate('branches', branches);
+                        }}
+                        placeholder="Branch name"
+                      />
+                      <input
+                        type="text"
+                        className="w-full px-2 py-1 bg-gray-700 border border-gray-600 rounded text-sm text-white font-mono focus:border-blue-500 focus:outline-none"
+                        value={branch.condition}
+                        onChange={(e) => {
+                          const branches = [...(nodeData.branches || [])];
+                          branches[index] = { ...branch, condition: e.target.value };
+                          handleUpdate('branches', branches);
+                        }}
+                        placeholder="Condition (e.g., data.value > 10)"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {/* Subagent-specific fields */}
         {selectedNode.type === 'subagent' && (

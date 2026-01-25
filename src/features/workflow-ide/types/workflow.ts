@@ -9,19 +9,33 @@ export interface BaseNodeData {
   [key: string]: any; // Index signature for XY Flow compatibility
 }
 
-export interface OrchestratorNodeData extends BaseNodeData {
-  agentId: string;
-  displayName: string;
-  description: string;
-  providerId: string;
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  systemPrompt: string;
-  skills: string[];
-  mcps: string[];
+// Start Node Data - BPMN start event
+export interface StartNodeData extends BaseNodeData {
+  triggerType: 'manual' | 'scheduled' | 'webhook';
+  schedule?: string; // cron expression for scheduled triggers
 }
 
+// End Node Data - BPMN end event
+export interface EndNodeData extends BaseNodeData {
+  // No additional properties needed
+}
+
+// Conditional Node Data - BPMN gateway for branching logic (DRAFT)
+export interface ConditionalNodeData extends BaseNodeData {
+  condition: string;           // Expression to evaluate
+  branches: ConditionalBranch[]; // Possible branches
+  defaultBranch?: string;       // Default branch ID if no conditions match
+}
+
+// Conditional branch definition
+export interface ConditionalBranch {
+  id: string;
+  name: string;
+  condition: string;           // JavaScript expression to evaluate
+  targetNodeId?: string;        // Connected node for this branch
+}
+
+// Subagent Node Data - Worker agent that orchestrator can delegate to
 export interface SubagentNodeData extends BaseNodeData {
   subagentId: string;        // Folder name in .subagents/
   displayName: string;
@@ -31,6 +45,21 @@ export interface SubagentNodeData extends BaseNodeData {
   temperature: number;
   maxTokens: number;
   systemPrompt: string;      // Content of AGENTS.md
+  skills: string[];
+  mcps: string[];
+}
+
+// Orchestrator Node Data - Legacy: Only for migration purposes
+// Orchestrator is now flow-level config, not a node
+export interface OrchestratorNodeData extends BaseNodeData {
+  agentId: string;
+  displayName: string;
+  description: string;
+  providerId: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+  systemPrompt: string;
   skills: string[];
   mcps: string[];
 }
@@ -51,8 +80,11 @@ export interface OutputNodeData extends BaseNodeData {
 
 // Union type for all node data
 export type WorkflowNodeData =
-  | OrchestratorNodeData
+  | StartNodeData
+  | EndNodeData
+  | ConditionalNodeData   // DRAFT - Conditional branching
   | SubagentNodeData
+  | OrchestratorNodeData  // Legacy: for migration only
   | ToolNodeData
   | InputNodeData
   | OutputNodeData;
@@ -92,16 +124,16 @@ export interface SubagentConfig {
 }
 
 export interface OrchestratorConfig {
-  agentId: string;
   displayName: string;
-  description: string;
+  description?: string;
   providerId: string;
   model: string;
   temperature: number;
   maxTokens: number;
-  skills: string[];
+  systemInstructions: string;
   mcps: string[];
-  subagents: Record<string, SubagentConfig>;  // key = subagent folder name
+  skills: string[];
+  middleware?: string;
 }
 
 // ============================================================================
@@ -133,3 +165,21 @@ export interface ExecutionLog {
   nodeId?: string;
   message: string;
 }
+
+// ============================================================================
+// Validation State
+// ============================================================================
+
+export interface NodeValidation {
+  nodeId: string;
+  errors: string[];
+  warnings: string[];
+}
+
+export interface WorkflowValidation {
+  isValid: boolean;
+  nodeErrors: number;
+  nodeWarnings: number;
+  nodes: Record<string, NodeValidation>;
+}
+

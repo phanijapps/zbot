@@ -1,40 +1,207 @@
 import React, { useEffect, useCallback, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2, Play } from 'lucide-react';
-import { listen } from '@tauri-apps/api/event';
-import { invoke } from '@tauri-apps/api/core';
+import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { ArrowLeft, Save, Loader2, Undo, Redo, Plus } from 'lucide-react';
 import { WorkflowEditor } from './components/WorkflowEditor';
+import { NewAgentDialog } from './components/NewAgentDialog';
 import { useWorkflowStore } from './stores/workflowStore';
-import { useWorkflowExecution } from './hooks/useWorkflowExecution';
 import * as workflowService from '@/services/workflow';
 
 export const WorkflowIDEPage: React.FC = () => {
   const { agentId } = useParams<{ agentId: string }>();
   const navigate = useNavigate();
-  const { nodes, edges, orchestratorConfig, setNodes, setEdges, isDirty, setIsDirty, setOrchestratorConfig } = useWorkflowStore();
+  const location = useLocation();
+  const { nodes, edges, setNodes, setEdges, isDirty, setIsDirty, setOrchestratorConfig, undo, redo, canUndo, canRedo } = useWorkflowStore();
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
-  const [executing, setExecuting] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [showNewAgentDialog, setShowNewAgentDialog] = React.useState(false);
 
-  const unlistenRef = useRef<(() => void) | null>(null);
-  const isMountedRef = useRef(true);
+  // Store navigation state for back navigation
+  const fromLocationRef = useRef<string>('/');
+  const restoreAgentIdRef = useRef<string | undefined>(undefined);
 
-  // Execution tracking hook
-  const { handleEvent: handleExecutionEvent, clearExecution } = useWorkflowExecution(nodes);
+  // Capture where we came from and which agent to restore
+  useEffect(() => {
+    const state = location.state as { from?: string; restoreAgentId?: string } | null;
+    fromLocationRef.current = state?.from || '/';
+    restoreAgentIdRef.current = state?.restoreAgentId;
+  }, [location.state]);
 
   // Load workflow from backend
   const loadWorkflow = useCallback(async () => {
     if (!agentId) return;
-    
+
     setLoading(true);
     setError(null);
-    
+
     try {
       const graph = await workflowService.getOrchestratorStructure(agentId);
-      
+
+      // Migration: Convert Orchestrator node to flow-level config, add Start/End nodes
+      let migratedNodes = graph.nodes.filter(node => node.type);
+      let migratedEdges = graph.edges.map(edge => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        label: edge.label,
+      }));
+
+      // Check if workflow has an orchestrator node (old format)
+      const orchestratorNode = migratedNodes.find(n => n.type === 'orchestrator');
+
+      if (orchestratorNode) {
+        console.log('[loadWorkflow] Migrating workflow with Orchestrator node');
+
+        // Extract orchestrator config from node data
+        const orchestratorData = orchestratorNode.data as any;
+        const orchestratorConfig = orchestratorData ? {
+          displayName: orchestratorData.displayName || orchestratorData.label || 'Orchestrator',
+          description: orchestratorData.description || '',
+          providerId: orchestratorData.providerId || '',
+          model: orchestratorData.model || '',
+          temperature: orchestratorData.temperature || 0.7,
+          maxTokens: orchestratorData.maxTokens || 2000,
+          systemInstructions: orchestratorData.instructions || orchestratorData.systemPrompt || '',
+          mcps: orchestratorData.mcps || [],
+          skills: orchestratorData.skills || [],
+        } : undefined;
+
+        // Set orchestrator config at flow level
+        if (orchestratorConfig) {
+          setOrchestratorConfig(orchestratorConfig);
+        }
+
+        // Remove orchestrator node
+        migratedNodes = migratedNodes.filter(n => n.type !== 'orchestrator');
+
+        // Remove edges connected to orchestrator
+        const orchestratorId = orchestratorNode.id;
+        migratedEdges = migratedEdges.filter(e =>
+          e.source !== orchestratorId && e.target !== orchestratorId
+        );
+
+        // Add Start node
+        const startNodeId = `start-${Date.now()}`;
+        const startNode = {
+          id: startNodeId,
+          type: 'start' as const,
+          position: { x: 100, y: 100 },
+          data: {
+            label: 'Start',
+            triggerType: 'manual',
+          },
+        };
+        migratedNodes.push(startNode);
+
+        // Add End node
+        const endNodeId = `end-${Date.now()}`;
+        const endNode = {
+          id: endNodeId,
+          type: 'end' as const,
+          position: { x: 100, y: 500 },
+          data: {
+            label: 'End',
+          },
+        };
+        migratedNodes.push(endNode);
+
+        // Connect Start to first subagent (if any) or End
+        const firstSubagent = migratedNodes.find(n => n.type === 'subagent');
+        if (firstSubagent) {
+          migratedEdges.push({
+            id: `edge-${startNodeId}-${firstSubagent.id}`,
+            source: startNodeId,
+            target: firstSubagent.id,
+            label: undefined,
+          });
+        } else {
+          // No subagents, connect Start directly to End
+          migratedEdges.push({
+            id: `edge-${startNodeId}-${endNodeId}`,
+            source: startNodeId,
+            target: endNodeId,
+            label: undefined,
+          });
+        }
+
+        // Connect last subagent to End (if any)
+        const lastSubagent = migratedNodes.filter(n => n.type === 'subagent').pop();
+        if (lastSubagent) {
+          migratedEdges.push({
+            id: `edge-${lastSubagent.id}-${endNodeId}`,
+            source: lastSubagent.id,
+            target: endNodeId,
+            label: undefined,
+          });
+        }
+
+        console.log('[loadWorkflow] Migration complete - Start/End nodes added');
+      } else {
+        // No orchestrator node found, use existing orchestrator config
+        if (graph.orchestrator) {
+          setOrchestratorConfig(graph.orchestrator);
+        }
+
+        // Check if Start/End nodes exist, if not add them
+        const hasStart = migratedNodes.some(n => n.type === 'start');
+        const hasEnd = migratedNodes.some(n => n.type === 'end');
+
+        if (!hasStart || !hasEnd) {
+          console.log('[loadWorkflow] Adding missing Start/End nodes');
+
+          if (!hasStart) {
+            const startNodeId = `start-${Date.now()}`;
+            const startNode = {
+              id: startNodeId,
+              type: 'start' as const,
+              position: { x: 100, y: 100 },
+              data: {
+                label: 'Start',
+                triggerType: 'manual',
+              },
+            };
+            migratedNodes.push(startNode);
+
+            // Connect Start to first node
+            const firstNode = migratedNodes[0];
+            if (firstNode) {
+              migratedEdges.push({
+                id: `edge-${startNodeId}-${firstNode.id}`,
+                source: startNodeId,
+                target: firstNode.id,
+                label: undefined,
+              });
+            }
+          }
+
+          if (!hasEnd) {
+            const endNodeId = `end-${Date.now()}`;
+            const endNode = {
+              id: endNodeId,
+              type: 'end' as const,
+              position: { x: 100, y: 500 },
+              data: {
+                label: 'End',
+              },
+            };
+            migratedNodes.push(endNode);
+
+            // Connect last node to End
+            const lastNode = migratedNodes[migratedNodes.length - 1];
+            if (lastNode && lastNode.type !== 'end') {
+              migratedEdges.push({
+                id: `edge-${lastNode.id}-${endNodeId}`,
+                source: lastNode.id,
+                target: endNodeId,
+                label: undefined,
+              });
+            }
+          }
+        }
+      }
+
       // Convert nodes to XY Flow format - ensure data structure matches XY Flow expectations
-      const xyFlowNodes = graph.nodes
+      const xyFlowNodes = migratedNodes
         .filter(node => node.type) // Filter out nodes with undefined type
         .map(node => ({
           id: node.id,
@@ -42,15 +209,17 @@ export const WorkflowIDEPage: React.FC = () => {
           position: node.position,
           data: node.data as Record<string, unknown>, // Type assertion for XY Flow compatibility
         }));
-      
+
+      console.log('[loadWorkflow] Loaded nodes with positions:', xyFlowNodes.map(n => ({ id: n.id, type: n.type, position: n.position })));
+
       // Convert edges to XY Flow format
-      const xyFlowEdges = graph.edges.map(edge => ({
+      const xyFlowEdges = migratedEdges.map(edge => ({
         id: edge.id,
         source: edge.source,
         target: edge.target,
         label: edge.label,
       }));
-      
+
       setNodes(xyFlowNodes);
       setEdges(xyFlowEdges);
       
@@ -73,6 +242,8 @@ export const WorkflowIDEPage: React.FC = () => {
     setError(null);
 
     try {
+      console.log('[saveWorkflow] Saving nodes with positions:', nodes.map(n => ({ id: n.id, type: n.type, position: n.position })));
+
       const graph: workflowService.WorkflowGraph = {
         nodes: nodes
           .filter(node => node.type) // Filter out nodes with undefined type
@@ -88,9 +259,8 @@ export const WorkflowIDEPage: React.FC = () => {
           target: edge.target as string,
           label: edge.label as string | undefined,
         })),
-        orchestrator: orchestratorConfig,
       };
-
+      
       await workflowService.saveOrchestratorStructure(agentId, graph);
       setIsDirty(false);
     } catch (err) {
@@ -99,114 +269,12 @@ export const WorkflowIDEPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  }, [agentId, nodes, edges, orchestratorConfig, setIsDirty]);
+  }, [agentId, nodes, edges, setIsDirty, navigate]);
 
   // Load workflow on mount
   useEffect(() => {
     loadWorkflow();
   }, [loadWorkflow]);
-
-  // Listen to agent execution events for visualization
-  useEffect(() => {
-    if (!agentId) return;
-
-    const setupEventListener = async () => {
-      try {
-        const unlisten = await listen('agent-stream-event', (event) => {
-          if (!isMountedRef.current) return;
-
-          const payload = event.payload as { type: string; [key: string]: any };
-          if (!payload) return;
-
-          // Map to AgentStreamEvent format
-          const streamEvent: any = { type: payload.type };
-
-          switch (payload.type) {
-            case 'metadata':
-              streamEvent.agentId = payload.agentId;
-              streamEvent.timestamp = payload.timestamp;
-              streamEvent.model = payload.model;
-              streamEvent.provider = payload.provider;
-              break;
-            case 'token':
-              streamEvent.content = payload.content;
-              streamEvent.timestamp = payload.timestamp;
-              break;
-            case 'tool_call_start':
-              streamEvent.toolId = payload.toolId;
-              streamEvent.toolName = payload.toolName;
-              streamEvent.args = payload.args;
-              streamEvent.timestamp = payload.timestamp;
-              break;
-            case 'tool_result':
-              streamEvent.toolId = payload.toolId;
-              streamEvent.toolName = payload.toolName;
-              streamEvent.result = payload.result;
-              streamEvent.error = payload.error;
-              streamEvent.timestamp = payload.timestamp;
-              break;
-            case 'done':
-              streamEvent.finalMessage = payload.finalMessage;
-              streamEvent.tokenCount = payload.tokenCount;
-              streamEvent.timestamp = payload.timestamp;
-              break;
-            case 'error':
-              streamEvent.error = payload.error;
-              streamEvent.recoverable = payload.recoverable;
-              streamEvent.timestamp = payload.timestamp;
-              break;
-          }
-
-          // Pass to execution handler
-          handleExecutionEvent(streamEvent);
-        });
-
-        if (isMountedRef.current) {
-          unlistenRef.current = unlisten;
-        }
-      } catch (err) {
-        console.error('Failed to setup event listener:', err);
-      }
-    };
-
-    setupEventListener();
-
-    return () => {
-      isMountedRef.current = false;
-      if (unlistenRef.current) {
-        unlistenRef.current();
-      }
-    };
-  }, [agentId, handleExecutionEvent]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      isMountedRef.current = false;
-    };
-  }, []);
-
-  // Execute workflow (send a message to the orchestrator)
-  const executeWorkflow = useCallback(async () => {
-    if (!agentId || executing) return;
-
-    setExecuting(true);
-    setError(null);
-    clearExecution();
-
-    try {
-      // Start the agent execution - this will emit events we listen to
-      await invoke('execute_agent_stream', {
-        agentId: agentId,
-        message: "Please demonstrate your workflow by performing your task.", // Default message
-      });
-    } catch (err) {
-      console.error('Failed to execute workflow:', err);
-      setError(err instanceof Error ? err.message : 'Failed to execute workflow');
-    } finally {
-      setExecuting(false);
-    }
-  }, [agentId, executing, clearExecution]);
 
   if (!agentId) {
     return (
@@ -222,7 +290,7 @@ export const WorkflowIDEPage: React.FC = () => {
       <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-950">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate(-1)}
+            onClick={() => navigate(fromLocationRef.current, { state: { restoreAgentId: restoreAgentIdRef.current } })}
             className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
           >
             <ArrowLeft size={20} />
@@ -231,6 +299,13 @@ export const WorkflowIDEPage: React.FC = () => {
             <h1 className="text-lg font-semibold">Workflow IDE</h1>
             <p className="text-sm text-gray-400">Agent: {agentId}</p>
           </div>
+          <button
+            onClick={() => setShowNewAgentDialog(true)}
+            className="p-2 hover:bg-gray-800 rounded-lg transition-colors text-purple-400 hover:text-purple-300"
+            title="Create new agent"
+          >
+            <Plus size={20} />
+          </button>
         </div>
         
         <div className="flex items-center gap-2">
@@ -241,21 +316,20 @@ export const WorkflowIDEPage: React.FC = () => {
             <span className="text-sm text-yellow-400">Unsaved changes</span>
           )}
           <button
-            onClick={executeWorkflow}
-            disabled={executing || loading}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg transition-colors"
+            onClick={undo}
+            disabled={!canUndo()}
+            className="p-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-lg transition-colors"
+            title="Undo (Ctrl+Z)"
           >
-            {executing ? (
-              <>
-                <Loader2 size={16} className="animate-spin" />
-                Running...
-              </>
-            ) : (
-              <>
-                <Play size={16} />
-                Test Run
-              </>
-            )}
+            <Undo size={16} />
+          </button>
+          <button
+            onClick={redo}
+            disabled={!canRedo()}
+            className="p-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:text-gray-600 rounded-lg transition-colors"
+            title="Redo (Ctrl+Y)"
+          >
+            <Redo size={16} />
           </button>
           <button
             onClick={saveWorkflow}
@@ -287,6 +361,11 @@ export const WorkflowIDEPage: React.FC = () => {
           <WorkflowEditor agentId={agentId} />
         )}
       </div>
+
+      {/* New Agent Dialog */}
+      {showNewAgentDialog && (
+        <NewAgentDialog onClose={() => setShowNewAgentDialog(false)} />
+      )}
     </div>
   );
 };

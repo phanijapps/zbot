@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { AppShell } from "./core";
 import { VaultSelector, VaultSwitchingLoader, useVaults } from "./features/vaults";
+import { initializeVaultSystem } from "@/services/vaults";
 import type { Vault } from "@/shared/types";
 
 import {
@@ -38,6 +39,10 @@ function App() {
 
   const checkVaultStatus = async () => {
     try {
+      // First, initialize the vault system (this sets the active vault path in Rust backend)
+      const initializedVault = await initializeVaultSystem();
+
+      // Then check the vault status to get all available vaults
       const { invoke } = await import("@tauri-apps/api/core");
       const status = await invoke<{
         registryExists: boolean;
@@ -47,12 +52,27 @@ function App() {
         vaults: Vault[];
       }>("get_vault_status");
 
-      // If there's a valid active vault, use it
-      if (status.hasActiveVault && status.activeVault) {
-        setVault(status.activeVault);
-      }
+      // Use the initialized vault or fall back to active vault from status
+      setVault(initializedVault || status.activeVault);
     } catch (error) {
-      console.error("Failed to check vault status:", error);
+      console.error("Failed to initialize vault system:", error);
+      // If initialization fails, try to get vault status anyway
+      try {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const status = await invoke<{
+          registryExists: boolean;
+          hasVaults: boolean;
+          hasActiveVault: boolean;
+          activeVault: Vault | null;
+          vaults: Vault[];
+        }>("get_vault_status");
+
+        if (status.hasActiveVault && status.activeVault) {
+          setVault(status.activeVault);
+        }
+      } catch (statusError) {
+        console.error("Failed to check vault status:", statusError);
+      }
     } finally {
       setIsCheckingVault(false);
     }

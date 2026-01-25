@@ -3,8 +3,9 @@
 // Visual workflow IDE commands that sync XY Flow graphs with .subagents/ folders
 // ============================================================================
 
-use crate::commands::agents::{get_agents_dir, read_agent_folder, Agent, AgentConfig};
+use crate::commands::agents::{read_agent_folder, Agent, AgentConfig};
 use crate::commands::agents::save_subagent;
+use crate::domains::vault::manager::get_active_vault_path;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
@@ -159,7 +160,9 @@ impl NodeLayout {
 /// Reads from .subagents/ folder and AGENTS.md to construct the workflow
 #[tauri::command]
 pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGraph, String> {
-    let agents_dir = get_agents_dir()?;
+    let vault_path = get_active_vault_path().await?;
+    // Agents are in vault_path/agents/
+    let agents_dir = vault_path.join("agents");
     let agent_dir = agents_dir.join(&agent_id);
 
     if !agent_dir.exists() {
@@ -245,6 +248,17 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
         let y_offset = 300.0;
         let x_offset = 100.0;
 
+        // First, check if we have saved node IDs in the layout that match subagent folders
+        let mut subagent_id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
+        // Build a map from subagent folder name to saved node ID (if exists in layout)
+        for (node_id, _pos) in &layout.positions {
+            if node_id.starts_with("subagent-") {
+                let folder_name = node_id.strip_prefix("subagent-").unwrap_or("");
+                subagent_id_map.insert(folder_name.to_string(), node_id.clone());
+            }
+        }
+
         for (index, entry) in entries.flatten().enumerate() {
             let path = entry.path();
 
@@ -259,10 +273,13 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
 
             // Read subagent config
             if let Ok(subagent) = read_agent_folder(&path) {
-                let subagent_id = format!("subagent-{}", subagent.name);
+                // Use the saved node ID from layout if it exists, otherwise generate a new one
+                let subagent_node_id = subagent_id_map.get(&subagent.name)
+                    .cloned()
+                    .unwrap_or_else(|| format!("subagent-{}", subagent.name));
 
                 // Use saved position or calculate default
-                let saved_position = layout.positions.get(&subagent_id);
+                let saved_position = layout.positions.get(&subagent_node_id);
                 let position = if let Some(pos) = saved_position {
                     *pos
                 } else {
@@ -285,7 +302,7 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
                 node_data.insert("skills".to_string(), json!(subagent.skills));
 
                 nodes.push(WorkflowNode {
-                    id: subagent_id.clone(),
+                    id: subagent_node_id.clone(),
                     node_type: "subagent".to_string(),
                     position,
                     data: WorkflowNodeData {
@@ -296,9 +313,9 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
 
                 // Create edge from orchestrator to subagent
                 edges.push(WorkflowEdge {
-                    id: format!("edge-{}-{}", orchestrator_id, subagent_id),
+                    id: format!("edge-{}-{}", orchestrator_id, subagent_node_id),
                     source: orchestrator_id.clone(),
-                    target: subagent_id,
+                    target: subagent_node_id,
                     label: Some("delegates to".to_string()),
                 });
             }
@@ -319,7 +336,9 @@ pub async fn save_orchestrator_structure(
     agent_id: String,
     graph: WorkflowGraph,
 ) -> Result<(), String> {
-    let agents_dir = get_agents_dir()?;
+    let vault_path = get_active_vault_path().await?;
+    // Agents are in vault_path/agents/
+    let agents_dir = vault_path.join("agents");
     let agent_dir = agents_dir.join(&agent_id);
     let layout_path = agent_dir.join(".workflow-layout.json");
 
@@ -328,9 +347,29 @@ pub async fn save_orchestrator_structure(
     }
 
     // Save node positions to layout file
+    // The key must match what get_orchestrator_structure expects:
+    // - Orchestrator: "orchestrator-{agent_id}"
+    // - Subagent: "subagent-{folder_name}" where folder_name comes from subagentId field
     let mut layout = NodeLayout::new();
     for node in &graph.nodes {
-        layout.positions.insert(node.id.clone(), node.position.clone());
+        let layout_key = if node.node_type == "orchestrator" {
+            format!("orchestrator-{}", agent_id)
+        } else if node.node_type == "subagent" {
+            // Get the subagentId from node data - this should be the folder name
+            // If subagentId already has "subagent-" prefix, strip it first
+            let folder_name = node.data.extra.get("subagentId")
+                .and_then(|v| v.as_str())
+                .unwrap_or(&node.id);
+            
+            // Remove "subagent-" prefix if present to get just the folder name
+            let clean_name = folder_name.strip_prefix("subagent-")
+                .unwrap_or(folder_name);
+            
+            format!("subagent-{}", clean_name)
+        } else {
+            node.id.clone()
+        };
+        layout.positions.insert(layout_key, node.position.clone());
     }
     layout.save(&layout_path)?;
 
@@ -554,7 +593,9 @@ async fn update_agent_orchestrator_config(
     agent_id: String,
     orchestrator: &OrchestratorConfig,
 ) -> Result<(), String> {
-    let agents_dir = get_agents_dir()?;
+    let vault_path = get_active_vault_path().await?;
+    // Agents are in vault_path/agents/
+    let agents_dir = vault_path.join("agents");
     let agent_dir = agents_dir.join(&agent_id);
     let config_path = agent_dir.join("config.yaml");
 

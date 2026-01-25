@@ -29,8 +29,9 @@ import { DaySeparator } from "./DaySeparator";
 import { KnowledgeGraphVisualizer } from "./KnowledgeGraphVisualizer";
 import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
 import { TranscriptCommentDialog, type TranscriptAttachmentInfo } from "./TranscriptCommentDialog";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { AttachmentsPanel, type Attachment } from "./AttachmentsPanel";
+import { NewAgentDialog } from "@/features/workflow-ide/components/NewAgentDialog";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -58,6 +59,7 @@ type ExecutionStage = "idle" | "thinking" | "using_tools" | "generating" | "done
 export function AgentChannelPanel() {
   const { currentVault } = useVaults();
   const navigate = useNavigate();
+  const location = useLocation();
 
   // UI State
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -119,6 +121,9 @@ export function AgentChannelPanel() {
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
 
+  // New Agent Dialog state
+  const [showNewAgentDialog, setShowNewAgentDialog] = useState(false);
+
   // Track the current request_input tool ID for marking it as completed when form is submitted
   const [pendingRequestInputToolId, setPendingRequestInputToolId] = useState<string | null>(null);
 
@@ -145,6 +150,23 @@ export function AgentChannelPanel() {
       }
     };
   }, [currentVault?.id]); // Reload when vault changes
+
+  // Restore selected agent from navigation state (e.g., returning from workflow IDE)
+  useEffect(() => {
+    const state = location.state as { restoreAgentId?: string } | null;
+    const restoreAgentId = state?.restoreAgentId;
+
+    if (restoreAgentId && agents.length > 0) {
+      const agentToRestore = agents.find(a => a.id === restoreAgentId);
+      if (agentToRestore && selectedAgent?.id !== restoreAgentId) {
+        debugLog(`Restoring selected agent: ${restoreAgentId}`);
+        setSelectedAgent(agentToRestore);
+        // Clear the state so we don't restore again unnecessarily
+        window.history.replaceState({}, '', location.pathname);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, agents]); // Remove selectedAgent from deps to prevent re-running when user clicks a different agent
 
   // Reset state when vault changes
   useEffect(() => {
@@ -911,6 +933,8 @@ export function AgentChannelPanel() {
         onSelectAgent={setSelectedAgent}
         onToggleVault={() => setShowVaultSwitcher(!showVaultSwitcher)}
         showVaultSwitcher={showVaultSwitcher}
+        onCreateAgent={() => setShowNewAgentDialog(true)}
+        vaultName={currentVault?.name}
       />
 
       {/* Main Content Area */}
@@ -962,7 +986,7 @@ export function AgentChannelPanel() {
                   </button>
                 )}
                 <button
-                  onClick={() => selectedAgent && navigate(`/workflow/${selectedAgent.id}`)}
+                  onClick={() => selectedAgent && navigate(`/workflow/${selectedAgent.id}`, { state: { from: '/', restoreAgentId: selectedAgent.id } })}
                   disabled={!selectedAgent}
                   className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                   aria-label="Edit workflow"
@@ -1399,6 +1423,11 @@ export function AgentChannelPanel() {
           }}
           loading={sendingTranscript}
         />
+      )}
+
+      {/* New Agent Dialog */}
+      {showNewAgentDialog && (
+        <NewAgentDialog onClose={() => setShowNewAgentDialog(false)} />
       )}
 
       {/* Attachments Panel */}
