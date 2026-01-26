@@ -172,6 +172,7 @@ pub fn run() {
             // Window commands
             commands::open_skill_editor_window,
             commands::open_external,
+            commands::open_folder,
             // Tool commands
             commands::read_file_lines,
             commands::write_file_with_dirs,
@@ -209,6 +210,11 @@ pub fn run() {
             commands::list_attachments,
             commands::get_attachment,
             commands::delete_attachment,
+            // Theme commands
+            commands::list_themes,
+            commands::get_theme_css,
+            commands::get_theme_info,
+            commands::get_themes_dir_path,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

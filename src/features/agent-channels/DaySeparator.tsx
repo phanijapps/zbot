@@ -29,14 +29,14 @@ export const DaySeparator = memo(function DaySeparator({
     <button
       onClick={onToggle}
       className={cn(
-        "w-full flex items-center gap-2 py-2 text-left hover:bg-white/5 rounded transition-colors group",
+        "w-full flex items-center gap-2 py-2 text-left hover:bg-accent rounded transition-colors group",
         className
       )}
       aria-expanded={isExpanded}
       aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${date}`}
     >
       {/* Expand/collapse icon */}
-      <span className="text-gray-400 group-hover:text-gray-300 transition-colors">
+      <span className="text-muted-foreground group-hover:text-foreground transition-colors">
         {isExpanded ? (
           <ChevronDown className="size-4" aria-hidden="true" />
         ) : (
@@ -45,18 +45,18 @@ export const DaySeparator = memo(function DaySeparator({
       </span>
 
       {/* Date label */}
-      <span className="text-sm font-semibold text-gray-300 group-hover:text-gray-200 transition-colors">
+      <span className="text-sm font-semibold text-muted-foreground group-hover:text-foreground transition-colors">
         {date}
       </span>
 
       {/* Message count */}
-      <span className="text-xs text-gray-500 group-hover:text-gray-400 transition-colors">
+      <span className="text-xs text-muted-foreground/70 group-hover:text-muted-foreground transition-colors">
         {messageCount} message{messageCount !== 1 ? 's' : ''}
       </span>
 
       {/* Summary preview (when collapsed) */}
       {summary && !isExpanded && (
-        <span className="text-xs text-gray-500 truncate flex-1" title={summary}>
+        <span className="text-xs text-muted-foreground/70 truncate flex-1" title={summary}>
           — {summary}
         </span>
       )}

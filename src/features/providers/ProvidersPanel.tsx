@@ -78,15 +78,15 @@ export function ProvidersPanel() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-white">Providers</h2>
-            <p className="text-gray-400 text-sm mt-1">
+            <h2 className="text-2xl font-bold text-foreground">Providers</h2>
+            <p className="text-muted-foreground text-sm mt-1">
               OpenAI-compatible API providers
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              className="border-white/20 text-white hover:bg-white/5"
+              className="border-border text-foreground hover:bg-accent"
               onClick={handleRefresh}
               disabled={refreshing}
             >
@@ -104,20 +104,20 @@ export function ProvidersPanel() {
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="size-8 text-white animate-spin" />
+            <Loader2 className="size-8 text-foreground animate-spin" />
           </div>
         ) : providers.length === 0 ? (
           <div className="text-center py-20">
-            <Brain className="size-16 text-gray-600 mx-auto mb-4" />
-            <h3 className="text-xl font-medium text-white mb-2">No Providers</h3>
-            <p className="text-gray-400">Add your first API provider to get started</p>
+            <Brain className="size-16 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-xl font-medium text-foreground mb-2">No Providers</h3>
+            <p className="text-muted-foreground">Add your first API provider to get started</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {providers.map((provider) => (
               <div
                 key={provider.id}
-                className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-xl p-5 border border-white/10 hover:border-white/20 transition-all"
+                className="bg-card rounded-xl p-5 border border-border hover:border-primary/50 transition-all"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-start gap-3">
@@ -126,7 +126,7 @@ export function ProvidersPanel() {
                     </div>
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-white font-semibold">{provider.name}</h3>
+                        <h3 className="text-foreground font-semibold">{provider.name}</h3>
                         {provider.verified && (
                           <Badge className="bg-green-500/20 text-green-300 border-green-500/30 text-xs">
                             <Check className="size-3 mr-1" />
@@ -141,7 +141,7 @@ export function ProvidersPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleOpenEditDialog(provider)}
-                      className="text-gray-400 hover:text-white h-7 w-7 p-0"
+                      className="text-muted-foreground hover:text-foreground h-7 w-7 p-0"
                     >
                       <Edit className="size-3.5" />
                     </Button>
@@ -149,19 +149,19 @@ export function ProvidersPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDeleteProvider(provider.id)}
-                      className="text-gray-400 hover:text-red-400 h-7 w-7 p-0"
+                      className="text-muted-foreground hover:text-destructive h-7 w-7 p-0"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
                   </div>
                 </div>
 
-                <p className="text-gray-400 text-sm mb-3">{provider.description}</p>
+                <p className="text-muted-foreground text-sm mb-3">{provider.description}</p>
 
                 {/* Base URL */}
-                <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
-                  <p className="text-xs text-gray-500 mb-1">Base URL</p>
-                  <code className="text-xs text-gray-300 font-mono block truncate">
+                <div className="bg-muted rounded-lg p-2.5 mb-3 border border-border">
+                  <p className="text-xs text-muted-foreground mb-1">Base URL</p>
+                  <code className="text-xs text-foreground font-mono block truncate">
                     {provider.baseUrl}
                   </code>
                 </div>
@@ -177,7 +177,7 @@ export function ProvidersPanel() {
                     </span>
                   ))}
                   {provider.models.length > 4 && (
-                    <span className="px-2 py-0.5 bg-gray-500/10 rounded-full text-xs text-gray-400 border border-gray-500/20">
+                    <span className="px-2 py-0.5 bg-muted rounded-full text-xs text-muted-foreground border border-border">
                       +{provider.models.length - 4} more
                     </span>
                   )}

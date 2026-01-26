@@ -107,15 +107,15 @@ export function MCPServersPanel() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-white">MCP Servers</h2>
-            <p className="text-gray-400 text-sm mt-1">
+            <h2 className="text-2xl font-bold text-foreground">MCP Servers</h2>
+            <p className="text-muted-foreground text-sm mt-1">
               Model Context Protocol servers extend AI capabilities with external tools
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              className="border-white/20 text-white hover:bg-white/5"
+              className="border-border text-foreground hover:bg-accent"
               onClick={handleRefresh}
               disabled={refreshing}
             >
@@ -133,20 +133,20 @@ export function MCPServersPanel() {
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="size-8 text-white animate-spin" />
+            <Loader2 className="size-8 text-foreground animate-spin" />
           </div>
         ) : servers.length === 0 ? (
           <div className="text-center py-20">
-            <Server className="size-16 text-gray-600 mx-auto mb-4" />
-            <h3 className="text-xl font-medium text-white mb-2">No MCP Servers</h3>
-            <p className="text-gray-400">Add your first MCP server to get started</p>
+            <Server className="size-16 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-xl font-medium text-foreground mb-2">No MCP Servers</h3>
+            <p className="text-muted-foreground">Add your first MCP server to get started</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {servers.map((server) => (
               <div
                 key={server.id}
-                className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-xl p-5 border border-white/10 hover:border-white/20 transition-all"
+                className="bg-card rounded-xl p-5 border border-border hover:border-primary/50 transition-all"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-start gap-3">
@@ -155,7 +155,7 @@ export function MCPServersPanel() {
                     </div>
                     <div>
                       <div className="flex items-center gap-2 mb-1">
-                        <h3 className="text-white font-semibold">{server.name}</h3>
+                        <h3 className="text-foreground font-semibold">{server.name}</h3>
                         {server.validated && (
                           <Badge className="bg-green-500/20 text-green-300 border-green-500/30 text-xs">
                             <Check className="size-3 mr-1" />
@@ -172,7 +172,7 @@ export function MCPServersPanel() {
                       size="sm"
                       onClick={() => handleTestServer(server)}
                       disabled={testingServerId === server.id}
-                      className="text-gray-400 hover:text-blue-400 h-7 w-7 p-0"
+                      className="text-muted-foreground hover:text-primary h-7 w-7 p-0"
                       title="Test server"
                     >
                       {testingServerId === server.id ? (
@@ -185,7 +185,7 @@ export function MCPServersPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleOpenEditDialog(server)}
-                      className="text-gray-400 hover:text-white h-7 w-7 p-0"
+                      className="text-muted-foreground hover:text-foreground h-7 w-7 p-0"
                     >
                       <Edit className="size-3.5" />
                     </Button>
@@ -193,27 +193,27 @@ export function MCPServersPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDeleteServer(server.id)}
-                      className="text-gray-400 hover:text-red-400 h-7 w-7 p-0"
+                      className="text-muted-foreground hover:text-destructive h-7 w-7 p-0"
                     >
                       <Trash2 className="size-3.5" />
                     </Button>
                   </div>
                 </div>
 
-                <p className="text-gray-400 text-sm mb-3">{server.description}</p>
+                <p className="text-muted-foreground text-sm mb-3">{server.description}</p>
 
                 {/* Command/URL display based on server type */}
                 {server.type === 'stdio' ? (
-                  <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
-                    <p className="text-xs text-gray-500 mb-1">Command</p>
-                    <code className="text-xs text-gray-300 font-mono block truncate">
+                  <div className="bg-muted rounded-lg p-2.5 mb-3 border border-border">
+                    <p className="text-xs text-muted-foreground mb-1">Command</p>
+                    <code className="text-xs text-foreground font-mono block truncate">
                       {server.command} {server.args?.join(" ")}
                     </code>
                   </div>
                 ) : (
-                  <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
-                    <p className="text-xs text-gray-500 mb-1">URL</p>
-                    <code className="text-xs text-gray-300 font-mono block truncate">
+                  <div className="bg-muted rounded-lg p-2.5 mb-3 border border-border">
+                    <p className="text-xs text-muted-foreground mb-1">URL</p>
+                    <code className="text-xs text-foreground font-mono block truncate">
                       {server.url}
                     </code>
                   </div>
@@ -231,7 +231,7 @@ export function MCPServersPanel() {
                       </span>
                     ))}
                     {Object.keys(server.env).length > 3 && (
-                      <span className="px-2 py-0.5 bg-gray-500/10 rounded-full text-xs text-gray-400 border border-gray-500/20">
+                      <span className="px-2 py-0.5 bg-muted rounded-full text-xs text-muted-foreground border border-border">
                         +{Object.keys(server.env).length - 3} more
                       </span>
                     )}

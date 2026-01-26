@@ -81,12 +81,12 @@ export function InlineToolCard({ name, status, result, error }: InlineToolCardPr
       <div className="flex items-center justify-between px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="text-lg">{getToolIcon()}</span>
-          <span className="text-sm font-medium text-white">{name}</span>
-          <span className="text-xs text-gray-400">• {getStatusText()}</span>
+          <span className="text-sm font-medium text-foreground">{name}</span>
+          <span className="text-xs text-muted-foreground">• {getStatusText()}</span>
         </div>
         <div className="flex items-center gap-2">
           {getIcon()}
-          <button className="text-gray-400 hover:text-white transition-colors">
+          <button className="text-muted-foreground hover:text-foreground transition-colors">
             {isExpanded ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
           </button>
         </div>
@@ -94,11 +94,11 @@ export function InlineToolCard({ name, status, result, error }: InlineToolCardPr
 
       {/* Details (expanded) */}
       {isExpanded && (
-        <div className="border-t border-white/10 px-3 py-2 space-y-2">
+        <div className="border-t border-border px-3 py-2 space-y-2">
           {result && (
             <div>
-              <div className="text-xs text-gray-400 mb-1">Result:</div>
-              <pre className="text-xs text-gray-300 bg-black/20 rounded p-2 overflow-x-auto">
+              <div className="text-xs text-muted-foreground mb-1">Result:</div>
+              <pre className="text-xs text-foreground/80 bg-muted rounded p-2 overflow-x-auto">
                 {truncate(result, 200)}
               </pre>
             </div>

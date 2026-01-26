@@ -4,21 +4,28 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { Bell, Lock, Database, Palette, Zap, Loader2, FileCode, Package, CheckCircle2, AlertCircle } from "lucide-react";
+import { Bell, Lock, Database, Palette, Zap, Loader2, FileCode, Package, CheckCircle2, AlertCircle, FolderOpen } from "lucide-react";
 import { Switch } from "@/shared/ui/switch";
 import { Button } from "@/shared/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/select";
 import { Textarea } from "@/shared/ui/textarea";
 import * as settingsService from "@/services/settings";
+import * as themesService from "@/services/themes";
+import type { ThemeInfo } from "@/services/themes";
 import type { Settings, StorageInfo } from "./types";
 import { defaultSettings } from "./types";
 import type { VenvInfo, PackageInfo } from "@/services/settings";
+import { useTheme } from "@/core";
 
 export function SettingsPanel() {
   const [settings, setSettings] = useState<Settings>(defaultSettings);
   const [storageInfo, setStorageInfo] = useState<StorageInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Theme state
+  const { setTheme } = useTheme();
+  const [themes, setThemes] = useState<ThemeInfo[]>([]);
 
   // Python venv state
   const [venvInfo, setVenvInfo] = useState<VenvInfo | null>(null);
@@ -34,7 +41,17 @@ export function SettingsPanel() {
     loadSettings();
     loadStorageInfo();
     loadVenvInfo();
+    loadThemes();
   }, []);
+
+  const loadThemes = async () => {
+    try {
+      const themeList = await themesService.listThemes();
+      setThemes(themeList);
+    } catch (error) {
+      console.error("Failed to load themes:", error);
+    }
+  };
 
   const loadSettings = async () => {
     try {
@@ -70,6 +87,20 @@ export function SettingsPanel() {
     value: Settings["appearance"][K]
   ) => {
     updateSetting("appearance", { ...settings.appearance, [key]: value });
+    // Apply theme immediately when changed
+    if (key === "theme" && typeof value === "string") {
+      setTheme(value);
+    }
+  };
+
+  const handleOpenThemesFolder = async () => {
+    try {
+      const path = await themesService.getThemesDirPath();
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("open_folder", { path });
+    } catch (error) {
+      console.error("Failed to open themes folder:", error);
+    }
   };
 
   const updatePerformanceSetting = <K extends keyof Settings["performance"]>(
@@ -215,7 +246,7 @@ export function SettingsPanel() {
   if (loading) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <Loader2 className="size-8 text-white animate-spin" />
+        <Loader2 className="size-8 text-foreground animate-spin" />
       </div>
     );
   }
@@ -227,11 +258,11 @@ export function SettingsPanel() {
     <div className="p-8 max-w-4xl">
       <div className="mb-8 flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
-          <p className="text-gray-400">Customize your AI assistant experience</p>
+          <h1 className="text-3xl font-bold text-foreground mb-2">Settings</h1>
+          <p className="text-muted-foreground">Customize your AI assistant experience</p>
         </div>
         {saving && (
-          <div className="flex items-center gap-2 text-gray-400 text-sm">
+          <div className="flex items-center gap-2 text-muted-foreground text-sm">
             <Loader2 className="size-4 animate-spin" />
             Saving...
           </div>
@@ -240,40 +271,53 @@ export function SettingsPanel() {
 
       <div className="space-y-6">
         {/* Appearance */}
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-2xl p-6 border border-white/10">
+        <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-gradient-to-br from-purple-500 to-pink-600 p-2 rounded-lg">
               <Palette className="size-5 text-white" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Appearance</h2>
+            <h2 className="text-foreground font-semibold text-lg">Appearance</h2>
           </div>
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-white text-sm">Dark Mode</p>
-                <p className="text-gray-500 text-xs">Use dark theme</p>
-              </div>
-              <Switch
-                checked={settings.appearance.dark_mode}
-                onCheckedChange={(checked) => updateAppearanceSetting("dark_mode", checked)}
-              />
-            </div>
             <div>
-              <p className="text-white text-sm mb-2">Theme</p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="text-foreground text-sm">Theme</p>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-muted-foreground hover:text-foreground h-6 px-2"
+                  onClick={handleOpenThemesFolder}
+                >
+                  <FolderOpen className="size-3 mr-1" />
+                  Open Folder
+                </Button>
+              </div>
               <Select
                 value={settings.appearance.theme}
                 onValueChange={(value) => updateAppearanceSetting("theme", value)}
               >
-                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                <SelectTrigger className="bg-input border-border text-foreground">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-[#1a1a1a] border-white/10">
-                  <SelectItem value="default">Default</SelectItem>
-                  <SelectItem value="purple">Purple Dream</SelectItem>
-                  <SelectItem value="blue">Ocean Blue</SelectItem>
-                  <SelectItem value="green">Forest Green</SelectItem>
+                <SelectContent className="bg-popover border-border">
+                  {themes.map((theme) => (
+                    <SelectItem key={theme.id} value={theme.id}>
+                      <div className="flex items-center gap-2">
+                        <span>{theme.name}</span>
+                        {theme.author && (
+                          <span className="text-xs text-muted-foreground">by {theme.author}</span>
+                        )}
+                      </div>
+                    </SelectItem>
+                  ))}
+                  {themes.length === 0 && (
+                    <SelectItem value="default">Default</SelectItem>
+                  )}
                 </SelectContent>
               </Select>
+              <p className="text-muted-foreground text-xs mt-1">
+                Drop .css theme files in the themes folder to add custom themes
+              </p>
             </div>
             <div>
               <p className="text-white text-sm mb-2">Font Size</p>
@@ -281,10 +325,10 @@ export function SettingsPanel() {
                 value={settings.appearance.font_size}
                 onValueChange={(value) => updateAppearanceSetting("font_size", value)}
               >
-                <SelectTrigger className="bg-white/5 border-white/10 text-white">
+                <SelectTrigger className="bg-input border-border text-foreground">
                   <SelectValue />
                 </SelectTrigger>
-                <SelectContent className="bg-[#1a1a1a] border-white/10">
+                <SelectContent className="bg-popover border-border">
                   <SelectItem value="small">Small</SelectItem>
                   <SelectItem value="medium">Medium</SelectItem>
                   <SelectItem value="large">Large</SelectItem>
@@ -295,18 +339,18 @@ export function SettingsPanel() {
         </div>
 
         {/* Performance */}
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-2xl p-6 border border-white/10">
+        <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-gradient-to-br from-blue-500 to-cyan-600 p-2 rounded-lg">
               <Zap className="size-5 text-white" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Performance</h2>
+            <h2 className="text-foreground font-semibold text-lg">Performance</h2>
           </div>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-white text-sm">Hardware Acceleration</p>
-                <p className="text-gray-500 text-xs">
+                <p className="text-foreground text-sm">Hardware Acceleration</p>
+                <p className="text-muted-foreground text-xs">
                   Use GPU for faster processing
                 </p>
               </div>
@@ -317,8 +361,8 @@ export function SettingsPanel() {
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-white text-sm">Stream Responses</p>
-                <p className="text-gray-500 text-xs">
+                <p className="text-foreground text-sm">Stream Responses</p>
+                <p className="text-muted-foreground text-xs">
                   Show responses as they generate
                 </p>
               </div>
@@ -331,18 +375,18 @@ export function SettingsPanel() {
         </div>
 
         {/* Notifications */}
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-2xl p-6 border border-white/10">
+        <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-gradient-to-br from-orange-500 to-red-600 p-2 rounded-lg">
               <Bell className="size-5 text-white" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Notifications</h2>
+            <h2 className="text-foreground font-semibold text-lg">Notifications</h2>
           </div>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-white text-sm">Desktop Notifications</p>
-                <p className="text-gray-500 text-xs">
+                <p className="text-foreground text-sm">Desktop Notifications</p>
+                <p className="text-muted-foreground text-xs">
                   Show notifications on desktop
                 </p>
               </div>
@@ -353,8 +397,8 @@ export function SettingsPanel() {
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-white text-sm">Sound Effects</p>
-                <p className="text-gray-500 text-xs">
+                <p className="text-foreground text-sm">Sound Effects</p>
+                <p className="text-muted-foreground text-xs">
                   Play sound for new messages
                 </p>
               </div>
@@ -367,18 +411,18 @@ export function SettingsPanel() {
         </div>
 
         {/* Privacy */}
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-2xl p-6 border border-white/10">
+        <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-gradient-to-br from-green-500 to-emerald-600 p-2 rounded-lg">
               <Lock className="size-5 text-white" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Privacy</h2>
+            <h2 className="text-foreground font-semibold text-lg">Privacy</h2>
           </div>
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-white text-sm">Save Chat History</p>
-                <p className="text-gray-500 text-xs">
+                <p className="text-foreground text-sm">Save Chat History</p>
+                <p className="text-muted-foreground text-xs">
                   Store conversations locally
                 </p>
               </div>
@@ -389,8 +433,8 @@ export function SettingsPanel() {
             </div>
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-white text-sm">Analytics</p>
-                <p className="text-gray-500 text-xs">
+                <p className="text-foreground text-sm">Analytics</p>
+                <p className="text-muted-foreground text-xs">
                   Help improve the app with usage data
                 </p>
               </div>
@@ -410,20 +454,20 @@ export function SettingsPanel() {
         </div>
 
         {/* Storage */}
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-2xl p-6 border border-white/10">
+        <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-gradient-to-br from-yellow-500 to-orange-600 p-2 rounded-lg">
               <Database className="size-5 text-white" />
             </div>
-            <h2 className="text-white font-semibold text-lg">Storage</h2>
+            <h2 className="text-foreground font-semibold text-lg">Storage</h2>
           </div>
           <div className="space-y-4">
             <div>
               <div className="flex items-center justify-between mb-2">
-                <p className="text-white text-sm">Storage Used</p>
-                <p className="text-gray-400 text-sm">{storageUsed} / 10 GB</p>
+                <p className="text-foreground text-sm">Storage Used</p>
+                <p className="text-muted-foreground text-sm">{storageUsed} / 10 GB</p>
               </div>
-              <div className="h-2 bg-white/5 rounded-full overflow-hidden">
+              <div className="h-2 bg-muted rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-blue-500 to-purple-600 rounded-full transition-all"
                   style={{ width: `${storagePercentage}%` }}
@@ -433,14 +477,14 @@ export function SettingsPanel() {
             <div className="flex gap-2">
               <Button
                 variant="outline"
-                className="flex-1 border-white/20 text-white hover:bg-white/5"
+                className="flex-1 border-border text-foreground hover:bg-accent"
                 onClick={loadStorageInfo}
               >
                 Refresh
               </Button>
               <Button
                 variant="outline"
-                className="flex-1 border-white/20 text-white hover:bg-white/5"
+                className="flex-1 border-border text-foreground hover:bg-accent"
                 onClick={handleResetSettings}
               >
                 Reset Settings
@@ -450,14 +494,14 @@ export function SettingsPanel() {
         </div>
 
         {/* Python Environment */}
-        <div className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-2xl p-6 border border-white/10">
+        <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
             <div className="bg-gradient-to-br from-emerald-500 to-teal-600 p-2 rounded-lg">
               <FileCode className="size-5 text-white" />
             </div>
             <div className="flex-1">
-              <h2 className="text-white font-semibold text-lg">Python Environment</h2>
-              <p className="text-gray-500 text-xs">
+              <h2 className="text-foreground font-semibold text-lg">Python Environment</h2>
+              <p className="text-muted-foreground text-xs">
                 {venvInfo?.venv_exists
                   ? `Venv at ${venvInfo.venv_path?.split('/').slice(-2).join('/')}`
                   : "No Python venv found"
@@ -468,7 +512,7 @@ export function SettingsPanel() {
               <Button
                 variant="outline"
                 size="sm"
-                className="border-white/20 text-white hover:bg-white/5"
+                className="border-border text-foreground hover:bg-accent"
                 onClick={() => setShowPackages(!showPackages)}
               >
                 <Package className="size-4 mr-2" />
@@ -489,14 +533,14 @@ export function SettingsPanel() {
             <div className="space-y-4">
               {/* Installed packages list */}
               {showPackages && (
-                <div className="p-3 bg-white/5 rounded-lg max-h-48 overflow-y-auto">
-                  <div className="text-xs text-gray-500 mb-2">Installed packages:</div>
+                <div className="p-3 bg-muted rounded-lg max-h-48 overflow-y-auto">
+                  <div className="text-xs text-muted-foreground mb-2">Installed packages:</div>
                   <div className="grid grid-cols-2 gap-1">
                     {installedPackages.map((pkg) => (
-                      <div key={pkg.name} className="text-xs text-gray-300 flex items-center gap-1">
+                      <div key={pkg.name} className="text-xs text-foreground flex items-center gap-1">
                         <CheckCircle2 className="size-3 text-green-500 shrink-0" />
                         <span className="truncate">{pkg.name}</span>
-                        <span className="text-gray-600 shrink-0">v{pkg.version}</span>
+                        <span className="text-muted-foreground shrink-0">v{pkg.version}</span>
                       </div>
                     ))}
                   </div>
@@ -506,7 +550,7 @@ export function SettingsPanel() {
               {/* Requirements editor */}
               <div>
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-white text-sm">requirements.txt</p>
+                  <p className="text-foreground text-sm">requirements.txt</p>
                   {requirementsChanged && (
                     <span className="text-xs text-orange-400">Unsaved changes</span>
                   )}
@@ -515,7 +559,7 @@ export function SettingsPanel() {
                   value={requirements}
                   onChange={(e) => handleRequirementsChange(e.target.value)}
                   placeholder="# Add your Python requirements here (one per line)&#10;# Example: numpy==1.24.0"
-                  className="bg-white/5 border-white/10 text-white text-sm font-mono min-h-[120px] resize-y"
+                  className="bg-input border-border text-foreground text-sm font-mono min-h-[120px] resize-y"
                 />
               </div>
 
@@ -531,7 +575,7 @@ export function SettingsPanel() {
                   ) : (
                     <AlertCircle className="size-4 text-red-500 shrink-0 mt-0.5" />
                   )}
-                  <pre className="text-xs text-gray-300 whitespace-pre-wrap font-sans">
+                  <pre className="text-xs text-foreground whitespace-pre-wrap font-sans">
                     {installStatus.message}
                   </pre>
                 </div>
@@ -542,7 +586,7 @@ export function SettingsPanel() {
                 {requirementsChanged && (
                   <Button
                     variant="outline"
-                    className="border-white/20 text-white hover:bg-white/5"
+                    className="border-border text-foreground hover:bg-accent"
                     onClick={handleSaveRequirements}
                   >
                     Save Only

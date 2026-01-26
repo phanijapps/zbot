@@ -765,25 +765,25 @@ export function ConversationsPanel() {
         onDelete={handleDeleteConversation}
         onDeleteAgent={handleDeleteAgentConversations}
         agents={agents}
-        className="w-80 bg-black/20 shrink-0"
+        className="w-80 bg-sidebar shrink-0"
       />
 
       {/* Right: Chat Area or Empty State */}
-      <div className="flex-1 flex min-w-0 bg-black/40">
+      <div className="flex-1 flex min-w-0 bg-background">
         {selectedConversation ? (
           /* When conversation IS selected - show chat with embedded thought panel */
           <div className="flex-1 flex flex-col min-w-0">
             {/* Agent Info Header */}
-            <div className="h-14 px-6 bg-white/5 flex items-center shrink-0">
+            <div className="h-14 px-6 bg-card flex items-center shrink-0">
               <div className="flex items-center gap-3">
                 <span className="text-xl" role="img">
                   {selectedConversation.agentIcon || "🤖"}
                 </span>
                 <div>
-                  <div className="text-sm font-medium text-white">
+                  <div className="text-sm font-medium text-foreground">
                     {selectedConversation.title}
                   </div>
-                  <div className="text-xs text-gray-500">
+                  <div className="text-xs text-muted-foreground">
                     {selectedConversation.agentName} • {selectedConversation.model || "AI Agent"}
                   </div>
                 </div>
@@ -817,7 +817,7 @@ export function ConversationsPanel() {
 
               {/* Thought Panel - next to messages area */}
               {displayThinkingState.isOpen && (
-                <div className="w-80 border-l border-white/10 flex flex-col bg-black/30 overflow-y-auto">
+                <div className="w-80 border-l border-border flex flex-col bg-card overflow-y-auto">
                   {/* Reasoning / Chain of Thought */}
                   {displayThinkingState.reasoning.length > 0 && (
                     <ThinkingContent reasoning={displayThinkingState.reasoning.join("")} />
@@ -878,9 +878,9 @@ export function ConversationsPanel() {
             </div>
 
             {/* Input Area */}
-            <div className="border-t border-white/10 p-4">
+            <div className="border-t border-border p-4">
               <div className="max-w-3xl mx-auto">
-                <div className="relative bg-white/5 rounded-2xl border border-white/10 focus-within:border-purple-500/50 transition-colors">
+                <div className="relative bg-input rounded-2xl border border-border focus-within:border-primary/50 transition-colors">
                   <Textarea
                     ref={inputRef}
                     value={input}
@@ -897,7 +897,7 @@ export function ConversationsPanel() {
                     }}
                     placeholder="Type your message... (Press Enter to send, Shift+Enter for new line)"
                     disabled={isLoading}
-                    className="min-h-[60px] max-h-[200px] bg-transparent border-0 text-white placeholder:text-gray-500 resize-none pr-24 focus-visible:ring-0"
+                    className="min-h-[60px] max-h-[200px] bg-transparent border-0 text-foreground placeholder:text-muted-foreground resize-none pr-24 focus-visible:ring-0"
                   />
                   <div className="absolute bottom-3 right-3 flex items-center gap-2">
                     <button
@@ -932,7 +932,7 @@ export function ConversationsPanel() {
           /* Empty state when no conversation selected */
           loading ? (
             <div className="flex-1 flex items-center justify-center">
-              <Loader2 className="size-8 text-white animate-spin" />
+              <Loader2 className="size-8 text-foreground animate-spin" />
             </div>
           ) : conversations.length === 0 ? (
             <div className="flex-1">
@@ -949,15 +949,15 @@ export function ConversationsPanel() {
       {/* Agent Selector Modal */}
       {showAgentSelector && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-zinc-900 border border-white/10 rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
+          <div className="bg-popover border border-border rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">Select an Agent</h3>
+              <h3 className="text-lg font-semibold text-foreground">Select an Agent</h3>
               <button
                 onClick={() => {
                   setShowAgentSelector(false);
                   setPendingAgentId(null);
                 }}
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 <X className="size-5" />
               </button>
@@ -972,8 +972,8 @@ export function ConversationsPanel() {
                     "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all",
                     "border",
                     pendingAgentId === agent.id
-                      ? "bg-purple-500/10 border-purple-500/30 text-white"
-                      : "bg-white/5 border-transparent hover:bg-white/10 hover:border-white/10 text-gray-300"
+                      ? "bg-primary/10 border-primary/30 text-foreground"
+                      : "bg-muted border-transparent hover:bg-accent hover:border-border text-foreground"
                   )}
                 >
                   <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
@@ -981,7 +981,7 @@ export function ConversationsPanel() {
                   </div>
                   <div>
                     <div className="font-medium">{agent.displayName}</div>
-                    <div className="text-xs text-gray-500">{agent.name}</div>
+                    <div className="text-xs text-muted-foreground">{agent.name}</div>
                   </div>
                   {pendingAgentId === agent.id && (
                     <div className="ml-auto">
@@ -998,7 +998,7 @@ export function ConversationsPanel() {
                   setShowAgentSelector(false);
                   setPendingAgentId(null);
                 }}
-                className="flex-1 px-4 py-2 text-sm font-medium text-gray-300 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                className="flex-1 px-4 py-2 text-sm font-medium text-foreground bg-muted hover:bg-accent rounded-lg transition-colors"
               >
                 Cancel
               </button>
@@ -1008,8 +1008,8 @@ export function ConversationsPanel() {
                 className={cn(
                   "flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all",
                   pendingAgentId
-                    ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg shadow-purple-500/25"
-                    : "bg-white/5 text-gray-500 cursor-not-allowed"
+                    ? "bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
                 )}
               >
                 Start Chat
@@ -1048,8 +1048,8 @@ function EmptyState({ onNewChat }: { onNewChat: (agentId?: string) => void }) {
       <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center mb-6 border border-white/10">
         <MessageSquare className="size-10 text-purple-400" />
       </div>
-      <h2 className="text-2xl font-bold text-white mb-2">No conversations yet</h2>
-      <p className="text-gray-400 mb-8 max-w-md">
+      <h2 className="text-2xl font-bold text-foreground mb-2">No conversations yet</h2>
+      <p className="text-muted-foreground mb-8 max-w-md">
         Start chatting with an AI agent to begin. Your conversations will be grouped by agent here.
       </p>
       <button
@@ -1068,14 +1068,14 @@ function EmptyState({ onNewChat }: { onNewChat: (agentId?: string) => void }) {
 function PlaceholderState() {
   return (
     <div className="flex flex-col items-center justify-center h-full px-8 text-center">
-      <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-white/5 to-white/[0.02] flex items-center justify-center mb-6 border border-white/10">
-        <Bot className="size-10 text-gray-600" />
+      <div className="w-20 h-20 rounded-2xl bg-card flex items-center justify-center mb-6 border border-border">
+        <Bot className="size-10 text-muted-foreground" />
       </div>
-      <h2 className="text-2xl font-bold text-white mb-2">Select a conversation</h2>
-      <p className="text-gray-400 max-w-md">
+      <h2 className="text-2xl font-bold text-foreground mb-2">Select a conversation</h2>
+      <p className="text-muted-foreground max-w-md">
         Choose a conversation from the sidebar to view and continue your chat.
       </p>
-      <div className="mt-8 flex items-center gap-2 text-sm text-gray-500">
+      <div className="mt-8 flex items-center gap-2 text-sm text-muted-foreground">
         <ChevronRight className="size-4" />
         <span>Click on any conversation in the left sidebar</span>
       </div>
@@ -1155,8 +1155,8 @@ function MessageBubble({ message, onShowThinking, onOpenAttachment }: MessageBub
           className={cn(
             "inline-block rounded-2xl px-4 py-3 text-left",
             isUser
-              ? "bg-blue-600 text-white"
-              : "bg-white/5 text-gray-100"
+              ? "bg-primary text-primary-foreground"
+              : "bg-card text-foreground"
           )}
         >
           {isUser ? (
@@ -1218,7 +1218,7 @@ function TypingIndicator() {
       <div className="size-8 rounded-lg bg-gradient-to-br from-orange-500 to-pink-600 flex items-center justify-center">
         <span className="text-sm">🤖</span>
       </div>
-      <div className="bg-white/5 rounded-2xl px-4 py-3">
+      <div className="bg-card rounded-2xl px-4 py-3">
         <div className="flex gap-1">
           <span className="size-2 bg-gray-500 rounded-full animate-bounce [animation-delay:-0.3s]" />
           <span className="size-2 bg-gray-500 rounded-full animate-bounce [animation-delay:-0.15s]" />
@@ -1267,10 +1267,10 @@ function EmptyChatState({ agentName }: { agentName?: string }) {
   return (
     <div className="flex flex-col items-center justify-center h-full text-center px-8">
       <div className="text-5xl mb-4">💬</div>
-      <h3 className="text-lg font-medium text-white mb-2">
+      <h3 className="text-lg font-medium text-foreground mb-2">
         Start a conversation with {agentName || "the agent"}
       </h3>
-      <p className="text-sm text-gray-500 max-w-md">
+      <p className="text-sm text-muted-foreground max-w-md">
         Send a message to begin. The agent will use its tools to help you with
         your task.
       </p>

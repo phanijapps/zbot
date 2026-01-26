@@ -1,0 +1,81 @@
+/*
+ * @name: Default
+ * @author: Agent Zero
+ * @version: 1.0
+ */
+
+:root {
+  --font-size: 16px;
+  --background: #ffffff;
+  --foreground: #1a1a1a;
+  --card: #ffffff;
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --primary: #030213;
+  --primary-foreground: #ffffff;
+  --secondary: #f0f0f5;
+  --secondary-foreground: #030213;
+  --muted: #ececf0;
+  --muted-foreground: #717182;
+  --accent: #e9ebef;
+  --accent-foreground: #030213;
+  --destructive: #d4183d;
+  --destructive-foreground: #ffffff;
+  --border: rgba(0, 0, 0, 0.1);
+  --input: transparent;
+  --input-background: #f3f3f5;
+  --switch-background: #cbced4;
+  --ring: #a0a0a0;
+  --chart-1: #e07020;
+  --chart-2: #20a0a0;
+  --chart-3: #406080;
+  --chart-4: #d0a020;
+  --chart-5: #c09020;
+  --radius: 0.625rem;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: #030213;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #2a2a2a;
+  --sidebar-border: #e5e5e5;
+  --sidebar-ring: #a0a0a0;
+}
+
+.dark {
+  --background: #1a1a1a;
+  --foreground: #fafafa;
+  --card: #1a1a1a;
+  --card-foreground: #fafafa;
+  --popover: #1a1a1a;
+  --popover-foreground: #fafafa;
+  --primary: #fafafa;
+  --primary-foreground: #2a2a2a;
+  --secondary: #2a2a2a;
+  --secondary-foreground: #fafafa;
+  --muted: #2a2a2a;
+  --muted-foreground: #a0a0a0;
+  --accent: #2a2a2a;
+  --accent-foreground: #fafafa;
+  --destructive: #7f1d1d;
+  --destructive-foreground: #ef4444;
+  --border: #2a2a2a;
+  --input: #2a2a2a;
+  --input-background: #2a2a2a;
+  --switch-background: #404040;
+  --ring: #505050;
+  --chart-1: #6366f1;
+  --chart-2: #22c55e;
+  --chart-3: #c09020;
+  --chart-4: #a855f7;
+  --chart-5: #ef4444;
+  --sidebar: #2a2a2a;
+  --sidebar-foreground: #fafafa;
+  --sidebar-primary: #6366f1;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #2a2a2a;
+  --sidebar-accent-foreground: #fafafa;
+  --sidebar-border: #2a2a2a;
+  --sidebar-ring: #505050;
+}

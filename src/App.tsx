@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
-import { AppShell } from "./core";
+import { AppShell, ThemeProvider } from "./core";
 import { VaultSelector, VaultSwitchingLoader, useVaults } from "./features/vaults";
 import { initializeVaultSystem } from "@/services/vaults";
 import type { Vault } from "@/shared/types";
@@ -26,12 +26,7 @@ function App() {
   const [isCheckingVault, setIsCheckingVault] = useState(true);
   const { isSwitchingVault } = useVaults(); // Get vault switching state
 
-  // Apply dark theme to document - this ensures CSS variables work correctly
-  useEffect(() => {
-    document.body.classList.add('dark');
-    // Also set data-theme attribute for completeness
-    document.documentElement.setAttribute('data-theme', 'dark');
-  }, []);
+  // Dark mode is now handled by ThemeProvider based on settings
 
   useEffect(() => {
     checkVaultStatus();
@@ -101,7 +96,7 @@ function App() {
 
   // Show main app when vault is ready
   return (
-    <>
+    <ThemeProvider>
       <VaultSwitchingLoader show={isSwitchingVault} />
       <BrowserRouter>
         <AppShell>
@@ -117,7 +112,7 @@ function App() {
           </Routes>
         </AppShell>
       </BrowserRouter>
-    </>
+    </ThemeProvider>
   );
 }
 

@@ -132,24 +132,41 @@ pub struct AppDirs {
     pub venv_dir: PathBuf,
     /// Conversation logs directory (logs/<conv-id>/) - legacy
     pub conversation_logs_dir: PathBuf,
-    /// Outputs directory (~/Documents/ZeroAgent/outputs/)
-    pub outputs_dir: PathBuf,
 }
 
 impl AppDirs {
+    /// Get the global app config directory
+    /// This is where shared resources (utils, venv, vault registry) are stored
+    /// - Windows: C:\Users\{user}\AppData\Roaming\agentzero
+    /// - Linux: ~/.config/agentzero
+    /// - macOS: ~/Library/Application Support/agentzero
+    pub fn get_global_config_dir() -> Result<PathBuf> {
+        let config_dir = dirs::config_dir()
+            .context("Failed to get config directory")?
+            .join("agentzero");
+
+        // Ensure directory exists
+        fs::create_dir_all(&config_dir)
+            .context("Failed to create global config directory")?;
+
+        Ok(config_dir)
+    }
+
     /// Get AppDirs for a specific vault path
     /// This creates all necessary directories and returns AppDirs pointing to the vault
+    /// Note: utils and venv are stored in the global config directory, not per-vault
     pub fn for_vault(vault_path: &std::path::Path) -> Result<Self> {
         let vault_root = vault_path.to_path_buf();
 
-        // Ensure all directories exist
+        // Get global config directory for shared resources (utils, venv)
+        let global_config_dir = Self::get_global_config_dir()?;
+
+        // Ensure vault-specific directories exist
         fs::create_dir_all(&vault_root).context("Failed to create vault directory")?;
         fs::create_dir_all(vault_root.join("agents"))
             .context("Failed to create agents directory")?;
         fs::create_dir_all(vault_root.join("skills"))
             .context("Failed to create skills directory")?;
-        fs::create_dir_all(vault_root.join("utils"))
-            .context("Failed to create utils directory")?;
         fs::create_dir_all(vault_root.join("agents_data"))
             .context("Failed to create agents_data directory")?;
         fs::create_dir_all(vault_root.join("db"))
@@ -157,10 +174,9 @@ impl AppDirs {
         fs::create_dir_all(vault_root.join("logs"))
             .context("Failed to create logs directory")?;
 
-        // Get documents directory for outputs (not vault-specific)
-        let documents_dir = dirs::document_dir()
-            .unwrap_or_else(|| vault_root.clone());
-        let outputs_dir = documents_dir.join("ZeroAgent").join("outputs");
+        // Ensure global shared directories exist (utils, venv)
+        fs::create_dir_all(global_config_dir.join("utils"))
+            .context("Failed to create utils directory")?;
 
         Ok(Self {
             settings_file: vault_root.join("settings.yaml"),
@@ -169,10 +185,9 @@ impl AppDirs {
             agents_data_dir: vault_root.join("agents_data"),
             db_dir: vault_root.join("db"),
             skills_dir: vault_root.join("skills"),
-            utils_dir: vault_root.join("utils"),
-            venv_dir: vault_root.join("venv"),
+            utils_dir: global_config_dir.join("utils"),
+            venv_dir: global_config_dir.join("venv"),
             conversation_logs_dir: vault_root.join("logs"),
-            outputs_dir,
             config_dir: vault_root,
         })
     }
@@ -191,15 +206,26 @@ impl AppDirs {
     }
 
     /// Get the default vault path (for backward compatibility)
+    /// This checks for legacy "zeroagent" path first, then falls back to "agentzero"
     pub fn get_default_vault_path() -> std::path::PathBuf {
-        Self::get_config_dir().unwrap_or_else(|_| {
-            dirs::config_dir()
-                .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
-                .join("zeroagent")
-        })
+        // Check for legacy path first
+        let legacy_path = dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("zeroagent");
+
+        if legacy_path.exists() {
+            return legacy_path;
+        }
+
+        // Use new agentzero path
+        dirs::config_dir()
+            .unwrap_or_else(|| std::path::PathBuf::from("~/.config"))
+            .join("agentzero")
     }
 
     /// Get the config directory based on the platform
+    /// Note: This returns the legacy "zeroagent" path for backward compatibility
+    /// New code should use get_global_config_dir() which returns "agentzero"
     fn get_config_dir() -> Result<PathBuf> {
         let config_dir = dirs::config_dir()
             .context("Failed to get config directory")?
@@ -241,10 +267,6 @@ impl AppDirs {
         // Create conversation logs directory
         fs::create_dir_all(&self.conversation_logs_dir)
             .context("Failed to create conversation logs directory")?;
-
-        // Create outputs directory
-        fs::create_dir_all(&self.outputs_dir)
-            .context("Failed to create outputs directory")?;
 
         // Create LanceDB database file if it doesn't exist
         if !self.database_path.exists() {

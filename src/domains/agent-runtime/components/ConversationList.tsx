@@ -136,8 +136,8 @@ export function ConversationList({
   return (
     <div className={cn("flex flex-col h-full", className)}>
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
-        <h2 className="text-lg font-semibold text-white">Conversations</h2>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+        <h2 className="text-lg font-semibold text-foreground">Conversations</h2>
         <button
           onClick={() => onNewChat()}
           className="px-3 py-1.5 text-sm font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors"
@@ -187,7 +187,7 @@ function ConversationCard({
       className={cn(
         "w-full text-left p-4 rounded-xl transition-all duration-200",
         "border border-transparent",
-        "hover:bg-white/5 hover:border-white/10",
+        "hover:bg-accent hover:border-border",
         isSelected
           ? "bg-purple-500/10 border-purple-500/30"
           : "bg-transparent"
@@ -200,10 +200,10 @@ function ConversationCard({
             {icon}
           </span>
           <div className="text-left">
-            <div className="font-medium text-white text-sm">
+            <div className="font-medium text-foreground text-sm">
               {conversation.agentName}
             </div>
-            <div className="text-xs text-gray-500">
+            <div className="text-xs text-muted-foreground">
               {conversation.model || "AI Agent"}
             </div>
           </div>
@@ -211,17 +211,17 @@ function ConversationCard({
       </div>
 
       {/* Conversation Title */}
-      <div className="text-sm font-medium text-gray-200 mb-1 truncate">
+      <div className="text-sm font-medium text-foreground mb-1 truncate">
         {conversation.title}
       </div>
 
       {/* Last Message Preview */}
-      <div className="text-xs text-gray-500 mb-2 line-clamp-2">
+      <div className="text-xs text-muted-foreground mb-2 line-clamp-2">
         {truncateText(conversation.lastMessage || "", 80)}
       </div>
 
       {/* Metadata */}
-      <div className="flex items-center gap-3 text-xs text-gray-600">
+      <div className="flex items-center gap-3 text-xs text-muted-foreground">
         <div className="flex items-center gap-1">
           <MessageSquare className="size-3" />
           <span>{conversation.messageCount}</span>
@@ -244,10 +244,10 @@ function EmptyState({ onNewChat }: { onNewChat: (agentId?: string) => void }) {
       <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-purple-500/20 to-blue-500/20 flex items-center justify-center mb-4 border border-white/10">
         <MessageSquare className="size-7 text-purple-400" />
       </div>
-      <h3 className="text-base font-semibold text-white mb-2">
+      <h3 className="text-base font-semibold text-foreground mb-2">
         No conversations yet
       </h3>
-      <p className="text-sm text-gray-500 mb-4 max-w-xs">
+      <p className="text-sm text-muted-foreground mb-4 max-w-xs">
         Start a conversation with an agent to see your chat history here.
       </p>
       <button
@@ -316,7 +316,7 @@ export function GroupedConversationList({
     <div className={cn("flex flex-col h-full", className)}>
       {/* Header - only show button when there are conversations */}
       <div className="h-14 flex items-center justify-between px-4 shrink-0">
-        <h2 className="text-lg font-semibold text-white">Conversations</h2>
+        <h2 className="text-lg font-semibold text-foreground">Conversations</h2>
         {groups.length > 0 && (
           <button
             onClick={handleNewChatClick}
@@ -347,12 +347,12 @@ export function GroupedConversationList({
       {/* Agent Selector Modal */}
       {showAgentSelector && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60">
-          <div className="bg-zinc-900 border border-white/10 rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
+          <div className="bg-popover border border-border rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold text-white">Select an Agent</h3>
+              <h3 className="text-lg font-semibold text-foreground">Select an Agent</h3>
               <button
                 onClick={() => setShowAgentSelector(false)}
-                className="text-gray-400 hover:text-white transition-colors"
+                className="text-muted-foreground hover:text-foreground transition-colors"
               >
                 <X className="size-5" />
               </button>
@@ -367,8 +367,8 @@ export function GroupedConversationList({
                     "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-left transition-all",
                     "border",
                     selectedAgent === agent.id
-                      ? "bg-purple-500/10 border-purple-500/30 text-white"
-                      : "bg-white/5 border-transparent hover:bg-white/10 hover:border-white/10 text-gray-300"
+                      ? "bg-primary/10 border-primary/30 text-foreground"
+                      : "bg-muted border-transparent hover:bg-accent hover:border-border text-foreground"
                   )}
                 >
                   <div className="w-10 h-10 rounded-lg bg-purple-500/20 flex items-center justify-center">
@@ -376,7 +376,7 @@ export function GroupedConversationList({
                   </div>
                   <div>
                     <div className="font-medium">{agent.displayName}</div>
-                    <div className="text-xs text-gray-500">{agent.name}</div>
+                    <div className="text-xs text-muted-foreground">{agent.name}</div>
                   </div>
                   {selectedAgent === agent.id && (
                     <div className="ml-auto">
@@ -390,7 +390,7 @@ export function GroupedConversationList({
             <div className="flex gap-3">
               <button
                 onClick={() => setShowAgentSelector(false)}
-                className="flex-1 px-4 py-2 text-sm font-medium text-gray-300 bg-white/5 hover:bg-white/10 rounded-lg transition-colors"
+                className="flex-1 px-4 py-2 text-sm font-medium text-foreground bg-muted hover:bg-accent rounded-lg transition-colors"
               >
                 Cancel
               </button>
@@ -400,8 +400,8 @@ export function GroupedConversationList({
                 className={cn(
                   "flex-1 px-4 py-2 text-sm font-medium rounded-lg transition-all",
                   selectedAgent
-                    ? "bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white shadow-lg shadow-purple-500/25"
-                    : "bg-white/5 text-gray-500 cursor-not-allowed"
+                    ? "bg-primary hover:bg-primary/90 text-primary-foreground shadow-lg"
+                    : "bg-muted text-muted-foreground cursor-not-allowed"
                 )}
               >
                 Start Chat
@@ -439,7 +439,7 @@ function AgentGroup({
   return (
     <div className="space-y-2">
       {/* Agent Header */}
-      <div className="group flex items-center gap-1 px-3 py-2 text-sm text-gray-400 hover:text-white hover:bg-white/5 rounded-lg transition-all">
+      <div className="group flex items-center gap-1 px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:bg-accent rounded-lg transition-all">
         <button
           onClick={() => setIsExpanded(!isExpanded)}
           className="flex-1 flex items-center gap-2 min-w-0"
@@ -450,11 +450,11 @@ function AgentGroup({
               isExpanded && "rotate-90"
             )}
           />
-          <div className="w-6 h-6 rounded bg-white/5 flex items-center justify-center shrink-0">
-            <AgentIcon iconName={iconName} className="size-3.5 text-gray-400" />
+          <div className="w-6 h-6 rounded bg-muted flex items-center justify-center shrink-0">
+            <AgentIcon iconName={iconName} className="size-3.5 text-muted-foreground" />
           </div>
           <span className="font-medium truncate">{agentName}</span>
-          <span className="ml-auto text-xs text-gray-600 bg-white/5 px-2 py-0.5 rounded-full shrink-0">
+          <span className="ml-auto text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full shrink-0">
             {conversations.length}
           </span>
         </button>
@@ -466,7 +466,7 @@ function AgentGroup({
                 onDeleteAgent(agentId);
               }
             }}
-            className="opacity-0 group-hover:opacity-100 p-1.5 rounded transition-all hover:bg-red-500/20 hover:text-red-400 text-gray-600 shrink-0"
+            className="opacity-0 group-hover:opacity-100 p-1.5 rounded transition-all hover:bg-destructive/20 hover:text-destructive text-muted-foreground shrink-0"
             title={`Delete all conversations for ${agentName}`}
           >
             <Trash2 className="size-3.5" />
@@ -483,8 +483,8 @@ function AgentGroup({
               className={cn(
                 "group flex items-center gap-1 px-3 py-2.5 rounded-lg text-sm transition-all border",
                 conv.id === selectedId
-                  ? "bg-purple-500/10 border-purple-500/20 text-white"
-                  : "text-gray-400 hover:bg-white/5 border-transparent hover:border-white/5"
+                  ? "bg-primary/10 border-primary/20 text-foreground"
+                  : "text-muted-foreground hover:bg-accent border-transparent hover:border-border"
               )}
             >
               <button
@@ -492,7 +492,7 @@ function AgentGroup({
                 className="flex-1 text-left min-w-0"
               >
                 <div className="truncate mb-1">{conv.title}</div>
-                <div className="flex items-center gap-2 text-xs text-gray-600">
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span>{formatTimestamp(conv.lastMessageTime)}</span>
                   {conv.messageCount > 0 && (
                     <>
@@ -510,7 +510,7 @@ function AgentGroup({
                   }}
                   className={cn(
                     "opacity-0 group-hover:opacity-100 p-1.5 rounded transition-all",
-                    "hover:bg-red-500/20 hover:text-red-400 text-gray-600"
+                    "hover:bg-destructive/20 hover:text-destructive text-muted-foreground"
                   )}
                   title="Delete conversation"
                 >

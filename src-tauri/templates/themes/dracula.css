@@ -1,0 +1,81 @@
+/*
+ * @name: Dracula
+ * @author: Zeno Rocha
+ * @version: 1.0
+ */
+
+:root {
+  --font-size: 16px;
+  --background: #282a36;
+  --foreground: #f8f8f2;
+  --card: #44475a;
+  --card-foreground: #f8f8f2;
+  --popover: #44475a;
+  --popover-foreground: #f8f8f2;
+  --primary: #bd93f9;
+  --primary-foreground: #282a36;
+  --secondary: #44475a;
+  --secondary-foreground: #f8f8f2;
+  --muted: #44475a;
+  --muted-foreground: #6272a4;
+  --accent: #44475a;
+  --accent-foreground: #f8f8f2;
+  --destructive: #ff5555;
+  --destructive-foreground: #f8f8f2;
+  --border: #6272a4;
+  --input: #44475a;
+  --input-background: #44475a;
+  --switch-background: #6272a4;
+  --ring: #bd93f9;
+  --chart-1: #bd93f9;
+  --chart-2: #50fa7b;
+  --chart-3: #f1fa8c;
+  --chart-4: #ff79c6;
+  --chart-5: #8be9fd;
+  --radius: 0.625rem;
+  --sidebar: #21222c;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #bd93f9;
+  --sidebar-primary-foreground: #282a36;
+  --sidebar-accent: #44475a;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #6272a4;
+  --sidebar-ring: #bd93f9;
+}
+
+.dark {
+  --background: #282a36;
+  --foreground: #f8f8f2;
+  --card: #44475a;
+  --card-foreground: #f8f8f2;
+  --popover: #44475a;
+  --popover-foreground: #f8f8f2;
+  --primary: #bd93f9;
+  --primary-foreground: #282a36;
+  --secondary: #44475a;
+  --secondary-foreground: #f8f8f2;
+  --muted: #44475a;
+  --muted-foreground: #6272a4;
+  --accent: #44475a;
+  --accent-foreground: #f8f8f2;
+  --destructive: #ff5555;
+  --destructive-foreground: #f8f8f2;
+  --border: #6272a4;
+  --input: #44475a;
+  --input-background: #44475a;
+  --switch-background: #6272a4;
+  --ring: #bd93f9;
+  --chart-1: #bd93f9;
+  --chart-2: #50fa7b;
+  --chart-3: #f1fa8c;
+  --chart-4: #ff79c6;
+  --chart-5: #8be9fd;
+  --sidebar: #21222c;
+  --sidebar-foreground: #f8f8f2;
+  --sidebar-primary: #bd93f9;
+  --sidebar-primary-foreground: #282a36;
+  --sidebar-accent: #44475a;
+  --sidebar-accent-foreground: #f8f8f2;
+  --sidebar-border: #6272a4;
+  --sidebar-ring: #bd93f9;
+}

@@ -184,9 +184,9 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
       />
 
       {/* Canvas Panel - slides from bottom */}
-      <div className="relative w-full max-h-[85vh] bg-gradient-to-br from-[#0a0a0a] to-[#111] border-t border-white/10 rounded-t-2xl shadow-2xl flex flex-col animate-in slide-in-from-bottom duration-300">
+      <div className="relative w-full max-h-[85vh] bg-popover border-t border-border rounded-t-2xl shadow-2xl flex flex-col animate-in slide-in-from-bottom duration-300">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-white/10 shrink-0">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-border shrink-0">
           <div className="flex items-center gap-2.5">
             {content?.type === "show_content" && (
               <>
@@ -194,8 +194,8 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
                   {getContentTypeIcon(content.event.contentType)}
                 </div>
                 <div>
-                  <h2 className="text-sm font-medium text-white">{content.event.title}</h2>
-                  <p className="text-xs text-gray-500 capitalize">{content.event.contentType}</p>
+                  <h2 className="text-sm font-medium text-foreground">{content.event.title}</h2>
+                  <p className="text-xs text-muted-foreground capitalize">{content.event.contentType}</p>
                 </div>
               </>
             )}
@@ -205,8 +205,8 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
                   <Globe className="size-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-medium text-white">{content.event.title}</h2>
-                  <p className="text-xs text-gray-500">Input Required</p>
+                  <h2 className="text-sm font-medium text-foreground">{content.event.title}</h2>
+                  <p className="text-xs text-muted-foreground">Input Required</p>
                 </div>
               </>
             )}
@@ -216,8 +216,8 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
                   <FileText className="size-5" />
                 </div>
                 <div>
-                  <h2 className="text-sm font-medium text-white">Canvas</h2>
-                  <p className="text-xs text-gray-500">Generative UI</p>
+                  <h2 className="text-sm font-medium text-foreground">Canvas</h2>
+                  <p className="text-xs text-muted-foreground">Generative UI</p>
                 </div>
               </>
             )}
@@ -228,7 +228,7 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
                 variant="ghost"
                 size="sm"
                 onClick={handleDownload}
-                className="text-gray-400 hover:text-white h-8 w-8 p-0"
+                className="h-8 w-8 p-0"
                 title="Export"
               >
                 <Download className="size-4" />
@@ -238,7 +238,7 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
               variant="ghost"
               size="sm"
               onClick={onClose}
-              className="text-gray-400 hover:text-white h-8 w-8 p-0"
+              className="h-8 w-8 p-0"
             >
               <X className="size-4" />
             </Button>
@@ -250,8 +250,8 @@ export function GenerativeCanvas({ isOpen, onClose, content: externalContent, on
           {!content && (
             <div className="flex flex-col items-center justify-center h-full text-center">
               <div className="text-4xl mb-3">🎨</div>
-              <p className="text-gray-500 text-sm">Canvas is ready</p>
-              <p className="text-gray-600 text-xs mt-1">Content will appear here when the agent generates it</p>
+              <p className="text-muted-foreground text-sm">Canvas is ready</p>
+              <p className="text-muted-foreground/70 text-xs mt-1">Content will appear here when the agent generates it</p>
             </div>
           )}
 
@@ -297,10 +297,10 @@ function ContentViewer({ event, loadedContent, isLoadingContent }: ContentViewer
     // Show loading indicator if loading attachment content
     if (event.isAttachment && isLoadingContent) {
       return (
-        <div className="flex items-center justify-center bg-white/5 rounded-lg p-8">
+        <div className="flex items-center justify-center bg-muted rounded-lg p-8">
           <div className="flex flex-col items-center gap-3">
             <Loader2 className="size-6 text-purple-500 animate-spin" />
-            <p className="text-sm text-gray-400">Loading content...</p>
+            <p className="text-sm text-muted-foreground">Loading content...</p>
           </div>
         </div>
       );
@@ -335,7 +335,7 @@ function ContentViewer({ event, loadedContent, isLoadingContent }: ContentViewer
 
       case "image":
         return (
-          <div className="flex items-center justify-center bg-white/5 rounded-lg p-4">
+          <div className="flex items-center justify-center bg-muted rounded-lg p-4">
             <img
               src={`data:image/png;base64,${displayContent}`}
               alt={event.title}
@@ -347,7 +347,7 @@ function ContentViewer({ event, loadedContent, isLoadingContent }: ContentViewer
       case "markdown":
         return (
           <div className="prose prose-invert prose-sm max-w-none">
-            <pre className="whitespace-pre-wrap text-gray-300 text-sm">{displayContent}</pre>
+            <pre className="whitespace-pre-wrap text-foreground/80 text-sm">{displayContent}</pre>
           </div>
         );
 
@@ -355,7 +355,7 @@ function ContentViewer({ event, loadedContent, isLoadingContent }: ContentViewer
       default:
         return (
           <div className="prose prose-invert prose-sm max-w-none">
-            <pre className="whitespace-pre-wrap text-gray-300 text-sm">{displayContent}</pre>
+            <pre className="whitespace-pre-wrap text-foreground/80 text-sm">{displayContent}</pre>
           </div>
         );
     }
@@ -364,9 +364,9 @@ function ContentViewer({ event, loadedContent, isLoadingContent }: ContentViewer
   return (
     <div className="space-y-3">
       {event.metadata && Object.keys(event.metadata).length > 0 && (
-        <div className="bg-white/5 rounded-lg p-3">
-          <p className="text-xs text-gray-500 mb-1">Metadata</p>
-          <pre className="text-xs text-gray-400 overflow-x-auto">
+        <div className="bg-muted rounded-lg p-3">
+          <p className="text-xs text-muted-foreground mb-1">Metadata</p>
+          <pre className="text-xs text-muted-foreground overflow-x-auto">
             {JSON.stringify(event.metadata, null, 2)}
           </pre>
         </div>
@@ -424,7 +424,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
             <select
               value={value as string || ""}
               onChange={(e) => setFormData({ ...formData, [name]: e.target.value })}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary"
             >
               <option value="">Select...</option>
               {propSchema.enum.map((option: string) => (
@@ -441,7 +441,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
               value={value as string || ""}
               onChange={(e) => setFormData({ ...formData, [name]: e.target.value })}
               placeholder={propSchema.description || ""}
-              className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500 resize-none"
+              className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary resize-none"
               rows={4}
             />
           );
@@ -452,7 +452,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
             value={value as string || ""}
             onChange={(e) => setFormData({ ...formData, [name]: e.target.value })}
             placeholder={propSchema.description || ""}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+            className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary"
           />
         );
 
@@ -463,7 +463,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
             value={value as number || ""}
             onChange={(e) => setFormData({ ...formData, [name]: parseFloat(e.target.value) })}
             placeholder={propSchema.description || ""}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+            className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary"
           />
         );
 
@@ -474,9 +474,9 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
               type="checkbox"
               checked={value as boolean || false}
               onChange={(e) => setFormData({ ...formData, [name]: e.target.checked })}
-              className="rounded bg-white/5 border-white/10"
+              className="rounded bg-muted border-border"
             />
-            <span className="text-sm text-gray-300">{propSchema.description || name}</span>
+            <span className="text-sm text-muted-foreground">{propSchema.description || name}</span>
           </label>
         );
 
@@ -487,7 +487,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
             value={Array.isArray(value) ? value.join(", ") : ""}
             onChange={(e) => setFormData({ ...formData, [name]: e.target.value.split(", ").filter(Boolean) })}
             placeholder={propSchema.description || "Comma-separated values"}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+            className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary"
           />
         );
 
@@ -504,7 +504,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
               }
             }}
             placeholder={propSchema.description || "JSON object"}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500 resize-none font-mono"
+            className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary resize-none font-mono"
             rows={4}
           />
         );
@@ -515,7 +515,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
             type="text"
             value={value as string || ""}
             onChange={(e) => setFormData({ ...formData, [name]: e.target.value })}
-            className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-purple-500"
+            className="w-full bg-muted border border-border rounded-lg px-3 py-2 text-foreground text-sm focus:outline-none focus:border-primary"
           />
         );
     }
@@ -528,14 +528,14 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
     <div className="space-y-4">
       {/* Description */}
       {event.description && (
-        <p className="text-sm text-gray-400">{event.description}</p>
+        <p className="text-sm text-muted-foreground">{event.description}</p>
       )}
 
       {/* Form Fields */}
       <div className="space-y-3">
         {Object.entries(properties).map(([name, propSchema]: [string, any]) => (
           <div key={name} className="space-y-1.5">
-            <label className="text-sm font-medium text-white flex items-center gap-1">
+            <label className="text-sm font-medium text-foreground flex items-center gap-1">
               {propSchema.title || name}
               {(schema.required?.includes(name)) && <span className="text-red-400">*</span>}
             </label>
@@ -544,7 +544,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
               <p className="text-xs text-red-400">{errors[name]}</p>
             )}
             {propSchema.description && (
-              <p className="text-xs text-gray-500">{propSchema.description}</p>
+              <p className="text-xs text-muted-foreground">{propSchema.description}</p>
             )}
           </div>
         ))}
@@ -554,7 +554,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
       <div className="flex gap-2 pt-2">
         <Button
           variant="outline"
-          className="flex-1 border-white/20 text-white hover:bg-white/5"
+          className="flex-1"
           onClick={onCancel}
         >
           Cancel

@@ -1,0 +1,81 @@
+/*
+ * @name: Solarized Light
+ * @author: Ethan Schoonover
+ * @version: 1.0
+ */
+
+:root {
+  --font-size: 16px;
+  --background: #fdf6e3;
+  --foreground: #657b83;
+  --card: #eee8d5;
+  --card-foreground: #586e75;
+  --popover: #eee8d5;
+  --popover-foreground: #586e75;
+  --primary: #268bd2;
+  --primary-foreground: #fdf6e3;
+  --secondary: #eee8d5;
+  --secondary-foreground: #586e75;
+  --muted: #eee8d5;
+  --muted-foreground: #93a1a1;
+  --accent: #eee8d5;
+  --accent-foreground: #586e75;
+  --destructive: #dc322f;
+  --destructive-foreground: #fdf6e3;
+  --border: #93a1a1;
+  --input: #eee8d5;
+  --input-background: #eee8d5;
+  --switch-background: #93a1a1;
+  --ring: #268bd2;
+  --chart-1: #268bd2;
+  --chart-2: #859900;
+  --chart-3: #b58900;
+  --chart-4: #d33682;
+  --chart-5: #6c71c4;
+  --radius: 0.625rem;
+  --sidebar: #eee8d5;
+  --sidebar-foreground: #586e75;
+  --sidebar-primary: #268bd2;
+  --sidebar-primary-foreground: #fdf6e3;
+  --sidebar-accent: #fdf6e3;
+  --sidebar-accent-foreground: #586e75;
+  --sidebar-border: #93a1a1;
+  --sidebar-ring: #268bd2;
+}
+
+.dark {
+  --background: #002b36;
+  --foreground: #839496;
+  --card: #073642;
+  --card-foreground: #93a1a1;
+  --popover: #073642;
+  --popover-foreground: #93a1a1;
+  --primary: #268bd2;
+  --primary-foreground: #fdf6e3;
+  --secondary: #073642;
+  --secondary-foreground: #93a1a1;
+  --muted: #073642;
+  --muted-foreground: #657b83;
+  --accent: #073642;
+  --accent-foreground: #93a1a1;
+  --destructive: #dc322f;
+  --destructive-foreground: #fdf6e3;
+  --border: #586e75;
+  --input: #073642;
+  --input-background: #073642;
+  --switch-background: #586e75;
+  --ring: #268bd2;
+  --chart-1: #268bd2;
+  --chart-2: #859900;
+  --chart-3: #b58900;
+  --chart-4: #d33682;
+  --chart-5: #6c71c4;
+  --sidebar: #073642;
+  --sidebar-foreground: #93a1a1;
+  --sidebar-primary: #268bd2;
+  --sidebar-primary-foreground: #fdf6e3;
+  --sidebar-accent: #002b36;
+  --sidebar-accent-foreground: #93a1a1;
+  --sidebar-border: #586e75;
+  --sidebar-ring: #268bd2;
+}

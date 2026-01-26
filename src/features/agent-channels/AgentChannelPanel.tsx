@@ -925,7 +925,7 @@ export function AgentChannelPanel() {
   };
 
   return (
-    <div className="flex h-full bg-[#313338]">
+    <div className="flex h-full bg-background">
       {/* Sidebar - Agent Channels */}
       <AgentChannelList
         agents={agents}
@@ -942,34 +942,34 @@ export function AgentChannelPanel() {
         {selectedAgent && currentSession ? (
           <>
             {/* Header */}
-            <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
+            <div className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
               <div className="flex items-center gap-2 group">
-                <Hash className="size-5 text-gray-300" />
-                <h2 className="text-white font-semibold cursor-default" title={`${loadedDays.reduce((sum, d) => sum + d.messageCount, 0)} total messages across ${loadedDays.length} day${loadedDays.length !== 1 ? 's' : ''}`}>
+                <Hash className="size-5 text-muted-foreground" />
+                <h2 className="text-foreground font-semibold cursor-default" title={`${loadedDays.reduce((sum, d) => sum + d.messageCount, 0)} total messages across ${loadedDays.length} day${loadedDays.length !== 1 ? 's' : ''}`}>
                   {selectedAgent.displayName}
                 </h2>
-                <span className="text-xs text-gray-400 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-xs text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                   {loadedDays.reduce((sum, d) => sum + d.messageCount, 0)}
                 </span>
               </div>
               <div className="flex items-center gap-1">
                 <button
                   onClick={() => setHistoryPanelOpen(true)}
-                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
                   aria-label="Show history"
                 >
                   <History className="size-5" />
                 </button>
                 <button
                   onClick={() => setKnowledgeGraphOpen(true)}
-                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
                   aria-label="Show knowledge graph"
                 >
                   <Network className="size-5" />
                 </button>
                 <button
                   onClick={() => setAttachmentsPanelOpen(true)}
-                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+                  className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
                   aria-label="Show attachments"
                 >
                   <FileText className="size-5" />
@@ -979,7 +979,7 @@ export function AgentChannelPanel() {
                   <button
                     onClick={() => setVoiceRecordingOpen(true)}
                     disabled={isLoading}
-                    className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:opacity-50"
+                    className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent disabled:opacity-50"
                     aria-label="Record voice note"
                   >
                     <Mic className="size-5" />
@@ -988,7 +988,7 @@ export function AgentChannelPanel() {
                 <button
                   onClick={() => selectedAgent && navigate(`/workflow/${selectedAgent.id}`, { state: { from: '/', restoreAgentId: selectedAgent.id } })}
                   disabled={!selectedAgent}
-                  className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed"
+                  className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent disabled:text-muted-foreground/50 disabled:hover:bg-transparent disabled:cursor-not-allowed"
                   aria-label="Edit workflow"
                 >
                   <GitBranch className="size-5" />
@@ -1005,13 +1005,13 @@ export function AgentChannelPanel() {
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center h-full px-6 text-center">
-                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-violet-600/20 to-purple-700/20 flex items-center justify-center mb-4 border border-white/10">
+                    <div className="w-14 h-14 rounded-xl bg-gradient-to-br from-violet-600/20 to-purple-700/20 flex items-center justify-center mb-4 border border-border">
                       <MessageSquare className="size-7 text-violet-400" />
                     </div>
-                    <h3 className="text-base font-semibold text-white mb-2">
+                    <h3 className="text-base font-semibold text-foreground mb-2">
                       Today's session
                     </h3>
-                    <p className="text-sm text-gray-300 max-w-xs">
+                    <p className="text-sm text-muted-foreground max-w-xs">
                       Start a conversation with {selectedAgent.displayName}. Messages are saved to today's session.
                     </p>
                   </div>
@@ -1038,7 +1038,7 @@ export function AgentChannelPanel() {
                           {isExpanded && (
                             <div className="space-y-4 mt-2">
                               {isLoading ? (
-                                <div className="flex items-center gap-2 text-gray-300 text-sm py-4">
+                                <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
                                   <Loader2 className="size-4 animate-spin" />
                                   <span>Loading messages...</span>
                                 </div>
@@ -1050,8 +1050,8 @@ export function AgentChannelPanel() {
                                       className={cn(
                                         "group -mx-4 px-4 py-0.5",
                                         msg.role === 'user'
-                                          ? 'bg-[#404249] hover:bg-[#45474f]'
-                                          : 'bg-transparent hover:bg-black/5'
+                                          ? 'bg-card hover:bg-accent'
+                                          : 'bg-transparent hover:bg-accent/50'
                                       )}
                                     >
                                       {/* User message */}
@@ -1062,9 +1062,9 @@ export function AgentChannelPanel() {
                                           </div>
                                           <div className="flex-1 min-w-0">
                                             <div className="flex items-baseline gap-2 mb-1">
-                                              <span className="font-semibold text-white">You</span>
+                                              <span className="font-semibold text-foreground">You</span>
                                             </div>
-                                            <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                                            <p className="text-foreground/90 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
                                               {msg.content}
                                             </p>
                                           </div>
@@ -1093,9 +1093,9 @@ export function AgentChannelPanel() {
                                             </div>
                                             <div className="flex-1 min-w-0">
                                               <div className="flex items-baseline gap-2 mb-1">
-                                                <span className="font-semibold text-white">{selectedAgent.displayName}</span>
+                                                <span className="font-semibold text-foreground">{selectedAgent.displayName}</span>
                                               </div>
-                                              <p className="text-gray-200 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
+                                              <p className="text-foreground/90 text-[15px] leading-relaxed whitespace-pre-wrap break-words">
                                                 {msg.content}
                                               </p>
                                             </div>
@@ -1113,7 +1113,7 @@ export function AgentChannelPanel() {
                     })}
                     {/* Show loading indicator for today's session */}
                     {isLoading && expandedDays.has(currentSession?.id || '') && (
-                      <div className="flex items-center gap-2 text-gray-300 text-sm py-4">
+                      <div className="flex items-center gap-2 text-muted-foreground text-sm py-4">
                         <Loader2 className="size-4 animate-spin" />
                         <span>
                           {executionStage === "thinking" && "Thinking..."}
@@ -1130,9 +1130,9 @@ export function AgentChannelPanel() {
 
             {/* Input Area */}
             <div className="px-4 pb-6 shrink-0">
-              <div className="relative bg-[#383a40] rounded-lg">
+              <div className="relative bg-input rounded-lg">
                 <div className="flex items-start gap-3 p-3">
-                  <button className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5 mt-1">
+                  <button className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent mt-1">
                     <Paperclip className="size-5" />
                   </button>
                   <Textarea
@@ -1146,7 +1146,7 @@ export function AgentChannelPanel() {
                       }
                     }}
                     placeholder={`Message ${selectedAgent.displayName}`}
-                    className="flex-1 min-h-[24px] max-h-[200px] bg-transparent border-0 text-white placeholder:text-gray-500 resize-none focus-visible:ring-0 p-0"
+                    className="flex-1 min-h-[24px] max-h-[200px] bg-transparent border-0 text-foreground placeholder:text-muted-foreground resize-none focus-visible:ring-0 p-0"
                     rows={1}
                   />
                   <div className="flex items-center gap-1 mt-1">
@@ -1156,8 +1156,8 @@ export function AgentChannelPanel() {
                       className={cn(
                         'p-1.5 rounded transition-colors',
                         input.trim() && !isLoading
-                          ? 'text-white hover:bg-white/5'
-                          : 'text-gray-600 cursor-not-allowed'
+                          ? 'text-foreground hover:bg-accent'
+                          : 'text-muted-foreground cursor-not-allowed'
                       )}
                     >
                       <Send className="size-5" />
@@ -1171,13 +1171,13 @@ export function AgentChannelPanel() {
           /* Empty State - No Agent Selected */
           <div className="flex-1 flex items-center justify-center">
             <div className="text-center px-6">
-              <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-violet-600/20 to-purple-700/20 flex items-center justify-center mx-auto mb-4 border border-white/10">
+              <div className="w-16 h-16 rounded-xl bg-gradient-to-br from-violet-600/20 to-purple-700/20 flex items-center justify-center mx-auto mb-4 border border-border">
                 <Bot className="size-8 text-violet-400" />
               </div>
-              <h2 className="text-xl font-semibold text-white mb-2">
+              <h2 className="text-xl font-semibold text-foreground mb-2">
                 Select an Agent Channel
               </h2>
-              <p className="text-gray-300 max-w-md mx-auto">
+              <p className="text-muted-foreground max-w-md mx-auto">
                 Choose an agent from the sidebar to start your conversation. Each agent has its own daily session.
               </p>
             </div>
@@ -1187,16 +1187,16 @@ export function AgentChannelPanel() {
 
       {/* History Panel */}
       {historyPanelOpen && (
-        <div className="fixed inset-y-0 right-0 w-80 bg-[#2b2d31] border-l border-black/20 shadow-xl z-50 flex flex-col">
+        <div className="fixed inset-y-0 right-0 w-80 bg-sidebar border-l border-border shadow-xl z-50 flex flex-col">
           {/* Header */}
-          <div className="h-12 border-b border-black/20 flex items-center justify-between px-4 shrink-0">
+          <div className="h-12 border-b border-border flex items-center justify-between px-4 shrink-0">
             <div className="flex items-center gap-2">
-              <History className="size-5 text-gray-300" />
-              <h2 className="text-white font-semibold">History</h2>
+              <History className="size-5 text-muted-foreground" />
+              <h2 className="text-foreground font-semibold">History</h2>
             </div>
             <button
               onClick={() => setHistoryPanelOpen(false)}
-              className="p-2 text-gray-300 hover:text-white transition-colors rounded hover:bg-white/5"
+              className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
               aria-label="Close history"
             >
               <X className="size-5" />
@@ -1238,7 +1238,7 @@ export function AgentChannelPanel() {
 
             {previousDays.length === 0 ? (
               <div className="text-center py-8">
-                <p className="text-sm text-gray-300">No previous days found</p>
+                <p className="text-sm text-muted-foreground">No previous days found</p>
               </div>
             ) : (
               <>
@@ -1262,8 +1262,8 @@ export function AgentChannelPanel() {
                       <div
                         key={day.sessionId}
                         className={cn(
-                          "p-3 rounded-lg border border-black/20 transition-colors",
-                          isLoaded ? 'bg-[#404249]' : 'bg-[#383a40] hover:bg-[#404249]'
+                          "p-3 rounded-lg border border-border transition-colors",
+                          isLoaded ? 'bg-card' : 'bg-input hover:bg-card'
                         )}
                       >
                         <div className="flex items-start justify-between gap-2">
@@ -1275,24 +1275,24 @@ export function AgentChannelPanel() {
                           >
                             <div className="flex items-center gap-2 mb-1">
                               {isDayLoading ? (
-                                <Loader2 className="size-3 text-gray-400 animate-spin" />
+                                <Loader2 className="size-3 text-muted-foreground animate-spin" />
                               ) : isLoaded && isExpanded ? (
-                                <ChevronDown className="size-3 text-gray-400" />
+                                <ChevronDown className="size-3 text-muted-foreground" />
                               ) : isLoaded ? (
-                                <ChevronRight className="size-3 text-gray-400" />
+                                <ChevronRight className="size-3 text-muted-foreground" />
                               ) : null}
-                              <div className="text-sm text-white font-medium">
+                              <div className="text-sm text-foreground font-medium">
                                 {formatSessionDate(day.sessionDate)}
                               </div>
                               {isLoaded && (
-                                <span className="text-xs text-violet-400">• Loaded</span>
+                                <span className="text-xs text-primary">• Loaded</span>
                               )}
                             </div>
-                            <div className="text-xs text-gray-300">
+                            <div className="text-xs text-muted-foreground">
                               {day.messageCount} message{day.messageCount !== 1 ? 's' : ''}
                             </div>
                             {day.summary && (
-                              <div className="text-xs text-gray-400 mt-1 line-clamp-2">
+                              <div className="text-xs text-muted-foreground/70 mt-1 line-clamp-2">
                                 {day.summary}
                               </div>
                             )}
@@ -1327,7 +1327,7 @@ export function AgentChannelPanel() {
                                 }
                               }
                             }}
-                            className="p-1.5 text-gray-400 hover:text-red-400 transition-colors rounded hover:bg-white/5 shrink-0"
+                            className="p-1.5 text-muted-foreground hover:text-red-400 transition-colors rounded hover:bg-accent shrink-0"
                             aria-label={`Delete ${formatSessionDate(day.sessionDate)}`}
                           >
                             <Trash2 className="size-4" />

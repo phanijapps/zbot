@@ -20,6 +20,7 @@ pub mod search;
 pub mod knowledge_graph;
 pub mod media;
 pub mod workflow;
+pub mod themes;
 
 // Re-export all commands
 pub use core::*;
@@ -39,3 +40,4 @@ pub use search::*;
 pub use knowledge_graph::*;
 pub use media::*;
 pub use workflow::*;
+pub use themes::*;

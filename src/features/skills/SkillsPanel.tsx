@@ -110,15 +110,15 @@ export function SkillsPanel() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-white">Skills</h2>
-            <p className="text-gray-400 text-sm mt-1">
+            <h2 className="text-2xl font-bold text-foreground">Skills</h2>
+            <p className="text-muted-foreground text-sm mt-1">
               Extend agent capabilities with skills following the Agent Skills specification
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              className="border-white/20 text-white hover:bg-white/5"
+              className="border-border text-foreground hover:bg-accent"
               onClick={handleRefresh}
               disabled={refreshing}
             >
@@ -142,8 +142,8 @@ export function SkillsPanel() {
               onClick={() => setSelectedCategory(cat)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-all ${
                 selectedCategory === cat
-                  ? "bg-blue-600 text-white"
-                  : "bg-white/5 text-gray-300 hover:bg-white/10"
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-foreground hover:bg-accent"
               }`}
             >
               {cat === "all" ? "All Skills" : cat}
@@ -153,14 +153,14 @@ export function SkillsPanel() {
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="size-8 text-white animate-spin" />
+            <Loader2 className="size-8 text-foreground animate-spin" />
           </div>
         ) : filteredSkills.length === 0 ? (
-          <Card className="bg-white/5 border-white/10">
+          <Card className="bg-card border-border">
             <CardContent className="py-16 text-center">
-              <Sparkles className="size-12 text-gray-500 mx-auto mb-4" />
-              <h3 className="text-white text-lg font-medium mb-2">No Skills Found</h3>
-              <p className="text-gray-400 text-sm mb-4">
+              <Sparkles className="size-12 text-muted-foreground mx-auto mb-4" />
+              <h3 className="text-foreground text-lg font-medium mb-2">No Skills Found</h3>
+              <p className="text-muted-foreground text-sm mb-4">
                 {selectedCategory === "all"
                   ? "Get started by adding your first skill"
                   : `No skills in ${selectedCategory} category`}
@@ -179,23 +179,23 @@ export function SkillsPanel() {
             {filteredSkills.map((skill) => (
               <Card
                 key={skill.id}
-                className="bg-white/5 border-white/10 hover:bg-white/10 transition-colors group"
+                className="bg-card border-border hover:bg-accent transition-colors group"
               >
                 <CardHeader>
                   <div className="flex items-start justify-between">
                     <div className={`bg-gradient-to-br ${getCategoryGradient(skill.category)} p-3 rounded-xl`}>
                       <Sparkles className="size-5 text-white" />
                     </div>
-                    <Badge variant="secondary" className="bg-white/10 text-gray-300 text-xs">
+                    <Badge variant="secondary" className="bg-muted text-foreground text-xs">
                       {skill.category}
                     </Badge>
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <CardTitle className="text-white text-lg mb-2">
+                  <CardTitle className="text-foreground text-lg mb-2">
                     {skill.displayName}
                   </CardTitle>
-                  <CardDescription className="text-gray-400 text-sm mb-4 line-clamp-2">
+                  <CardDescription className="text-muted-foreground text-sm mb-4 line-clamp-2">
                     {skill.description}
                   </CardDescription>
                   <div className="flex items-center justify-between">
@@ -207,7 +207,7 @@ export function SkillsPanel() {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleOpenEditEditor(skill)}
-                        className="text-gray-400 hover:text-white h-8 w-8 p-0"
+                        className="text-muted-foreground hover:text-foreground h-8 w-8 p-0"
                       >
                         <Edit className="size-4" />
                       </Button>
@@ -215,7 +215,7 @@ export function SkillsPanel() {
                         variant="ghost"
                         size="sm"
                         onClick={() => handleDeleteSkill(skill.id)}
-                        className="text-gray-400 hover:text-red-400 h-8 w-8 p-0"
+                        className="text-muted-foreground hover:text-destructive h-8 w-8 p-0"
                       >
                         <Trash2 className="size-4" />
                       </Button>

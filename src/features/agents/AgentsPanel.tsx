@@ -4,15 +4,15 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import { Bot, Plus, Trash2, Loader2, RefreshCw, Edit, Workflow } from "lucide-react";
+import { Bot, Plus, Trash2, Loader2, RefreshCw, Workflow } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { useNavigate } from "react-router-dom";
-import { AgentIDEPage } from "./AgentIDEPage";
 import * as agentService from "@/services/agent";
 import * as providerService from "@/services/provider";
 import type { Agent } from "@/shared/types";
 import type { Provider } from "@/shared/types";
 import { useVaults } from "@/features/vaults/useVaults";
+import { NewAgentDialog } from "@/features/workflow-ide/components/NewAgentDialog";
 
 export function AgentsPanel() {
   const { currentVault } = useVaults();
@@ -20,8 +20,7 @@ export function AgentsPanel() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [providers, setProviders] = useState<Provider[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showFullPageEditor, setShowFullPageEditor] = useState(false);
-  const [editingAgent, setEditingAgent] = useState<Agent | null>(null);
+  const [showNewAgentDialog, setShowNewAgentDialog] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   // Load agents and providers on mount and when vault changes
@@ -58,25 +57,6 @@ export function AgentsPanel() {
     setRefreshing(false);
   };
 
-  const handleOpenCreateEditor = () => {
-    setEditingAgent(null);
-    setShowFullPageEditor(true);
-  };
-
-  const handleOpenEditEditor = (agent: Agent) => {
-    setEditingAgent(agent);
-    setShowFullPageEditor(true);
-  };
-
-  const handleSaveAgent = async (agent: Omit<Agent, "id" | "createdAt">) => {
-    if (editingAgent) {
-      await agentService.updateAgent(editingAgent.id, agent);
-    } else {
-      await agentService.createAgent(agent);
-    }
-    await loadAgents();
-  };
-
   const handleDeleteAgent = async (id: string) => {
     if (confirm("Are you sure you want to delete this agent?")) {
       try {
@@ -111,15 +91,15 @@ export function AgentsPanel() {
       <div className="p-6">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-white">Agents</h2>
-            <p className="text-gray-400 text-sm mt-1">
+            <h2 className="text-2xl font-bold text-foreground">Agents</h2>
+            <p className="text-muted-foreground text-sm mt-1">
               Create and manage your AI agents
             </p>
           </div>
           <div className="flex items-center gap-2">
             <Button
               variant="outline"
-              className="border-white/20 text-white hover:bg-white/5"
+              className="border-border text-foreground hover:bg-accent"
               onClick={handleRefresh}
               disabled={refreshing}
             >
@@ -127,7 +107,7 @@ export function AgentsPanel() {
             </Button>
             <Button
               className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white"
-              onClick={handleOpenCreateEditor}
+              onClick={() => setShowNewAgentDialog(true)}
             >
               <Plus className="size-4 mr-2" />
               Add Agent
@@ -137,20 +117,20 @@ export function AgentsPanel() {
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
-            <Loader2 className="size-8 text-white animate-spin" />
+            <Loader2 className="size-8 text-foreground animate-spin" />
           </div>
         ) : agents.length === 0 ? (
           <div className="text-center py-20">
-            <Bot className="size-16 text-gray-600 mx-auto mb-4" />
-            <h3 className="text-xl font-medium text-white mb-2">No Agents</h3>
-            <p className="text-gray-400">Add your first agent to get started</p>
+            <Bot className="size-16 text-muted-foreground mx-auto mb-4" />
+            <h3 className="text-xl font-medium text-foreground mb-2">No Agents</h3>
+            <p className="text-muted-foreground">Add your first agent to get started</p>
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {agents.map((agent) => (
               <div
                 key={agent.id}
-                className="bg-gradient-to-br from-white/5 to-white/[0.02] rounded-xl p-5 border border-white/10 hover:border-white/20 transition-all"
+                className="bg-card rounded-xl p-5 border border-border hover:border-primary/50 transition-all"
               >
                 <div className="flex items-start justify-between mb-4">
                   <div className="flex items-start gap-3">
@@ -158,26 +138,17 @@ export function AgentsPanel() {
                       <Bot className="size-4 text-white" />
                     </div>
                     <div>
-                      <h3 className="text-white font-semibold">{agent.displayName}</h3>
-                      <p className="text-xs text-gray-500">{agent.name}</p>
+                      <h3 className="text-foreground font-semibold">{agent.displayName}</h3>
+                      <p className="text-xs text-muted-foreground">{agent.name}</p>
                     </div>
                   </div>
                   <div className="flex items-center gap-1">
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => handleOpenEditEditor(agent)}
-                      className="text-gray-400 hover:text-white h-7 w-7 p-0"
-                      title="Edit agent"
-                    >
-                      <Edit className="size-3.5" />
-                    </Button>
-                    <Button
-                      variant="ghost"
-                      size="sm"
                       onClick={() => navigate(`/workflow/${agent.id}`, { state: { from: '/agents' } })}
-                      className="text-gray-400 hover:text-purple-400 h-7 w-7 p-0"
-                      title="Open Workflow IDE"
+                      className="text-muted-foreground hover:text-primary h-7 w-7 p-0"
+                      title="Edit in Workflow IDE"
                     >
                       <Workflow className="size-3.5" />
                     </Button>
@@ -185,7 +156,7 @@ export function AgentsPanel() {
                       variant="ghost"
                       size="sm"
                       onClick={() => handleDeleteAgent(agent.id)}
-                      className="text-gray-400 hover:text-red-400 h-7 w-7 p-0"
+                      className="text-muted-foreground hover:text-destructive h-7 w-7 p-0"
                       title="Delete agent"
                     >
                       <Trash2 className="size-3.5" />
@@ -193,12 +164,12 @@ export function AgentsPanel() {
                   </div>
                 </div>
 
-                <p className="text-gray-400 text-sm mb-3">{agent.description}</p>
+                <p className="text-muted-foreground text-sm mb-3">{agent.description}</p>
 
                 {/* Provider and Model */}
-                <div className="bg-black/30 rounded-lg p-2.5 mb-3 border border-white/5">
-                  <p className="text-xs text-gray-500 mb-1">Provider</p>
-                  <p className="text-xs text-gray-300 font-mono">
+                <div className="bg-muted rounded-lg p-2.5 mb-3 border border-border">
+                  <p className="text-xs text-muted-foreground mb-1">Provider</p>
+                  <p className="text-xs text-foreground font-mono">
                     {getProviderName(agent.providerId)} · {agent.model.length > 25 ? agent.model.substring(0, 25) + "..." : agent.model}
                   </p>
                 </div>
@@ -244,15 +215,12 @@ export function AgentsPanel() {
         </div>
       </div>
 
-      {showFullPageEditor && (
-        <AgentIDEPage
-          onClose={() => setShowFullPageEditor(false)}
-          onSave={handleSaveAgent}
-          onAgentUpdated={(updatedAgent) => {
-            setEditingAgent(updatedAgent);
-            loadAgents();
+      {showNewAgentDialog && (
+        <NewAgentDialog
+          onClose={() => {
+            setShowNewAgentDialog(false);
+            loadAgents(); // Refresh list after dialog closes
           }}
-          initialAgent={editingAgent}
         />
       )}
     </>
