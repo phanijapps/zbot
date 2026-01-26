@@ -28,6 +28,71 @@ use serde_json::json;
 type TResult<T> = std::result::Result<T, String>;
 
 // ============================================================================
+// SYSTEM PROMPT TEMPLATE
+// ============================================================================
+
+/// Base system prompt template with tool usage guidelines
+/// This is prepended to all agent instructions to ensure consistent behavior
+const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../../../templates/system_prompt.md");
+
+/// List of built-in tools (static, known at compile time)
+const BUILTIN_TOOLS: &[&str] = &[
+    "read", "write", "edit", "glob", "grep",
+    "shell", "python", "load_skill",
+    "request_input", "show_content", "create_agent",
+    "list_entities", "search_entities", "get_entity_relationships",
+    "add_entity", "add_relationship",
+];
+
+/// Build a complete system prompt by combining the template with agent-specific instructions
+///
+/// # Arguments
+/// * `base_instructions` - The agent's AGENTS.md content
+/// * `agent_name` - The agent's name/id for file paths
+/// * `vault_path` - Path to the vault directory
+/// * `mcp_tool_names` - Names of configured MCP tools
+fn build_full_system_prompt(
+    base_instructions: &str,
+    agent_name: &str,
+    vault_path: &str,
+    mcp_tool_names: &[String],
+) -> String {
+    let mut prompt = SYSTEM_PROMPT_TEMPLATE.to_string();
+
+    // Replace base instructions placeholder
+    prompt = prompt.replace("{BASE_INSTRUCTIONS}", base_instructions);
+
+    // Generate built-in tools XML list
+    let tools_xml = BUILTIN_TOOLS
+        .iter()
+        .map(|t| format!("- {}", t))
+        .collect::<Vec<_>>()
+        .join("\n");
+    prompt = prompt.replace("{AVAILABLE_TOOLS_XML}", &tools_xml);
+
+    // Generate MCP tools XML list
+    let mcp_tools_xml = if mcp_tool_names.is_empty() {
+        "No MCP tools configured for this agent.".to_string()
+    } else {
+        mcp_tool_names
+            .iter()
+            .map(|t| format!("- {}", t))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    prompt = prompt.replace("{AVAILABLE_MCP_TOOLS_XML}", &mcp_tools_xml);
+
+    // Replace vault path (and fix typo in template)
+    prompt = prompt.replace("{vault}", vault_path);
+    prompt = prompt.replace("{valut}", vault_path); // Fix typo in template
+
+    // Replace agent name placeholder
+    prompt = prompt.replace("<agent_name>", agent_name);
+
+    prompt
+}
+
+// ============================================================================
 // EXECUTOR CONFIG
 // ============================================================================
 
@@ -1013,9 +1078,20 @@ pub async fn create_zero_executor(
         system_instruction.push_str(&available_context);
     }
 
-    // Override system_instruction with AGENTS.md content + skills
+    // Build the full system prompt using the template
+    // This wraps the agent's instructions with tool usage guidelines
+    let vault_path = dirs.config_dir.to_string_lossy().to_string();
+    let mcp_tool_names: Vec<String> = agent_config.mcps.iter().cloned().collect();
+    let full_system_prompt = build_full_system_prompt(
+        &system_instruction,
+        agent_id,
+        &vault_path,
+        &mcp_tool_names,
+    );
+
+    // Override system_instruction with full template + AGENTS.md content + skills
     let agent_config = AgentYamlConfig {
-        system_instruction: if system_instruction.is_empty() { None } else { Some(system_instruction) },
+        system_instruction: if full_system_prompt.is_empty() { None } else { Some(full_system_prompt) },
         ..agent_config
     };
 
@@ -1094,7 +1170,7 @@ pub async fn create_subagent_executor(
 
     // Read AGENTS.md for system instruction
     let agents_md_file = agent_dir.join("AGENTS.md");
-    let mut system_instruction = if agents_md_file.exists() {
+    let base_instruction = if agents_md_file.exists() {
         std::fs::read_to_string(&agents_md_file)
             .map_err(|e| format!("Failed to read AGENTS.md: {}", e))?
             .trim()
@@ -1103,10 +1179,21 @@ pub async fn create_subagent_executor(
         String::new()
     };
 
+    // Build the full system prompt using the template (includes tool usage guidelines)
+    let vault_path = dirs.config_dir.to_string_lossy().to_string();
+    let mcp_tool_names: Vec<String> = agent_config.mcps.iter().cloned().collect();
+    let subagent_full_id = format!("{}.{}", parent_agent_id, subagent_id);
+    let full_system_prompt = build_full_system_prompt(
+        &base_instruction,
+        &subagent_full_id,
+        &vault_path,
+        &mcp_tool_names,
+    );
+
     // Inject context+task+goal into subagent's system instruction
     let enhanced_instruction = format!(
-        "{}\n\n## Context from Orchestrator\n{}\n\n## Your Task\n{}\n\n## Overall Goal\n{}",
-        system_instruction, context, task, goal
+        "{}\n\n---\n\n## Context from Orchestrator\n{}\n\n## Your Task\n{}\n\n## Overall Goal\n{}",
+        full_system_prompt, context, task, goal
     );
 
     // Override system_instruction with enhanced version
