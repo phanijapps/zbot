@@ -143,6 +143,7 @@ pub fn run() {
             commands::start_mcp_server,
             commands::stop_mcp_server,
             commands::test_mcp_server,
+            commands::validate_mcp_server,
             // Skill commands
             commands::list_skills,
             commands::get_skill,
