@@ -149,3 +149,4 @@ export async function installRequirements(): Promise<string> {
 export async function listInstalledPackages(): Promise<PackageInfo[]> {
   return invoke("list_installed_packages");
 }
+
