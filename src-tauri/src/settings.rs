@@ -422,13 +422,28 @@ impl AppDirs {
         })
     }
 
-    /// Clear all data (except settings)
-    pub fn clear_all_data(&self) -> Result<()> {
-        // Remove database
+    /// Clear conversation data only (preserves agents and skills)
+    pub fn clear_conversations(&self) -> Result<()> {
+        // Remove conversation database
         if self.database_path.exists() {
             fs::remove_file(&self.database_path)
                 .context("Failed to remove database")?;
         }
+
+        // Remove agent-channels database (daily sessions)
+        let agent_channels_db = self.db_dir.join("agent-channels.db");
+        if agent_channels_db.exists() {
+            fs::remove_file(&agent_channels_db)
+                .context("Failed to remove agent-channels database")?;
+        }
+
+        Ok(())
+    }
+
+    /// Clear all data (except settings) - WARNING: Deletes agents and skills too!
+    pub fn clear_all_data(&self) -> Result<()> {
+        // Clear conversations first
+        self.clear_conversations()?;
 
         // Remove agents directory
         if self.agents_dir.exists() {

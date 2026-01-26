@@ -140,13 +140,13 @@ export function SettingsPanel() {
     }
   };
 
-  const handleClearAllData = async () => {
-    if (confirm("Are you sure you want to clear all data? This cannot be undone.")) {
+  const handleClearConversations = async () => {
+    if (confirm("Are you sure you want to delete all conversations? Your agents and skills will be preserved. This cannot be undone.")) {
       try {
-        await settingsService.clearAllData();
+        await settingsService.clearConversations();
         await loadStorageInfo();
       } catch (error) {
-        console.error("Failed to clear data:", error);
+        console.error("Failed to clear conversations:", error);
       }
     }
   };
@@ -417,12 +417,12 @@ export function SettingsPanel() {
               <Button
                 variant="outline"
                 className="w-full border-orange-500/30 text-orange-400 hover:bg-orange-500/10 hover:text-orange-300"
-                onClick={handleClearAllData}
+                onClick={handleClearConversations}
               >
                 Delete All Conversations
               </Button>
               <p className="text-muted-foreground text-xs mt-1">
-                Removes all chat history and session data
+                Removes all chat history and session data (preserves agents and skills)
               </p>
             </div>
             <div>

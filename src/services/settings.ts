@@ -39,7 +39,14 @@ export async function getStorageInfo(): Promise<StorageInfo> {
 }
 
 /**
- * Clear all application data (except settings)
+ * Clear conversation data only (preserves agents and skills)
+ */
+export async function clearConversations(): Promise<void> {
+  return invoke("clear_conversations");
+}
+
+/**
+ * Clear all application data (except settings) - WARNING: Also deletes agents and skills!
  */
 export async function clearAllData(): Promise<void> {
   return invoke("clear_all_data");

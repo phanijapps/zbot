@@ -38,7 +38,14 @@ pub async fn get_storage_info() -> Result<StorageInfo, String> {
     dirs.get_storage_info().map_err(|e| e.to_string())
 }
 
-/// Clear all application data (except settings)
+/// Clear conversation data only (preserves agents and skills)
+#[tauri::command]
+pub async fn clear_conversations() -> Result<(), String> {
+    let dirs = AppDirs::get().map_err(|e| e.to_string())?;
+    dirs.clear_conversations().map_err(|e| e.to_string())
+}
+
+/// Clear all application data (except settings) - WARNING: Also deletes agents and skills!
 #[tauri::command]
 pub async fn clear_all_data() -> Result<(), String> {
     let dirs = AppDirs::get().map_err(|e| e.to_string())?;

@@ -160,6 +160,7 @@ pub fn run() {
             commands::save_settings,
             commands::reset_settings,
             commands::get_storage_info,
+            commands::clear_conversations,
             commands::clear_all_data,
             commands::get_config_path,
             commands::initialize_directories,
