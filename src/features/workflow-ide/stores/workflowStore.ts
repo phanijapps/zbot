@@ -133,18 +133,26 @@ export const useWorkflowStore = create<WorkflowState>()(
       },
 
       onNodesChange: (changes) => {
+        // Only mark dirty for meaningful changes (not dimensions/select which happen on load)
+        const meaningfulChanges = changes.some(
+          (c) => c.type === 'position' || c.type === 'remove' || c.type === 'add'
+        );
         set({
           nodes: applyNodeChanges(changes, get().nodes),
-          isDirty: true,
+          ...(meaningfulChanges ? { isDirty: true } : {}),
         });
         // Trigger validation after node changes
         get().runValidation();
       },
 
       onEdgesChange: (changes) => {
+        // Only mark dirty for meaningful changes (not select which happens on load)
+        const meaningfulChanges = changes.some(
+          (c) => c.type === 'remove' || c.type === 'add'
+        );
         set({
           edges: applyEdgeChanges(changes, get().edges),
-          isDirty: true,
+          ...(meaningfulChanges ? { isDirty: true } : {}),
         });
         // Trigger validation after edge changes
         get().runValidation();

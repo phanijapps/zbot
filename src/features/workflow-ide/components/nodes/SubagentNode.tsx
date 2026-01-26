@@ -1,23 +1,43 @@
-import { memo } from 'react';
+import { memo, useCallback } from 'react';
 import { Handle, Position, NodeProps } from '@xyflow/react';
-import { Bot, Wrench, Server, Loader2, CheckCircle2, XCircle, AlertTriangle, AlertCircle } from 'lucide-react';
+import { Bot, Loader2, CheckCircle2, XCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 import { cn } from '@/core/utils/cn';
 import { useWorkflowStore } from '../../stores/workflowStore';
+import { NodeConfigChips } from './NodeConfigChips';
 
 type ExecutionStatus = 'idle' | 'running' | 'completed' | 'failed';
 
 export const SubagentNode = memo(({ id, data, selected }: NodeProps) => {
-  const hasTools = ((data.skills as string[])?.length ?? 0) > 0 || ((data.mcps as string[])?.length ?? 0) > 0;
   const description = data.description as string | undefined;
   const displayName = data.displayName as string | undefined;
   const subagentId = data.subagentId as string | undefined;
   const model = data.model as string | undefined;
-  const skills = data.skills as string[] | undefined;
-  const mcps = data.mcps as string[] | undefined;
+  const skills = (data.skills as string[]) || [];
+  const mcps = (data.mcps as string[]) || [];
+  const tools = (data.tools as string[]) || [];
+  const middleware = data.middleware as string | undefined;
   const status = (data._executionStatus as ExecutionStatus) || 'idle';
 
-  // Get validation state for this node
+  // Get validation state and update function
   const validation = useWorkflowStore((s) => s.validation.nodes[id || '']);
+  const updateNode = useWorkflowStore((s) => s.updateNode);
+
+  // Handlers for config changes
+  const handleMcpsChange = useCallback((newMcps: string[]) => {
+    if (id) updateNode(id, { mcps: newMcps });
+  }, [id, updateNode]);
+
+  const handleSkillsChange = useCallback((newSkills: string[]) => {
+    if (id) updateNode(id, { skills: newSkills });
+  }, [id, updateNode]);
+
+  const handleToolsChange = useCallback((newTools: string[]) => {
+    if (id) updateNode(id, { tools: newTools });
+  }, [id, updateNode]);
+
+  const handleMiddlewareChange = useCallback((newMiddleware: string) => {
+    if (id) updateNode(id, { middleware: newMiddleware });
+  }, [id, updateNode]);
 
   // Status styles
   const getStatusStyles = () => {
@@ -99,23 +119,17 @@ export const SubagentNode = memo(({ id, data, selected }: NodeProps) => {
           </span>
         </div>
 
-        {/* Tools/MCPs indicator */}
-        {hasTools && (
-          <div className="flex items-center gap-2 text-xs text-gray-400">
-            {skills && skills.length > 0 && (
-              <span className="flex items-center gap-1">
-                <Wrench size={10} />
-                {skills.length}
-              </span>
-            )}
-            {mcps && mcps.length > 0 && (
-              <span className="flex items-center gap-1">
-                <Server size={10} />
-                {mcps.length}
-              </span>
-            )}
-          </div>
-        )}
+        {/* Config Chips - MCPs, Skills, Tools, Middleware */}
+        <NodeConfigChips
+          mcps={mcps}
+          skills={skills}
+          tools={tools}
+          middleware={middleware}
+          onMcpsChange={handleMcpsChange}
+          onSkillsChange={handleSkillsChange}
+          onToolsChange={handleToolsChange}
+          onMiddlewareChange={handleMiddlewareChange}
+        />
 
         {/* Status text */}
         {status !== 'idle' && (

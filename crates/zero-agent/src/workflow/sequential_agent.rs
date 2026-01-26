@@ -92,6 +92,8 @@ impl Agent for SequentialAgent {
     }
 
     async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
+        use zero_core::Event;
+
         let sub_agents = self.sub_agents.clone();
 
         let s = stream! {
@@ -100,11 +102,27 @@ impl Agent for SequentialAgent {
             // In a real implementation, these would be run before creating the stream
 
             for agent in &sub_agents {
+                let agent_name = agent.name().to_string();
+
+                // Emit agent start event
+                let mut start_event = Event::new(&agent_name);
+                start_event.author = format!("workflow:{}", agent_name);
+                start_event.metadata.insert("agent_lifecycle".to_string(), serde_json::json!("start"));
+                start_event.metadata.insert("agent_id".to_string(), serde_json::json!(agent_name));
+                yield Ok(start_event);
+
                 let mut stream = agent.run(ctx.clone()).await?;
 
                 while let Some(result) = stream.next().await {
                     yield result;
                 }
+
+                // Emit agent end event
+                let mut end_event = Event::new(&agent_name);
+                end_event.author = format!("workflow:{}", agent_name);
+                end_event.metadata.insert("agent_lifecycle".to_string(), serde_json::json!("end"));
+                end_event.metadata.insert("agent_id".to_string(), serde_json::json!(agent_name));
+                yield Ok(end_event);
             }
         };
 

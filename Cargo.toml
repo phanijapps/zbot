@@ -23,6 +23,7 @@ members = [
     "application/search-index",
     "application/session-archive",
     "application/knowledge-graph",
+    "application/workflow-executor",
 ]
 
 [workspace.package]

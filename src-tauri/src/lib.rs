@@ -117,6 +117,8 @@ pub fn run() {
             commands::get_orchestrator_structure,
             commands::save_orchestrator_structure,
             commands::validate_workflow,
+            commands::execute_workflow,
+            commands::stop_workflow,
             // Agent Channel commands (NEW)
             commands::get_or_create_today_session,
             commands::list_previous_days,

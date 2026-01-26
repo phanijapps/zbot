@@ -1,0 +1,40 @@
+[package]
+name = "workflow-executor"
+version = "0.1.0"
+edition = "2021"
+description = "Workflow execution engine for AgentZero - loads and executes visual workflow definitions"
+license = "MIT"
+
+[dependencies]
+# Core framework
+zero-core = { path = "../../crates/zero-core" }
+zero-agent = { path = "../../crates/zero-agent" }
+zero-llm = { path = "../../crates/zero-llm" }
+zero-mcp = { path = "../../crates/zero-mcp" }
+zero-session = { path = "../../crates/zero-session" }
+zero-middleware = { path = "../../crates/zero-middleware" }
+
+# Application crates
+agent-tools = { path = "../agent-tools" }
+knowledge-graph = { path = "../knowledge-graph" }
+
+# Async runtime
+tokio = { version = "1.0", features = ["full"] }
+async-trait = "0.1"
+futures = "0.3"
+async-stream = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+serde_yaml = "0.9"
+
+# Utilities
+uuid = { version = "1.0", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2.0"
+tracing = "0.1"
+once_cell = "1.21"
+
+[dev-dependencies]
+tokio-test = "0.4"
