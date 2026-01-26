@@ -65,17 +65,16 @@ function ZeroLogo({ className }: { className?: string }) {
 
 export function Sidebar({ className }: SidebarProps) {
   const menuItems = [
-    { path: "/", icon: MessageSquare, label: "Conversations" },
+    { path: "/", icon: MessageSquare, label: "Chat" },
     { path: "/search", icon: Search, label: "Search" },
     { path: "/agents", icon: Bot, label: "Agents" },
-    { path: "/providers", icon: Zap, label: "Providers" },
-    { path: "/mcp", icon: Network, label: "MCP" },
     { path: "/skills", icon: Sparkles, label: "Skills" },
-    { path: "/settings", icon: Settings, label: "Settings" },
+    { path: "/mcp", icon: Network, label: "MCP" },
+    { path: "/providers", icon: Zap, label: "Providers" },
   ];
 
   return (
-    <aside className={cn("w-[72px] bg-[#1a1a1d] flex flex-col items-center py-3 gap-2 border-r border-black/20", className)} aria-label="Main navigation">
+    <aside className={cn("w-[72px] bg-sidebar flex flex-col items-center py-3 gap-2 border-r border-sidebar-border", className)} aria-label="Main navigation">
       {/* Logo */}
       <button
         className="mb-2 cursor-pointer group bg-transparent border-0 p-0"
@@ -87,7 +86,7 @@ export function Sidebar({ className }: SidebarProps) {
       </button>
 
       {/* Separator */}
-      <div className="w-8 h-[2px] bg-white/10 rounded-full my-1" aria-hidden="true" />
+      <div className="w-8 h-[2px] bg-sidebar-border rounded-full my-1" aria-hidden="true" />
 
       {/* Menu Items */}
       <nav className="flex flex-col gap-2 flex-1" aria-label="Primary navigation">
@@ -100,8 +99,8 @@ export function Sidebar({ className }: SidebarProps) {
               cn(
                 "w-12 h-12 rounded-2xl flex items-center justify-center transition-all relative group",
                 isActive
-                  ? "bg-violet-600 text-white rounded-xl"
-                  : "bg-[#2b2d31] text-gray-300 hover:text-white hover:bg-violet-600 hover:rounded-xl"
+                  ? "bg-sidebar-primary text-sidebar-primary-foreground rounded-xl"
+                  : "bg-sidebar-accent text-sidebar-foreground hover:text-sidebar-primary-foreground hover:bg-sidebar-primary hover:rounded-xl"
               )
             }
           >
@@ -115,7 +114,26 @@ export function Sidebar({ className }: SidebarProps) {
         ))}
       </nav>
 
-      {/* Settings at bottom - already included in menuItems above */}
+      {/* Settings at bottom */}
+      <NavLink
+        to="/settings"
+        aria-label="Settings"
+        className={({ isActive }) =>
+          cn(
+            "w-12 h-12 rounded-2xl flex items-center justify-center transition-all relative group mb-1",
+            isActive
+              ? "bg-sidebar-primary text-sidebar-primary-foreground rounded-xl"
+              : "bg-sidebar-accent text-sidebar-foreground hover:text-sidebar-primary-foreground hover:bg-sidebar-primary hover:rounded-xl"
+          )
+        }
+      >
+        <Settings className="size-5" aria-hidden="true" />
+        {/* Tooltip with arrow */}
+        <div className="absolute left-full ml-4 px-3 py-2 bg-black text-white text-sm rounded-lg opacity-0 group-hover:opacity-100 pointer-events-none whitespace-nowrap z-50 shadow-xl" role="tooltip">
+          Settings
+          <div className="absolute right-full top-1/2 -translate-y-1/2 border-4 border-transparent border-r-black" aria-hidden="true" />
+        </div>
+      </NavLink>
     </aside>
   );
 }
