@@ -119,17 +119,20 @@ pub struct ValidationWarning {
     pub message: String,
 }
 
-/// Node layout storage - persists node positions
+/// Workflow layout storage - persists node positions and edges
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct NodeLayout {
+struct WorkflowLayout {
     #[serde(default)]
     positions: HashMap<String, WorkflowPosition>,
+    #[serde(default)]
+    edges: Vec<WorkflowEdge>,
 }
 
-impl NodeLayout {
+impl WorkflowLayout {
     fn new() -> Self {
         Self {
             positions: HashMap::new(),
+            edges: Vec::new(),
         }
     }
 
@@ -174,8 +177,8 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
     let config_path = agent_dir.join("config.yaml");
     let layout_path = agent_dir.join(".workflow-layout.json");
 
-    // Load saved layout positions
-    let layout = NodeLayout::load(&layout_path)?;
+    // Load saved layout (positions and edges)
+    let layout = WorkflowLayout::load(&layout_path)?;
 
     // Read agent config for orchestrator settings
     let (orchestrator_config, display_name, description) = if config_path.exists() {
@@ -216,29 +219,63 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
     });
 
     let mut nodes = Vec::new();
-    let mut edges = Vec::new();
+    let mut subagent_node_ids = Vec::new();
 
-    // Create orchestrator node
-    let orchestrator_id = format!("orchestrator-{}", agent_id);
-    let orchestrator_position = layout.positions.get(&orchestrator_id)
-        .copied()
-        .unwrap_or(WorkflowPosition { x: 100.0, y: 100.0 });
-    nodes.push(WorkflowNode {
-        id: orchestrator_id.clone(),
-        node_type: "orchestrator".to_string(),
-        position: orchestrator_position,
-        data: {
-            let mut map = serde_json::Map::new();
-            map.insert("label".to_string(), json!(display_name));
-            map.insert("displayName".to_string(), json!(display_name));
-            map.insert("description".to_string(), json!(description));
-            if let Some(orc) = &orchestrator_config {
-                map.insert("providerId".to_string(), json!(orc.provider_id));
-                map.insert("model".to_string(), json!(orc.model));
+    // Check if layout has start/end nodes (new workflow format) or orchestrator node (legacy)
+    let has_start_end_nodes = layout.positions.keys().any(|k| k.starts_with("start-") || k.starts_with("end-"));
+
+    if has_start_end_nodes {
+        // Load start and end nodes from saved layout
+        for (node_id, position) in &layout.positions {
+            if node_id.starts_with("start-") {
+                let mut map = serde_json::Map::new();
+                map.insert("label".to_string(), json!(display_name.clone()));
+                map.insert("displayName".to_string(), json!(display_name.clone()));
+                map.insert("description".to_string(), json!(description.clone()));
+                if let Some(orc) = &orchestrator_config {
+                    map.insert("providerId".to_string(), json!(orc.provider_id.clone()));
+                    map.insert("model".to_string(), json!(orc.model.clone()));
+                }
+                nodes.push(WorkflowNode {
+                    id: node_id.clone(),
+                    node_type: "start".to_string(),
+                    position: *position,
+                    data: WorkflowNodeData { label: display_name.clone(), extra: map },
+                });
+            } else if node_id.starts_with("end-") {
+                let mut map = serde_json::Map::new();
+                map.insert("label".to_string(), json!("End"));
+                nodes.push(WorkflowNode {
+                    id: node_id.clone(),
+                    node_type: "end".to_string(),
+                    position: *position,
+                    data: WorkflowNodeData { label: "End".to_string(), extra: map },
+                });
             }
-            WorkflowNodeData { label: display_name, extra: map }
-        },
-    });
+        }
+    } else {
+        // Legacy: Create orchestrator node
+        let orchestrator_id = format!("orchestrator-{}", agent_id);
+        let orchestrator_position = layout.positions.get(&orchestrator_id)
+            .copied()
+            .unwrap_or(WorkflowPosition { x: 100.0, y: 100.0 });
+        nodes.push(WorkflowNode {
+            id: orchestrator_id.clone(),
+            node_type: "orchestrator".to_string(),
+            position: orchestrator_position,
+            data: {
+                let mut map = serde_json::Map::new();
+                map.insert("label".to_string(), json!(display_name));
+                map.insert("displayName".to_string(), json!(display_name));
+                map.insert("description".to_string(), json!(description));
+                if let Some(orc) = &orchestrator_config {
+                    map.insert("providerId".to_string(), json!(orc.provider_id));
+                    map.insert("model".to_string(), json!(orc.model));
+                }
+                WorkflowNodeData { label: display_name, extra: map }
+            },
+        });
+    }
 
     // Read subagents from .subagents/ folder
     if subagents_dir.exists() {
@@ -278,6 +315,9 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
                     .cloned()
                     .unwrap_or_else(|| format!("subagent-{}", subagent.name));
 
+                // Track subagent node IDs for default edge generation
+                subagent_node_ids.push(subagent_node_id.clone());
+
                 // Use saved position or calculate default
                 let saved_position = layout.positions.get(&subagent_node_id);
                 let position = if let Some(pos) = saved_position {
@@ -310,17 +350,31 @@ pub async fn get_orchestrator_structure(agent_id: String) -> Result<WorkflowGrap
                         extra: node_data,
                     },
                 });
-
-                // Create edge from orchestrator to subagent
-                edges.push(WorkflowEdge {
-                    id: format!("edge-{}-{}", orchestrator_id, subagent_node_id),
-                    source: orchestrator_id.clone(),
-                    target: subagent_node_id,
-                    label: Some("delegates to".to_string()),
-                });
             }
         }
     }
+
+    // Use saved edges if available, otherwise generate default edges
+    let edges = if !layout.edges.is_empty() {
+        // Use saved edges from layout
+        layout.edges.clone()
+    } else {
+        // Generate default edges from start/orchestrator node to each subagent
+        // Find the start or orchestrator node
+        let source_node_id = nodes.iter()
+            .find(|n| n.node_type == "start" || n.node_type == "orchestrator")
+            .map(|n| n.id.clone())
+            .unwrap_or_else(|| format!("orchestrator-{}", agent_id));
+
+        subagent_node_ids.iter()
+            .map(|subagent_node_id| WorkflowEdge {
+                id: format!("edge-{}-{}", source_node_id, subagent_node_id),
+                source: source_node_id.clone(),
+                target: subagent_node_id.clone(),
+                label: Some("delegates to".to_string()),
+            })
+            .collect()
+    };
 
     Ok(WorkflowGraph {
         nodes,
@@ -346,11 +400,11 @@ pub async fn save_orchestrator_structure(
         return Err(format!("Agent not found: {}", agent_id));
     }
 
-    // Save node positions to layout file
+    // Save node positions and edges to layout file
     // The key must match what get_orchestrator_structure expects:
     // - Orchestrator: "orchestrator-{agent_id}"
     // - Subagent: "subagent-{folder_name}" where folder_name comes from subagentId field
-    let mut layout = NodeLayout::new();
+    let mut layout = WorkflowLayout::new();
     for node in &graph.nodes {
         let layout_key = if node.node_type == "orchestrator" {
             format!("orchestrator-{}", agent_id)
@@ -360,17 +414,19 @@ pub async fn save_orchestrator_structure(
             let folder_name = node.data.extra.get("subagentId")
                 .and_then(|v| v.as_str())
                 .unwrap_or(&node.id);
-            
+
             // Remove "subagent-" prefix if present to get just the folder name
             let clean_name = folder_name.strip_prefix("subagent-")
                 .unwrap_or(folder_name);
-            
+
             format!("subagent-{}", clean_name)
         } else {
             node.id.clone()
         };
         layout.positions.insert(layout_key, node.position.clone());
     }
+    // Save edges from the graph
+    layout.edges = graph.edges.clone();
     layout.save(&layout_path)?;
 
     // Update orchestrator config if provided
@@ -619,11 +675,12 @@ async fn update_agent_orchestrator_config(
             voice_recording_enabled: true,
             skills: orchestrator.skills.clone(),
             mcps: orchestrator.mcps.clone(),
-            system_instruction: Some(orchestrator.system_instructions.clone()),
+            // Don't save system_instruction - AGENTS.md is the source of truth
+            system_instruction: None,
         }
     };
 
-    // Update with orchestrator config
+    // Update with orchestrator config (metadata only - instructions go in AGENTS.md)
     config.display_name = orchestrator.display_name.clone();
     config.description = orchestrator.description.clone();
     config.provider_id = orchestrator.provider_id.clone();
@@ -632,7 +689,8 @@ async fn update_agent_orchestrator_config(
     config.max_tokens = orchestrator.max_tokens;
     config.skills = orchestrator.skills.clone();
     config.mcps = orchestrator.mcps.clone();
-    config.system_instruction = Some(orchestrator.system_instructions.clone());
+    // Don't save system_instruction to config.yaml - AGENTS.md is the source of truth
+    config.system_instruction = None;
 
     // Write updated config
     let config_yaml = serde_yaml::to_string(&config)
@@ -650,48 +708,144 @@ async fn update_agent_orchestrator_config(
     Ok(())
 }
 
-/// Generate AGENTS.md from the workflow graph
+/// Write AGENTS.md with the orchestrator's instructions
+/// This preserves user-authored content - no auto-generated boilerplate
 fn generate_agents_md(agent_dir: PathBuf, graph: &WorkflowGraph) -> Result<(), String> {
-    let mut content = String::new();
-
-    // Add system instructions from orchestrator config if available
-    if let Some(ref orchestrator) = graph.orchestrator {
-        if !orchestrator.system_instructions.is_empty() {
-            content.push_str(&orchestrator.system_instructions);
-            content.push_str("\n\n");
+    // Write the user's instructions directly - AGENTS.md is the source of truth
+    // Don't add auto-generated "## Your Team" sections - the user maintains their own format
+    let content = if let Some(ref orchestrator) = graph.orchestrator {
+        if orchestrator.system_instructions.is_empty() {
+            // If no instructions, don't overwrite existing AGENTS.md
+            return Ok(());
         }
-    }
-
-    // Extract subagents from nodes
-    let subagents: Vec<_> = graph.nodes.iter()
-        .filter(|n| n.node_type == "subagent")
-        .collect();
-
-    if !subagents.is_empty() {
-        content.push_str("## Your Team\n\n");
-        content.push_str("You have access to the following specialized subagents:\n\n");
-
-        for subagent in &subagents {
-            let display_name = subagent.data.extra.get("displayName")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown");
-            let description = subagent.data.extra.get("description")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            
-            content.push_str(&format!("- **{}**: {}\n", display_name, description));
-        }
-
-        content.push_str("\n## Workflow\n\n");
-        content.push_str("When appropriate, delegate tasks to your subagents using the context/task/goal pattern:\n");
-        content.push_str("- **context**: Summarize relevant information for the subagent\n");
-        content.push_str("- **task**: Specific instructions for what the subagent should accomplish\n");
-        content.push_str("- **goal**: The overall objective guiding the work\n\n");
-    }
+        format!("{}\n", orchestrator.system_instructions)
+    } else {
+        // No orchestrator config, don't overwrite
+        return Ok(());
+    };
 
     // Write AGENTS.md
     fs::write(agent_dir.join("AGENTS.md"), content)
         .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
 
     Ok(())
+}
+
+// ============================================================================
+// WORKFLOW EXECUTION
+// ============================================================================
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use once_cell::sync::Lazy;
+
+/// Global map of active workflow executions for cancellation support
+static ACTIVE_EXECUTIONS: Lazy<std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<AtomicBool>>>> =
+    Lazy::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
+
+/// Stop a running workflow execution
+#[tauri::command]
+pub async fn stop_workflow(invocation_id: String) -> Result<(), String> {
+    tracing::info!("Stopping workflow execution: {}", invocation_id);
+
+    if let Ok(mut executions) = ACTIVE_EXECUTIONS.lock() {
+        if let Some(cancelled) = executions.get(&invocation_id) {
+            cancelled.store(true, Ordering::SeqCst);
+            tracing::info!("Workflow {} marked for cancellation", invocation_id);
+        }
+        executions.remove(&invocation_id);
+    }
+
+    Ok(())
+}
+
+/// Execute a workflow with streaming events
+///
+/// This command:
+/// 1. Loads the workflow definition from the agents directory
+/// 2. Builds an executable workflow using LLM and toolset factories
+/// 3. Executes the workflow with the given user message
+/// 4. Streams events to the frontend via Tauri events
+#[tauri::command]
+pub async fn execute_workflow(
+    app: tauri::AppHandle,
+    agent_id: String,
+    message: String,
+    session_id: Option<String>,
+    invocation_id: Option<String>,
+) -> Result<Value, String> {
+    use crate::domains::agent_runtime::workflow_integration::{
+        load_and_build_workflow,
+        stream_workflow_events,
+    };
+    use workflow_executor::{WorkflowExecutor, ExecutionOptions};
+
+    // Use provided invocation_id or generate one
+    let invocation_id = invocation_id.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
+    tracing::info!("Executing workflow: {} with message: {} (invocation: {})", agent_id, message, invocation_id);
+
+    let vault_path = get_active_vault_path().await?;
+    let agents_dir = vault_path.join("agents");
+
+    // Load and build the workflow
+    let (executable, _definition) = load_and_build_workflow(&agents_dir, &agent_id).await?;
+
+    // Create executor
+    let executor = WorkflowExecutor::new(executable);
+
+    // Generate session ID if not provided
+    let session_id = session_id.unwrap_or_else(|| {
+        format!("workflow-{}-{}", agent_id, uuid::Uuid::new_v4())
+    });
+
+    // Create execution options
+    let options = ExecutionOptions::new()
+        .with_session_id(session_id.clone())
+        .with_user_id("user")
+        .with_app_name("agentzero")
+        .with_max_iterations(50);
+
+    // Execute the workflow - this returns the event stream
+    let result = executor.execute(&message, options).await
+        .map_err(|e| format!("Workflow execution failed: {}", e))?;
+
+    let workflow_id = result.workflow_id.clone();
+    let invocation_id_clone = invocation_id.clone();
+
+    // Create cancellation flag and register this execution
+    let cancelled = std::sync::Arc::new(AtomicBool::new(false));
+    if let Ok(mut executions) = ACTIVE_EXECUTIONS.lock() {
+        executions.insert(invocation_id.clone(), cancelled.clone());
+    }
+
+    // Spawn streaming as background task so we can return immediately
+    // This allows the frontend to set up listeners before events start flowing
+    let app_clone = app.clone();
+    let invocation_id_for_cleanup = invocation_id.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = stream_workflow_events(
+            &app_clone,
+            result.events,
+            &workflow_id,
+            &invocation_id_clone,
+            cancelled,
+        ).await {
+            tracing::error!("Workflow streaming error: {}", e);
+        }
+        tracing::info!("Workflow execution completed: {}", invocation_id_clone);
+
+        // Clean up from active executions
+        if let Ok(mut executions) = ACTIVE_EXECUTIONS.lock() {
+            executions.remove(&invocation_id_for_cleanup);
+        }
+    });
+
+    // Return immediately so frontend can receive events
+    Ok(json!({
+        "workflow_id": agent_id,
+        "invocation_id": invocation_id,
+        "session_id": session_id,
+        "response": "",
+        "done": false
+    }))
 }

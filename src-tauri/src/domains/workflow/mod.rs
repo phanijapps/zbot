@@ -1,9 +1,8 @@
 // ============================================================================
-// DOMAINS MODULE
-// Business logic organized by domain
+// WORKFLOW DOMAIN
+// Clean architecture for workflow graphs
 // ============================================================================
 
-pub mod conversation_runtime;
-pub mod agent_runtime;
-pub mod vault;
-pub mod workflow;
+pub mod graph;
+pub mod layout;
+pub mod loader;

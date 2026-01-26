@@ -47,6 +47,8 @@ export interface SubagentNodeData extends BaseNodeData {
   systemPrompt: string;      // Content of AGENTS.md
   skills: string[];
   mcps: string[];
+  tools: string[];           // Built-in tools enabled for this agent
+  middleware?: string;       // YAML middleware configuration
 }
 
 // Orchestrator Node Data - Legacy: Only for migration purposes
@@ -181,5 +183,50 @@ export interface WorkflowValidation {
   nodeErrors: number;
   nodeWarnings: number;
   nodes: Record<string, NodeValidation>;
+}
+
+// ============================================================================
+// Workflow Execution Events (from Tauri backend)
+// ============================================================================
+
+/**
+ * Workflow stream event from the execute_workflow Tauri command
+ * Event channel: workflow-stream://{invocationId}
+ */
+export interface WorkflowStreamEvent {
+  type: 'token' | 'agent_start' | 'agent_end' | 'tool_call_start' | 'tool_result' | 'turn_complete' | 'done' | 'error' | 'cancelled' | 'unknown';
+  timestamp: number;
+  content?: string;
+  agentId?: string;      // For agent_start/agent_end events
+  toolId?: string;
+  toolName?: string;
+  args?: Record<string, unknown>;
+  result?: string;
+  error?: string;
+  turnComplete?: boolean;
+  finalMessage?: string;
+}
+
+/**
+ * Workflow node status event for visual feedback
+ * Event channel: workflow-node://{workflowId}
+ */
+export interface WorkflowNodeStatusEvent {
+  nodeId: string;
+  status: NodeExecutionStatus;
+  agentId?: string;
+  message?: string;
+  timestamp: number;
+}
+
+/**
+ * Result from execute_workflow Tauri command
+ */
+export interface WorkflowExecutionResult {
+  workflow_id: string;
+  invocation_id: string;
+  session_id: string;
+  response: string;
+  done: boolean;
 }
 

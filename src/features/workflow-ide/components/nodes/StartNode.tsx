@@ -5,9 +5,46 @@
 
 import { memo } from 'react';
 import { Handle, Position, type NodeProps } from '@xyflow/react';
+import { Loader2, CheckCircle2 } from 'lucide-react';
+
+type ExecutionStatus = 'idle' | 'running' | 'completed' | 'failed';
 
 export const StartNode = memo(({ data, selected }: NodeProps) => {
   const label = data?.label as string | undefined;
+  const status = (data?._executionStatus as ExecutionStatus) || 'idle';
+
+  // Get status-based styles
+  const getStatusStyles = () => {
+    switch (status) {
+      case 'running':
+        return {
+          fill: 'rgba(59, 130, 246, 0.2)',
+          stroke: '#3b82f6',
+          glow: 'drop-shadow(0 0 8px rgba(59, 130, 246, 0.5))',
+        };
+      case 'completed':
+        return {
+          fill: 'rgba(34, 197, 94, 0.2)',
+          stroke: '#22c55e',
+          glow: 'drop-shadow(0 0 8px rgba(34, 197, 94, 0.5))',
+        };
+      case 'failed':
+        return {
+          fill: 'rgba(239, 68, 68, 0.2)',
+          stroke: '#ef4444',
+          glow: 'drop-shadow(0 0 8px rgba(239, 68, 68, 0.5))',
+        };
+      default:
+        return {
+          fill: 'rgba(34, 197, 94, 0.1)',
+          stroke: '#22c55e',
+          glow: '',
+        };
+    }
+  };
+
+  const statusStyles = getStatusStyles();
+
   return (
     <div className="relative">
       {/* SVG Circle - Thin border (BPMN start event style) */}
@@ -15,16 +52,28 @@ export const StartNode = memo(({ data, selected }: NodeProps) => {
         width={60}
         height={60}
         className={`block transition-opacity ${selected ? 'opacity-80' : ''}`}
+        style={{ filter: statusStyles.glow }}
       >
         <circle
           cx={30}
           cy={30}
           r={26}
-          fill="rgba(34, 197, 94, 0.1)"
-          stroke="#22c55e"
-          strokeWidth={2}
+          fill={statusStyles.fill}
+          stroke={statusStyles.stroke}
+          strokeWidth={status === 'running' ? 3 : 2}
           className={`transition-all ${selected ? 'stroke-[3px]' : ''}`}
         />
+        {/* Status icon in center */}
+        {status === 'running' && (
+          <foreignObject x={18} y={18} width={24} height={24}>
+            <Loader2 size={24} className="animate-spin text-blue-400" />
+          </foreignObject>
+        )}
+        {status === 'completed' && (
+          <foreignObject x={18} y={18} width={24} height={24}>
+            <CheckCircle2 size={24} className="text-green-400" />
+          </foreignObject>
+        )}
       </svg>
 
       {/* Label below the circle */}

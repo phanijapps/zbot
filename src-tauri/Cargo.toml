@@ -64,6 +64,7 @@ daily-sessions = { path = "../application/daily-sessions" }
 search-index = { path = "../application/search-index" }
 session-archive = { path = "../application/session-archive" }
 knowledge-graph = { path = "../application/knowledge-graph" }
+workflow-executor = { path = "../application/workflow-executor" }
 
 # Zero framework integration
 zero-core = { path = "../crates/zero-core" }

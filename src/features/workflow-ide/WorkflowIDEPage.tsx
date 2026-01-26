@@ -1,9 +1,11 @@
-import React, { useEffect, useCallback, useRef } from 'react';
+import React, { useEffect, useCallback, useRef, useState } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ArrowLeft, Save, Loader2, Undo, Redo, Plus } from 'lucide-react';
+import { ArrowLeft, Save, Loader2, Undo, Redo, Plus, Play } from 'lucide-react';
 import { WorkflowEditor } from './components/WorkflowEditor';
 import { NewAgentDialog } from './components/NewAgentDialog';
+import { ExecutionPanel } from './components/ExecutionPanel';
 import { useWorkflowStore } from './stores/workflowStore';
+import { useWorkflowExecution } from './hooks/useWorkflowExecution';
 import * as workflowService from '@/services/workflow';
 
 export const WorkflowIDEPage: React.FC = () => {
@@ -15,6 +17,18 @@ export const WorkflowIDEPage: React.FC = () => {
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [showNewAgentDialog, setShowNewAgentDialog] = React.useState(false);
+
+  // Execution panel state
+  const [showExecutionPanel, setShowExecutionPanel] = useState(false);
+
+  // Use workflow execution hook
+  const {
+    executeWorkflow,
+    stopExecution,
+    isExecuting,
+    streamOutput,
+    executionError,
+  } = useWorkflowExecution(agentId || '', nodes);
 
   // Store navigation state for back navigation
   const fromLocationRef = useRef<string>('/');
@@ -222,17 +236,20 @@ export const WorkflowIDEPage: React.FC = () => {
 
       setNodes(xyFlowNodes);
       setEdges(xyFlowEdges);
-      
+
       if (graph.orchestrator) {
         setOrchestratorConfig(graph.orchestrator);
       }
+
+      // Reset dirty flag after loading - workflow is in sync with backend
+      setIsDirty(false);
     } catch (err) {
       console.error('Failed to load workflow:', err);
       setError(err instanceof Error ? err.message : 'Failed to load workflow');
     } finally {
       setLoading(false);
     }
-  }, [agentId, setNodes, setEdges, setOrchestratorConfig]);
+  }, [agentId, setNodes, setEdges, setOrchestratorConfig, setIsDirty]);
 
   // Save workflow to backend
   const saveWorkflow = useCallback(async () => {
@@ -348,18 +365,42 @@ export const WorkflowIDEPage: React.FC = () => {
               </>
             )}
           </button>
+          {/* Run/Execute button */}
+          <button
+            onClick={() => setShowExecutionPanel(true)}
+            disabled={loading || isDirty}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-700 disabled:bg-gray-700 disabled:text-gray-500 rounded-lg transition-colors"
+            title={isDirty ? "Save changes before running" : "Run workflow"}
+          >
+            <Play size={16} />
+            Run
+          </button>
         </div>
       </div>
 
-      {/* Editor */}
-      <div className="flex-1 overflow-hidden">
-        {loading ? (
-          <div className="flex items-center justify-center h-full">
-            <Loader2 size={32} className="animate-spin text-gray-500" />
-          </div>
-        ) : (
-          <WorkflowEditor agentId={agentId} />
-        )}
+      {/* Main Content - Editor + Execution Panel */}
+      <div className="flex-1 flex overflow-hidden">
+        {/* Editor */}
+        <div className="flex-1 overflow-hidden">
+          {loading ? (
+            <div className="flex items-center justify-center h-full">
+              <Loader2 size={32} className="animate-spin text-gray-500" />
+            </div>
+          ) : (
+            <WorkflowEditor agentId={agentId} />
+          )}
+        </div>
+
+        {/* Execution Panel - Slide-out from right */}
+        <ExecutionPanel
+          isOpen={showExecutionPanel}
+          onClose={() => setShowExecutionPanel(false)}
+          isExecuting={isExecuting}
+          onStop={stopExecution}
+          onExecute={executeWorkflow}
+          streamOutput={streamOutput}
+          executionError={executionError}
+        />
       </div>
 
       {/* New Agent Dialog */}
