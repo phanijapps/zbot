@@ -165,7 +165,7 @@ impl ConfigAdapter {
         let agent_type = config.agent_type.as_deref().unwrap_or("llm");
 
         match agent_type {
-            "llm" => self.build_llm_agent(config),
+            "llm" | "orchestrator" => self.build_llm_agent(config),
             "sequential" => self.build_sequential_agent(config),
             "parallel" => self.build_parallel_agent(config),
             "loop" => self.build_loop_agent(config),
