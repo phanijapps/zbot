@@ -5,7 +5,7 @@
  */
 
 import type { Agent } from "@/shared/types";
-import { Hash, ChevronDown, ChevronRight, Bot, Plus } from "lucide-react";
+import { Hash, ChevronDown, ChevronRight, Bot } from "lucide-react";
 import { cn } from "@/shared/utils";
 import { memo } from "react";
 import { VaultSwitcher } from "@/features/vaults/VaultSwitcher";
@@ -16,7 +16,6 @@ interface AgentChannelListProps {
   onSelectAgent: (agent: Agent) => void;
   onToggleVault?: () => void;
   showVaultSwitcher?: boolean;
-  onCreateAgent?: () => void;
   vaultName?: string;
   className?: string;
 }
@@ -66,7 +65,6 @@ export const AgentChannelList = memo(function AgentChannelList({
   onSelectAgent,
   onToggleVault,
   showVaultSwitcher = false,
-  onCreateAgent,
   vaultName,
   className,
 }: AgentChannelListProps) {
@@ -74,18 +72,8 @@ export const AgentChannelList = memo(function AgentChannelList({
     <div className={cn("w-60 bg-sidebar flex flex-col", className)} role="navigation" aria-label="Agent channels">
       {/* Header - Click chevron to toggle vault switcher */}
       <div className="h-12 border-b border-border flex items-center justify-between px-4">
-        <div className="flex-1 flex items-center justify-center gap-2">
+        <div className="flex-1 flex items-center justify-center">
           <h2 className="text-foreground font-bold text-base">{vaultName || 'Agent Channels'}</h2>
-          {onCreateAgent && (
-            <button
-              onClick={onCreateAgent}
-              className="p-1 hover:bg-accent rounded transition-colors text-primary hover:text-primary/80"
-              aria-label="Create new agent"
-              title="Create new agent"
-            >
-              <Plus className="size-4" />
-            </button>
-          )}
         </div>
         <button
           onClick={onToggleVault}
@@ -147,7 +135,7 @@ const EmptyState = memo(function EmptyState() {
       </div>
       <h3 className="text-base font-semibold text-foreground mb-2">No agents yet</h3>
       <p className="text-sm text-muted-foreground max-w-xs">
-        Create an agent to start chatting. Each agent has its own daily channel.
+        Go to the Agents panel in the sidebar to create your first agent.
       </p>
     </div>
   );

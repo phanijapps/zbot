@@ -117,12 +117,6 @@ export function SettingsPanel() {
     updateSetting("notifications", { ...settings.notifications, [key]: value });
   };
 
-  const updatePrivacySetting = <K extends keyof Settings["privacy"]>(
-    key: K,
-    value: Settings["privacy"][K]
-  ) => {
-    updateSetting("privacy", { ...settings.privacy, [key]: value });
-  };
 
   // Debounced save to avoid too many writes
   let saveTimeout: ReturnType<typeof setTimeout>;
@@ -410,46 +404,49 @@ export function SettingsPanel() {
           </div>
         </div>
 
-        {/* Privacy */}
+        {/* Data Management */}
         <div className="bg-card rounded-2xl p-6 border border-border">
           <div className="flex items-center gap-3 mb-4">
-            <div className="bg-gradient-to-br from-green-500 to-emerald-600 p-2 rounded-lg">
+            <div className="bg-gradient-to-br from-red-500 to-orange-600 p-2 rounded-lg">
               <Lock className="size-5 text-white" />
             </div>
-            <h2 className="text-foreground font-semibold text-lg">Privacy</h2>
+            <h2 className="text-foreground font-semibold text-lg">Data Management</h2>
           </div>
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-foreground text-sm">Save Chat History</p>
-                <p className="text-muted-foreground text-xs">
-                  Store conversations locally
-                </p>
-              </div>
-              <Switch
-                checked={settings.privacy.save_chat_history}
-                onCheckedChange={(checked) => updatePrivacySetting("save_chat_history", checked)}
-              />
+          <div className="space-y-3">
+            <div>
+              <Button
+                variant="outline"
+                className="w-full border-orange-500/30 text-orange-400 hover:bg-orange-500/10 hover:text-orange-300"
+                onClick={handleClearAllData}
+              >
+                Delete All Conversations
+              </Button>
+              <p className="text-muted-foreground text-xs mt-1">
+                Removes all chat history and session data
+              </p>
             </div>
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-foreground text-sm">Analytics</p>
-                <p className="text-muted-foreground text-xs">
-                  Help improve the app with usage data
-                </p>
-              </div>
-              <Switch
-                checked={settings.privacy.analytics}
-                onCheckedChange={(checked) => updatePrivacySetting("analytics", checked)}
-              />
+            <div>
+              <Button
+                variant="outline"
+                className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                onClick={async () => {
+                  if (confirm("Are you sure you want to wipe all knowledge graph data? This cannot be undone.")) {
+                    try {
+                      await settingsService.clearKnowledgeGraph();
+                      alert("Knowledge graph wiped successfully");
+                    } catch (error) {
+                      console.error("Failed to clear knowledge graph:", error);
+                      alert("Failed to wipe knowledge graph");
+                    }
+                  }
+                }}
+              >
+                Wipe Knowledge Graph
+              </Button>
+              <p className="text-muted-foreground text-xs mt-1">
+                Removes all learned entities and relationships
+              </p>
             </div>
-            <Button
-              variant="outline"
-              className="w-full border-red-500/30 text-red-400 hover:bg-red-500/10 hover:text-red-300"
-              onClick={handleClearAllData}
-            >
-              Clear All Data
-            </Button>
           </div>
         </div>
 

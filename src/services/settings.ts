@@ -46,6 +46,13 @@ export async function clearAllData(): Promise<void> {
 }
 
 /**
+ * Clear all knowledge graph data
+ */
+export async function clearKnowledgeGraph(): Promise<void> {
+  return invoke("clear_knowledge_graph");
+}
+
+/**
  * Get the config directory path
  */
 export async function getConfigPath(): Promise<string> {

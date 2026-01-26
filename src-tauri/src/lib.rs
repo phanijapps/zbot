@@ -192,6 +192,7 @@ pub fn run() {
             commands::get_knowledge_graph,
             commands::get_knowledge_graph_entities,
             commands::get_knowledge_graph_relationships,
+            commands::clear_knowledge_graph,
             // Media commands
             commands::get_audio_input_devices,
             commands::start_audio_recording,

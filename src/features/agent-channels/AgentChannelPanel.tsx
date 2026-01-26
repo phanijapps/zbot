@@ -31,7 +31,6 @@ import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
 import { TranscriptCommentDialog, type TranscriptAttachmentInfo } from "./TranscriptCommentDialog";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AttachmentsPanel, type Attachment } from "./AttachmentsPanel";
-import { NewAgentDialog } from "@/features/workflow-ide/components/NewAgentDialog";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -120,9 +119,6 @@ export function AgentChannelPanel() {
 
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
-
-  // New Agent Dialog state
-  const [showNewAgentDialog, setShowNewAgentDialog] = useState(false);
 
   // Track the current request_input tool ID for marking it as completed when form is submitted
   const [pendingRequestInputToolId, setPendingRequestInputToolId] = useState<string | null>(null);
@@ -933,7 +929,6 @@ export function AgentChannelPanel() {
         onSelectAgent={setSelectedAgent}
         onToggleVault={() => setShowVaultSwitcher(!showVaultSwitcher)}
         showVaultSwitcher={showVaultSwitcher}
-        onCreateAgent={() => setShowNewAgentDialog(true)}
         vaultName={currentVault?.name}
       />
 
@@ -1423,11 +1418,6 @@ export function AgentChannelPanel() {
           }}
           loading={sendingTranscript}
         />
-      )}
-
-      {/* New Agent Dialog */}
-      {showNewAgentDialog && (
-        <NewAgentDialog onClose={() => setShowNewAgentDialog(false)} />
       )}
 
       {/* Attachments Panel */}

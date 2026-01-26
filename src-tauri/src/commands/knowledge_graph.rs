@@ -79,3 +79,21 @@ pub async fn get_knowledge_graph(
     }))
         .map_err(|e| format!("Failed to serialize graph: {}", e))
 }
+
+/// Clear all knowledge graph data
+///
+/// Deletes the entire knowledge graph database.
+#[tauri::command]
+pub async fn clear_knowledge_graph() -> Result<(), String> {
+    let dirs = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?;
+
+    let db_path = dirs.db_dir.join("knowledge-graph.db");
+
+    if db_path.exists() {
+        std::fs::remove_file(&db_path)
+            .map_err(|e| format!("Failed to delete knowledge graph database: {}", e))?;
+    }
+
+    Ok(())
+}
