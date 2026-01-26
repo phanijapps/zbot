@@ -39,6 +39,8 @@ pub struct ZeroExecutorConfig {
     pub provider_id: String,
     pub llm_config: LlmConfig,
     pub conversation_id: Option<String>,
+    /// Skip loading conversation history from database (for subagents with fresh sessions)
+    pub skip_history_load: bool,
 }
 
 // ============================================================================
@@ -285,14 +287,18 @@ impl ZeroAppExecutor {
             tracing::info!("No saved session state found for agent: {}", config.agent_id);
         }
 
-        // Load conversation history from today's session
-        match repo.load_conversation_history_into_session(&config.agent_id, &session).await {
-            Ok(count) => {
-                tracing::info!("Loaded {} messages from history for agent: {}", count, config.agent_id);
+        // Load conversation history from today's session (skip for subagents with fresh sessions)
+        if !config.skip_history_load {
+            match repo.load_conversation_history_into_session(&config.agent_id, &session).await {
+                Ok(count) => {
+                    tracing::info!("Loaded {} messages from history for agent: {}", count, config.agent_id);
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to load conversation history: {}", e);
+                }
             }
-            Err(e) => {
-                tracing::warn!("Failed to load conversation history: {}", e);
-            }
+        } else {
+            tracing::info!("Skipping history load for subagent: {}", config.agent_id);
         }
 
         // Set conversation_id in session state so tools can access it
@@ -1044,6 +1050,7 @@ pub async fn create_zero_executor(
         provider_id: provider_id.clone(),
         llm_config,
         conversation_id,
+        skip_history_load: false,
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await
@@ -1132,13 +1139,14 @@ pub async fn create_subagent_executor(
     // This ensures isolation - the subagent has no access to orchestrator's conversation
     let conversation_id = format!("subagent-{}-{}", parent_agent_id, subagent_id);
 
-    // Create executor config
+    // Create executor config with skip_history_load=true to ensure fresh session
     let executor_config = ZeroExecutorConfig {
         agent_id: format!("{}.{}", parent_agent_id, subagent_id),
         agent_config,
         provider_id: provider_id.clone(),
         llm_config,
         conversation_id: Some(conversation_id),
+        skip_history_load: true,  // Subagents always start fresh
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await
