@@ -161,12 +161,16 @@ export function TodoPanel({ open, onClose, agentId, sessionId }: TodoPanelProps)
     // Group by agentId
     const groups = new Map<string, AgentGroup>();
 
+    // Extract base agent name from agentId prop (e.g., "my-agent" from full ID)
+    const baseAgentName = agentId.split('.').pop() || agentId;
+
     for (const todo of filtered) {
-      const key = todo.agentId || "unknown";
+      // Use agentId prop as fallback for TODOs created before agent identity was added
+      const key = todo.agentId || agentId;
       if (!groups.has(key)) {
         groups.set(key, {
-          agentId: todo.agentId || "unknown",
-          agentName: todo.agentName || "Unknown Agent",
+          agentId: todo.agentId || agentId,
+          agentName: todo.agentName || baseAgentName,
           isOrchestrator: todo.isOrchestrator ?? true,
           todos: [],
           pendingCount: 0,
