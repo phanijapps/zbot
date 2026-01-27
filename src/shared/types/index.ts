@@ -3,6 +3,9 @@
 // Central type definitions used across the application
 // ============================================================================
 
+// Re-export workflow types
+export * from './workflow';
+
 // ============================================================================
 // DOMAIN: Core
 // ============================================================================
@@ -382,4 +385,48 @@ export interface IndexBuildProgress {
   indexedMessages: number;
   stage: string;
   isComplete: boolean;
+}
+
+// ============================================================================
+// DOMAIN: Execution Control
+// ============================================================================
+
+/** Agent execution status */
+export interface AgentExecutionStatus {
+  agentId: string;
+  isExecuting: boolean;
+  iteration: number;
+  stopRequested: boolean;
+}
+
+/** Stop execution result */
+export interface StopExecutionResult {
+  success: boolean;
+  agentId: string;
+  message: string;
+  sessionId?: string;
+}
+
+// ============================================================================
+// DOMAIN: TODO List
+// ============================================================================
+
+/** A single TODO item */
+export interface Todo {
+  id: string;
+  agentId: string;
+  agentName: string;
+  isOrchestrator: boolean;
+  title: string;
+  description?: string;
+  completed: boolean;
+  priority: "low" | "medium" | "high";
+  createdAt: string;
+  completedAt?: string;
+}
+
+/** The complete TODO list */
+export interface TodoList {
+  items: Todo[];
+  lastUpdated: string;
 }

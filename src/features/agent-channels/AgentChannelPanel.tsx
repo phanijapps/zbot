@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback, startTransition } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic, FileText, GitBranch } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic, FileText, GitBranch, Square, CheckSquare } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -31,12 +31,14 @@ import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
 import { TranscriptCommentDialog, type TranscriptAttachmentInfo } from "./TranscriptCommentDialog";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AttachmentsPanel, type Attachment } from "./AttachmentsPanel";
+import { TodoPanel } from "./TodoPanel";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
   listPreviousDays,
   loadSessionMessages,
   formatSessionDate,
+  stopAgentExecution,
 } from "@/services/agentChannels";
 import { listAgents } from "@/services/agent";
 import { useVaults } from "@/features/vaults/useVaults";
@@ -78,6 +80,10 @@ export function AgentChannelPanel() {
   const [executionStage, setExecutionStage] = useState<ExecutionStage>("idle");
   const [activeToolName, setActiveToolName] = useState<string | null>(null);
 
+  // Iteration tracking for execution control
+  const [currentIteration, setCurrentIteration] = useState<{ current: number; max: number } | null>(null);
+  const [stopRequested, setStopRequested] = useState(false);
+
   // Day Messages - stores messages grouped by session date
   // Structure: array of DayMessages, ordered by date (newest first)
   const [loadedDays, setLoadedDays] = useState<DayMessages[]>([]);
@@ -116,6 +122,9 @@ export function AgentChannelPanel() {
   // Attachments Panel state
   const [attachmentsPanelOpen, setAttachmentsPanelOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+
+  // TODO Panel state
+  const [todoPanelOpen, setTodoPanelOpen] = useState(false);
 
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
@@ -437,6 +446,8 @@ export function AgentChannelPanel() {
     isExecutingRef.current = true;
     setIsLoading(true);
     setExecutionStage("thinking");
+    setCurrentIteration(null);
+    setStopRequested(false);
 
     // Close history sidebar when sending a new message
     setHistoryPanelOpen(false);
@@ -476,6 +487,8 @@ export function AgentChannelPanel() {
       setIsLoading(false);
       setExecutionStage("done");
       setActiveToolName(null);
+      setCurrentIteration(null);
+      setStopRequested(false);
 
       handleThinkingEvent({
         type: "done",
@@ -497,7 +510,7 @@ export function AgentChannelPanel() {
       // Don't process events if component is unmounted
       if (!isMountedRef.current) return;
 
-      const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string; formId?: string; title?: string; description?: string; schema?: any; submitButton?: string };
+      const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; toolName?: string; toolId?: string; args?: string; result?: string; formId?: string; title?: string; description?: string; schema?: any; submitButton?: string; current?: number; max?: number; iteration?: number };
       if (!data) return;
 
       // Map simplified events to AgentStreamEvent format and pass to thinking panel
@@ -718,6 +731,49 @@ export function AgentChannelPanel() {
           });
           finishProcessing();
           break;
+
+        case "iteration_update":
+          // Track iteration progress
+          debugLog("ITERATION_UPDATE event:", data.current, "/", data.max);
+          if (data.current !== undefined && data.max !== undefined) {
+            setCurrentIteration({ current: data.current, max: data.max });
+          }
+          break;
+
+        case "stopped":
+          // Execution was stopped by user request
+          debugLog("STOPPED event received at iteration", data.iteration);
+          setStopRequested(false);
+          setCurrentIteration(null);
+          const stoppedMsg = `[Execution stopped at iteration ${data.iteration}]`;
+          startTransition(() => {
+            setMessages((prev) => prev.map((msg) =>
+              msg.id === assistantMessageId
+                ? { ...msg, content: msg.content + "\n\n" + stoppedMsg }
+                : msg
+            ));
+            setLoadedDays((prev) => prev.map((day) =>
+              day.sessionId === currentSession?.id
+                ? {
+                    ...day,
+                    messages: day.messages.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, content: msg.content + "\n\n" + stoppedMsg }
+                        : msg
+                    ),
+                  }
+                : day
+            ));
+          });
+          finishProcessing();
+          break;
+
+        case "continuation_prompt":
+          // Agent reached max iterations, asking if user wants to continue
+          debugLog("CONTINUATION_PROMPT at iteration", data.iteration);
+          // For now, just log - could show a dialog in the future
+          // TODO: Show continuation dialog
+          break;
       }
     });
 
@@ -792,6 +848,24 @@ export function AgentChannelPanel() {
 
     // Then call backend
     await executeAgentWithMessage(userMessage);
+  };
+
+  /**
+   * Handle stop execution button click
+   */
+  const handleStopExecution = async () => {
+    if (!selectedAgent || !isExecutingRef.current) return;
+
+    setStopRequested(true);
+    debugLog("Requesting stop for agent:", selectedAgent.id);
+
+    try {
+      const result = await stopAgentExecution(selectedAgent.id);
+      debugLog("Stop result:", result);
+    } catch (err) {
+      console.error("Failed to stop execution:", err);
+      setStopRequested(false);
+    }
   };
 
   /**
@@ -948,6 +1022,28 @@ export function AgentChannelPanel() {
                 </span>
               </div>
               <div className="flex items-center gap-1">
+                {/* Stop button - only show during execution */}
+                {isLoading && (
+                  <button
+                    onClick={handleStopExecution}
+                    disabled={stopRequested}
+                    className={cn(
+                      "p-2 transition-colors rounded flex items-center gap-1.5",
+                      stopRequested
+                        ? "text-muted-foreground cursor-not-allowed"
+                        : "text-red-400 hover:text-red-300 hover:bg-red-500/10"
+                    )}
+                    aria-label={stopRequested ? "Stopping..." : "Stop execution"}
+                    title={stopRequested ? "Stopping..." : "Stop execution"}
+                  >
+                    <Square className="size-4 fill-current" />
+                    {currentIteration && (
+                      <span className="text-xs tabular-nums">
+                        {currentIteration.current}/{currentIteration.max}
+                      </span>
+                    )}
+                  </button>
+                )}
                 <button
                   onClick={() => setHistoryPanelOpen(true)}
                   className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
@@ -968,6 +1064,13 @@ export function AgentChannelPanel() {
                   aria-label="Show attachments"
                 >
                   <FileText className="size-5" />
+                </button>
+                <button
+                  onClick={() => setTodoPanelOpen(true)}
+                  className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
+                  aria-label="Show TODO list"
+                >
+                  <CheckSquare className="size-5" />
                 </button>
                 {/* Only show voice recording if enabled in agent config */}
                 {selectedAgent.voiceRecordingEnabled !== false && (
@@ -1429,6 +1532,16 @@ export function AgentChannelPanel() {
           onView={handleViewAttachment}
           onSend={handleSendAttachment}
           onDelete={handleDeleteAttachment}
+        />
+      )}
+
+      {/* TODO Panel */}
+      {selectedAgent && (
+        <TodoPanel
+          open={todoPanelOpen}
+          onClose={() => setTodoPanelOpen(false)}
+          agentId={selectedAgent.id}
+          sessionId={currentSession?.id}
         />
       )}
     </div>

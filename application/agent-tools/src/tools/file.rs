@@ -114,9 +114,9 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write content to a file in your agent's data directory. Creates parent directories automatically. \
-        Use subdirectories like 'outputs/', 'documents/', 'images/', etc. to organize files. \
-        Example: 'outputs/comic.html' writes to {vault}/agent_data/{agent_id}/outputs/comic.html"
+        "Write or append content to a file. Use mode='append' to add content to existing files. \
+        For large files, write the initial structure first, then use multiple append calls to add sections. \
+        Example: 'outputs/report.html' writes to {vault}/agent_data/{agent_id}/outputs/report.html"
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -125,11 +125,17 @@ impl Tool for WriteTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative path for the file. Will be written under agent_data/{agent_id}/. Use subdirectories like 'outputs/', 'documents/', etc."
+                    "description": "Relative path for the file. Will be written under agent_data/{agent_id}/."
                 },
                 "content": {
                     "type": "string",
                     "description": "Content to write to the file"
+                },
+                "mode": {
+                    "type": "string",
+                    "enum": ["write", "append"],
+                    "default": "write",
+                    "description": "write: Create/overwrite file. append: Add to end of existing file. Use append for large content that must be split across multiple calls."
                 }
             },
             "required": ["path", "content"]
@@ -166,6 +172,12 @@ impl Tool for WriteTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'content' parameter".to_string()))?;
 
+        // Get write mode (default: "write", can be "append")
+        let mode = args.get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("write");
+        let is_append = mode == "append";
+
         // Security: Reject paths with parent directory components
         if path.contains("..") {
             return Err(zero_core::ZeroError::Tool(
@@ -180,9 +192,12 @@ impl Tool for WriteTool {
             ));
         }
 
-        // Get agent_id from session state (required for all writes)
-        let agent_id = ctx.get_state("app:agent_id")
+        // Get root_agent_id from session state (for subagents, this is the parent's ID)
+        // Fall back to agent_id if root_agent_id is not set
+        let data_agent_id = ctx.get_state("app:root_agent_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
+            .or_else(|| ctx.get_state("app:agent_id")
+                .and_then(|v| v.as_str().map(|s| s.to_owned())))
             .ok_or_else(|| zero_core::ZeroError::Tool(
                 "Agent ID not found in state. Cannot write file.".to_string()
             ))?;
@@ -190,12 +205,13 @@ impl Tool for WriteTool {
         tracing::info!(
             file = %file!(),
             line = %line!(),
-            "Writing file: path='{}' ({} bytes), agent_id={}",
-            path, content.len(), agent_id
+            "{} file: path='{}' ({} bytes), data_agent_id={}",
+            if is_append { "Appending to" } else { "Writing" },
+            path, content.len(), data_agent_id
         );
 
-        // Resolve path: all paths go under agent_data/<agent_id>/
-        let agent_data_dir = self.fs.agent_data_dir(&agent_id)
+        // Resolve path: all paths go under agent_data/<root_agent_id>/
+        let agent_data_dir = self.fs.agent_data_dir(&data_agent_id)
             .ok_or_else(|| zero_core::ZeroError::Tool(
                 "Agent data directory not available".to_string()
             ))?;
@@ -208,21 +224,35 @@ impl Tool for WriteTool {
                 .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to create directories: {}", e)))?;
         }
 
-        // Write the file
+        // Write or append to the file
         tracing::info!(
             file = %file!(),
             line = %line!(),
-            "Writing to file: {}",
+            "{} file: {}",
+            if is_append { "Appending to" } else { "Writing to" },
             final_path.display()
         );
-        std::fs::write(&final_path, content)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write file: {}", e)))?;
+
+        if is_append {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&final_path)
+                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to open file for append: {}", e)))?;
+            file.write_all(content.as_bytes())
+                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to append to file: {}", e)))?;
+        } else {
+            std::fs::write(&final_path, content)
+                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write file: {}", e)))?;
+        }
 
         // Return the original requested path (not the absolute resolved path)
         // so the LLM continues to use relative paths
         Ok(json!({
             "path": path,
             "bytes_written": content.len(),
+            "mode": mode
         }))
     }
 }
@@ -328,9 +358,12 @@ impl Tool for EditTool {
             ));
         }
 
-        // Get agent_id from session state (required for all edits)
-        let agent_id = ctx.get_state("app:agent_id")
+        // Get root_agent_id from session state (for subagents, this is the parent's ID)
+        // Fall back to agent_id if root_agent_id is not set
+        let data_agent_id = ctx.get_state("app:root_agent_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
+            .or_else(|| ctx.get_state("app:agent_id")
+                .and_then(|v| v.as_str().map(|s| s.to_owned())))
             .ok_or_else(|| zero_core::ZeroError::Tool(
                 "Agent ID not found in state. Cannot edit file.".to_string()
             ))?;
@@ -338,12 +371,12 @@ impl Tool for EditTool {
         tracing::info!(
             file = %file!(),
             line = %line!(),
-            "Editing file: path='{}', agent_id={}",
-            path, agent_id
+            "Editing file: path='{}', data_agent_id={}",
+            path, data_agent_id
         );
 
-        // Resolve path: all paths go under agent_data/<agent_id>/
-        let agent_data_dir = self.fs.agent_data_dir(&agent_id)
+        // Resolve path: all paths go under agent_data/<root_agent_id>/
+        let agent_data_dir = self.fs.agent_data_dir(&data_agent_id)
             .ok_or_else(|| zero_core::ZeroError::Tool(
                 "Agent data directory not available".to_string()
             ))?;

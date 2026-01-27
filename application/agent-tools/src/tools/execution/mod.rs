@@ -1,9 +1,14 @@
 // ============================================================================
 // EXECUTION TOOLS
-// Python and LoadSkill tools
+// Python, Shell, LoadSkill, and TODO tools
 // ============================================================================
 
 pub mod skills;
+pub mod shell;
+pub mod todos;
+
+pub use shell::ShellTool;
+pub use todos::TodoTool;
 
 use std::sync::Arc;
 

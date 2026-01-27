@@ -10,6 +10,9 @@ import type {
   DaySummary,
   SessionMessage,
   AgentChannel,
+  AgentExecutionStatus,
+  StopExecutionResult,
+  TodoList,
 } from "@/shared/types";
 
 // ============================================================================
@@ -184,4 +187,79 @@ export function formatSessionDate(sessionDate: string): string {
     day: "numeric",
     year: "numeric",
   });
+}
+
+// ============================================================================
+// EXECUTION CONTROL
+// ============================================================================
+
+/**
+ * Stop agent execution
+ * Sets a stop flag that the agent checks at each iteration
+ */
+export async function stopAgentExecution(
+  agentId: string
+): Promise<StopExecutionResult> {
+  return await invoke<StopExecutionResult>("stop_agent_execution", {
+    agentId,
+  });
+}
+
+/**
+ * Get agent execution status
+ * Returns current iteration count and stop state
+ */
+export async function getAgentExecutionStatus(
+  agentId: string
+): Promise<AgentExecutionStatus> {
+  return await invoke<AgentExecutionStatus>("get_agent_execution_status", {
+    agentId,
+  });
+}
+
+// ============================================================================
+// TODO LIST MANAGEMENT
+// ============================================================================
+
+/**
+ * Get TODO list for an agent
+ */
+export async function getAgentTodos(agentId: string): Promise<TodoList> {
+  return await invoke<TodoList>("get_agent_todos", {
+    agentId,
+  });
+}
+
+/**
+ * Save TODO list for an agent
+ */
+export async function saveAgentTodos(
+  agentId: string,
+  todos: TodoList
+): Promise<{ success: boolean; message: string }> {
+  return await invoke<{ success: boolean; message: string }>(
+    "save_agent_todos",
+    {
+      agentId,
+      todos,
+    }
+  );
+}
+
+/**
+ * Update a single TODO item's completion status
+ */
+export async function updateAgentTodo(
+  agentId: string,
+  todoId: string,
+  completed: boolean
+): Promise<{ success: boolean; todoId: string; completed: boolean }> {
+  return await invoke<{ success: boolean; todoId: string; completed: boolean }>(
+    "update_agent_todo",
+    {
+      agentId,
+      todoId,
+      completed,
+    }
+  );
 }

@@ -122,6 +122,9 @@ pub async fn execute_agent_stream(
         exec
     };
 
+    // Clear any previous stop flag before starting new execution
+    executor.clear_stop()?;
+
     // Execute with streaming
     let mut final_response = String::new();
     let mut current_tool_calls: Vec<ToolCall> = Vec::new();
@@ -211,6 +214,19 @@ pub async fn execute_agent_stream(
                         }
                         // Don't return - continue to emit tool_result so the UI knows the tool completed
                     }
+
+                    // Check for todo_update marker
+                    if parsed.get("__todo_update").and_then(|v| v.as_bool()).unwrap_or(false) {
+                        tracing::debug!("Detected todo_update marker, emitting todo_update event");
+                        if let Err(e) = app.emit(&event_name, serde_json::json!({
+                            "type": "todo_update",
+                            "timestamp": chrono::Utc::now().timestamp_millis(),
+                            "todos": parsed.get("todos"),
+                        })) {
+                            eprintln!("Failed to emit todo_update event to frontend: {}", e);
+                        }
+                        // Don't return - continue to emit tool_result so the UI knows the tool completed
+                    }
                 } else {
                     tracing::debug!("Failed to parse tool response as JSON: {}", response.chars().take(200).collect::<String>());
                 }
@@ -248,6 +264,36 @@ pub async fn execute_agent_stream(
                     "recoverable": false
                 })) {
                     eprintln!("Failed to emit event to frontend: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::IterationUpdate { current, max } => {
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "iteration_update",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "current": current,
+                    "max": max
+                })) {
+                    eprintln!("Failed to emit iteration update event: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::ContinuationPrompt { iteration, message } => {
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "continuation_prompt",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "iteration": iteration,
+                    "message": message
+                })) {
+                    eprintln!("Failed to emit continuation prompt event: {}", e);
+                }
+            }
+            ZeroAppStreamEvent::Stopped { iteration, reason } => {
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "stopped",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "iteration": iteration,
+                    "reason": reason
+                })) {
+                    eprintln!("Failed to emit stopped event: {}", e);
                 }
             }
         }
@@ -396,6 +442,237 @@ pub async fn get_or_create_conversation(
 pub async fn clear_executor_cache() -> Result<(), String> {
     clear_executor_cache_internal().await;
     Ok(())
+}
+
+/// Stop agent execution
+///
+/// This command sets the stop flag in the agent's session state,
+/// causing the agent loop to stop at the next iteration.
+///
+/// # Arguments
+/// * `agent_id` - The ID of the agent to stop
+///
+/// # Returns
+/// Ok(()) if the stop was requested successfully
+/// Err if the agent was not found in cache (not currently executing)
+#[tauri::command]
+pub async fn stop_agent_execution(agent_id: String) -> Result<Value, String> {
+    tracing::info!("Stop requested for agent: {}", agent_id);
+
+    // Find the executor in cache
+    let cache = EXECUTOR_CACHE.read().await;
+
+    // Find any executor for this agent (regardless of session_id)
+    let executor = cache.iter()
+        .find(|(key, _)| key.agent_id == agent_id)
+        .map(|(_, exec)| exec.clone());
+
+    drop(cache); // Release the lock
+
+    if let Some(executor) = executor {
+        executor.request_stop()?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "agent_id": agent_id,
+            "message": "Stop requested - agent will stop at next iteration"
+        }))
+    } else {
+        // Agent not in cache - may not be executing
+        // Try to set stop flag in session state directly
+        let db_path = crate::settings::AppDirs::get()
+            .map_err(|e| format!("Failed to get app dirs: {}", e))?
+            .agent_channels_db_path();
+
+        let repo = Arc::new(SqliteSessionRepository::new(db_path)?);
+        let manager = DailySessionManager::new(repo.clone());
+
+        // Get today's session for the agent
+        if let Ok(session) = manager.get_or_create_today(&agent_id).await {
+            // Set stop flag in the database session state
+            let stop_key = "execution_control::stop";
+            let _ = repo.save_session_state_key(&agent_id, stop_key, &serde_json::json!(true)).await;
+
+            Ok(serde_json::json!({
+                "success": true,
+                "agent_id": agent_id,
+                "session_id": session.id,
+                "message": "Stop flag set in session state"
+            }))
+        } else {
+            Err(format!("Agent {} not found in cache and no active session", agent_id))
+        }
+    }
+}
+
+/// Get agent execution status
+///
+/// Returns the current execution status including iteration count and stop state
+#[tauri::command]
+pub async fn get_agent_execution_status(agent_id: String) -> Result<Value, String> {
+    let cache = EXECUTOR_CACHE.read().await;
+
+    // Find any executor for this agent
+    let executor = cache.iter()
+        .find(|(key, _)| key.agent_id == agent_id)
+        .map(|(_, exec)| exec.clone());
+
+    drop(cache);
+
+    if let Some(executor) = executor {
+        Ok(serde_json::json!({
+            "agent_id": agent_id,
+            "is_executing": true,
+            "iteration": executor.get_iteration(),
+            "stop_requested": executor.is_stop_requested(),
+        }))
+    } else {
+        Ok(serde_json::json!({
+            "agent_id": agent_id,
+            "is_executing": false,
+            "iteration": 0,
+            "stop_requested": false,
+        }))
+    }
+}
+
+// ============================================================================
+// TODO LIST COMMANDS
+// ============================================================================
+
+/// Get TODO list for an agent
+///
+/// Returns the TODO list from session state
+#[tauri::command]
+pub async fn get_agent_todos(agent_id: String) -> Result<Value, String> {
+    let db_path = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
+
+    let repo = SqliteSessionRepository::new(db_path)?;
+
+    // Load session state
+    if let Some(state) = repo.load_session_state(&agent_id).await
+        .map_err(|e| format!("Failed to load session state: {}", e))? {
+
+        // Get TODO list from state
+        if let Some(todos) = state.get("app:todo_list") {
+            return Ok(todos.clone());
+        }
+    }
+
+    // Return empty TODO list if not found
+    Ok(serde_json::json!({
+        "items": [],
+        "last_updated": chrono::Utc::now().to_rfc3339()
+    }))
+}
+
+/// Save TODO list for an agent
+///
+/// Saves the TODO list to session state
+#[tauri::command]
+pub async fn save_agent_todos(agent_id: String, todos: Value) -> Result<Value, String> {
+    let db_path = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
+
+    let repo = SqliteSessionRepository::new(db_path)?;
+
+    // Save TODO list to session state
+    repo.save_session_state_key(&agent_id, "app:todo_list", &todos).await?;
+
+    // If there's an active executor, also update its session state
+    let cache = EXECUTOR_CACHE.read().await;
+    if let Some(executor) = cache.iter()
+        .find(|(key, _)| key.agent_id == agent_id)
+        .map(|(_, exec)| exec.clone())
+    {
+        drop(cache);
+        if let Ok(mut session) = executor.session().lock() {
+            let _ = session.state_mut().set("app:todo_list".to_string(), todos.clone());
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "message": "TODO list saved"
+    }))
+}
+
+/// Update a single TODO item
+///
+/// Convenience command to update just one TODO item's completion status
+#[tauri::command]
+pub async fn update_agent_todo(
+    agent_id: String,
+    todo_id: String,
+    completed: bool,
+) -> Result<Value, String> {
+    let db_path = crate::settings::AppDirs::get()
+        .map_err(|e| format!("Failed to get app dirs: {}", e))?
+        .agent_channels_db_path();
+
+    let repo = SqliteSessionRepository::new(db_path)?;
+
+    // Load session state
+    let mut state = repo.load_session_state(&agent_id).await
+        .map_err(|e| format!("Failed to load session state: {}", e))?
+        .unwrap_or_default();
+
+    // Get and update TODO list
+    let mut todos: Value = state.get("app:todo_list")
+        .cloned()
+        .unwrap_or(serde_json::json!({
+            "items": [],
+            "last_updated": chrono::Utc::now().to_rfc3339()
+        }));
+
+    // Find and update the item
+    let mut found = false;
+    if let Some(items) = todos.get_mut("items").and_then(|v| v.as_array_mut()) {
+        for item in items.iter_mut() {
+            if item.get("id").and_then(|v| v.as_str()) == Some(&todo_id) {
+                item["completed"] = serde_json::json!(completed);
+                item["completed_at"] = if completed {
+                    serde_json::json!(chrono::Utc::now().to_rfc3339())
+                } else {
+                    serde_json::json!(null)
+                };
+                found = true;
+                break;
+            }
+        }
+    }
+
+    if !found {
+        return Err(format!("TODO item not found: {}", todo_id));
+    }
+
+    // Update last_updated
+    todos["last_updated"] = serde_json::json!(chrono::Utc::now().to_rfc3339());
+
+    // Save back
+    state.insert("app:todo_list".to_string(), todos.clone());
+    repo.save_session_state(&agent_id, &state).await?;
+
+    // Update active executor session if exists
+    let cache = EXECUTOR_CACHE.read().await;
+    if let Some(executor) = cache.iter()
+        .find(|(key, _)| key.agent_id == agent_id)
+        .map(|(_, exec)| exec.clone())
+    {
+        drop(cache);
+        if let Ok(mut session) = executor.session().lock() {
+            let _ = session.state_mut().set("app:todo_list".to_string(), todos);
+        }
+    }
+
+    Ok(serde_json::json!({
+        "success": true,
+        "todo_id": todo_id,
+        "completed": completed
+    }))
 }
 
 // ============================================================================

@@ -7,6 +7,7 @@
 
 use std::sync::Arc;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use futures::StreamExt;
 use async_trait::async_trait;
 
@@ -42,6 +43,7 @@ const BUILTIN_TOOLS: &[&str] = &[
     "request_input", "show_content", "create_agent",
     "list_entities", "search_entities", "get_entity_relationships",
     "add_entity", "add_relationship",
+    "todos",
 ];
 
 /// Build a complete system prompt by combining the template with agent-specific instructions
@@ -106,6 +108,9 @@ pub struct ZeroExecutorConfig {
     pub conversation_id: Option<String>,
     /// Skip loading conversation history from database (for subagents with fresh sessions)
     pub skip_history_load: bool,
+    /// Root agent ID for data directory (subagents use parent's ID)
+    /// If None, defaults to agent_id
+    pub root_agent_id: Option<String>,
 }
 
 // ============================================================================
@@ -383,6 +388,15 @@ impl ZeroAppExecutor {
                     json!(config.agent_id),
                 );
             }
+            // Set root agent ID (determines data directory)
+            // For subagents, this is the parent orchestrator's ID
+            if session.state().get(state_keys::state_keys::ROOT_AGENT_ID).is_none() {
+                let root_id = config.root_agent_id.as_ref().unwrap_or(&config.agent_id);
+                session.state_mut().set(
+                    state_keys::state_keys::ROOT_AGENT_ID.to_string(),
+                    json!(root_id),
+                );
+            }
             // Only set if not already in state (don't override loaded state)
             if session.state().get(state_keys::state_keys::PROVIDER_ID).is_none() {
                 session.state_mut().set(
@@ -425,42 +439,12 @@ impl ZeroAppExecutor {
 
     /// Run the agent with a user message
     pub async fn run(&self, user_message: String) -> TResult<Vec<Event>> {
-        // Apply middleware preprocessing to conversation history
-        let history = {
-            let session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
-            session.conversation_history()
-        };
-
-        // Build messages array for middleware (history + new user message)
-        let mut messages = Vec::new();
-        messages.extend(history);
-        messages.push(Content::user(&user_message));
-
-        // Estimate tokens and get context window
-        let estimated_tokens = self.middleware_executor.estimate_tokens(&messages);
-        let context_window = self.middleware_executor.get_context_window(&self.config.llm_config.model);
-
-        // Apply middleware preprocessing
-        let processed_messages = self.middleware_executor.apply_preprocessing(
-            messages.clone(),
-            messages.len(),
-            estimated_tokens,
-            context_window,
-        ).await.unwrap_or_else(|e| {
-            tracing::warn!("Middleware preprocessing failed: {}, using original messages", e);
-            messages
-        });
-
-        // Add processed messages to session
+        // Add user message to session (history is already there from previous turns)
+        let user_content = Content::user(&user_message);
         {
             let mut session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
-            for msg in &processed_messages {
-                session.add_content(msg.clone());
-            }
+            session.add_content(user_content.clone());
         }
-
-        // Create invocation context with the last processed message (user message)
-        let user_content = processed_messages.into_iter().last().unwrap_or_else(|| Content::user(&user_message));
 
         // Create invocation context with user content
         let ctx = self.create_invocation_context(user_content)?;
@@ -472,15 +456,8 @@ impl ZeroAppExecutor {
 
         while let Some(event_result) = stream.next().await {
             let event = event_result.map_err(|e| format!("Event error: {}", e.to_string()))?;
-
-            // Add assistant content to session (synchronous)
-            if let Some(content) = &event.content {
-                if content.role == "assistant" {
-                    let mut session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
-                    session.add_content(content.clone());
-                }
-            }
-
+            // Note: Don't add assistant content here - llm_agent.rs already does this
+            // via ctx_clone.add_content() in the agent loop
             events.push(event);
         }
 
@@ -549,6 +526,18 @@ impl ZeroAppExecutor {
 
         tracing::info!("Agent run completed with {} events", event_count);
 
+        // Check if execution was stopped by user request
+        if self.is_stop_requested() {
+            let iteration = self.get_iteration();
+            tracing::info!("Execution was stopped at iteration {}", iteration);
+            callback(ZeroAppStreamEvent::Stopped {
+                iteration,
+                reason: "User requested stop".to_string(),
+            });
+            // Clear the stop flag for next execution
+            let _ = self.clear_stop();
+        }
+
         Ok(())
     }
 
@@ -595,6 +584,61 @@ impl ZeroAppExecutor {
     /// Get the LLM
     pub fn llm(&self) -> Arc<dyn Llm> {
         self.llm.clone()
+    }
+
+    /// Request the agent to stop execution
+    ///
+    /// This sets the stop flag in session state, which will be checked
+    /// by the agent loop at the start of each iteration.
+    pub fn request_stop(&self) -> TResult<()> {
+        let mut session = self.session.lock()
+            .map_err(|e| format!("Session lock error: {}", e))?;
+
+        session.state_mut().set(
+            state_keys::state_keys::EXECUTION_STOP.to_string(),
+            json!(true),
+        );
+
+        tracing::info!("Stop requested for agent: {}", self.config.agent_id);
+        Ok(())
+    }
+
+    /// Clear the stop flag (for resumption after continuation prompt)
+    pub fn clear_stop(&self) -> TResult<()> {
+        let mut session = self.session.lock()
+            .map_err(|e| format!("Session lock error: {}", e))?;
+
+        session.state_mut().set(
+            state_keys::state_keys::EXECUTION_STOP.to_string(),
+            json!(false),
+        );
+
+        Ok(())
+    }
+
+    /// Check if a stop has been requested
+    pub fn is_stop_requested(&self) -> bool {
+        if let Ok(session) = self.session.lock() {
+            if let Some(stop_value) = session.state().get(state_keys::state_keys::EXECUTION_STOP) {
+                return stop_value.as_bool().unwrap_or(false);
+            }
+        }
+        false
+    }
+
+    /// Get the current iteration count
+    pub fn get_iteration(&self) -> u32 {
+        if let Ok(session) = self.session.lock() {
+            if let Some(iter_value) = session.state().get(state_keys::state_keys::EXECUTION_ITERATION) {
+                return iter_value.as_u64().unwrap_or(0) as u32;
+            }
+        }
+        0
+    }
+
+    /// Get the agent ID
+    pub fn agent_id(&self) -> &str {
+        &self.config.agent_id
     }
 
     // ============================================================================
@@ -806,6 +850,21 @@ pub enum ZeroAppStreamEvent {
     Error {
         message: String,
     },
+    /// Iteration update event for tracking execution progress
+    IterationUpdate {
+        current: u32,
+        max: u32,
+    },
+    /// Continuation prompt when max iterations reached (for main agent)
+    ContinuationPrompt {
+        iteration: u32,
+        message: String,
+    },
+    /// Execution was stopped by user request
+    Stopped {
+        iteration: u32,
+        reason: String,
+    },
 }
 
 impl ZeroAppStreamEvent {
@@ -877,8 +936,11 @@ pub struct ZeroInvocationContext {
     llm: Arc<dyn Llm>,
     tool_registry: Arc<ToolRegistry>,
     user_content: Content, // Store user_content here to avoid reference issues
-    actions: EventActions,
-    ended: bool,
+    actions: std::sync::Mutex<EventActions>,
+    /// Flag to indicate the invocation should stop (thread-safe)
+    ended: AtomicBool,
+    /// Current iteration count (thread-safe for tracking)
+    current_iteration: AtomicU32,
     run_config: RunConfig,
 }
 
@@ -896,9 +958,62 @@ impl ZeroInvocationContext {
             llm,
             tool_registry,
             user_content,
-            actions: EventActions::default(),
-            ended: false,
+            actions: std::sync::Mutex::new(EventActions::default()),
+            ended: AtomicBool::new(false),
+            current_iteration: AtomicU32::new(0),
             run_config: RunConfig::default(),
+        }
+    }
+
+    /// Check if a stop has been requested via session state
+    pub fn check_stop_requested(&self) -> bool {
+        // First check the atomic ended flag
+        if self.ended.load(Ordering::SeqCst) {
+            return true;
+        }
+
+        // Also check the session state for stop signal
+        if let Ok(s) = self.session.lock() {
+            if let Some(stop_value) = s.state().get(state_keys::state_keys::EXECUTION_STOP) {
+                if stop_value.as_bool().unwrap_or(false) {
+                    // Set the atomic flag so subsequent checks are faster
+                    self.ended.store(true, Ordering::SeqCst);
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Get the current iteration count
+    pub fn get_iteration(&self) -> u32 {
+        self.current_iteration.load(Ordering::SeqCst)
+    }
+
+    /// Increment and return the new iteration count
+    pub fn increment_iteration(&self) -> u32 {
+        let new_val = self.current_iteration.fetch_add(1, Ordering::SeqCst) + 1;
+
+        // Also update session state so frontend can track
+        if let Ok(mut s) = self.session.lock() {
+            let _ = s.state_mut().set(
+                state_keys::state_keys::EXECUTION_ITERATION.to_string(),
+                json!(new_val),
+            );
+        }
+
+        new_val
+    }
+
+    /// Reset iteration count (for continuation after max iterations)
+    pub fn reset_iteration(&self) {
+        self.current_iteration.store(0, Ordering::SeqCst);
+        if let Ok(mut s) = self.session.lock() {
+            let _ = s.state_mut().set(
+                state_keys::state_keys::EXECUTION_ITERATION.to_string(),
+                json!(0),
+            );
         }
     }
 }
@@ -974,21 +1089,29 @@ impl InvocationContext for ZeroInvocationContext {
     }
 
     fn actions(&self) -> EventActions {
-        self.actions.clone()
+        self.actions.lock().unwrap().clone()
     }
 
     fn set_actions(&self, actions: EventActions) {
-        // In a real implementation, this would update the actions
-        // For now, we'll just ignore it since actions is a clone
+        *self.actions.lock().unwrap() = actions;
     }
 
     fn end_invocation(&self) {
-        // Mark the invocation as ended
-        // In a real implementation, this would set a flag
+        // Mark the invocation as ended using atomic store
+        self.ended.store(true, Ordering::SeqCst);
+
+        // Also set the state flag so other parts of the system can see it
+        if let Ok(mut s) = self.session.lock() {
+            let _ = s.state_mut().set(
+                state_keys::state_keys::EXECUTION_STOP.to_string(),
+                json!(true),
+            );
+        }
     }
 
     fn ended(&self) -> bool {
-        self.ended
+        // Check both the atomic flag and the state-based stop signal
+        self.check_stop_requested()
     }
 
     fn add_content(&self, content: zero_app::Content) {
@@ -1127,6 +1250,7 @@ pub async fn create_zero_executor(
         llm_config,
         conversation_id,
         skip_history_load: false,
+        root_agent_id: None,  // Regular agents use their own agent_id for data directory
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await
@@ -1234,6 +1358,7 @@ pub async fn create_subagent_executor(
         llm_config,
         conversation_id: Some(conversation_id),
         skip_history_load: true,  // Subagents always start fresh
+        root_agent_id: Some(parent_agent_id.to_string()),  // Use parent's data directory
     };
 
     ZeroAppExecutor::new(executor_config, dirs).await

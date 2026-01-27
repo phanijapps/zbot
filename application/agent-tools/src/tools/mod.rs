@@ -17,7 +17,9 @@ use zero_core::FileSystemContext;
 pub use file::{ReadTool, WriteTool, EditTool};
 pub use search::{GrepTool, GlobTool};
 pub use execution::PythonTool;
+pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
+pub use execution::TodoTool;
 pub use ui::{RequestInputTool, ShowContentTool};
 pub use knowledge_graph::{
     ListEntitiesTool,
@@ -54,6 +56,7 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         Arc::new(GrepTool),
         Arc::new(GlobTool),
         Arc::new(PythonTool::new(fs.clone())),
+        Arc::new(ShellTool::new()),
         Arc::new(LoadSkillTool::new(fs.clone())),
         Arc::new(RequestInputTool),
         Arc::new(ShowContentTool),
@@ -65,5 +68,7 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         Arc::new(AddRelationshipTool),
         // Agent tools
         Arc::new(CreateAgentTool::new(fs.clone())),
+        // TODO list tool
+        Arc::new(TodoTool::new()),
     ]
 }
