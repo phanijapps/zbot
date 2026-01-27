@@ -326,7 +326,7 @@ impl ZeroAppExecutor {
         }
 
         // Register MCP tools in the tool registry (before wrapping in Arc)
-        Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
+        let mcp_tool_names = Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
 
         // Generate conversation_id early (needed for subagent tool registration)
         let conversation_id = config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -338,11 +338,49 @@ impl ZeroAppExecutor {
         // Now wrap in Arc
         let tool_registry = Arc::new(tool_registry);
 
+        // Update system prompt with actual MCP tool names (not just server IDs)
+        let mut agent_config = config.agent_config.clone();
+        if !mcp_tool_names.is_empty() {
+            if let Some(ref mut system_instruction) = agent_config.system_instruction {
+                // Replace the placeholder MCP tools section with actual tool names
+                let mcp_tools_list = mcp_tool_names
+                    .iter()
+                    .map(|t| format!("- {}", t))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                // The system prompt template uses {AVAILABLE_MCP_TOOLS_XML} which was replaced
+                // with server IDs. Now we need to find and replace that section.
+                // Look for the line that starts with "- " after "## Available MCP Tools"
+                if let Some(mcp_section_start) = system_instruction.find("## Available MCP Tools") {
+                    if let Some(tools_start) = system_instruction[mcp_section_start..].find("\n- ") {
+                        let abs_tools_start = mcp_section_start + tools_start + 1;
+                        // Find where the tools list ends (next section or double newline)
+                        let rest = &system_instruction[abs_tools_start..];
+                        let tools_end = rest.find("\n\n")
+                            .or_else(|| rest.find("\n##"))
+                            .unwrap_or(rest.len());
+                        let abs_tools_end = abs_tools_start + tools_end;
+
+                        // Replace the old tools list with actual tool names
+                        let new_instruction = format!(
+                            "{}{}{}",
+                            &system_instruction[..abs_tools_start],
+                            mcp_tools_list,
+                            &system_instruction[abs_tools_end..]
+                        );
+                        *system_instruction = new_instruction;
+                        tracing::info!("Updated system prompt with {} actual MCP tool names", mcp_tool_names.len());
+                    }
+                }
+            }
+        }
+
         // Create config adapter
         let adapter = ConfigAdapter::new(llm.clone(), tool_registry.clone());
 
-        // Build the agent
-        let agent = adapter.build_agent(&config.agent_config)?;
+        // Build the agent with updated config
+        let agent = adapter.build_agent(&agent_config)?;
         let session = Arc::new(MutexSession::with_params(
             conversation_id.clone(),
             "agentzero".to_string(),
@@ -740,13 +778,14 @@ impl ZeroAppExecutor {
     }
 
     /// Register MCP tools from the MCP manager into the tool registry
+    /// Returns the list of registered tool names (qualified names like "server__tool")
     async fn register_mcp_tools(
         tool_registry: &mut ToolRegistry,
         mcp_manager: &Arc<McpManager>,
         agent_mcps: &[String],
-    ) {
+    ) -> Vec<String> {
         if agent_mcps.is_empty() {
-            return;
+            return Vec::new();
         }
 
         // List all tools from connected MCP servers
@@ -754,11 +793,13 @@ impl ZeroAppExecutor {
             Ok(tools) => tools,
             Err(e) => {
                 tracing::warn!("Failed to list MCP tools: {}", e);
-                return;
+                return Vec::new();
             }
         };
 
         tracing::info!("Found {} MCP tools to register", mcp_tools.len());
+
+        let mut registered_tool_names = Vec::new();
 
         // Register each MCP tool
         for mcp_tool in mcp_tools {
@@ -773,12 +814,17 @@ impl ZeroAppExecutor {
                     mcp_manager.clone(), // Clone the Arc
                 );
 
-                tracing::info!("Registering MCP tool: {} (from server: {})", bridge.qualified_name, server_id);
+                let tool_name = bridge.qualified_name.to_string();
+                tracing::info!("Registering MCP tool: {} (from server: {})", tool_name, server_id);
+
+                registered_tool_names.push(tool_name);
 
                 // Register the tool
                 tool_registry.register(Arc::new(bridge));
             }
         }
+
+        registered_tool_names
     }
 
     /// Find which MCP server provides a given tool
