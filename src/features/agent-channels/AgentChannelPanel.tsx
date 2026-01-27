@@ -621,9 +621,6 @@ export function AgentChannelPanel() {
           });
           // Batch state updates using startTransition for better performance
           startTransition(() => {
-            // Build final content with generated files summary
-            let finalContent = data.finalMessage || "";
-
             // Append generated files summary if any
             const generatedFiles = (data as Record<string, unknown>).generatedFiles as Array<{
               path: string;
@@ -632,39 +629,54 @@ export function AgentChannelPanel() {
               isAttachment?: boolean;
             }> | undefined;
 
+            // Build generated files markdown to append
+            let generatedFilesSuffix = "";
             if (generatedFiles && generatedFiles.length > 0) {
-              finalContent += "\n\n**Generated Files:**\n";
+              generatedFilesSuffix = "\n\n**Generated Files:**\n";
               for (const file of generatedFiles) {
                 const fileName = file.title || file.path.split('/').pop() || file.path;
                 // Use file:// protocol for local files, or relative path for attachments
                 if (file.isAttachment) {
-                  finalContent += `- 📄 [${fileName}](attachment://${file.path})\n`;
+                  generatedFilesSuffix += `- 📄 [${fileName}](attachment://${file.path})\n`;
                 } else {
-                  finalContent += `- 📄 [${fileName}](file://${file.path})\n`;
+                  generatedFilesSuffix += `- 📄 [${fileName}](file://${file.path})\n`;
                 }
               }
             }
 
-            // Update with final content and tool data
-            const finalMsg = {
-              content: finalContent,
-              ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {}),
-              generatedFiles: generatedFiles || [],
-            };
-            setMessages((prev) => prev.map((msg) =>
-              msg.id === assistantMessageId
-                ? { ...msg, ...finalMsg }
-                : msg
-            ));
+            // Update message - preserve accumulated streamed content, just append generated files
+            // Don't overwrite with finalMessage as it may be incomplete after continuation
+            setMessages((prev) => prev.map((msg) => {
+              if (msg.id !== assistantMessageId) return msg;
+
+              // Use existing streamed content if available, otherwise fall back to finalMessage
+              const currentContent = msg.content || data.finalMessage || "";
+              const finalContent = currentContent + generatedFilesSuffix;
+
+              return {
+                ...msg,
+                content: finalContent,
+                ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {}),
+                generatedFiles: generatedFiles || [],
+              };
+            }));
             setLoadedDays((prev) => prev.map((day) =>
               day.sessionId === currentSession?.id
                 ? {
                     ...day,
-                    messages: day.messages.map((msg) =>
-                      msg.id === assistantMessageId
-                        ? { ...msg, ...finalMsg }
-                        : msg
-                    ),
+                    messages: day.messages.map((msg) => {
+                      if (msg.id !== assistantMessageId) return msg;
+
+                      const currentContent = msg.content || data.finalMessage || "";
+                      const finalContent = currentContent + generatedFilesSuffix;
+
+                      return {
+                        ...msg,
+                        content: finalContent,
+                        ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {}),
+                        generatedFiles: generatedFiles || [],
+                      };
+                    }),
                   }
                 : day
             ));
