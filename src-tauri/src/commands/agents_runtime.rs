@@ -5,9 +5,14 @@
 
 use std::sync::Arc;
 use std::collections::HashMap;
+use std::time::Instant;
 use serde_json::Value;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::RwLock;
+
+use crate::domains::agent_runtime::event_emitter::{
+    ActivityItem, ActivityType, ToolCallActivity, ToolStatus,
+};
 
 use crate::domains::conversation_runtime::repository::{MessageRole, ToolCall, ToolResult};
 use crate::domains::agent_runtime::executor_v2::{create_zero_executor, ZeroAppStreamEvent};
@@ -130,6 +135,13 @@ pub async fn execute_agent_stream(
     let mut current_tool_calls: Vec<ToolCall> = Vec::new();
     let mut current_tool_results: Vec<ToolResult> = Vec::new();
 
+    // Track tool call start times for duration calculation
+    let mut tool_start_times: HashMap<String, Instant> = HashMap::new();
+    // Track activity items for the activity panel
+    let mut activity_items: Vec<ActivityItem> = Vec::new();
+    // Track generated files for the completion summary
+    let mut generated_files: Vec<serde_json::Value> = Vec::new();
+
     executor.run_stream(message, |stream_event| {
         let event_name = format!("agent-stream://{}", session_id);
 
@@ -152,18 +164,83 @@ pub async fn execute_agent_stream(
                     arguments: serde_json::from_str(&arguments).unwrap_or_default(),
                 });
 
+                // Track start time for duration calculation
+                tool_start_times.insert(id.clone(), Instant::now());
+
+                // Truncate arguments for preview
+                let args_preview: String = arguments.chars().take(100).collect();
+
+                // Create activity item
+                let activity_id = format!("tool_{}_{}", id, chrono::Utc::now().timestamp_millis());
+                activity_items.push(ActivityItem {
+                    id: activity_id,
+                    agent_id: agent_id.clone(),
+                    agent_name: agent_id.split('.').last().unwrap_or(&agent_id).to_string(),
+                    is_orchestrator: true, // Main agent is orchestrator
+                    item_type: ActivityType::ToolCall,
+                    timestamp: chrono::Utc::now().to_rfc3339(),
+                    tool_call: Some(ToolCallActivity {
+                        id: id.clone(),
+                        name: name.clone(),
+                        status: ToolStatus::Running,
+                        duration_ms: None,
+                        arguments_preview: Some(args_preview),
+                        result_preview: None,
+                        error: None,
+                    }),
+                });
+
+                // Emit tool_call_start event
                 if let Err(e) = app.emit(&event_name, serde_json::json!({
                     "type": "tool_call_start",
                     "timestamp": chrono::Utc::now().timestamp_millis(),
                     "toolId": id,
                     "toolName": name,
-                    "args": arguments
+                    "args": arguments,
+                    "status": "running"
                 })) {
                     eprintln!("Failed to emit event to frontend: {}", e);
+                }
+
+                // Emit activity_update with current activity list
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "activity_update",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "activity": activity_items
+                })) {
+                    eprintln!("Failed to emit activity_update event: {}", e);
                 }
             }
             ZeroAppStreamEvent::ToolResponse { id, response } => {
                 tracing::debug!("ToolResponse: toolId={}, response.len={}", id, response.len());
+
+                // Calculate duration from start time
+                let duration_ms = tool_start_times.get(&id)
+                    .map(|start| start.elapsed().as_millis() as u64);
+
+                // Truncate result for preview
+                let result_preview: String = response.chars().take(200).collect();
+
+                // Update activity item with result
+                for item in activity_items.iter_mut() {
+                    if let Some(tc) = &mut item.tool_call {
+                        if tc.id == id {
+                            tc.status = ToolStatus::Success;
+                            tc.duration_ms = duration_ms;
+                            tc.result_preview = Some(result_preview.clone());
+                            break;
+                        }
+                    }
+                }
+
+                // Emit activity_update with updated activity list
+                if let Err(e) = app.emit(&event_name, serde_json::json!({
+                    "type": "activity_update",
+                    "timestamp": chrono::Utc::now().timestamp_millis(),
+                    "activity": activity_items
+                })) {
+                    eprintln!("Failed to emit activity_update event: {}", e);
+                }
 
                 // Add to tool results for database
                 current_tool_results.push(ToolResult {
@@ -182,6 +259,17 @@ pub async fn execute_agent_stream(
                     // Check for show_content marker
                     if parsed.get("__show_content").and_then(|v| v.as_bool()).unwrap_or(false) {
                         tracing::debug!("Detected show_content marker, emitting show_content event");
+
+                        // Track generated file for completion summary
+                        if let Some(file_path) = parsed.get("file_path").and_then(|v| v.as_str()) {
+                            generated_files.push(serde_json::json!({
+                                "path": file_path,
+                                "title": parsed.get("title").and_then(|v| v.as_str()),
+                                "contentType": parsed.get("content_type").and_then(|v| v.as_str()),
+                                "isAttachment": parsed.get("is_attachment").and_then(|v| v.as_bool()).unwrap_or(false),
+                            }));
+                        }
+
                         if let Err(e) = app.emit(&event_name, serde_json::json!({
                             "type": "show_content",
                             "timestamp": chrono::Utc::now().timestamp_millis(),
@@ -238,7 +326,9 @@ pub async fn execute_agent_stream(
                     "type": "tool_result",
                     "timestamp": chrono::Utc::now().timestamp_millis(),
                     "toolId": id,
-                    "result": response
+                    "result": response,
+                    "durationMs": duration_ms,
+                    "status": "success"
                 })) {
                     eprintln!("Failed to emit event to frontend: {}", e);
                 } else {
@@ -246,12 +336,17 @@ pub async fn execute_agent_stream(
                 }
             }
             ZeroAppStreamEvent::Complete { turn_complete } => {
+                tracing::info!("Complete event: turn_complete={}, final_response.len={}, generated_files.len={}",
+                    turn_complete, final_response.len(), generated_files.len());
+
                 if let Err(e) = app.emit(&event_name, serde_json::json!({
                     "type": "done",
                     "timestamp": chrono::Utc::now().timestamp_millis(),
                     "finalMessage": final_response,
                     "tokenCount": final_response.len(),
-                    "turnComplete": turn_complete
+                    "turnComplete": turn_complete,
+                    "generatedFiles": generated_files,
+                    "toolCallCount": current_tool_calls.len()
                 })) {
                     eprintln!("Failed to emit event to frontend: {}", e);
                 }
@@ -502,6 +597,160 @@ pub async fn stop_agent_execution(agent_id: String) -> Result<Value, String> {
         } else {
             Err(format!("Agent {} not found in cache and no active session", agent_id))
         }
+    }
+}
+
+/// Continue agent execution after max iterations was reached
+///
+/// This increases max_iterations by the specified amount (default 25) and continues execution.
+/// The agent will resume from where it left off using the existing session history.
+///
+/// # Arguments
+/// * `agent_id` - The agent ID to continue
+/// * `additional_iterations` - How many more iterations to allow (default 25)
+///
+/// # Returns
+/// Streams events to the frontend via the agent-stream channel
+#[tauri::command]
+pub async fn continue_agent_execution(
+    app: tauri::AppHandle,
+    agent_id: String,
+    additional_iterations: Option<u32>,
+) -> Result<Value, String> {
+    let additional = additional_iterations.unwrap_or(25);
+    tracing::info!("Continue requested for agent: {} with {} additional iterations", agent_id, additional);
+
+    // Find the executor in cache
+    let cache = EXECUTOR_CACHE.read().await;
+    let executor_entry = cache.iter()
+        .find(|(key, _)| key.agent_id == agent_id)
+        .map(|(key, exec)| (key.clone(), exec.clone()));
+    drop(cache);
+
+    if let Some((key, executor)) = executor_entry {
+        let event_name = format!("agent-stream://{}", key.session_id);
+        tracing::info!("Continuing agent {} on session {}", agent_id, key.session_id);
+
+        // Emit continuation_started event
+        if let Err(e) = app.emit(&event_name, serde_json::json!({
+            "type": "continuation_started",
+            "timestamp": chrono::Utc::now().timestamp_millis(),
+            "additionalIterations": additional
+        })) {
+            eprintln!("Failed to emit continuation_started event: {}", e);
+        }
+
+        // Track state for this continuation
+        let mut final_response = String::new();
+        let mut tool_call_count = 0;
+        let mut tool_start_times: std::collections::HashMap<String, std::time::Instant> = std::collections::HashMap::new();
+        let generated_files: Vec<serde_json::Value> = Vec::new();
+
+        // Run continuation with streaming
+        executor.continue_stream(additional, |event| {
+            match event {
+                ZeroAppStreamEvent::Content { delta } => {
+                    final_response.push_str(&delta);
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "content",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "content": delta
+                    })) {
+                        eprintln!("Failed to emit content event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::ToolCall { id, name, arguments } => {
+                    tool_start_times.insert(id.clone(), std::time::Instant::now());
+                    tool_call_count += 1;
+
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "tool_call",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "toolId": id,
+                        "toolName": name,
+                        "arguments": arguments,
+                        "status": "running"
+                    })) {
+                        eprintln!("Failed to emit tool_call event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::ToolResponse { id, response } => {
+                    let duration_ms = tool_start_times.get(&id)
+                        .map(|start| start.elapsed().as_millis() as u64);
+
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "tool_result",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "toolId": id,
+                        "result": response,
+                        "durationMs": duration_ms,
+                        "status": "success"
+                    })) {
+                        eprintln!("Failed to emit tool_result event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::Complete { turn_complete } => {
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "done",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "finalMessage": final_response,
+                        "turnComplete": turn_complete,
+                        "generatedFiles": generated_files,
+                        "toolCallCount": tool_call_count
+                    })) {
+                        eprintln!("Failed to emit done event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::IterationUpdate { current, max } => {
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "iteration_update",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "current": current,
+                        "max": max
+                    })) {
+                        eprintln!("Failed to emit iteration_update event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::ContinuationPrompt { iteration, message } => {
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "continuation_prompt",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "iteration": iteration,
+                        "message": message
+                    })) {
+                        eprintln!("Failed to emit continuation_prompt event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::Stopped { iteration, reason } => {
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "stopped",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "iteration": iteration,
+                        "reason": reason
+                    })) {
+                        eprintln!("Failed to emit stopped event: {}", e);
+                    }
+                }
+                ZeroAppStreamEvent::Error { message } => {
+                    if let Err(e) = app.emit(&event_name, serde_json::json!({
+                        "type": "error",
+                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                        "error": message
+                    })) {
+                        eprintln!("Failed to emit error event: {}", e);
+                    }
+                }
+            }
+        }).await.map_err(|e| format!("Continuation failed: {}", e))?;
+
+        Ok(serde_json::json!({
+            "success": true,
+            "agent_id": agent_id,
+            "additional_iterations": additional,
+            "message": "Continuation completed"
+        }))
+    } else {
+        Err(format!("Agent {} not found in cache - cannot continue", agent_id))
     }
 }
 

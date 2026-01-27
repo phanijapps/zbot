@@ -21,7 +21,10 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .setup(|_app| {
+        .setup(|app| {
+            // Initialize global event emitter first
+            domains::agent_runtime::event_emitter::init(app.handle());
+
             // Initialize application directories on startup
             use settings::AppDirs;
 
@@ -190,6 +193,13 @@ pub fn run() {
             commands::create_agent_conversation,
             commands::get_or_create_conversation,
             commands::clear_executor_cache,
+            commands::stop_agent_execution,
+            commands::continue_agent_execution,
+            commands::get_agent_execution_status,
+            // TODO list commands
+            commands::get_agent_todos,
+            commands::save_agent_todos,
+            commands::update_agent_todo,
             // Knowledge Graph commands
             commands::get_knowledge_graph,
             commands::get_knowledge_graph_entities,

@@ -49,20 +49,30 @@ const BUILTIN_TOOLS: &[&str] = &[
 /// Build a complete system prompt by combining the template with agent-specific instructions
 ///
 /// # Arguments
-/// * `base_instructions` - The agent's AGENTS.md content
+/// * `base_instructions` - The agent's AGENTS.md content (brief role description)
+/// * `skills_content` - Formatted skills with descriptions and load commands
 /// * `agent_name` - The agent's name/id for file paths
 /// * `vault_path` - Path to the vault directory
 /// * `mcp_tool_names` - Names of configured MCP tools
 fn build_full_system_prompt(
     base_instructions: &str,
+    skills_content: &str,
     agent_name: &str,
     vault_path: &str,
     mcp_tool_names: &[String],
 ) -> String {
     let mut prompt = SYSTEM_PROMPT_TEMPLATE.to_string();
 
-    // Replace base instructions placeholder
+    // Replace base instructions placeholder (AGENTS.md - brief role)
     prompt = prompt.replace("{BASE_INSTRUCTIONS}", base_instructions);
+
+    // Replace skills placeholder with formatted skills
+    let skills_section = if skills_content.is_empty() {
+        "No skills configured for this agent.".to_string()
+    } else {
+        skills_content.to_string()
+    };
+    prompt = prompt.replace("{AVAILABLE_SKILLS}", &skills_section);
 
     // Generate built-in tools XML list
     let tools_xml = BUILTIN_TOOLS
@@ -84,9 +94,8 @@ fn build_full_system_prompt(
     };
     prompt = prompt.replace("{AVAILABLE_MCP_TOOLS_XML}", &mcp_tools_xml);
 
-    // Replace vault path (and fix typo in template)
+    // Replace vault path
     prompt = prompt.replace("{vault}", vault_path);
-    prompt = prompt.replace("{valut}", vault_path); // Fix typo in template
 
     // Replace agent name placeholder
     prompt = prompt.replace("<agent_name>", agent_name);
@@ -286,6 +295,8 @@ pub struct ZeroAppExecutor {
     tool_registry: Arc<ToolRegistry>,
     mcp_manager: Arc<McpManager>,
     middleware_executor: Arc<MiddlewareExecutor>,
+    /// Current iteration count (thread-safe for tracking)
+    current_iteration: AtomicU32,
 }
 
 impl ZeroAppExecutor {
@@ -317,8 +328,12 @@ impl ZeroAppExecutor {
         // Register MCP tools in the tool registry (before wrapping in Arc)
         Self::register_mcp_tools(&mut tool_registry, &mcp_manager, &agent_mcps).await;
 
+        // Generate conversation_id early (needed for subagent tool registration)
+        let conversation_id = config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+
         // Register subagent tools from .subagents/ folder
-        Self::register_subagent_tools(&mut tool_registry, &config.agent_id, &dirs).await;
+        // Pass conversation_id so subagents can emit events to parent's channel
+        Self::register_subagent_tools(&mut tool_registry, &config.agent_id, &conversation_id, &dirs).await;
 
         // Now wrap in Arc
         let tool_registry = Arc::new(tool_registry);
@@ -328,9 +343,6 @@ impl ZeroAppExecutor {
 
         // Build the agent
         let agent = adapter.build_agent(&config.agent_config)?;
-
-        // Create session using MutexSession for shared access
-        let conversation_id = config.conversation_id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let session = Arc::new(MutexSession::with_params(
             conversation_id.clone(),
             "agentzero".to_string(),
@@ -434,7 +446,32 @@ impl ZeroAppExecutor {
             tool_registry,
             mcp_manager,
             middleware_executor,
+            current_iteration: AtomicU32::new(0),
         })
+    }
+
+    /// Increment and return the new iteration count
+    pub fn increment_iteration(&self) -> u32 {
+        let new_val = self.current_iteration.fetch_add(1, Ordering::SeqCst) + 1;
+        // Also update session state so frontend can track
+        if let Ok(mut s) = self.session.lock() {
+            let _ = s.state_mut().set(
+                state_keys::state_keys::EXECUTION_ITERATION.to_string(),
+                json!(new_val),
+            );
+        }
+        new_val
+    }
+
+    /// Reset iteration count (for next run)
+    pub fn reset_iteration(&self) {
+        self.current_iteration.store(0, Ordering::SeqCst);
+        if let Ok(mut s) = self.session.lock() {
+            let _ = s.state_mut().set(
+                state_keys::state_keys::EXECUTION_ITERATION.to_string(),
+                json!(0),
+            );
+        }
     }
 
     /// Run the agent with a user message
@@ -482,19 +519,35 @@ impl ZeroAppExecutor {
         // Create invocation context with user content
         let ctx = self.create_invocation_context(user_content)?;
 
+        // Get max_iterations from config (default 25)
+        let max_iterations = self.config.agent_config.max_iterations.unwrap_or(25);
+
         // Run the agent with streaming
-        tracing::info!("Starting agent.run()");
+        tracing::info!("Starting agent.run() with max_iterations={}", max_iterations);
         let mut stream = self.agent.run(ctx).await
             .map_err(|e| format!("Agent execution error: {}", e.to_string()))?;
 
         let mut event_count = 0;
+        let mut last_turn_complete = false;
+
         while let Some(event_result) = stream.next().await {
             event_count += 1;
-            tracing::info!("Received event #{}", event_count);
+            // Track iterations (each event from the agent loop is roughly one iteration)
+            self.increment_iteration();
+
+            tracing::info!("Received event #{} (iteration {})", event_count, self.get_iteration());
 
             match event_result {
                 Ok(event) => {
+                    // Track turn_complete status
+                    last_turn_complete = event.turn_complete;
                     tracing::info!("Event: turn_complete={}, has_content={}", event.turn_complete, event.content.is_some());
+
+                    // Emit iteration update to frontend
+                    callback(ZeroAppStreamEvent::IterationUpdate {
+                        current: self.get_iteration(),
+                        max: max_iterations,
+                    });
 
                     // Convert event to stream event and emit it
                     let stream_event = ZeroAppStreamEvent::from_event(&event);
@@ -524,7 +577,7 @@ impl ZeroAppExecutor {
             }
         }
 
-        tracing::info!("Agent run completed with {} events", event_count);
+        tracing::info!("Agent run completed with {} events, last_turn_complete={}", event_count, last_turn_complete);
 
         // Check if execution was stopped by user request
         if self.is_stop_requested() {
@@ -536,7 +589,27 @@ impl ZeroAppExecutor {
             });
             // Clear the stop flag for next execution
             let _ = self.clear_stop();
+        } else if !last_turn_complete {
+            // Agent finished without turn_complete - means max_iterations was reached
+            let iteration = self.get_iteration();
+            tracing::info!("Max iterations reached at iteration {}, prompting for continuation", iteration);
+            callback(ZeroAppStreamEvent::ContinuationPrompt {
+                iteration,
+                message: format!(
+                    "Agent reached {} iterations. Would you like to continue?",
+                    iteration
+                ),
+            });
+        } else {
+            // Normal completion with turn_complete=true
+            tracing::info!("Emitting final Complete event for normal completion");
+            callback(ZeroAppStreamEvent::Complete {
+                turn_complete: true,
+            });
         }
+
+        // Reset iteration counter for next run
+        self.reset_iteration();
 
         Ok(())
     }
@@ -628,12 +701,7 @@ impl ZeroAppExecutor {
 
     /// Get the current iteration count
     pub fn get_iteration(&self) -> u32 {
-        if let Ok(session) = self.session.lock() {
-            if let Some(iter_value) = session.state().get(state_keys::state_keys::EXECUTION_ITERATION) {
-                return iter_value.as_u64().unwrap_or(0) as u32;
-            }
-        }
-        0
+        self.current_iteration.load(Ordering::SeqCst)
     }
 
     /// Get the agent ID
@@ -735,9 +803,16 @@ impl ZeroAppExecutor {
     ///
     /// Scans the .subagents directory for subagent configurations and
     /// registers each as a tool that the orchestrator can call.
+    ///
+    /// # Arguments
+    /// * `tool_registry` - Registry to add subagent tools to
+    /// * `agent_id` - Parent agent ID (orchestrator)
+    /// * `session_id` - Parent session ID for event relay
+    /// * `dirs` - App directories for locating subagents
     async fn register_subagent_tools(
         tool_registry: &mut ToolRegistry,
         agent_id: &str,
+        session_id: &str,
         dirs: &Arc<AppDirs>,
     ) {
         use super::subagent_tool::SubagentTool;
@@ -800,8 +875,10 @@ impl ZeroAppExecutor {
             };
 
             // Create and register SubagentTool
+            // Pass session_id so subagent can emit events to parent's channel
             let tool = SubagentTool::new(
                 agent_id.to_string(),
+                session_id.to_string(),
                 subagent_id.clone(),
                 description,
             );
@@ -815,13 +892,153 @@ impl ZeroAppExecutor {
     }
 
     fn create_invocation_context(&self, user_content: Content) -> TResult<Arc<dyn InvocationContext>> {
+        // Get max_iterations: first check session state for override, then use config, default to 25
+        let max_iterations = {
+            let session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
+            session
+                .state()
+                .get(state_keys::state_keys::EXECUTION_MAX_ITERATIONS)
+                .and_then(|v| v.as_u64())
+                .map(|v| v as u32)
+                .unwrap_or_else(|| self.config.agent_config.max_iterations.unwrap_or(25))
+        };
+
+        tracing::info!("Creating invocation context with max_iterations={}", max_iterations);
+
         Ok(Arc::new(ZeroInvocationContext::new(
             self.agent.clone(),
             self.session.clone(),
             self.llm.clone(),
             self.tool_registry.clone(),
             user_content,
+            max_iterations,
         )))
+    }
+
+    /// Increase max_iterations for continuation
+    pub fn increase_max_iterations(&self, additional: u32) -> TResult<u32> {
+        let mut session = self.session.lock()
+            .map_err(|e| format!("Session lock error: {}", e))?;
+
+        // Get current max_iterations from state or config
+        let current = session
+            .state()
+            .get(state_keys::state_keys::EXECUTION_MAX_ITERATIONS)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32)
+            .unwrap_or_else(|| self.config.agent_config.max_iterations.unwrap_or(25));
+
+        let new_max = current + additional;
+
+        // Store the new max in session state
+        session.state_mut().set(
+            state_keys::state_keys::EXECUTION_MAX_ITERATIONS.to_string(),
+            json!(new_max),
+        );
+
+        tracing::info!("Increased max_iterations from {} to {}", current, new_max);
+        Ok(new_max)
+    }
+
+    /// Continue execution after max_iterations was reached
+    /// This increases max_iterations and runs without adding a new user message
+    pub async fn continue_stream(
+        &self,
+        additional_iterations: u32,
+        mut callback: impl FnMut(ZeroAppStreamEvent),
+    ) -> TResult<()> {
+        // Increase max_iterations
+        let new_max = self.increase_max_iterations(additional_iterations)?;
+        tracing::info!("Continuing execution with new max_iterations={}", new_max);
+
+        // Get the last user content from session to create context
+        // (we don't add a new user message, just continue)
+        let user_content = {
+            let session = self.session.lock().map_err(|e| format!("Session lock error: {}", e))?;
+            // Find the last user message in history
+            session.history()
+                .iter()
+                .rev()
+                .find(|c| c.role == "user")
+                .cloned()
+                .unwrap_or_else(|| Content::user("Continue"))
+        };
+
+        // Create invocation context (will use the new max_iterations from session state)
+        let ctx = self.create_invocation_context(user_content)?;
+
+        // Run the agent with streaming
+        tracing::info!("Starting agent.run() for continuation");
+        let mut stream = self.agent.run(ctx).await
+            .map_err(|e| format!("Agent execution error: {}", e.to_string()))?;
+
+        let mut event_count = 0;
+        let mut last_turn_complete = false;
+
+        while let Some(event_result) = stream.next().await {
+            event_count += 1;
+            self.increment_iteration();
+
+            tracing::info!("Continuation event #{} (iteration {})", event_count, self.get_iteration());
+
+            match event_result {
+                Ok(event) => {
+                    last_turn_complete = event.turn_complete;
+
+                    // Emit iteration update
+                    callback(ZeroAppStreamEvent::IterationUpdate {
+                        current: self.get_iteration(),
+                        max: new_max,
+                    });
+
+                    let stream_event = ZeroAppStreamEvent::from_event(&event);
+                    let needs_complete_event = event.turn_complete && matches!(stream_event, ZeroAppStreamEvent::Content { .. });
+
+                    callback(stream_event);
+
+                    if needs_complete_event {
+                        callback(ZeroAppStreamEvent::Complete {
+                            turn_complete: true,
+                        });
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Continuation event error: {}", e);
+                    callback(ZeroAppStreamEvent::Error {
+                        message: e.to_string(),
+                    });
+                    return Err(e.to_string());
+                }
+            }
+        }
+
+        tracing::info!("Continuation completed with {} events, last_turn_complete={}", event_count, last_turn_complete);
+
+        if self.is_stop_requested() {
+            let iteration = self.get_iteration();
+            callback(ZeroAppStreamEvent::Stopped {
+                iteration,
+                reason: "User requested stop".to_string(),
+            });
+            let _ = self.clear_stop();
+        } else if !last_turn_complete {
+            // Still reached max_iterations, prompt again
+            let iteration = self.get_iteration();
+            callback(ZeroAppStreamEvent::ContinuationPrompt {
+                iteration,
+                message: format!(
+                    "Agent reached {} iterations. Would you like to continue?",
+                    iteration
+                ),
+            });
+        } else {
+            callback(ZeroAppStreamEvent::Complete {
+                turn_complete: true,
+            });
+        }
+
+        self.reset_iteration();
+        Ok(())
     }
 }
 
@@ -951,6 +1168,7 @@ impl ZeroInvocationContext {
         llm: Arc<dyn Llm>,
         tool_registry: Arc<ToolRegistry>,
         user_content: Content, // Pass user_content during creation
+        max_iterations: u32,
     ) -> Self {
         Self {
             agent,
@@ -961,7 +1179,10 @@ impl ZeroInvocationContext {
             actions: std::sync::Mutex::new(EventActions::default()),
             ended: AtomicBool::new(false),
             current_iteration: AtomicU32::new(0),
-            run_config: RunConfig::default(),
+            run_config: RunConfig {
+                max_iterations: Some(max_iterations as usize),
+                ..RunConfig::default()
+            },
         }
     }
 
@@ -1155,7 +1376,7 @@ pub async fn create_zero_executor(
     // Parse config - read entire file, then parse
     let agent_config = ConfigAdapter::parse_config(&config_content)?;
 
-    // Read AGENTS.md for system instruction
+    // Read AGENTS.md for system instruction (brief role description)
     let agents_md_file = agent_dir.join("AGENTS.md");
     let mut system_instruction = if agents_md_file.exists() {
         std::fs::read_to_string(&agents_md_file)
@@ -1166,9 +1387,10 @@ pub async fn create_zero_executor(
         String::new()
     };
 
-    // Load skills and append their name/description to the system instruction
-    // Full skill content is lazy-loaded via load_skill tool when needed
+    // Build skills content separately (not appended to AGENTS.md)
+    // Skills are positioned prominently in the template with explicit load instructions
     let skills_dir = dirs.skills_dir.clone();
+    let mut skills_content = String::new();
     for skill_id in &agent_config.skills {
         let skill_dir = skills_dir.join(skill_id);
         let skill_md_file = skill_dir.join("SKILL.md");
@@ -1176,15 +1398,30 @@ pub async fn create_zero_executor(
         if skill_md_file.exists() {
             match std::fs::read_to_string(&skill_md_file) {
                 Ok(skill_content) => {
-                    // Parse the YAML frontmatter to extract name and description
-                    if let Some(pos) = skill_content.find("---") {
-                        let frontmatter = &skill_content[0..pos].trim();
-                        // Just add skill name/description - full content is lazy-loaded
-                        system_instruction.push_str(&format!("\n\n## Available Skill: {}\nYAML: {}", skill_id, frontmatter.trim()));
+                    // Parse the YAML frontmatter to extract description
+                    let description = if let Some(start) = skill_content.find("---") {
+                        let after_first = &skill_content[start + 3..];
+                        if let Some(end) = after_first.find("---") {
+                            let frontmatter = &after_first[..end];
+                            // Extract description from YAML
+                            frontmatter
+                                .lines()
+                                .find(|line| line.starts_with("description:"))
+                                .map(|line| line.trim_start_matches("description:").trim())
+                                .unwrap_or("Use load_skill to see full instructions")
+                                .to_string()
+                        } else {
+                            "Use load_skill to see full instructions".to_string()
+                        }
                     } else {
-                        // No frontmatter, just mention the skill exists
-                        system_instruction.push_str(&format!("\n\n## Available Skill: {}\n(Use load_skill to load this skill)", skill_id));
-                    }
+                        "Use load_skill to see full instructions".to_string()
+                    };
+
+                    // Format skill with clear load command
+                    skills_content.push_str(&format!(
+                        "### `{}`\n{}\n→ Load with: `load_skill({{ file: \"@skill:{}\" }})`\n\n",
+                        skill_id, description, skill_id
+                    ));
                 }
                 Err(e) => {
                     tracing::warn!("Failed to read skill {}: {}", skill_id, e);
@@ -1202,11 +1439,12 @@ pub async fn create_zero_executor(
     }
 
     // Build the full system prompt using the template
-    // This wraps the agent's instructions with tool usage guidelines
+    // Template structure: Role (AGENTS.md) → Skills (prominent) → Tools → Guidelines
     let vault_path = dirs.config_dir.to_string_lossy().to_string();
     let mcp_tool_names: Vec<String> = agent_config.mcps.iter().cloned().collect();
     let full_system_prompt = build_full_system_prompt(
         &system_instruction,
+        &skills_content,
         agent_id,
         &vault_path,
         &mcp_tool_names,
@@ -1292,7 +1530,7 @@ pub async fn create_subagent_executor(
     // Parse config
     let agent_config = ConfigAdapter::parse_config(&config_content)?;
 
-    // Read AGENTS.md for system instruction
+    // Read AGENTS.md for system instruction (brief role)
     let agents_md_file = agent_dir.join("AGENTS.md");
     let base_instruction = if agents_md_file.exists() {
         std::fs::read_to_string(&agents_md_file)
@@ -1303,12 +1541,47 @@ pub async fn create_subagent_executor(
         String::new()
     };
 
+    // Build skills content for subagent
+    let skills_dir = dirs.skills_dir.clone();
+    let mut skills_content = String::new();
+    for skill_id in &agent_config.skills {
+        let skill_dir = skills_dir.join(skill_id);
+        let skill_md_file = skill_dir.join("SKILL.md");
+
+        if skill_md_file.exists() {
+            if let Ok(skill_content) = std::fs::read_to_string(&skill_md_file) {
+                let description = if let Some(start) = skill_content.find("---") {
+                    let after_first = &skill_content[start + 3..];
+                    if let Some(end) = after_first.find("---") {
+                        let frontmatter = &after_first[..end];
+                        frontmatter
+                            .lines()
+                            .find(|line| line.starts_with("description:"))
+                            .map(|line| line.trim_start_matches("description:").trim())
+                            .unwrap_or("Use load_skill to see full instructions")
+                            .to_string()
+                    } else {
+                        "Use load_skill to see full instructions".to_string()
+                    }
+                } else {
+                    "Use load_skill to see full instructions".to_string()
+                };
+
+                skills_content.push_str(&format!(
+                    "### `{}`\n{}\n→ Load with: `load_skill({{ file: \"@skill:{}\" }})`\n\n",
+                    skill_id, description, skill_id
+                ));
+            }
+        }
+    }
+
     // Build the full system prompt using the template (includes tool usage guidelines)
     let vault_path = dirs.config_dir.to_string_lossy().to_string();
     let mcp_tool_names: Vec<String> = agent_config.mcps.iter().cloned().collect();
     let subagent_full_id = format!("{}.{}", parent_agent_id, subagent_id);
     let full_system_prompt = build_full_system_prompt(
         &base_instruction,
+        &skills_content,
         &subagent_full_id,
         &vault_path,
         &mcp_tool_names,

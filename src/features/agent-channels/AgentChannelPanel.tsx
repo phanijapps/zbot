@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback, startTransition } from "react";
-import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic, FileText, GitBranch, Square, CheckSquare } from "lucide-react";
+import { MessageSquare, Bot, Loader2, Paperclip, Send, History, Hash, Trash2, X, ChevronDown, ChevronRight, Network, Mic, FileText, GitBranch, Square, Activity } from "lucide-react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { cn } from "@/shared/utils";
@@ -21,7 +21,6 @@ import {
   AgentChannelList,
   useStreamEvents,
   GenerativeCanvas,
-  InlineToolCallsList,
   type MessageWithThinking,
 } from "@/domains/agent-runtime/components";
 import { ClearHistoryDialog } from "./ClearHistoryDialog";
@@ -31,7 +30,7 @@ import { VoiceRecordingDialog } from "./VoiceRecordingDialog";
 import { TranscriptCommentDialog, type TranscriptAttachmentInfo } from "./TranscriptCommentDialog";
 import { useNavigate, useLocation } from "react-router-dom";
 import { AttachmentsPanel, type Attachment } from "./AttachmentsPanel";
-import { TodoPanel } from "./TodoPanel";
+import { ActivityPanel } from "./ActivityPanel";
 import type { Agent, DailySession, DaySummary, SessionMessage } from "@/shared/types";
 import {
   getOrCreateTodaySession,
@@ -84,6 +83,10 @@ export function AgentChannelPanel() {
   const [currentIteration, setCurrentIteration] = useState<{ current: number; max: number } | null>(null);
   const [stopRequested, setStopRequested] = useState(false);
 
+  // Continuation prompt dialog state
+  const [showContinuationDialog, setShowContinuationDialog] = useState(false);
+  const [continuationIteration, setContinuationIteration] = useState<number>(0);
+
   // Day Messages - stores messages grouped by session date
   // Structure: array of DayMessages, ordered by date (newest first)
   const [loadedDays, setLoadedDays] = useState<DayMessages[]>([]);
@@ -123,8 +126,8 @@ export function AgentChannelPanel() {
   const [attachmentsPanelOpen, setAttachmentsPanelOpen] = useState(false);
   const [attachments, setAttachments] = useState<Attachment[]>([]);
 
-  // TODO Panel state
-  const [todoPanelOpen, setTodoPanelOpen] = useState(false);
+  // Activity Panel state (unified TODOs + Tool Calls)
+  const [activityPanelOpen, setActivityPanelOpen] = useState(false);
 
   // Vault Switcher state - toggled by chevron in AgentChannelList
   const [showVaultSwitcher, setShowVaultSwitcher] = useState(false);
@@ -516,6 +519,7 @@ export function AgentChannelPanel() {
       // Map simplified events to AgentStreamEvent format and pass to thinking panel
       switch (data.type) {
         case "token":
+        case "content": // Handle both "token" (initial) and "content" (continuation) events
           setExecutionStage("generating");
           handleThinkingEvent({
             type: "token",
@@ -617,10 +621,35 @@ export function AgentChannelPanel() {
           });
           // Batch state updates using startTransition for better performance
           startTransition(() => {
+            // Build final content with generated files summary
+            let finalContent = data.finalMessage || "";
+
+            // Append generated files summary if any
+            const generatedFiles = (data as Record<string, unknown>).generatedFiles as Array<{
+              path: string;
+              title?: string;
+              contentType?: string;
+              isAttachment?: boolean;
+            }> | undefined;
+
+            if (generatedFiles && generatedFiles.length > 0) {
+              finalContent += "\n\n**Generated Files:**\n";
+              for (const file of generatedFiles) {
+                const fileName = file.title || file.path.split('/').pop() || file.path;
+                // Use file:// protocol for local files, or relative path for attachments
+                if (file.isAttachment) {
+                  finalContent += `- 📄 [${fileName}](attachment://${file.path})\n`;
+                } else {
+                  finalContent += `- 📄 [${fileName}](file://${file.path})\n`;
+                }
+              }
+            }
+
             // Update with final content and tool data
             const finalMsg = {
-              content: data.finalMessage || "",
-              ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {})
+              content: finalContent,
+              ...(toolCallCount > 0 ? { thinking: { toolCount: toolCallCount, toolCalls: [...toolCallsData] } } : {}),
+              generatedFiles: generatedFiles || [],
             };
             setMessages((prev) => prev.map((msg) =>
               msg.id === assistantMessageId
@@ -771,8 +800,35 @@ export function AgentChannelPanel() {
         case "continuation_prompt":
           // Agent reached max iterations, asking if user wants to continue
           debugLog("CONTINUATION_PROMPT at iteration", data.iteration);
-          // For now, just log - could show a dialog in the future
-          // TODO: Show continuation dialog
+          // Show continuation dialog to ask user if they want to continue
+          setContinuationIteration(data.iteration || 0);
+          setShowContinuationDialog(true);
+          break;
+
+        case "continuation_started":
+          // User chose to continue, execution is resuming
+          debugLog("CONTINUATION_STARTED with additional iterations:", (data as { additionalIterations?: number }).additionalIterations);
+          setShowContinuationDialog(false);
+          setExecutionStage("thinking");
+          break;
+
+        case "tool_call":
+          // Tool call event from continuation (same as tool_call_start)
+          setExecutionStage("using_tools");
+          setActiveToolName(data.toolName || null);
+          toolCallCount++;
+          const contToolId = data.toolId || `tool-${Date.now()}`;
+          toolCallsData.push({
+            id: contToolId,
+            name: data.toolName || "unknown",
+            status: "running",
+          });
+          handleThinkingEvent({
+            type: "tool_call_start",
+            toolId: contToolId,
+            toolName: data.toolName || "unknown",
+            timestamp: Date.now()
+          });
           break;
       }
     });
@@ -866,6 +922,52 @@ export function AgentChannelPanel() {
       console.error("Failed to stop execution:", err);
       setStopRequested(false);
     }
+  };
+
+  /**
+   * Handle continuation dialog - user wants to continue execution
+   */
+  const handleContinueExecution = async () => {
+    if (!selectedAgent) return;
+
+    setShowContinuationDialog(false);
+    debugLog("Continuing execution for agent:", selectedAgent.id);
+
+    try {
+      // Call the backend to continue with additional iterations (default 25)
+      await invoke("continue_agent_execution", {
+        agentId: selectedAgent.id,
+        additionalIterations: 25,
+      });
+      debugLog("Continue execution initiated");
+    } catch (err) {
+      console.error("Failed to continue execution:", err);
+      // If continue fails, reset the loading state
+      setIsLoading(false);
+      setExecutionStage("done");
+    }
+  };
+
+  /**
+   * Handle continuation dialog - user wants to stop execution
+   */
+  const handleStopContinuation = async () => {
+    setShowContinuationDialog(false);
+    debugLog("User declined to continue execution");
+
+    // Stop the agent execution
+    if (selectedAgent) {
+      try {
+        await stopAgentExecution(selectedAgent.id);
+      } catch (err) {
+        console.error("Failed to stop after declining continuation:", err);
+      }
+    }
+
+    // Reset state
+    setIsLoading(false);
+    setExecutionStage("done");
+    setCurrentIteration(null);
   };
 
   /**
@@ -1066,11 +1168,11 @@ export function AgentChannelPanel() {
                   <FileText className="size-5" />
                 </button>
                 <button
-                  onClick={() => setTodoPanelOpen(true)}
+                  onClick={() => setActivityPanelOpen(true)}
                   className="p-2 text-muted-foreground hover:text-foreground transition-colors rounded hover:bg-accent"
-                  aria-label="Show TODO list"
+                  aria-label="Show Activity (TODOs & Tools)"
                 >
-                  <CheckSquare className="size-5" />
+                  <Activity className="size-5" />
                 </button>
                 {/* Only show voice recording if enabled in agent config */}
                 {selectedAgent.voiceRecordingEnabled !== false && (
@@ -1170,19 +1272,17 @@ export function AgentChannelPanel() {
                                       ) : (
                                         /* Assistant message with optional tool cards */
                                         <>
-                                          {/* Inline tool cards - displayed before the message */}
+                                          {/* Tool call indicator - click to open Activity panel */}
                                           {msg.thinking?.toolCalls && msg.thinking.toolCalls.length > 0 && (
-                                            <div className="ml-14 mb-2">
-                                              <InlineToolCallsList
-                                                tools={msg.thinking.toolCalls.map(tc => ({
-                                                  id: tc.id,
-                                                  name: tc.name,
-                                                  status: tc.status,
-                                                  result: tc.result,
-                                                  error: tc.error,
-                                                }))}
-                                              />
-                                            </div>
+                                            <button
+                                              onClick={() => setActivityPanelOpen(true)}
+                                              className="ml-14 mb-2 flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                                            >
+                                              <Activity className="size-3" />
+                                              <span>
+                                                {msg.thinking.toolCalls.length} tool{msg.thinking.toolCalls.length > 1 ? 's' : ''} used
+                                              </span>
+                                            </button>
                                           )}
                                           {/* Assistant message content */}
                                           <div className="flex gap-4">
@@ -1535,14 +1635,50 @@ export function AgentChannelPanel() {
         />
       )}
 
-      {/* TODO Panel */}
+      {/* Activity Panel (TODOs + Tool Calls) */}
       {selectedAgent && (
-        <TodoPanel
-          open={todoPanelOpen}
-          onClose={() => setTodoPanelOpen(false)}
+        <ActivityPanel
+          open={activityPanelOpen}
+          onClose={() => setActivityPanelOpen(false)}
           agentId={selectedAgent.id}
           sessionId={currentSession?.id}
         />
+      )}
+
+      {/* Continuation Prompt Dialog */}
+      {showContinuationDialog && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-card border border-border rounded-lg shadow-xl p-6 max-w-md mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-amber-500/20 flex items-center justify-center">
+                <Activity className="size-5 text-amber-400" />
+              </div>
+              <div>
+                <h3 className="text-lg font-semibold text-foreground">Continue Execution?</h3>
+                <p className="text-sm text-muted-foreground">
+                  Iteration {continuationIteration} reached
+                </p>
+              </div>
+            </div>
+            <p className="text-sm text-foreground/80 mb-6">
+              The agent has reached {continuationIteration} iterations. Would you like to continue for another 25 iterations?
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={handleStopContinuation}
+                className="px-4 py-2 text-sm font-medium text-muted-foreground hover:text-foreground bg-input hover:bg-accent rounded-lg transition-colors"
+              >
+                Stop
+              </button>
+              <button
+                onClick={handleContinueExecution}
+                className="px-4 py-2 text-sm font-medium text-white bg-violet-600 hover:bg-violet-700 rounded-lg transition-colors"
+              >
+                Continue (+25)
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

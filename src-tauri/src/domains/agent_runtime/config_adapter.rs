@@ -63,6 +63,9 @@ pub struct AgentYamlConfig {
     pub system_instruction: Option<String>,
     #[serde(default)]
     pub middleware: Option<MiddlewareYamlConfig>,
+    /// Maximum iterations for the agent loop (default: 25)
+    #[serde(rename = "maxIterations")]
+    pub max_iterations: Option<u32>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
