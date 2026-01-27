@@ -203,6 +203,139 @@ export function AgentChannelPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedAgent?.id, resetThinking]);
 
+  // Check execution status when returning to an agent (handles navigation away/back)
+  useEffect(() => {
+    if (!selectedAgent || !currentSession) return;
+
+    const checkExecutionStatus = async () => {
+      try {
+        const status = await invoke<{
+          agent_id: string;
+          is_executing: boolean;
+          iteration: number;
+          stop_requested: boolean;
+        }>("get_agent_execution_status", { agentId: selectedAgent.id });
+
+        debugLog("Execution status check:", status);
+
+        if (status.is_executing && !isExecutingRef.current) {
+          // Agent is still executing but our UI doesn't know - restore state
+          debugLog("Restoring execution state - agent is still running");
+          isExecutingRef.current = true;
+          setIsLoading(true);
+          setExecutionStage("generating");
+          if (status.iteration > 0) {
+            setCurrentIteration({ current: status.iteration, max: 25 }); // Default max, will be updated by events
+          }
+          if (status.stop_requested) {
+            setStopRequested(true);
+          }
+
+          // Re-subscribe to the event channel to receive remaining events
+          const eventChannel = `agent-stream://${currentSession.id}`;
+          debugLog("Re-subscribing to event channel:", eventChannel);
+
+          // Find or create the assistant message to update
+          // Use a function to get current messages state
+          setMessages((currentMessages) => {
+            const lastAssistantMsg = currentMessages.filter(m => m.role === "assistant").pop();
+            const targetMessageId = lastAssistantMsg?.id || crypto.randomUUID();
+
+            // Set up event listener for remaining events
+            listen(eventChannel, (event) => {
+              if (!isMountedRef.current) return;
+
+              const data = event.payload as { type: string; content?: string; finalMessage?: string; error?: string; current?: number; max?: number; iteration?: number };
+              if (!data) return;
+
+              debugLog("Re-subscribed event:", data.type);
+
+              switch (data.type) {
+                case "token":
+                case "content":
+                  setExecutionStage("generating");
+                  startTransition(() => {
+                    setMessages((prev) => prev.map((msg) =>
+                      msg.id === targetMessageId
+                        ? { ...msg, content: msg.content + (data.content || "") }
+                        : msg
+                    ));
+                    setLoadedDays((prev) => prev.map((day) =>
+                      day.sessionId === currentSession?.id
+                        ? {
+                            ...day,
+                            messages: day.messages.map((msg) =>
+                              msg.id === targetMessageId
+                                ? { ...msg, content: msg.content + (data.content || "") }
+                                : msg
+                            ),
+                          }
+                        : day
+                    ));
+                  });
+                  break;
+
+                case "iteration_update":
+                  if (data.current !== undefined && data.max !== undefined) {
+                    setCurrentIteration({ current: data.current, max: data.max });
+                  }
+                  break;
+
+                case "done":
+                  isExecutingRef.current = false;
+                  setIsLoading(false);
+                  setExecutionStage("done");
+                  setCurrentIteration(null);
+                  setStopRequested(false);
+                  break;
+
+                case "error":
+                case "stopped":
+                  isExecutingRef.current = false;
+                  setIsLoading(false);
+                  setExecutionStage("done");
+                  setCurrentIteration(null);
+                  setStopRequested(false);
+                  break;
+
+                case "continuation_prompt":
+                  setContinuationIteration(data.iteration || 0);
+                  setShowContinuationDialog(true);
+                  break;
+              }
+            }).then((unlisten) => {
+              currentUnlistenRef.current = unlisten;
+            });
+
+            // If no assistant message exists, create one
+            if (!lastAssistantMsg) {
+              const newAssistantMessage: MessageWithThinking = {
+                id: targetMessageId,
+                conversationId: currentSession.id,
+                role: "assistant",
+                content: "",
+                timestamp: Date.now(),
+              };
+              setLoadedDays((prev) => prev.map((day) =>
+                day.sessionId === currentSession.id
+                  ? { ...day, messages: [...day.messages, newAssistantMessage], messageCount: day.messages.length + 1 }
+                  : day
+              ));
+              return [...currentMessages, newAssistantMessage];
+            }
+
+            return currentMessages;
+          });
+        }
+      } catch (err) {
+        debugLog("Failed to check execution status:", err);
+      }
+    };
+
+    checkExecutionStatus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedAgent?.id, currentSession?.id]);
+
   // Auto-scroll to bottom on new messages
   useEffect(() => {
     if (messages.length > 0) {
