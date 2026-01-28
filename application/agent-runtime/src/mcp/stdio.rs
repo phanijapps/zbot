@@ -45,9 +45,26 @@ impl StdioMcpClient {
     async fn spawn_and_call(&self, tool_name: &str, arguments: &Value) -> Result<Value, McpError> {
         tracing::debug!("STDIO MCP spawning: {} with args: {:?}", self.command, self.args);
 
-        // Build the command
-        let mut cmd = tokio::process::Command::new(&self.command);
-        cmd.args(&self.args);
+        // Build the command - on Windows, use cmd.exe to properly resolve PATH
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = tokio::process::Command::new("cmd.exe");
+            // Build the full command string with proper escaping
+            let full_cmd = if self.args.is_empty() {
+                self.command.clone()
+            } else {
+                format!("{} {}", self.command, self.args.join(" "))
+            };
+            c.args(["/c", &full_cmd]);
+            c
+        };
+
+        #[cfg(not(windows))]
+        let mut cmd = {
+            let mut c = tokio::process::Command::new(&self.command);
+            c.args(&self.args);
+            c
+        };
 
         // Set environment variables if provided
         for (key, value) in &self.env {
@@ -167,9 +184,26 @@ impl StdioMcpClient {
     async fn spawn_and_list(&self) -> Result<Vec<McpTool>, McpError> {
         tracing::debug!("STDIO MCP listing tools for: {}", self.name);
 
-        // Build the command
-        let mut cmd = tokio::process::Command::new(&self.command);
-        cmd.args(&self.args);
+        // Build the command - on Windows, use cmd.exe to properly resolve PATH
+        #[cfg(windows)]
+        let mut cmd = {
+            let mut c = tokio::process::Command::new("cmd.exe");
+            // Build the full command string with proper escaping
+            let full_cmd = if self.args.is_empty() {
+                self.command.clone()
+            } else {
+                format!("{} {}", self.command, self.args.join(" "))
+            };
+            c.args(["/c", &full_cmd]);
+            c
+        };
+
+        #[cfg(not(windows))]
+        let mut cmd = {
+            let mut c = tokio::process::Command::new(&self.command);
+            c.args(&self.args);
+            c
+        };
 
         // Set environment variables if provided
         for (key, value) in &self.env {
