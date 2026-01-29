@@ -43,6 +43,7 @@ pub mod executor_v2;
 pub mod subagent_tool;
 pub mod state_keys;
 pub mod workflow_integration;
+pub mod event_emitter;
 
 // Re-export zero-app executor
 pub use self::executor_v2::{

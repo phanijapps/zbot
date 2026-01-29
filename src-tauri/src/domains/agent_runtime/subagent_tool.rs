@@ -1,14 +1,21 @@
 // ============================================================================
 // SUBAGENT TOOL
 // Tool that wraps a subagent for execution by an orchestrator
+// Now with streaming event relay to parent's channel
 // ============================================================================
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Instant;
 use async_trait::async_trait;
 use serde_json::{json, Value};
+use tokio::sync::Mutex;
 
 use zero_app::prelude::*;
 use zero_core::ZeroError;
+
+use super::event_emitter;
+use super::executor_v2::ZeroAppStreamEvent;
 
 // Type alias for Result with String error type (for Tauri compatibility)
 type TResult<T> = std::result::Result<T, String>;
@@ -20,8 +27,8 @@ type TResult<T> = std::result::Result<T, String>;
 /// Tool that executes a subagent with isolated context.
 ///
 /// When called, this tool creates a fresh executor for the subagent,
-/// injects the context+task+goal into the system prompt, and returns
-/// only the final result (not the subagent's conversation history).
+/// injects the context+task+goal into the system prompt, and streams
+/// events back to the parent's event channel for visibility.
 pub struct SubagentTool {
     /// Leaked string for 'static lifetime (required by Tool trait)
     name: &'static str,
@@ -29,6 +36,8 @@ pub struct SubagentTool {
     description: &'static str,
     /// Parent agent ID (orchestrator)
     parent_agent_id: String,
+    /// Parent session ID (for event relay)
+    parent_session_id: String,
     /// Subagent ID
     subagent_id: String,
 }
@@ -38,10 +47,12 @@ impl SubagentTool {
     ///
     /// # Arguments
     /// * `parent_agent_id` - The parent/orchestrator agent ID
+    /// * `parent_session_id` - The parent's session ID for event relay
     /// * `subagent_id` - The subagent ID (folder name in .subagents/)
     /// * `description` - Description of what this subagent does
     pub fn new(
         parent_agent_id: String,
+        parent_session_id: String,
         subagent_id: String,
         description: String,
     ) -> Self {
@@ -60,11 +71,12 @@ impl SubagentTool {
             name,
             description,
             parent_agent_id,
+            parent_session_id,
             subagent_id,
         }
     }
 
-    /// Execute the subagent and return only the final result
+    /// Execute the subagent with streaming events relayed to parent
     async fn execute_subagent(
         &self,
         context: String,
@@ -78,6 +90,7 @@ impl SubagentTool {
         tracing::info!("========================================");
         tracing::info!("SUBAGENT TOOL CALLED: {}", self.subagent_id);
         tracing::info!("  Parent Orchestrator: {}", self.parent_agent_id);
+        tracing::info!("  Parent Session: {}", self.parent_session_id);
         tracing::info!("  Context: {}", context.chars().take(100).collect::<String>());
         if context.len() > 100 { tracing::info!("  ... ({} chars total)", context.len()); }
         tracing::info!("  Task: {}", task.chars().take(100).collect::<String>());
@@ -85,6 +98,19 @@ impl SubagentTool {
         tracing::info!("  Goal: {}", goal.chars().take(100).collect::<String>());
         if goal.len() > 100 { tracing::info!("  ... ({} chars total)", goal.len()); }
         tracing::info!("========================================");
+
+        // Emit subagent start event
+        let _ = event_emitter::emit_subagent_event(
+            &self.parent_session_id,
+            &self.subagent_id,
+            &self.subagent_id,
+            "subagent_start",
+            json!({
+                "type": "subagent_start",
+                "timestamp": chrono::Utc::now().timestamp_millis(),
+                "task": task.chars().take(200).collect::<String>(),
+            }),
+        ).await;
 
         // Create a fresh executor for the subagent
         let executor = create_subagent_executor(
@@ -95,38 +121,179 @@ impl SubagentTool {
             goal,
         ).await?;
 
-        tracing::info!("Subagent executor created, running...");
+        tracing::info!("Subagent executor created, running with streaming...");
 
-        // Run the subagent with a simple prompt to trigger execution
-        // The actual work is defined by the injected context+task+goal
+        // Run the subagent with streaming and relay events
         let user_message = String::from("Execute your task based on the provided context.");
 
-        // Collect all events and extract the final assistant response
-        let events = executor.run(user_message).await?;
+        // Collect final response while streaming events
+        let final_response = Arc::new(Mutex::new(String::new()));
+        let final_response_clone = final_response.clone();
 
-        tracing::info!("Subagent execution completed, extracting final result...");
+        // Track tool calls for activity
+        let tool_start_times: Arc<Mutex<std::collections::HashMap<String, Instant>>> =
+            Arc::new(Mutex::new(std::collections::HashMap::new()));
+        let tool_start_times_clone = tool_start_times.clone();
 
-        // Extract the final text response from events
-        let mut final_response = String::new();
-        for event in events {
-            if let Some(content) = event.content {
-                if content.role == "assistant" {
-                    for part in content.parts {
-                        if let zero_app::Part::Text { text } = part {
-                            final_response.push_str(&text);
+        let parent_session_id = self.parent_session_id.clone();
+        let subagent_id = self.subagent_id.clone();
+
+        // Use run_stream to get real-time events
+        executor.run_stream(user_message, move |event| {
+            let parent_session_id = parent_session_id.clone();
+            let subagent_id = subagent_id.clone();
+            let final_response = final_response_clone.clone();
+            let tool_start_times = tool_start_times_clone.clone();
+
+            // Spawn async task to handle event
+            tokio::spawn(async move {
+                match event {
+                    ZeroAppStreamEvent::Content { delta } => {
+                        // Accumulate content for final response
+                        let mut response = final_response.lock().await;
+                        response.push_str(&delta);
+
+                        // Relay content event to parent
+                        let _ = event_emitter::emit_subagent_event(
+                            &parent_session_id,
+                            &subagent_id,
+                            &subagent_id,
+                            "token",
+                            json!({
+                                "type": "subagent_token",
+                                "timestamp": chrono::Utc::now().timestamp_millis(),
+                                "content": delta,
+                            }),
+                        ).await;
+                    }
+                    ZeroAppStreamEvent::ToolCall { id, name, arguments } => {
+                        // Track start time
+                        {
+                            let mut times = tool_start_times.lock().await;
+                            times.insert(id.clone(), Instant::now());
                         }
+
+                        // Relay tool call event
+                        let _ = event_emitter::emit_subagent_event(
+                            &parent_session_id,
+                            &subagent_id,
+                            &subagent_id,
+                            "tool_call_start",
+                            json!({
+                                "type": "subagent_tool_call",
+                                "timestamp": chrono::Utc::now().timestamp_millis(),
+                                "toolId": id,
+                                "toolName": name,
+                                "status": "running",
+                                "args": arguments,
+                            }),
+                        ).await;
+                    }
+                    ZeroAppStreamEvent::ToolResponse { id, response } => {
+                        // Calculate duration
+                        let duration_ms = {
+                            let times = tool_start_times.lock().await;
+                            times.get(&id).map(|start| start.elapsed().as_millis() as u64)
+                        };
+
+                        // Truncate response for preview
+                        let result_preview: String = response.chars().take(200).collect();
+
+                        // Check for special markers in the response
+                        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&response) {
+                            // Check for todo_update marker - relay to parent for centralization
+                            if parsed.get("__todo_update").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                let _ = event_emitter::emit_subagent_event(
+                                    &parent_session_id,
+                                    &subagent_id,
+                                    &subagent_id,
+                                    "todo_update",
+                                    json!({
+                                        "type": "todo_update",
+                                        "timestamp": chrono::Utc::now().timestamp_millis(),
+                                        "todos": parsed.get("todos"),
+                                        "fromSubagent": true,
+                                    }),
+                                ).await;
+                            }
+                        }
+
+                        // Relay tool response event
+                        let _ = event_emitter::emit_subagent_event(
+                            &parent_session_id,
+                            &subagent_id,
+                            &subagent_id,
+                            "tool_result",
+                            json!({
+                                "type": "subagent_tool_result",
+                                "timestamp": chrono::Utc::now().timestamp_millis(),
+                                "toolId": id,
+                                "status": "success",
+                                "durationMs": duration_ms,
+                                "resultPreview": result_preview,
+                            }),
+                        ).await;
+                    }
+                    ZeroAppStreamEvent::IterationUpdate { current, max } => {
+                        // Relay iteration update
+                        let _ = event_emitter::emit_subagent_event(
+                            &parent_session_id,
+                            &subagent_id,
+                            &subagent_id,
+                            "iteration_update",
+                            json!({
+                                "type": "subagent_iteration",
+                                "timestamp": chrono::Utc::now().timestamp_millis(),
+                                "current": current,
+                                "max": max,
+                            }),
+                        ).await;
+                    }
+                    ZeroAppStreamEvent::Error { message } => {
+                        // Relay error event
+                        let _ = event_emitter::emit_subagent_event(
+                            &parent_session_id,
+                            &subagent_id,
+                            &subagent_id,
+                            "error",
+                            json!({
+                                "type": "subagent_error",
+                                "timestamp": chrono::Utc::now().timestamp_millis(),
+                                "message": message,
+                            }),
+                        ).await;
+                    }
+                    _ => {
+                        // Other events (Complete, Stopped, ContinuationPrompt)
+                        // Can be handled if needed
                     }
                 }
-            }
-        }
+            });
+        }).await?;
 
-        tracing::info!("SUBAGENT TOOL RESULT: {}", final_response.chars().take(200).collect::<String>());
-        if final_response.len() > 200 {
-            tracing::info!("  ... ({} chars total)", final_response.len());
+        // Get final response
+        let result = final_response.lock().await.clone();
+
+        tracing::info!("SUBAGENT TOOL RESULT: {}", result.chars().take(200).collect::<String>());
+        if result.len() > 200 {
+            tracing::info!("  ... ({} chars total)", result.len());
         }
         tracing::info!("========================================");
 
-        Ok(final_response)
+        // Emit subagent end event
+        let _ = event_emitter::emit_subagent_event(
+            &self.parent_session_id,
+            &self.subagent_id,
+            &self.subagent_id,
+            "subagent_end",
+            json!({
+                "type": "subagent_end",
+                "timestamp": chrono::Utc::now().timestamp_millis(),
+                "resultPreview": result.chars().take(200).collect::<String>(),
+            }),
+        ).await;
+
+        Ok(result)
     }
 }
 
@@ -201,6 +368,7 @@ mod tests {
     fn test_subagent_tool_name() {
         let tool = SubagentTool::new(
             "parent".to_string(),
+            "session-123".to_string(),
             "test-subagent".to_string(),
             "A test subagent".to_string(),
         );
@@ -213,6 +381,7 @@ mod tests {
     fn test_subagent_tool_schema() {
         let tool = SubagentTool::new(
             "parent".to_string(),
+            "session-123".to_string(),
             "test-subagent".to_string(),
             "A test subagent".to_string(),
         );
