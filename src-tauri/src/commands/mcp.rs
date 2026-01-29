@@ -349,56 +349,225 @@ pub async fn stop_mcp_server(id: String) -> Result<(), String> {
 pub async fn test_mcp_server(server: MCPServer) -> Result<MCPTestResult, String> {
     match server.server_type.as_str() {
         "stdio" => {
-            // Test stdio server by running the command
+            // Test stdio server by starting it and sending an MCP initialize request
             let command = server.command.clone().ok_or("Missing command")?;
             let args = server.args.clone().ok_or("Missing args")?;
             let env_vars = server.env.clone();
 
             let handle = tokio::task::spawn_blocking(move || {
-                let mut cmd = Command::new(&command);
+                use std::io::{BufRead, BufReader, Write};
+
+                // On Windows, npx/uvx etc need full paths or proper extensions
+                #[cfg(target_os = "windows")]
+                let actual_command = {
+                    let cmd_lower = command.to_lowercase();
+                    if cmd_lower == "npx" || cmd_lower == "npm" || cmd_lower == "node" ||
+                       cmd_lower == "uvx" || cmd_lower == "uv" || cmd_lower == "python" || cmd_lower == "pip" {
+                        let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+
+                        // Try to find the command in common locations
+                        let possible_paths = vec![
+                            // Standard uv/uvx installation location
+                            format!("{}\\.local\\bin\\{}.exe", user_profile, command),
+                            format!("{}\\.local\\bin\\{}", user_profile, command),
+                            // Node.js paths
+                            format!("C:\\Program Files\\nodejs\\{}.cmd", command),
+                            format!("C:\\Program Files\\nodejs\\{}.exe", command),
+                            format!("C:\\Program Files\\nodejs\\{}", command),
+                            // Python paths
+                            format!("{}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\{}.exe", user_profile, command),
+                            format!("{}\\AppData\\Local\\Programs\\Python\\Python311\\Scripts\\{}.exe", user_profile, command),
+                            format!("{}\\AppData\\Local\\Programs\\Python\\Python313\\Scripts\\{}.exe", user_profile, command),
+                            format!("{}\\AppData\\Roaming\\Python\\Python312\\Scripts\\{}.exe", user_profile, command),
+                            format!("{}\\AppData\\Roaming\\Python\\Python311\\Scripts\\{}.exe", user_profile, command),
+                            // Windows Apps
+                            format!("{}\\AppData\\Local\\Microsoft\\WindowsApps\\{}.exe", user_profile, command),
+                            // Scoop paths
+                            format!("{}\\scoop\\shims\\{}.exe", user_profile, command),
+                            format!("{}\\scoop\\shims\\{}.cmd", user_profile, command),
+                            format!("{}\\scoop\\apps\\nodejs-lts\\current\\{}.cmd", user_profile, command),
+                            format!("{}\\scoop\\apps\\nodejs\\current\\{}.cmd", user_profile, command),
+                            format!("{}\\scoop\\apps\\uv\\current\\{}.exe", user_profile, command),
+                            // Astral uv paths
+                            format!("{}\\AppData\\Local\\Programs\\astral\\uv\\{}.exe", user_profile, command),
+                            format!("{}\\AppData\\Roaming\\astral\\uv\\{}.exe", user_profile, command),
+                            format!("{}\\AppData\\Local\\astral\\uv\\{}.exe", user_profile, command),
+                            // Cargo bin (for Rust-based tools)
+                            format!("{}\\.cargo\\bin\\{}.exe", user_profile, command),
+                        ];
+
+                        let found_path = possible_paths.iter().find(|p| std::path::Path::new(p).exists());
+
+                        if let Some(path) = found_path {
+                            path.clone()
+                        } else {
+                            // Fallback: just use the command name and let Windows find it
+                            command.clone()
+                        }
+                    } else {
+                        command.clone()
+                    }
+                };
+
+                #[cfg(not(target_os = "windows"))]
+                let actual_command = command.clone();
+
+                let mut cmd = Command::new(&actual_command);
                 cmd.args(&args);
+
+                // On Windows, ensure PATH includes common tool locations
+                #[cfg(target_os = "windows")]
+                {
+                    let current_path = std::env::var("PATH").unwrap_or_default();
+                    let user_profile = std::env::var("USERPROFILE").unwrap_or_default();
+                    let additional_paths = vec![
+                        // Standard uv/uvx location (highest priority)
+                        format!("{}\\.local\\bin", user_profile),
+                        // Node.js
+                        "C:\\Program Files\\nodejs".to_string(),
+                        // Python
+                        format!("{}\\AppData\\Local\\Programs\\Python\\Python313\\Scripts", user_profile),
+                        format!("{}\\AppData\\Local\\Programs\\Python\\Python312\\Scripts", user_profile),
+                        format!("{}\\AppData\\Local\\Programs\\Python\\Python311\\Scripts", user_profile),
+                        // Astral uv paths
+                        format!("{}\\AppData\\Local\\Programs\\astral\\uv", user_profile),
+                        format!("{}\\AppData\\Roaming\\astral\\uv", user_profile),
+                        format!("{}\\AppData\\Local\\astral\\uv", user_profile),
+                        // Scoop
+                        format!("{}\\scoop\\shims", user_profile),
+                        // Windows Apps
+                        format!("{}\\AppData\\Local\\Microsoft\\WindowsApps", user_profile),
+                        // Cargo bin
+                        format!("{}\\.cargo\\bin", user_profile),
+                    ];
+                    let new_path = format!("{};{}", additional_paths.join(";"), current_path);
+                    cmd.env("PATH", new_path);
+                }
+
                 if let Some(env) = &env_vars {
                     for (key, value) in env {
                         cmd.env(key, value);
                     }
                 }
+                cmd.stdin(Stdio::piped());
                 cmd.stdout(Stdio::piped());
                 cmd.stderr(Stdio::piped());
-                cmd.output()
+
+                let mut child = match cmd.spawn() {
+                    Ok(c) => c,
+                    Err(e) => {
+                        // On Windows, provide more helpful error message
+                        #[cfg(target_os = "windows")]
+                        {
+                            if e.kind() == std::io::ErrorKind::NotFound {
+                                return Err(format!(
+                                    "Program not found: '{}'. Make sure it's installed and in your PATH. \
+                                    For npx: install Node.js from nodejs.org. \
+                                    For uvx: install uv from astral.sh/uv",
+                                    actual_command
+                                ));
+                            }
+                        }
+                        return Err(format!("Failed to start server: {}", e));
+                    }
+                };
+
+                // Send MCP initialize request (JSON-RPC 2.0)
+                let init_request = serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2024-11-05",
+                        "capabilities": {},
+                        "clientInfo": {
+                            "name": "agentzero-test",
+                            "version": "1.0.0"
+                        }
+                    }
+                });
+
+                let request_str = format!("{}\n", init_request.to_string());
+
+                // Write to stdin
+                if let Some(ref mut stdin) = child.stdin {
+                    if let Err(e) = stdin.write_all(request_str.as_bytes()) {
+                        let _ = child.kill();
+                        return Err(format!("Failed to send initialize request: {}", e));
+                    }
+                    if let Err(e) = stdin.flush() {
+                        let _ = child.kill();
+                        return Err(format!("Failed to flush stdin: {}", e));
+                    }
+                } else {
+                    let _ = child.kill();
+                    return Err("Failed to get stdin handle".to_string());
+                }
+
+                // Read response from stdout with timeout
+                let stdout = child.stdout.take();
+                if let Some(stdout) = stdout {
+                    let reader = BufReader::new(stdout);
+
+                    // Read lines until we get a valid JSON response or timeout
+                    for line in reader.lines().take(10) {
+                        match line {
+                            Ok(line_str) => {
+                                if line_str.trim().is_empty() {
+                                    continue;
+                                }
+                                // Try to parse as JSON
+                                if let Ok(response) = serde_json::from_str::<serde_json::Value>(&line_str) {
+                                    // Check if it's a valid MCP response
+                                    if response.get("jsonrpc").is_some() {
+                                        let _ = child.kill();
+
+                                        // Check for error response
+                                        if let Some(error) = response.get("error") {
+                                            let error_msg = error.get("message")
+                                                .and_then(|m| m.as_str())
+                                                .unwrap_or("Unknown error");
+                                            return Ok(MCPTestResult {
+                                                success: false,
+                                                message: format!("Server error: {}", error_msg),
+                                                tools: None,
+                                            });
+                                        }
+
+                                        // Extract server info if available
+                                        let server_name = response
+                                            .get("result")
+                                            .and_then(|r| r.get("serverInfo"))
+                                            .and_then(|s| s.get("name"))
+                                            .and_then(|n| n.as_str())
+                                            .unwrap_or("MCP Server");
+
+                                        return Ok(MCPTestResult {
+                                            success: true,
+                                            message: format!("Connected to {}", server_name),
+                                            tools: None,
+                                        });
+                                    }
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
+                }
+
+                let _ = child.kill();
+                Err("No valid response from server".to_string())
             });
 
-            let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(5), handle).await;
+            let timeout_result = tokio::time::timeout(std::time::Duration::from_secs(15), handle).await;
 
             match timeout_result {
                 Ok(inner) => match inner {
-                    Ok(io_result) => match io_result {
-                        Ok(output) => {
-                            if output.status.success() {
-                                Ok(MCPTestResult {
-                                    success: true,
-                                    message: "Server configuration validated successfully".to_string(),
-                                    tools: None,
-                                })
-                            } else {
-                                let stderr = String::from_utf8_lossy(&output.stderr);
-                                let stdout = String::from_utf8_lossy(&output.stdout);
-                                let error_msg = if !stderr.is_empty() {
-                                    stderr.to_string()
-                                } else if !stdout.is_empty() {
-                                    stdout.to_string()
-                                } else {
-                                    format!("Command exited with status: {}", output.status)
-                                };
-                                Ok(MCPTestResult {
-                                    success: false,
-                                    message: format!("Command failed: {}", error_msg.lines().next().unwrap_or(&error_msg)),
-                                    tools: None,
-                                })
-                            }
-                        }
+                    Ok(result) => match result {
+                        Ok(test_result) => Ok(test_result),
                         Err(e) => Ok(MCPTestResult {
                             success: false,
-                            message: format!("Command execution failed: {}", e),
+                            message: e,
                             tools: None,
                         })
                     },
@@ -410,7 +579,7 @@ pub async fn test_mcp_server(server: MCPServer) -> Result<MCPTestResult, String>
                 },
                 Err(_) => Ok(MCPTestResult {
                     success: false,
-                    message: "Command timed out after 5 seconds. The server may be hanging or taking too long to start.".to_string(),
+                    message: "Server took too long to respond (15s timeout). It may still be downloading dependencies.".to_string(),
                     tools: None,
                 })
             }
@@ -458,4 +627,28 @@ pub async fn test_mcp_server(server: MCPServer) -> Result<MCPTestResult, String>
             tools: None,
         })
     }
+}
+
+/// Validates an MCP server and updates its validated status in the config
+#[tauri::command]
+pub async fn validate_mcp_server(id: String) -> Result<MCPTestResult, String> {
+    // Get the server
+    let mut servers = read_mcp_servers()?;
+    let server_index = servers
+        .iter()
+        .position(|s| s.id.as_deref() == Some(id.as_str()))
+        .ok_or_else(|| format!("MCP server not found: {}", id))?;
+
+    let server = servers[server_index].clone();
+
+    // Test the server
+    let test_result = test_mcp_server(server).await?;
+
+    // Update validated status based on test result
+    servers[server_index].validated = Some(test_result.success);
+
+    // Save the updated config
+    write_mcp_servers(&servers)?;
+
+    Ok(test_result)
 }

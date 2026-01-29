@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { Server, Plus, Trash2, Check, Loader2, RefreshCw, Play, Edit } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/shared/ui/button";
 import { Badge } from "@/shared/ui/badge";
 import { AddMCPServerDialog } from "./AddMCPServerDialog";
@@ -77,20 +78,20 @@ export function MCPServersPanel() {
   const handleTestServer = async (server: MCPServer) => {
     setTestingServerId(server.id);
     try {
-      const result = await mcpService.testMCPServer(server);
+      // Use validate which tests and saves the result
+      const result = await mcpService.validateMCPServer(server.id);
+      await loadServers();
 
       if (result.success) {
-        // Update validated status
-        await mcpService.updateMCPServer(server.id, { ...server, validated: true });
-        await loadServers();
-
-        // Show success message with tools if available
-        let message = `✓ ${result.message}`;
-        if (result.tools && result.tools.length > 0) {
-          message += `\n\nTools found:\n${result.tools.join("\n")}`;
-        }
-        alert(message);
+        // Show success toast
+        toast.success(result.message, {
+          description: result.tools && result.tools.length > 0
+            ? `${result.tools.length} tool${result.tools.length > 1 ? 's' : ''} available`
+            : undefined,
+          duration: 3000,
+        });
       } else {
+        // Show failure popup with details
         alert(`✗ ${result.message}`);
       }
     } catch (error) {

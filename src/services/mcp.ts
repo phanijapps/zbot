@@ -71,3 +71,10 @@ export async function stopMCPServer(id: string): Promise<void> {
 export async function testMCPServer(server: Omit<MCPServer, "id" | "createdAt">): Promise<{ success: boolean; message: string; tools?: string[] }> {
   return invoke("test_mcp_server", { server });
 }
+
+/**
+ * Validate an MCP server and update its validated status
+ */
+export async function validateMCPServer(id: string): Promise<{ success: boolean; message: string; tools?: string[] }> {
+  return invoke("validate_mcp_server", { id });
+}
