@@ -1,9 +1,25 @@
 //! # Tool Trait
 //!
 //! Tool execution interface for the Zero framework.
+//!
+//! ## Permissions
+//!
+//! Tools can optionally declare their permissions via the `permissions()` method.
+//! This enables the orchestrator to make informed routing decisions and
+//! show appropriate warnings to users.
+//!
+//! ```rust
+//! use zero_core::{Tool, ToolPermissions, ToolRiskLevel};
+//!
+//! // Override permissions() to declare risk level and requirements
+//! fn permissions(&self) -> ToolPermissions {
+//!     ToolPermissions::moderate(vec!["network:http".into()])
+//! }
+//! ```
 
 use crate::context::ToolContext;
 use crate::error::Result;
+use crate::policy::ToolPermissions;
 use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
@@ -28,6 +44,22 @@ pub trait Tool: Send + Sync {
     /// Get the JSON Schema for the tool's response.
     fn response_schema(&self) -> Option<Value> {
         None
+    }
+
+    /// Get the tool's permission requirements.
+    ///
+    /// Override this to declare risk level, required capabilities,
+    /// and resource limits. Default is safe with no requirements.
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::default()
+    }
+
+    /// Validate arguments before execution.
+    ///
+    /// Override this to perform custom validation. Called before execute().
+    /// Default implementation does nothing (accepts all arguments).
+    fn validate(&self, _args: &Value) -> Result<()> {
+        Ok(())
     }
 
     /// Execute the tool with the given context and arguments.

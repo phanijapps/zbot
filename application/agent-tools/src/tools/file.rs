@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use zero_core::{Tool, ToolContext, Result};
+use zero_core::{Tool, ToolContext, ToolPermissions, Result};
 use zero_core::FileSystemContext;
 
 // ============================================================================
@@ -48,6 +48,10 @@ impl Tool for ReadTool {
             },
             "required": ["path"]
         }))
+    }
+
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::safe()
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
@@ -140,6 +144,10 @@ impl Tool for WriteTool {
             },
             "required": ["path", "content"]
         }))
+    }
+
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::moderate(vec!["filesystem:write".into()])
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
@@ -312,6 +320,10 @@ impl Tool for EditTool {
             },
             "required": ["path", "replacements"]
         }))
+    }
+
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::moderate(vec!["filesystem:write".into()])
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {

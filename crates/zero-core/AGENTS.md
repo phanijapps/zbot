@@ -1,52 +1,151 @@
-# zero-core
+# Zero Core
 
-Core traits, types, and errors for the Zero agent framework.
+Core traits, types, and abstractions for the Zero agent framework.
 
-## Setup
+## Overview
 
-```bash
-# Build
-cargo build
+This crate provides the foundational abstractions that all other Zero crates build upon.
 
-# Run tests
-cargo test
+## Key Abstractions
 
-# Run with logging
-RUST_LOG=debug cargo test
-```
-
-## Code Style
-
-- Use `// ===` comment banners for major sections
-- Use `// ----` comment banners for subsections
-- Prefer `Arc<T>` for shared state across async tasks
-- Use `async_trait` for trait methods with async functions
-- Return `Result<T>` from fallible operations (where `Result<T> = core::result::Result<T, ZeroError>`)
-
-## Core Types
-
-- `Agent` - Core agent interface with `invoke()` method
-- `Tool` - Tool execution interface with `execute()` method
-- `Toolset` - Collection of tools with predicate-based filtering
-- `ToolContext` - Context provided to tools during execution
-- `Event` - Immutable conversation event (user message, tool call, etc.)
-- `Content` - Message content with role and parts (text, function calls, etc.)
-- `Part` - Individual content part (Text, FunctionCall, FunctionResponse, Binary)
-
-## Testing
-
-Tests use standard `cargo test`. For integration tests that require async:
+### Agent Trait
 
 ```rust
-#[tokio::test]
-async fn test_async_function() {
-    // test code
+pub trait Agent: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn sub_agents(&self) -> Option<Vec<Arc<dyn Agent>>>;
+    async fn run(&self, ctx: Arc<dyn InvocationContext>) -> Result<EventStream>;
 }
 ```
 
-## Important Notes
+Agents are invokable AI entities that receive context and produce a stream of events.
 
-- All errors use `ZeroError` from `error.rs`
-- FileSystemContext abstraction for file operations - use this instead of direct fs calls
-- Events are immutable - create new events rather than modifying
-- Conversation ID should be propagated through ToolContext for conversation-scoped operations
+### Tool Trait
+
+```rust
+pub trait Tool: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters_schema(&self) -> Option<Value>;
+    fn response_schema(&self) -> Option<Value>;
+    fn permissions(&self) -> ToolPermissions;  // Risk level, capabilities
+    fn validate(&self, args: &Value) -> Result<()>;
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
+}
+```
+
+Tools are callable functions with JSON schemas for parameters and responses.
+
+### Context Hierarchy
+
+```
+ReadonlyContext (base)
+├── invocation_id, agent_name, user_id, session_id, user_content
+│
+├─ CallbackContext (extends ReadonlyContext)
+│  └── get_state(key), set_state(key, value)
+│
+├─ ToolContext (extends CallbackContext)
+│  └── function_call_id(), actions()
+│
+└─ InvocationContext (extends CallbackContext)
+   └── agent(), session(), run_config(), end_invocation()
+```
+
+### Event System
+
+Events are immutable log entries with:
+- `id`: Unique UUID
+- `invocation_id`: Groups events from single agent run
+- `author`: "user", "agent", "tool", "system"
+- `content`: Optional role-based message
+- `actions`: State deltas, transfers, escalations
+
+## Tool Policy Framework
+
+Every tool has permission requirements:
+
+```rust
+pub enum ToolRiskLevel {
+    Safe,      // Read-only, no side effects
+    Moderate,  // Controlled side effects (sandboxed writes)
+    Dangerous, // Can affect system (shell, browser)
+    Critical,  // Requires explicit approval
+}
+
+pub struct ToolPermissions {
+    pub risk_level: ToolRiskLevel,
+    pub requires: Vec<String>,      // Required capabilities
+    pub auto_approve: bool,         // Can skip confirmation
+    pub max_duration_secs: Option<u64>,
+    pub max_output_bytes: Option<usize>,
+}
+```
+
+### Standard Capabilities
+
+Tools declare required capabilities:
+- `filesystem:read` - Read files
+- `filesystem:write` - Write/modify files
+- `network:http` - Make HTTP requests
+- `shell:execute` - Run shell commands
+- `browser:automation` - Control browser
+
+### Risk Levels by Tool Category
+
+| Category | Risk Level | Examples |
+|----------|------------|----------|
+| File Read | Safe | `read`, `grep`, `glob` |
+| File Write | Moderate | `write`, `edit` |
+| Network | Moderate | `web_fetch` |
+| Code Execution | Dangerous | `python`, `shell` |
+| System Config | Critical | `configure_system` |
+
+## State Management
+
+State is managed via prefixed keys:
+
+```rust
+pub const KEY_PREFIX_USER: &str = "user:";   // Persists across sessions
+pub const KEY_PREFIX_APP: &str = "app:";     // Application-wide
+pub const KEY_PREFIX_TEMP: &str = "temp:";   // Cleared each turn
+```
+
+Common state keys:
+- `app:agent_id` - Current agent
+- `app:root_agent_id` - Parent agent (for subagents)
+- `app:conversation_id` - Current conversation
+- `app:todo_list` - TODO items
+
+## FileSystem Abstraction
+
+```rust
+pub trait FileSystemContext: Send + Sync {
+    fn conversation_dir(&self, id: &str) -> Option<PathBuf>;
+    fn outputs_dir(&self) -> Option<PathBuf>;
+    fn skills_dir(&self) -> Option<PathBuf>;
+    fn agents_dir(&self) -> Option<PathBuf>;
+    fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf>;
+    fn python_executable(&self) -> Option<PathBuf>;
+    fn vault_path(&self) -> Option<PathBuf>;
+}
+```
+
+Enables portable path resolution across different environments.
+
+## Error Handling
+
+```rust
+pub enum ZeroError {
+    Llm(String),
+    Tool(String),
+    Mcp(String),
+    Config(String),
+    Serialization(serde_json::Error),
+    Io(std::io::Error),
+    Generic(String),
+}
+```
+
+All errors convert to `ZeroError` for consistent handling.

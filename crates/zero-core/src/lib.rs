@@ -36,6 +36,7 @@ pub mod types;
 pub mod error;
 pub mod callbacks;
 pub mod filesystem;
+pub mod policy;
 
 // ============================================================================
 // CONVENIENCE RE-EXPORTS
@@ -56,6 +57,7 @@ pub use types::{Content, Part};
 pub use error::{ZeroError, Result};
 pub use callbacks::{BeforeAgentCallback, AfterAgentCallback};
 pub use filesystem::{FileSystemContext, NoFileSystemContext};
+pub use policy::{ToolPermissions, ToolRiskLevel, ResourceLimits, CapabilityCategory};
 
 // ============================================================================
 // STATE PREFIX CONSTANTS

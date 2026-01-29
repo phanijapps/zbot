@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use tokio::process::Command;
 use tokio::time::timeout;
 
-use zero_core::{Result, Tool, ToolContext, ZeroError};
+use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
 // ============================================================================
 // SECURITY CONFIGURATION
@@ -326,6 +326,10 @@ impl Tool for ShellTool {
             },
             "required": ["command"]
         }))
+    }
+
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::dangerous(vec!["shell:execute".into()])
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
