@@ -506,8 +506,10 @@ pub async fn delete_skill_file(skill_id: String, file_path: String) -> Result<()
 }
 
 /// Parse YAML frontmatter from SKILL.md content
+/// Handles both CRLF (Windows) and LF (Unix) line endings
 fn parse_skill_frontmatter(content: &str) -> Result<(SkillFrontmatter, String), String> {
-    let frontmatter_regex = regex::Regex::new(r"^---\n([\s\S]*?)\n---\n([\s\S]*)$")
+    // Use \r?\n to match both CRLF and LF line endings
+    let frontmatter_regex = regex::Regex::new(r"^---\r?\n([\s\S]*?)\r?\n---\r?\n([\s\S]*)$")
         .map_err(|e| format!("Failed to create regex: {}", e))?;
 
     let captures = frontmatter_regex.captures(content)
@@ -519,8 +521,8 @@ fn parse_skill_frontmatter(content: &str) -> Result<(SkillFrontmatter, String), 
     let frontmatter: SkillFrontmatter = serde_yaml::from_str(yaml_content)
         .map_err(|e| format!("Failed to parse frontmatter: {}", e))?;
 
-    // Trim leading newlines from body (the \n after ---)
-    let body = body.trim_start_matches('\n').to_string();
+    // Trim leading newlines/carriage returns from body
+    let body = body.trim_start_matches(['\r', '\n']).to_string();
 
     Ok((frontmatter, body))
 }

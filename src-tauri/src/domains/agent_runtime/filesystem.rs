@@ -45,7 +45,7 @@ impl FileSystemContext for TauriFileSystemContext {
     }
 
     fn outputs_dir(&self) -> Option<PathBuf> {
-        Some(self.dirs.outputs_dir.clone())
+        None // Not used - outputs go to agent_data_dir instead
     }
 
     fn skills_dir(&self) -> Option<PathBuf> {
@@ -72,6 +72,15 @@ impl FileSystemContext for TauriFileSystemContext {
         } else {
             None
         }
+    }
+
+    fn agent_node_modules_dir(&self, agent_id: &str) -> Option<PathBuf> {
+        // Return agent-specific node_modules directory
+        Some(self.dirs.agents_data_dir.join(agent_id).join("node_modules"))
+    }
+
+    fn vault_path(&self) -> Option<PathBuf> {
+        Some(self.dirs.config_dir.clone())
     }
 }
 

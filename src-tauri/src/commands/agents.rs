@@ -930,7 +930,7 @@ pub async fn save_subagent(agent_id: String, subagent: Agent) -> Result<Agent, S
     fs::create_dir_all(&subagent_dir)
         .map_err(|e| format!("Failed to create subagent directory: {}", e))?;
 
-    // Write config.yaml
+    // Write config.yaml (metadata only - instructions go in AGENTS.md)
     let config = AgentConfig {
         name: subagent.name.clone(),
         display_name: subagent.display_name.clone(),
@@ -944,7 +944,8 @@ pub async fn save_subagent(agent_id: String, subagent: Agent) -> Result<Agent, S
         skills: subagent.skills.clone(),
         mcps: subagent.mcps.clone(),
         agent_type: subagent.agent_type.clone(),
-        system_instruction: subagent.system_instruction.clone(),
+        // Don't save system_instruction to config.yaml - AGENTS.md is the source of truth
+        system_instruction: None,
     };
     let config_yaml = serde_yaml::to_string(&config)
         .map_err(|e| format!("Failed to serialize config.yaml: {}", e))?;

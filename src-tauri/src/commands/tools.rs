@@ -492,47 +492,74 @@ pub async fn write_attachment_file(
     Ok(format!("{}/attachments/{}/{}", agent_id, year_month, filename))
 }
 
-/// Read content from an attachment file
+/// Read content from an attachment or output file
 /// Returns base64-encoded content for binary files, plain text for text files
 ///
 /// Args:
-///   relative_path - The relative path returned by write_attachment_file
-///                   New format: agent_id/attachments/YYYY-MM/filename
-///                   Old format: conversation_id/attachments/filename (for backward compatibility)
+///   relative_path - The relative path to the file. Supported formats:
+///                   - agent_id/outputs/filename (generated files)
+///                   - agent_id/attachments/YYYY-MM/filename (monthly attachments)
+///                   - conversation_id/attachments/filename (legacy format)
 #[tauri::command]
 pub async fn read_attachment_file(
     relative_path: String,
 ) -> Result<String, String> {
     let dirs = AppDirs::get().map_err(|e| e.to_string())?;
 
-    // Try new format first: agent_id/attachments/YYYY-MM/filename
+    tracing::info!("=== read_attachment_file ===");
+    tracing::info!("relative_path: {}", relative_path);
+
+    // Split path into parts
     let parts: Vec<&str> = relative_path.split('/').collect();
-    let file_path = if parts.len() >= 4 && parts[1] == "attachments" {
-        // New format: agent_id/attachments/YYYY-MM/filename
+
+    let file_path = if parts.len() >= 3 && parts[1] == "outputs" {
+        // New format: agent_id/outputs/filename (or agent_id/outputs/subdir/filename)
+        let agent_id = parts[0];
+        let rest = parts[2..].join("/");
+
+        tracing::info!("Format: agent_id/outputs/...");
+        tracing::info!("agent_id: {}", agent_id);
+        tracing::info!("rest: {}", rest);
+
+        // agent_data/{agent_id}/outputs/{rest}
+        dirs.agents_data_dir.join(agent_id).join("outputs").join(&rest)
+    } else if parts.len() >= 4 && parts[1] == "attachments" {
+        // Format: agent_id/attachments/YYYY-MM/filename
         let agent_id = parts[0];
         let year_month = parts[2];
         let filename = parts[3..].join("/");
 
-        tracing::info!("=== read_attachment_file (new format) ===");
+        tracing::info!("Format: agent_id/attachments/YYYY-MM/...");
         tracing::info!("agent_id: {}", agent_id);
         tracing::info!("year_month: {}", year_month);
         tracing::info!("filename: {}", filename);
 
         dirs.agent_attachments_month_dir(agent_id, year_month).join(&filename)
+    } else if parts.len() >= 2 {
+        // Generic format: agent_id/{subdir}/filename
+        let agent_id = parts[0];
+        let rest = parts[1..].join("/");
+
+        tracing::info!("Format: agent_id/...");
+        tracing::info!("agent_id: {}", agent_id);
+        tracing::info!("rest: {}", rest);
+
+        // agent_data/{agent_id}/{rest}
+        dirs.agents_data_dir.join(agent_id).join(&rest)
     } else {
-        // Old format fallback: conversation_id/attachments/filename
+        // Legacy fallback: just filename, try conversation attachments
         let relative_path_str = relative_path.as_str();
         let conversation_id = parts.first().copied().unwrap_or(relative_path_str);
         let filename = parts.get(2).copied().unwrap_or("");
 
-        tracing::info!("=== read_attachment_file (old format fallback) ===");
+        tracing::info!("Format: legacy conversation/attachments/...");
         tracing::info!("conversation_id: {}", conversation_id);
         tracing::info!("filename: {}", filename);
 
         dirs.conversation_dir(conversation_id).join("attachments").join(filename)
     };
 
-    tracing::info!("file_path: {}", file_path.display());
+    tracing::info!("Resolved file_path: {}", file_path.display());
     tracing::info!("file exists: {}", file_path.exists());
 
     if !file_path.exists() {

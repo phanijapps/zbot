@@ -729,6 +729,20 @@ impl SqliteSessionRepository {
         Ok(())
     }
 
+    /// Save a single session state key for an agent
+    /// This is a convenience method that loads existing state, updates one key, and saves back
+    pub async fn save_session_state_key(&self, agent_id: &str, key: &str, value: &serde_json::Value) -> Result<(), String> {
+        // Load existing state or create empty
+        let mut state = self.load_session_state(agent_id).await?
+            .unwrap_or_default();
+
+        // Update the key
+        state.insert(key.to_string(), value.clone());
+
+        // Save back
+        self.save_session_state(agent_id, &state).await
+    }
+
     /// Load conversation history for an agent's today session and populate a session
     pub async fn load_conversation_history_into_session(
         &self,

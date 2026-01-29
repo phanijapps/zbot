@@ -21,3 +21,11 @@ pub fn open_external(url: String) -> Result<(), String> {
     tauri_plugin_opener::open_url(&url, None::<String>).map_err(|e| format!("Failed to open URL: {}", e))?;
     Ok(())
 }
+
+/// Opens a folder in the system file explorer
+#[tauri::command]
+pub fn open_folder(path: String) -> Result<(), String> {
+    tauri_plugin_opener::reveal_item_in_dir(std::path::Path::new(&path))
+        .map_err(|e| format!("Failed to open folder: {}", e))?;
+    Ok(())
+}
