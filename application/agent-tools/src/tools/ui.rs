@@ -131,7 +131,7 @@ impl Tool for ShowContentTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         let content_type = args.get("content_type")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'content_type' parameter".to_string()))?
@@ -150,15 +150,64 @@ impl Tool for ShowContentTool {
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        // Normalize file_path: if it's an absolute path, extract just the filename
-        // This handles cases where write tool returns full path
+        // Get agent_id for constructing the proper relative path
+        let agent_id = ctx.get_state("app:root_agent_id")
+            .and_then(|v| v.as_str().map(|s| s.to_owned()))
+            .or_else(|| ctx.get_state("app:agent_id")
+                .and_then(|v| v.as_str().map(|s| s.to_owned())));
+
+        // Normalize file_path to construct proper relative path for attachments
+        // The write tool uses paths like "outputs/report.html" which resolves to
+        // agent_data/{agent_id}/outputs/report.html
+        // We need to construct: {agent_id}/outputs/report.html for the frontend
         let normalized_file_path = if let Some(ref fp) = file_path {
-            if fp.starts_with('/') || fp.starts_with('\\') {
-                // Extract filename from absolute path
-                fp.split('/').last().or_else(|| fp.split('\\').last()).map(|s| s.to_string())
+            // Remove any trailing slashes
+            let fp = fp.trim_end_matches('/').trim_end_matches('\\');
+
+            // Check if it's empty after trimming
+            if fp.is_empty() {
+                tracing::warn!("show_content received empty file_path");
+                None
+            } else if fp.contains(':') || fp.starts_with('/') || fp.starts_with('\\') {
+                // Absolute path - extract the relative part after agent_data/{agent_id}/
+                // Look for known patterns like "outputs/", "attachments/", etc.
+                let path_lower = fp.to_lowercase();
+                if let Some(idx) = path_lower.find("outputs") {
+                    let relative = &fp[idx..];
+                    if let Some(ref aid) = agent_id {
+                        Some(format!("{}/{}", aid, relative))
+                    } else {
+                        Some(relative.to_string())
+                    }
+                } else if let Some(idx) = path_lower.find("attachments") {
+                    let relative = &fp[idx..];
+                    if let Some(ref aid) = agent_id {
+                        Some(format!("{}/{}", aid, relative))
+                    } else {
+                        Some(relative.to_string())
+                    }
+                } else {
+                    // Fall back to just filename
+                    let filename = fp.rsplit(&['/', '\\'][..]).next().unwrap_or(fp);
+                    if !filename.is_empty() {
+                        if let Some(ref aid) = agent_id {
+                            Some(format!("{}/outputs/{}", aid, filename))
+                        } else {
+                            Some(format!("outputs/{}", filename))
+                        }
+                    } else {
+                        tracing::warn!("show_content: could not extract filename from path: {}", fp);
+                        None
+                    }
+                }
             } else {
-                // Already a relative path, use as-is
-                Some(fp.clone())
+                // Already a relative path like "outputs/report.html"
+                // Prepend agent_id to make it: agent_id/outputs/report.html
+                if let Some(ref aid) = agent_id {
+                    Some(format!("{}/{}", aid, fp))
+                } else {
+                    Some(fp.to_string())
+                }
             }
         } else {
             None
@@ -174,10 +223,10 @@ impl Tool for ShowContentTool {
         let base64 = args.get("base64")
             .and_then(|v| v.as_bool());
 
-        tracing::debug!("Showing content: type={}, title={}, is_attachment={}, file_path={:?}, normalized={:?}", content_type, title, is_attachment, file_path, normalized_file_path);
+        tracing::info!("show_content: type={}, title={}, is_attachment={}, original_path={:?}, normalized={:?}, agent_id={:?}",
+            content_type, title, is_attachment, file_path, normalized_file_path, agent_id);
 
         // Return the content display request with the special marker
-        // Pass normalized_file_path (just filename) for frontend's read_attachment_file
         Ok(json!({
             "__show_content": true,
             "content_type": content_type,

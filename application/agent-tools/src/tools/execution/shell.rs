@@ -369,7 +369,7 @@ impl Tool for ShellTool {
 
         // Get shell and arguments
         #[cfg(unix)]
-        let (shell, mut shell_args) = Self::get_shell();
+        let (shell, shell_args) = Self::get_shell();
 
         #[cfg(windows)]
         let (shell, shell_args) = if use_wsl {

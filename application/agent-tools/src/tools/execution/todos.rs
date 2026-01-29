@@ -198,7 +198,9 @@ impl Tool for TodoTool {
     }
 
     fn description(&self) -> &str {
-        "Manage a TODO list for tracking tasks. Supports add, update, delete, and list operations. \
+        "Manage a TODO list for tracking tasks. Supports add (single or batch via 'items' array), \
+         update, delete, and list operations. PREFER BATCH CREATION: use 'items' array to create \
+         multiple TODOs in a single call instead of making separate calls for each item. \
          The TODO list persists across conversation turns within the session."
     }
 
@@ -209,21 +211,34 @@ impl Tool for TodoTool {
                 "action": {
                     "type": "string",
                     "enum": ["add", "update", "delete", "list"],
-                    "description": "Action to perform: add (create new), update (mark complete/incomplete), delete (remove), list (show all)"
+                    "description": "Action to perform: add (create new - single or batch), update (mark complete/incomplete), delete (remove), list (show all)"
                 },
                 "title": {
                     "type": "string",
-                    "description": "Title of the TODO item (required for 'add' action)"
+                    "description": "Title of a single TODO item (for 'add' action - use this OR 'items' for batch)"
                 },
                 "description": {
                     "type": "string",
-                    "description": "Detailed description of the TODO item (optional, for 'add' action)"
+                    "description": "Detailed description of the TODO item (optional, for single 'add' action)"
                 },
                 "priority": {
                     "type": "string",
                     "enum": ["low", "medium", "high"],
                     "default": "medium",
-                    "description": "Priority level (optional, for 'add' action)"
+                    "description": "Priority level (optional, for single 'add' action)"
+                },
+                "items": {
+                    "type": "array",
+                    "description": "Array of TODO items to create in batch (for 'add' action). Each item has: title (required), description (optional), priority (optional, default: medium)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": { "type": "string", "description": "Title of the TODO item" },
+                            "description": { "type": "string", "description": "Detailed description (optional)" },
+                            "priority": { "type": "string", "enum": ["low", "medium", "high"], "default": "medium" }
+                        },
+                        "required": ["title"]
+                    }
                 },
                 "id": {
                     "type": "string",
@@ -252,45 +267,97 @@ impl Tool for TodoTool {
 
         match action {
             "add" => {
-                let title = args
-                    .get("title")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ZeroError::Tool("Missing 'title' parameter for add action".to_string()))?;
-
-                let description = args.get("description").and_then(|v| v.as_str()).map(String::from);
-                let priority = args
-                    .get("priority")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("medium")
-                    .to_string();
-
-                // Get agent identity for the TODO
+                // Get agent identity for the TODO(s)
                 let (agent_id, agent_name, is_orchestrator) = Self::get_agent_identity(&ctx);
-
-                let todo = Todo::new(
-                    title.to_string(),
-                    description,
-                    priority,
-                    agent_id,
-                    agent_name,
-                    is_orchestrator,
-                );
-                let id = todo.id.clone();
-
                 let mut todos = Self::load_todos(&ctx);
-                todos.add(todo);
-                Self::save_todos(&ctx, &todos);
 
-                Ok(json!({
-                    "__todo_update": true,
-                    "todos": todos,
-                    "success": true,
-                    "action": "add",
-                    "id": id,
-                    "message": format!("Created TODO: {}", title),
-                    "total_items": todos.items.len(),
-                    "pending_count": todos.pending().len()
-                }))
+                // Check for batch creation (items array) or single creation (title)
+                if let Some(items) = args.get("items").and_then(|v| v.as_array()) {
+                    // Batch creation
+                    if items.is_empty() {
+                        return Err(ZeroError::Tool("'items' array cannot be empty".to_string()));
+                    }
+
+                    let mut created_ids: Vec<String> = Vec::new();
+                    let mut created_titles: Vec<String> = Vec::new();
+
+                    for item in items {
+                        let title = item
+                            .get("title")
+                            .and_then(|v| v.as_str())
+                            .ok_or_else(|| ZeroError::Tool("Each item must have a 'title'".to_string()))?;
+
+                        let description = item.get("description").and_then(|v| v.as_str()).map(String::from);
+                        let priority = item
+                            .get("priority")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("medium")
+                            .to_string();
+
+                        let todo = Todo::new(
+                            title.to_string(),
+                            description,
+                            priority,
+                            agent_id.clone(),
+                            agent_name.clone(),
+                            is_orchestrator,
+                        );
+                        created_ids.push(todo.id.clone());
+                        created_titles.push(title.to_string());
+                        todos.add(todo);
+                    }
+
+                    Self::save_todos(&ctx, &todos);
+
+                    Ok(json!({
+                        "__todo_update": true,
+                        "todos": todos,
+                        "success": true,
+                        "action": "add_batch",
+                        "ids": created_ids,
+                        "count": created_ids.len(),
+                        "message": format!("Created {} TODOs: {}", created_ids.len(), created_titles.join(", ")),
+                        "total_items": todos.items.len(),
+                        "pending_count": todos.pending().len()
+                    }))
+                } else {
+                    // Single creation (backwards compatible)
+                    let title = args
+                        .get("title")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| ZeroError::Tool("Missing 'title' or 'items' parameter for add action".to_string()))?;
+
+                    let description = args.get("description").and_then(|v| v.as_str()).map(String::from);
+                    let priority = args
+                        .get("priority")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("medium")
+                        .to_string();
+
+                    let todo = Todo::new(
+                        title.to_string(),
+                        description,
+                        priority,
+                        agent_id,
+                        agent_name,
+                        is_orchestrator,
+                    );
+                    let id = todo.id.clone();
+
+                    todos.add(todo);
+                    Self::save_todos(&ctx, &todos);
+
+                    Ok(json!({
+                        "__todo_update": true,
+                        "todos": todos,
+                        "success": true,
+                        "action": "add",
+                        "id": id,
+                        "message": format!("Created TODO: {}", title),
+                        "total_items": todos.items.len(),
+                        "pending_count": todos.pending().len()
+                    }))
+                }
             }
 
             "update" => {
