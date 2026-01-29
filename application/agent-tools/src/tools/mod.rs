@@ -8,6 +8,7 @@ mod execution;
 mod ui;
 mod knowledge_graph;
 mod agent;
+mod web;
 
 use std::sync::Arc;
 
@@ -29,6 +30,7 @@ pub use knowledge_graph::{
     AddRelationshipTool,
 };
 pub use agent::CreateAgentTool;
+pub use web::WebFetchTool;
 
 // ============================================================================
 // BUILT-IN TOOLS FACTORY
@@ -70,5 +72,7 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         Arc::new(CreateAgentTool::new(fs.clone())),
         // TODO list tool
         Arc::new(TodoTool::new()),
+        // Web tools
+        Arc::new(WebFetchTool::new()),
     ]
 }

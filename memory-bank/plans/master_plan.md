@@ -43,8 +43,8 @@ A simple, powerful AI agent platform where users state goals and the orchestrato
 ### Phase 1: Foundation (Current)
 **Goal:** Strengthen core crates with missing capabilities
 
-- [ ] 1.1 Add Tool Policy Framework (permissions, risk levels)
-- [ ] 1.2 Add WebFetchTool (HTTP requests)
+- [x] 1.1 Add Tool Policy Framework (permissions, risk levels) ✓
+- [x] 1.2 Add WebFetchTool (HTTP requests) ✓
 - [ ] 1.3 Add MemoryTool (persistent key-value)
 - [ ] 1.4 Improve system prompt
 - [ ] 1.5 Update documentation
@@ -188,4 +188,8 @@ A simple, powerful AI agent platform where users state goals and the orchestrato
 
 **Branch:** `timeline_zero`
 **Phase:** 1 (Foundation)
-**Next Step:** 1.1 Tool Policy Framework
+**Next Step:** 1.3 MemoryTool
+
+### Completed
+- 1.1 Tool Policy Framework (commit 990d1a6)
+- 1.2 WebFetchTool (HTTP requests with security)
