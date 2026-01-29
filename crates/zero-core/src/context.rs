@@ -38,7 +38,7 @@ impl Default for RunConfig {
     fn default() -> Self {
         Self {
             streaming_mode: StreamingMode::Token,
-            max_iterations: Some(50),
+            max_iterations: Some(25),  // Changed from 50 to reduce runaway iterations
             params: HashMap::new(),
         }
     }
@@ -183,7 +183,7 @@ mod tests {
     fn test_run_config_default() {
         let config = RunConfig::default();
         assert_eq!(config.streaming_mode, StreamingMode::Token);
-        assert_eq!(config.max_iterations, Some(50));
+        assert_eq!(config.max_iterations, Some(25));
     }
 
     #[test]

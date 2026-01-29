@@ -27,6 +27,19 @@ pub trait FileSystemContext: Send + Sync {
 
     /// Get the Python executable path
     fn python_executable(&self) -> Option<PathBuf>;
+
+    /// Get the agent-specific node_modules directory
+    /// Returns the directory for agent-specific npm packages (e.g., agents_data/{agent-id}/node_modules/)
+    fn agent_node_modules_dir(&self, agent_id: &str) -> Option<PathBuf> {
+        // Default implementation: node_modules inside agent_data_dir
+        self.agent_data_dir(agent_id).map(|p| p.join("node_modules"))
+    }
+
+    /// Get the vault/config root path
+    /// This is the base path for all configuration
+    fn vault_path(&self) -> Option<PathBuf> {
+        None
+    }
 }
 
 /// Default file system context that returns None for all paths
@@ -56,6 +69,14 @@ impl FileSystemContext for NoFileSystemContext {
     }
 
     fn python_executable(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn agent_node_modules_dir(&self, _agent_id: &str) -> Option<PathBuf> {
+        None
+    }
+
+    fn vault_path(&self) -> Option<PathBuf> {
         None
     }
 }

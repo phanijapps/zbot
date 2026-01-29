@@ -56,6 +56,79 @@ impl LlmAgent {
         self
     }
 
+    /// Validate and repair conversation history to ensure all tool_calls have responses.
+    ///
+    /// Some LLM APIs (like DeepSeek/OpenAI) require that every assistant message with
+    /// tool_calls must be followed by tool response messages. If execution was interrupted
+    /// (e.g., user stopped, error occurred), the history can be left in an invalid state.
+    ///
+    /// This function scans the history and adds placeholder error responses for any
+    /// tool_calls that don't have corresponding tool responses.
+    fn validate_conversation_history(contents: Vec<Content>) -> Vec<Content> {
+        let mut result = Vec::new();
+        let mut pending_tool_calls: Vec<(String, String)> = Vec::new(); // (id, name)
+
+        debug!("Validating conversation history with {} contents", contents.len());
+        for content in contents {
+            // First, check if we have pending tool calls that need responses
+            if !pending_tool_calls.is_empty() {
+                // Check if this content is a tool response
+                let is_tool_response = content.parts.iter().any(|part| {
+                    matches!(part, Part::FunctionResponse { .. })
+                });
+
+                if is_tool_response {
+                    // Collect which tool_call_ids are being responded to
+                    let responded_ids: std::collections::HashSet<String> = content.parts.iter()
+                        .filter_map(|part| match part {
+                            Part::FunctionResponse { id, .. } => Some(id.clone()),
+                            _ => None,
+                        })
+                        .collect();
+
+                    debug!("Tool response found with IDs: {:?}, pending: {:?}", responded_ids, pending_tool_calls);
+
+                    // Remove responded tool calls from pending
+                    pending_tool_calls.retain(|(id, _)| !responded_ids.contains(id));
+                } else {
+                    // Not a tool response but we have pending calls - add placeholder responses
+                    debug!("Non-tool-response content after tool calls, pending: {:?}", pending_tool_calls);
+                    for (tool_id, tool_name) in pending_tool_calls.drain(..) {
+                        warn!("Adding placeholder response for orphaned tool call: {} ({})", tool_name, tool_id);
+                        result.push(Content::tool_response(
+                            tool_id,
+                            format!("Error: Tool execution was interrupted for '{}'", tool_name),
+                        ));
+                    }
+                }
+            }
+
+            // Check if this content has tool calls
+            if content.role == "assistant" {
+                for part in &content.parts {
+                    if let Part::FunctionCall { name, id, .. } = part {
+                        let tool_id = id.clone().unwrap_or_else(|| format!("unknown-{}", name));
+                        debug!("Found tool call in assistant message: {} ({})", name, tool_id);
+                        pending_tool_calls.push((tool_id, name.clone()));
+                    }
+                }
+            }
+
+            result.push(content);
+        }
+
+        // Handle any remaining pending tool calls at the end
+        for (tool_id, tool_name) in pending_tool_calls {
+            warn!("Adding placeholder response for orphaned tool call at end: {} ({})", tool_name, tool_id);
+            result.push(Content::tool_response(
+                tool_id,
+                format!("Error: Tool execution was interrupted for '{}'", tool_name),
+            ));
+        }
+
+        result
+    }
+
     /// Generate LLM request from context.
     async fn build_request(&self, ctx: &Arc<dyn InvocationContext>) -> LlmRequest {
         let session = ctx.session();
@@ -63,9 +136,14 @@ impl LlmAgent {
         // Get conversation history (already includes user message added by executor)
         let all_contents = session.conversation_history();
 
+        debug!("build_request: History has {} items", all_contents.len());
+
+        // Validate and repair conversation history to ensure tool_calls have responses
+        let all_contents = Self::validate_conversation_history(all_contents);
+
         // Build tool definitions
         let tools = self.tools.tools().await.unwrap_or_default();
-        info!("Available tools for {}: {} (total: {})", self.name, tools.iter().map(|t| t.name().to_string()).collect::<Vec<_>>().join(", "), tools.len());
+        debug!("Available tools for {}: {} tools", self.name, tools.len());
         let tool_definitions: Vec<ToolDefinition> = tools
             .iter()
             .map(|tool| ToolDefinition {
@@ -74,7 +152,6 @@ impl LlmAgent {
                 parameters: tool.parameters_schema(),
             })
             .collect();
-        info!("Tool definitions sent to LLM: {} (total: {})", tool_definitions.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "), tool_definitions.len());
 
         let mut request = LlmRequest::new();
         request.contents = all_contents;
@@ -265,13 +342,13 @@ impl Agent for LlmAgent {
                 }
 
                 // Add tool responses to session history for the next iteration
+                debug!("Adding {} tool responses to session history", tool_responses.len());
                 for tool_response in tool_responses {
                     ctx_clone.add_content(tool_response);
-                    debug!("Added tool response to session history");
                 }
             }
 
-            info!("Agent {} finished", agent.name);
+            debug!("Agent {} finished", agent.name);
         };
 
         Ok(Box::pin(stream))
