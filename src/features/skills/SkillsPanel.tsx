@@ -14,6 +14,7 @@ import type { Skill } from "@/shared/types";
 import { useVaults } from "@/features/vaults/useVaults";
 
 const SKILL_CATEGORIES = [
+  "education",
   "utility",
   "coding",
   "writing",
@@ -91,6 +92,7 @@ export function SkillsPanel() {
   // Get gradient based on category
   const getCategoryGradient = (category: string) => {
     const gradients: Record<string, string> = {
+      "education": "from-amber-500 to-yellow-600",
       "coding": "from-blue-500 to-purple-600",
       "analysis": "from-green-500 to-teal-600",
       "automation": "from-orange-500 to-red-600",

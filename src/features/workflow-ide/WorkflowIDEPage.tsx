@@ -12,7 +12,7 @@ export const WorkflowIDEPage: React.FC = () => {
   const { agentId } = useParams<{ agentId: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const { nodes, edges, setNodes, setEdges, isDirty, setIsDirty, setOrchestratorConfig, undo, redo, canUndo, canRedo } = useWorkflowStore();
+  const { nodes, edges, setNodes, setEdges, isDirty, setIsDirty, orchestratorConfig, setOrchestratorConfig, undo, redo, canUndo, canRedo } = useWorkflowStore();
   const [loading, setLoading] = React.useState(true);
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
@@ -260,6 +260,7 @@ export const WorkflowIDEPage: React.FC = () => {
 
     try {
       console.log('[saveWorkflow] Saving nodes with positions:', nodes.map(n => ({ id: n.id, type: n.type, position: n.position })));
+      console.log('[saveWorkflow] Saving orchestratorConfig:', orchestratorConfig);
 
       const graph: workflowService.WorkflowGraph = {
         nodes: nodes
@@ -276,6 +277,7 @@ export const WorkflowIDEPage: React.FC = () => {
           target: edge.target as string,
           label: edge.label as string | undefined,
         })),
+        orchestrator: orchestratorConfig,
       };
       
       await workflowService.saveOrchestratorStructure(agentId, graph);
@@ -286,7 +288,7 @@ export const WorkflowIDEPage: React.FC = () => {
     } finally {
       setSaving(false);
     }
-  }, [agentId, nodes, edges, setIsDirty, navigate]);
+  }, [agentId, nodes, edges, orchestratorConfig, setIsDirty]);
 
   // Load workflow on mount
   useEffect(() => {

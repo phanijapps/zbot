@@ -5,6 +5,7 @@
 
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { Toaster } from "sonner";
 import { AppShell, ThemeProvider } from "./core";
 import { VaultSelector, VaultSwitchingLoader, useVaults } from "./features/vaults";
 import { initializeVaultSystem } from "@/services/vaults";
@@ -97,6 +98,18 @@ function App() {
   // Show main app when vault is ready
   return (
     <ThemeProvider>
+      <Toaster
+        position="bottom-right"
+        theme="dark"
+        richColors
+        toastOptions={{
+          style: {
+            fontWeight: 500,
+            fontSize: '14px',
+            boxShadow: '0 8px 30px rgba(0, 0, 0, 0.5)',
+          },
+        }}
+      />
       <VaultSwitchingLoader show={isSwitchingVault} />
       <BrowserRouter>
         <AppShell>

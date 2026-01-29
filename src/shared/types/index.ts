@@ -430,3 +430,43 @@ export interface TodoList {
   items: Todo[];
   lastUpdated: string;
 }
+
+// ============================================================================
+// DOMAIN: Activity Tracking
+// ============================================================================
+
+/** Type of activity item */
+export type ActivityType = "todo" | "tool_call" | "subagent_start" | "subagent_end";
+
+/** Status of a tool call */
+export type ToolStatus = "running" | "success" | "error";
+
+/** Tool call record for activity tracking */
+export interface ToolCallActivity {
+  id: string;
+  name: string;
+  status: ToolStatus;
+  durationMs?: number;
+  argumentsPreview?: string;
+  resultPreview?: string;
+  error?: string;
+}
+
+/** A single activity item (tool call, TODO, or subagent event) */
+export interface ActivityItem {
+  id: string;
+  agentId: string;
+  agentName: string;
+  isOrchestrator: boolean;
+  itemType: ActivityType;
+  timestamp: string;
+  toolCall?: ToolCallActivity;
+  todo?: Todo;
+}
+
+/** Activity update event payload */
+export interface ActivityUpdateEvent {
+  type: "activity_update";
+  timestamp: number;
+  activity: ActivityItem[];
+}

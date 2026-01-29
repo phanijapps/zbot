@@ -13,7 +13,7 @@ interface AppShellProps {
 
 export function AppShell({ children }: AppShellProps) {
   return (
-    <div className="flex flex-col h-screen bg-[#313338] text-foreground">
+    <div className="flex flex-col h-screen bg-background text-foreground">
       {/* Main Content Area */}
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar */}

@@ -1,9 +1,12 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Settings, X, Loader2, Crown, ArrowRight, Play, Square, HelpCircle } from 'lucide-react';
+import { Settings, X, Loader2, Crown, ArrowRight, Play, Square, HelpCircle, ChevronDown, ChevronRight, Plug, Sparkles, Code } from 'lucide-react';
 import { useWorkflowStore, selectSelectedNode, selectSelectedEdge } from '../../stores/workflowStore';
 import type { SubagentNodeData } from '../../types/workflow';
 import * as providerService from '@/services/provider';
-import type { Provider } from '@/shared/types';
+import * as skillsService from '@/services/skills';
+import * as mcpService from '@/services/mcp';
+import type { Provider, Skill } from '@/shared/types';
+import type { MCPServer } from '@/features/mcp/types';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/shared/ui/select';
 
 export const PropertiesPanel: React.FC = () => {
@@ -20,10 +23,53 @@ export const PropertiesPanel: React.FC = () => {
   const [loadingProviders, setLoadingProviders] = useState(true);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
 
-  // Load providers on mount
+  // Skills and MCPs state
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [mcpServers, setMcpServers] = useState<MCPServer[]>([]);
+  const [loadingSkills, setLoadingSkills] = useState(true);
+  const [loadingMcps, setLoadingMcps] = useState(true);
+
+  // Collapsible sections state
+  const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
+    mcps: false,
+    skills: false,
+    middleware: false,
+  });
+
+  const toggleSection = (section: string) => {
+    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
+  };
+
+  // Load providers, skills, and MCPs on mount
   useEffect(() => {
     loadProviders();
+    loadSkills();
+    loadMcps();
   }, []);
+
+  const loadSkills = async () => {
+    setLoadingSkills(true);
+    try {
+      const loaded = await skillsService.listSkills();
+      setSkills(loaded);
+    } catch (error) {
+      console.error('Failed to load skills:', error);
+    } finally {
+      setLoadingSkills(false);
+    }
+  };
+
+  const loadMcps = async () => {
+    setLoadingMcps(true);
+    try {
+      const loaded = await mcpService.listMCPServers();
+      setMcpServers(loaded);
+    } catch (error) {
+      console.error('Failed to load MCP servers:', error);
+    } finally {
+      setLoadingMcps(false);
+    }
+  };
 
   // Update available models when provider changes (for node or orchestrator)
   useEffect(() => {
@@ -269,6 +315,141 @@ export const PropertiesPanel: React.FC = () => {
                 <p className="text-xs text-gray-500 mt-1">
                   This serves as the system prompt for the orchestrator agent.
                 </p>
+              </div>
+
+              {/* MCPs Section */}
+              <div className="border border-gray-700 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('mcps')}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-gray-800 hover:bg-gray-750 text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <Plug size={14} className="text-blue-400" />
+                    <span className="text-xs font-medium text-gray-300">MCPs</span>
+                    {(orchestratorConfig.mcps || []).length > 0 && (
+                      <span className="text-xs text-blue-400">({(orchestratorConfig.mcps || []).length})</span>
+                    )}
+                  </div>
+                  {expandedSections.mcps ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                </button>
+                {expandedSections.mcps && (
+                  <div className="p-3 bg-gray-850 border-t border-gray-700 space-y-2 max-h-48 overflow-y-auto">
+                    {loadingMcps ? (
+                      <div className="flex items-center gap-2 text-gray-500 text-xs py-2">
+                        <Loader2 size={12} className="animate-spin" />
+                        Loading MCPs...
+                      </div>
+                    ) : mcpServers.length === 0 ? (
+                      <p className="text-xs text-gray-500">No MCP servers configured</p>
+                    ) : (
+                      mcpServers.map((mcp) => (
+                        <label key={mcp.id} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
+                            checked={(orchestratorConfig.mcps || []).includes(mcp.id)}
+                            onChange={(e) => {
+                              const current = orchestratorConfig.mcps || [];
+                              if (e.target.checked) {
+                                handleOrchestratorUpdate('mcps', [...current, mcp.id]);
+                              } else {
+                                handleOrchestratorUpdate('mcps', current.filter((id: string) => id !== mcp.id));
+                              }
+                            }}
+                          />
+                          <span className="text-xs text-gray-300">{mcp.name}</span>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Skills Section */}
+              <div className="border border-gray-700 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('skills')}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-gray-800 hover:bg-gray-750 text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <Sparkles size={14} className="text-yellow-400" />
+                    <span className="text-xs font-medium text-gray-300">Skills</span>
+                    {(orchestratorConfig.skills || []).length > 0 && (
+                      <span className="text-xs text-yellow-400">({(orchestratorConfig.skills || []).length})</span>
+                    )}
+                  </div>
+                  {expandedSections.skills ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                </button>
+                {expandedSections.skills && (
+                  <div className="p-3 bg-gray-850 border-t border-gray-700 space-y-2 max-h-48 overflow-y-auto">
+                    {loadingSkills ? (
+                      <div className="flex items-center gap-2 text-gray-500 text-xs py-2">
+                        <Loader2 size={12} className="animate-spin" />
+                        Loading skills...
+                      </div>
+                    ) : skills.length === 0 ? (
+                      <p className="text-xs text-gray-500">No skills available</p>
+                    ) : (
+                      skills.map((skill) => (
+                        <label key={skill.id} className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="rounded border-gray-600 bg-gray-700 text-purple-500 focus:ring-purple-500 focus:ring-offset-0"
+                            checked={(orchestratorConfig.skills || []).includes(skill.id)}
+                            onChange={(e) => {
+                              const current = orchestratorConfig.skills || [];
+                              if (e.target.checked) {
+                                handleOrchestratorUpdate('skills', [...current, skill.id]);
+                              } else {
+                                handleOrchestratorUpdate('skills', current.filter((id: string) => id !== skill.id));
+                              }
+                            }}
+                          />
+                          <div>
+                            <span className="text-xs text-gray-300">{skill.displayName || skill.name}</span>
+                            {skill.description && (
+                              <p className="text-xs text-gray-500 truncate max-w-[200px]">{skill.description}</p>
+                            )}
+                          </div>
+                        </label>
+                      ))
+                    )}
+                  </div>
+                )}
+              </div>
+
+              {/* Middleware Section */}
+              <div className="border border-gray-700 rounded-lg overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleSection('middleware')}
+                  className="w-full flex items-center justify-between px-3 py-2 bg-gray-800 hover:bg-gray-750 text-left"
+                >
+                  <div className="flex items-center gap-2">
+                    <Code size={14} className="text-green-400" />
+                    <span className="text-xs font-medium text-gray-300">Middleware</span>
+                    {orchestratorConfig.middleware && (
+                      <span className="text-xs text-green-400">(configured)</span>
+                    )}
+                  </div>
+                  {expandedSections.middleware ? <ChevronDown size={14} className="text-gray-400" /> : <ChevronRight size={14} className="text-gray-400" />}
+                </button>
+                {expandedSections.middleware && (
+                  <div className="p-3 bg-gray-850 border-t border-gray-700">
+                    <textarea
+                      className="w-full px-3 py-2 bg-gray-800 border border-gray-700 rounded-md text-xs font-mono text-white focus:border-blue-500 focus:outline-none resize-none"
+                      rows={6}
+                      value={orchestratorConfig.middleware || ''}
+                      onChange={(e) => handleOrchestratorUpdate('middleware', e.target.value)}
+                      placeholder="# Middleware YAML configuration&#10;middleware:&#10;  summarization:&#10;    enabled: true"
+                    />
+                    <p className="text-xs text-gray-500 mt-1">
+                      YAML configuration for middleware (summarization, context editing)
+                    </p>
+                  </div>
+                )}
               </div>
             </>
           ) : (
@@ -620,6 +801,11 @@ export const PropertiesPanel: React.FC = () => {
                 placeholder="# Instructions for this subagent..."
               />
             </div>
+
+            {/* Note: MCPs, Skills, Tools, Middleware are configured via chips on the node */}
+            <p className="text-xs text-gray-500 italic">
+              Configure MCPs, Skills, and Middleware using the chips on the node.
+            </p>
           </>
         )}
 
