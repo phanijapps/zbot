@@ -467,3 +467,30 @@ export interface ActivityUpdateEvent {
   timestamp: number;
   activity: ActivityItem[];
 }
+
+// ============================================================================
+// DOMAIN: Generative UI Events
+// ============================================================================
+
+/** Show content event - display content in generative UI canvas */
+export interface ShowContentEvent {
+  type: "show_content";
+  contentType: "pdf" | "ppt" | "html" | "image" | "text" | "markdown";
+  title: string;
+  content: string; // Base64 or raw content
+  metadata?: Record<string, unknown>;
+  filePath?: string; // Path to attachment file
+  isAttachment?: boolean; // true if content is saved to attachments directory
+  base64?: boolean; // true if content is base64 encoded
+}
+
+/** Request input event - request user input via JSON Schema form */
+export interface RequestInputEvent {
+  type: "request_input";
+  formId: string;
+  formType: "json_schema" | "dynamic_form";
+  title: string;
+  description?: string;
+  schema: Record<string, unknown>;
+  submitButton?: string;
+}

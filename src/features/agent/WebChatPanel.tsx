@@ -5,6 +5,8 @@
 
 import { useState, useEffect, useRef } from "react";
 import { getTransport, type StreamEvent } from "@/services/transport";
+import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
+import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 
 // ============================================================================
 // Types
@@ -31,6 +33,12 @@ export function WebChatPanel() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [conversationId, setConversationId] = useState<string>("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Generative Canvas state
+  const [canvasOpen, setCanvasOpen] = useState(false);
+  const [canvasContent, setCanvasContent] = useState<ContentState>(null);
+  const [pendingFormId, setPendingFormId] = useState<string | null>(null);
 
   // Subscribe to events when conversation changes
   useEffect(() => {
@@ -116,6 +124,26 @@ export function WebChatPanel() {
         });
         break;
 
+      case "show_content":
+        // Show content in generative canvas
+        setCanvasContent({
+          type: "show_content",
+          event: event as unknown as ShowContentEvent,
+        });
+        setCanvasOpen(true);
+        break;
+
+      case "request_input":
+        // Show form in generative canvas
+        const inputEvent = event as unknown as RequestInputEvent;
+        setCanvasContent({
+          type: "request_input",
+          event: inputEvent,
+        });
+        setPendingFormId(inputEvent.formId);
+        setCanvasOpen(true);
+        break;
+
       case "agent_completed":
       case "turn_complete":
       case "error":
@@ -162,6 +190,40 @@ export function WebChatPanel() {
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const handleCanvasClose = () => {
+    setCanvasOpen(false);
+    setCanvasContent(null);
+    setPendingFormId(null);
+    // Focus back to input
+    inputRef.current?.focus();
+  };
+
+  const handleFormSubmit = async (formId: string, data: Record<string, unknown>) => {
+    console.log("[WebChatPanel] Form submitted:", { formId, data });
+
+    // Send the form response back to the agent via a special message
+    // The agent should be waiting for this input
+    try {
+      const transport = await getTransport();
+      if (conversationId) {
+        // Send as a structured response
+        const responseMessage = JSON.stringify({
+          type: "form_response",
+          formId,
+          data,
+        });
+        await transport.executeAgent(ROOT_AGENT_ID, conversationId, responseMessage);
+      }
+    } catch (error) {
+      console.error("Failed to send form response:", error);
+    }
+  };
+
+  const handleFormCancel = (formId: string) => {
+    console.log("[WebChatPanel] Form cancelled:", formId);
+    // Optionally notify the agent that the form was cancelled
   };
 
   return (
@@ -219,23 +281,33 @@ export function WebChatPanel() {
       <div className="p-4 border-t border-gray-800">
         <div className="flex gap-2">
           <textarea
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
-            disabled={isProcessing}
+            disabled={isProcessing || canvasOpen}
             className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 resize-none focus:outline-none focus:border-violet-500 disabled:opacity-50"
             rows={1}
           />
           <button
             onClick={handleSend}
-            disabled={!input.trim() || isProcessing}
+            disabled={!input.trim() || isProcessing || canvasOpen}
             className="bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg transition-colors"
           >
             Send
           </button>
         </div>
       </div>
+
+      {/* Generative Canvas */}
+      <GenerativeCanvas
+        isOpen={canvasOpen}
+        content={canvasContent}
+        onClose={handleCanvasClose}
+        onFormSubmit={handleFormSubmit}
+        onFormCancel={handleFormCancel}
+      />
     </div>
   );
 }
