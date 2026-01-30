@@ -437,16 +437,13 @@ impl AgentExecutor {
     async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<String, String> {
         // First try built-in tools
         if let Some(tool) = self.tool_registry.find(tool_name) {
-            // Create tool context with conversation ID and skills if available
-            let ctx = match (&self.config.conversation_id, !self.config.skills.is_empty()) {
-                (Some(conv_id), true) => Arc::new(ToolContext::with_conversation_and_skills(
-                    conv_id.clone(),
-                    self.config.skills.clone(),
-                )),
-                (Some(conv_id), false) => Arc::new(ToolContext::with_conversation(conv_id.clone())),
-                (None, true) => Arc::new(ToolContext::with_skills(self.config.skills.clone())),
-                (None, false) => Arc::new(ToolContext::new()),
-            };
+            // Create tool context with agent_id, conversation_id, and skills
+            // This ensures tools like memory can find the agent's data directory
+            let ctx = Arc::new(ToolContext::full(
+                self.config.agent_id.clone(),
+                self.config.conversation_id.clone(),
+                self.config.skills.clone(),
+            ));
             let result = tool.execute(ctx, arguments.clone()).await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
             return Ok(serde_json::to_string(&result)

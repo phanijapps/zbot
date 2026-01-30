@@ -97,8 +97,34 @@ impl ToolContext {
     /// Create a context with agent ID
     #[must_use]
     pub fn with_agent_id(agent_id: String) -> Self {
+        let mut state = HashMap::new();
+        // Set agent_id in state for tools that need it (like memory tool)
+        state.insert("app:agent_id".to_string(), Value::String(agent_id.clone()));
         Self {
             agent_id: Some(agent_id),
+            state: RwLock::new(state),
+            ..Default::default()
+        }
+    }
+
+    /// Create a full context with all parameters
+    #[must_use]
+    pub fn full(
+        agent_id: String,
+        conversation_id: Option<String>,
+        available_skills: Vec<String>,
+    ) -> Self {
+        let mut state = HashMap::new();
+        // Set agent_id in state for tools that need it (like memory tool)
+        state.insert("app:agent_id".to_string(), Value::String(agent_id.clone()));
+        if let Some(ref conv_id) = conversation_id {
+            state.insert("app:conversation_id".to_string(), Value::String(conv_id.clone()));
+        }
+        Self {
+            agent_id: Some(agent_id),
+            conversation_id,
+            available_skills,
+            state: RwLock::new(state),
             ..Default::default()
         }
     }
