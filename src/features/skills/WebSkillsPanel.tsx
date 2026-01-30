@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
+import { Zap, Plus, Trash2, FolderOpen, FileText, Loader2, X } from "lucide-react";
 import { getTransport, type SkillResponse, type CreateSkillRequest } from "@/services/transport";
 
 // ============================================================================
@@ -107,57 +108,65 @@ export function WebSkillsPanel() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-500" />
+      <div className="flex items-center justify-center h-full bg-[var(--background)]">
+        <Loader2 className="w-6 h-6 text-[var(--primary)] animate-spin" />
       </div>
     );
   }
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-[var(--background)]">
       {/* Skills List */}
-      <div className="w-80 border-r border-gray-800 flex flex-col">
-        <div className="p-4 border-b border-gray-800 flex items-center justify-between">
-          <h1 className="text-lg font-bold">Skills</h1>
+      <div className="w-72 bg-[var(--card)] border-r border-[var(--border)] flex flex-col">
+        <div className="p-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Zap className="w-4 h-4 text-[var(--warning)]" />
+            <h1 className="text-sm font-semibold text-[var(--foreground)]">Skills</h1>
+          </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="bg-violet-600 hover:bg-violet-700 text-white px-3 py-1 rounded text-sm transition-colors"
+            className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-white px-2.5 py-1.5 rounded-lg text-xs transition-colors font-medium"
           >
+            <Plus className="w-3.5 h-3.5" />
             New
           </button>
         </div>
 
         {error && (
-          <div className="p-3 bg-red-900/30 border-b border-red-800 text-red-200 text-sm">
-            {error}
-            <button onClick={() => setError(null)} className="ml-2 text-red-400 hover:text-red-300">
-              Dismiss
+          <div className="px-3 py-2 bg-[var(--destructive)]/10 text-[var(--destructive)] text-xs flex items-center justify-between">
+            <span className="truncate">{error}</span>
+            <button onClick={() => setError(null)} className="hover:opacity-70 ml-2">
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
         <div className="flex-1 overflow-auto">
           {skills.length === 0 ? (
-            <div className="p-4 text-center text-gray-500">
-              <p>No skills yet</p>
-              <p className="text-sm mt-1">Create your first skill</p>
+            <div className="p-6 text-center">
+              <div className="w-10 h-10 rounded-lg bg-[var(--warning)]/10 flex items-center justify-center mx-auto mb-3">
+                <Zap className="w-5 h-5 text-[var(--warning)]" />
+              </div>
+              <p className="text-sm font-medium text-[var(--foreground)]">No skills yet</p>
+              <p className="text-xs text-[var(--muted-foreground)] mt-1">Create your first skill</p>
             </div>
           ) : (
             Object.entries(skillsByCategory).map(([category, categorySkills]) => (
               <div key={category}>
-                <div className="px-4 py-2 text-xs text-gray-500 uppercase tracking-wide bg-[#0a0a0a]">
+                <div className="px-3 py-2 text-xs text-[var(--muted-foreground)] uppercase tracking-wider bg-[var(--muted)] flex items-center gap-1.5">
+                  <FolderOpen className="w-3 h-3" />
                   {category}
                 </div>
                 {categorySkills.map((skill) => (
                   <button
                     key={skill.id}
                     onClick={() => setSelectedSkill(skill)}
-                    className={`w-full text-left px-4 py-3 border-b border-gray-800 hover:bg-gray-800/50 transition-colors ${
-                      selectedSkill?.id === skill.id ? "bg-violet-500/10 border-l-2 border-l-violet-500" : ""
+                    className={`w-full text-left px-3 py-2.5 hover:bg-[var(--muted)] transition-colors ${
+                      selectedSkill?.id === skill.id ? "bg-[var(--accent)] border-l-2 border-l-[var(--primary)]" : ""
                     }`}
                   >
-                    <div className="font-medium">{skill.displayName}</div>
-                    <div className="text-sm text-gray-500 truncate">{skill.description}</div>
+                    <div className="text-sm font-medium text-[var(--foreground)]">{skill.displayName}</div>
+                    <div className="text-xs text-[var(--muted-foreground)] truncate">{skill.description}</div>
                   </button>
                 ))}
               </div>
@@ -169,12 +178,17 @@ export function WebSkillsPanel() {
       {/* Skill Detail / Create Form */}
       <div className="flex-1 overflow-auto">
         {isCreating ? (
-          <div className="p-6">
-            <h2 className="text-xl font-bold mb-4">Create New Skill</h2>
+          <div className="p-8 max-w-xl">
+            <div className="flex items-center gap-3 mb-5">
+              <div className="w-9 h-9 rounded-lg bg-[var(--warning)]/10 flex items-center justify-center">
+                <Zap className="w-4.5 h-4.5 text-[var(--warning)]" />
+              </div>
+              <h2 className="text-lg font-semibold text-[var(--foreground)]">Create New Skill</h2>
+            </div>
 
-            <div className="space-y-4 max-w-2xl">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm text-gray-400 mb-1">Name (ID)</label>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-1.5">Name (ID)</label>
                 <input
                   type="text"
                   value={newSkill.name}
@@ -185,65 +199,65 @@ export function WebSkillsPanel() {
                     })
                   }
                   placeholder="my-skill"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500"
+                  className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent text-[var(--foreground)] text-sm"
                 />
               </div>
 
               <div>
-                <label className="block text-sm text-gray-400 mb-1">Display Name</label>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-1.5">Display Name</label>
                 <input
                   type="text"
                   value={newSkill.displayName}
                   onChange={(e) => setNewSkill({ ...newSkill, displayName: e.target.value })}
                   placeholder="My Skill"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500"
+                  className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent text-[var(--foreground)] text-sm"
                 />
               </div>
 
               <div>
-                <label className="block text-sm text-gray-400 mb-1">Description</label>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-1.5">Description</label>
                 <input
                   type="text"
                   value={newSkill.description}
                   onChange={(e) => setNewSkill({ ...newSkill, description: e.target.value })}
                   placeholder="What does this skill do?"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500"
+                  className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent text-[var(--foreground)] text-sm"
                 />
               </div>
 
               <div>
-                <label className="block text-sm text-gray-400 mb-1">Category</label>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-1.5">Category</label>
                 <input
                   type="text"
                   value={newSkill.category}
                   onChange={(e) => setNewSkill({ ...newSkill, category: e.target.value })}
                   placeholder="general"
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500"
+                  className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent text-[var(--foreground)] text-sm"
                 />
               </div>
 
               <div>
-                <label className="block text-sm text-gray-400 mb-1">Instructions</label>
+                <label className="block text-sm font-medium text-[var(--foreground)] mb-1.5">Instructions</label>
                 <textarea
                   value={newSkill.instructions}
                   onChange={(e) => setNewSkill({ ...newSkill, instructions: e.target.value })}
                   placeholder="Instructions for the agent when using this skill..."
-                  rows={10}
-                  className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 focus:outline-none focus:border-violet-500 resize-none font-mono text-sm"
+                  rows={8}
+                  className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent resize-none font-mono text-sm text-[var(--foreground)]"
                 />
               </div>
 
-              <div className="flex gap-3">
+              <div className="flex gap-2 pt-2">
                 <button
                   onClick={() => setIsCreating(false)}
-                  className="px-4 py-2 text-gray-400 hover:text-white transition-colors"
+                  className="px-4 py-2 text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors text-sm font-medium"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleCreateSkill}
                   disabled={!newSkill.name}
-                  className="bg-violet-600 hover:bg-violet-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors"
+                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
                 >
                   Create Skill
                 </button>
@@ -251,42 +265,58 @@ export function WebSkillsPanel() {
             </div>
           </div>
         ) : selectedSkill ? (
-          <div className="p-6">
-            <div className="flex items-start justify-between mb-6">
-              <div>
-                <h2 className="text-xl font-bold">{selectedSkill.displayName}</h2>
-                <p className="text-gray-500">{selectedSkill.id}</p>
+          <div className="p-8 max-w-xl">
+            <div className="flex items-start justify-between mb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-[var(--warning)]/10 flex items-center justify-center">
+                  <Zap className="w-4.5 h-4.5 text-[var(--warning)]" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold text-[var(--foreground)]">{selectedSkill.displayName}</h2>
+                  <p className="text-xs text-[var(--muted-foreground)]">{selectedSkill.id}</p>
+                </div>
               </div>
               <button
                 onClick={() => handleDeleteSkill(selectedSkill.id)}
-                className="text-gray-500 hover:text-red-400 transition-colors"
+                className="text-[var(--muted-foreground)] hover:text-[var(--destructive)] transition-colors p-1.5 hover:bg-[var(--destructive)]/10 rounded-lg"
               >
-                Delete
+                <Trash2 className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="space-y-4 max-w-2xl">
-              <div>
-                <label className="block text-sm text-gray-500 mb-1">Description</label>
-                <p className="text-gray-300">{selectedSkill.description || "No description"}</p>
+            <div className="space-y-4">
+              <div className="bg-[var(--card)] rounded-xl p-4 card-shadow">
+                <label className="block text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">Description</label>
+                <p className="text-sm text-[var(--foreground)]">{selectedSkill.description || "No description"}</p>
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-500 mb-1">Category</label>
-                <p className="text-gray-300">{selectedSkill.category}</p>
+              <div className="bg-[var(--card)] rounded-xl p-4 card-shadow">
+                <label className="block text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-1">Category</label>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-[var(--muted)] rounded text-xs text-[var(--muted-foreground)]">
+                  <FolderOpen className="w-3 h-3" />
+                  {selectedSkill.category}
+                </span>
               </div>
 
-              <div>
-                <label className="block text-sm text-gray-500 mb-1">Instructions</label>
-                <pre className="bg-gray-900 rounded-lg p-4 text-sm text-gray-300 whitespace-pre-wrap font-mono overflow-auto max-h-96">
+              <div className="bg-[var(--card)] rounded-xl p-4 card-shadow">
+                <label className="block text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-2 flex items-center gap-1">
+                  <FileText className="w-3 h-3" />
+                  Instructions
+                </label>
+                <pre className="bg-[var(--muted)] rounded-lg p-3 text-sm text-[var(--foreground)] whitespace-pre-wrap font-mono overflow-auto max-h-80">
                   {selectedSkill.instructions}
                 </pre>
               </div>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-center h-full text-gray-500">
-            <p>Select a skill to view details</p>
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <div className="w-12 h-12 rounded-xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-3">
+                <Zap className="w-6 h-6 text-[var(--muted-foreground)]" />
+              </div>
+              <p className="text-sm text-[var(--muted-foreground)]">Select a skill to view details</p>
+            </div>
           </div>
         )}
       </div>

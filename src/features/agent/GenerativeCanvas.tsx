@@ -4,7 +4,7 @@
 // Cannot be dismissed by clicking outside - only via cancel or submit buttons
 // ============================================================================
 
-import { useState, useCallback, useEffect } from "react";
+import { useState } from "react";
 import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
 
 // ============================================================================

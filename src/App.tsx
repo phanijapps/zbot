@@ -6,12 +6,25 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
+import {
+  MessageSquare,
+  Bot,
+  Zap,
+  Calendar,
+  Plug,
+  Server,
+  Settings,
+  Loader2,
+  AlertCircle,
+  RefreshCw,
+} from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
 import { WebCronPanel } from "./features/cron/WebCronPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
+import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 
 // ============================================================================
 // Types
@@ -45,17 +58,13 @@ function App() {
 
     return () => {
       cancelled = true;
-      // Cleanup WebSocket on unmount
       getTransport().then(t => t.disconnect());
     };
   }, []);
 
   const initializeApp = async () => {
     try {
-      // Initialize transport layer
       await initializeTransport();
-
-      // Get transport and check health
       const transport = await getTransport();
       const healthResult = await transport.health();
 
@@ -65,12 +74,10 @@ function App() {
         return;
       }
 
-      // Connect to event stream
       const connectResult = await transport.connect();
       if (connectResult.success) {
         setConnectionStatus({ connected: true });
       } else {
-        // Still mark as "connected" for HTTP-only usage
         setConnectionStatus({ connected: true });
       }
     } catch (err) {
@@ -82,30 +89,32 @@ function App() {
     }
   };
 
-  // Show loading while initializing
   if (isInitializing) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a1a1a]">
+      <div className="loading-spinner" style={{ minHeight: '100vh' }}>
         <div className="text-center">
-          <div className="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-violet-500 mb-4"></div>
-          <p className="text-gray-400">Connecting to gateway...</p>
+          <Loader2 className="loading-spinner__icon" />
+          <p className="page-subtitle">Connecting to gateway...</p>
         </div>
       </div>
     );
   }
 
-  // Show error if connection failed
   if (error && !connectionStatus.connected) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-[#1a1a1a]">
-        <div className="text-center max-w-md p-6">
-          <div className="text-red-500 text-6xl mb-4">!</div>
-          <h1 className="text-xl font-semibold text-white mb-2">Connection Failed</h1>
-          <p className="text-gray-400 mb-4">{error}</p>
-          <p className="text-gray-500 text-sm mb-6">
+      <div className="loading-spinner" style={{ minHeight: '100vh' }}>
+        <div className="card card__padding--lg" style={{ maxWidth: '28rem', textAlign: 'center' }}>
+          <div className="empty-state__icon" style={{ backgroundColor: 'var(--destructive-muted)' }}>
+            <AlertCircle style={{ width: 24, height: 24, color: 'var(--destructive)' }} />
+          </div>
+          <h2 className="empty-state__title">Connection Failed</h2>
+          <p className="empty-state__description">{error}</p>
+          <p className="page-subtitle" style={{ marginBottom: 'var(--spacing-6)' }}>
             Make sure the AgentZero daemon is running:
             <br />
-            <code className="bg-gray-800 px-2 py-1 rounded mt-2 inline-block">zerod</code>
+            <code className="badge" style={{ marginTop: 'var(--spacing-2)', display: 'inline-block' }}>
+              zerod
+            </code>
           </p>
           <button
             onClick={() => {
@@ -113,8 +122,9 @@ function App() {
               setIsInitializing(true);
               initializeApp();
             }}
-            className="bg-violet-600 hover:bg-violet-700 text-white px-4 py-2 rounded-lg transition-colors"
+            className="btn btn--primary btn--md"
           >
+            <RefreshCw style={{ width: 16, height: 16 }} />
             Retry Connection
           </button>
         </div>
@@ -122,18 +132,17 @@ function App() {
     );
   }
 
-  // Show main app when connected
   return (
     <BrowserRouter>
       <Toaster
         position="bottom-right"
-        theme="dark"
-        richColors
+        theme="light"
         toastOptions={{
           style: {
             fontWeight: 500,
-            fontSize: "14px",
-            boxShadow: "0 8px 30px rgba(0, 0, 0, 0.5)",
+            fontSize: '14px',
+            borderRadius: 'var(--radius-lg)',
+            boxShadow: 'var(--shadow-dropdown)',
           },
         }}
       />
@@ -144,6 +153,7 @@ function App() {
           <Route path="/skills" element={<WebSkillsPanel />} />
           <Route path="/cron" element={<WebCronPanel />} />
           <Route path="/integrations" element={<WebIntegrationsPanel />} />
+          <Route path="/mcps" element={<WebMcpsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
         </Routes>
       </WebAppShell>
@@ -160,59 +170,71 @@ interface WebAppShellProps {
   connectionStatus: ConnectionStatus;
 }
 
+const navItems = [
+  { to: "/", label: "Chat", icon: MessageSquare },
+  { to: "/agents", label: "Agents", icon: Bot },
+  { to: "/skills", label: "Skills", icon: Zap },
+  { to: "/cron", label: "Schedules", icon: Calendar },
+  { to: "/integrations", label: "Integrations", icon: Plug },
+  { to: "/mcps", label: "MCP Servers", icon: Server },
+  { to: "/settings", label: "Settings", icon: Settings },
+];
+
 function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
   return (
-    <div className="flex h-screen bg-[#1a1a1a] text-gray-100">
-      {/* Sidebar */}
-      <nav className="w-56 bg-[#141414] border-r border-gray-800 flex flex-col">
-        <div className="p-4 border-b border-gray-800">
-          <img src="/logo-dark.svg" alt="AgentZero" className="h-8" />
+    <div className="app-shell">
+      <nav className="sidebar">
+        <div className="sidebar__header">
+          <div className="sidebar__logo">
+            <div className="sidebar__logo-icon">
+              <Bot style={{ width: 18, height: 18 }} />
+            </div>
+            <span className="sidebar__logo-text">AgentZero</span>
+          </div>
         </div>
 
-        <div className="flex-1 py-4">
-          <NavLink to="/" label="Chat" />
-          <NavLink to="/agents" label="Agents" />
-          <NavLink to="/skills" label="Skills" />
-          <NavLink to="/cron" label="Schedules" />
-          <NavLink to="/integrations" label="Integrations" />
-          <NavLink to="/settings" label="Settings" />
+        <div className="sidebar__nav">
+          {navItems.map((item) => (
+            <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} />
+          ))}
         </div>
 
-        {/* Connection status */}
-        <div className="p-4 border-t border-gray-800">
-          <div className="flex items-center gap-2">
-            <div
-              className={`w-2 h-2 rounded-full ${
-                connectionStatus.connected ? "bg-green-500" : "bg-red-500"
-              }`}
-            />
-            <span className="text-xs text-gray-400">
+        <div className="sidebar__footer">
+          <div className="connection-status">
+            <div className={`connection-status__dot ${
+              connectionStatus.connected
+                ? 'connection-status__dot--connected'
+                : 'connection-status__dot--disconnected'
+            }`} />
+            <span className="connection-status__text">
               {connectionStatus.connected ? "Connected" : "Disconnected"}
             </span>
           </div>
         </div>
       </nav>
 
-      {/* Main content */}
       <main className="flex-1 overflow-hidden">{children}</main>
     </div>
   );
 }
 
-function NavLink({ to, label }: { to: string; label: string }) {
+interface NavLinkProps {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+}
+
+function NavLink({ to, label, icon: Icon }: NavLinkProps) {
   const location = useLocation();
   const isActive = location.pathname === to;
 
   return (
     <Link
       to={to}
-      className={`flex items-center gap-3 px-4 py-2 mx-2 rounded-lg transition-colors ${
-        isActive
-          ? "bg-violet-500/20 text-violet-400"
-          : "text-gray-400 hover:text-white hover:bg-gray-800"
-      }`}
+      className={`nav-link ${isActive ? 'nav-link--active' : ''}`}
     >
-      <span>{label}</span>
+      <Icon className="nav-link__icon" />
+      <span className="nav-link__label">{label}</span>
     </Link>
   );
 }
@@ -223,35 +245,56 @@ function NavLink({ to, label }: { to: string; label: string }) {
 
 function WebSettingsPanel() {
   return (
-    <div className="p-6">
-      <h1 className="text-2xl font-bold mb-6">Settings</h1>
-
-      <div className="space-y-6 max-w-2xl">
-        <div className="bg-[#141414] rounded-lg p-4 border border-gray-800">
-          <h2 className="text-lg font-semibold mb-2">Gateway Connection</h2>
-          <p className="text-gray-400 text-sm mb-4">
-            The web dashboard connects to the AgentZero daemon via HTTP and WebSocket.
-          </p>
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="text-gray-500">HTTP API:</span>
-              <span className="ml-2 text-gray-300">http://localhost:18791</span>
-            </div>
-            <div>
-              <span className="text-gray-500">WebSocket:</span>
-              <span className="ml-2 text-gray-300">ws://localhost:18790</span>
-            </div>
+    <div className="page">
+      <div className="page-container page-container--narrow">
+        <div className="page-header">
+          <div className="page-header__content">
+            <h1 className="page-title">Settings</h1>
+            <p className="page-subtitle">Configure your AgentZero environment</p>
           </div>
         </div>
 
-        <div className="bg-[#141414] rounded-lg p-4 border border-gray-800">
-          <h2 className="text-lg font-semibold mb-2">Data Location</h2>
-          <p className="text-gray-400 text-sm">
-            Agent configurations and data are stored in:
-          </p>
-          <code className="block mt-2 bg-gray-900 px-3 py-2 rounded text-sm text-gray-300">
-            ~/Documents/agentzero/
-          </code>
+        <div className="flex flex-col gap-4">
+          <div className="card card__padding--lg">
+            <div className="card__header">
+              <div className="flex items-center gap-3">
+                <div className="card__icon card__icon--primary">
+                  <Server style={{ width: 18, height: 18 }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Gateway Connection</h2>
+                  <p className="page-subtitle">HTTP and WebSocket endpoints</p>
+                </div>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="badge" style={{ padding: 'var(--spacing-3)', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>HTTP API</span>
+                <code className="font-mono" style={{ marginTop: 'var(--spacing-1)' }}>http://localhost:18791</code>
+              </div>
+              <div className="badge" style={{ padding: 'var(--spacing-3)', flexDirection: 'column', alignItems: 'flex-start' }}>
+                <span style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>WebSocket</span>
+                <code className="font-mono" style={{ marginTop: 'var(--spacing-1)' }}>ws://localhost:18790</code>
+              </div>
+            </div>
+          </div>
+
+          <div className="card card__padding--lg">
+            <div className="card__header">
+              <div className="flex items-center gap-3">
+                <div className="card__icon card__icon--success">
+                  <Settings style={{ width: 18, height: 18 }} />
+                </div>
+                <div>
+                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Data Location</h2>
+                  <p className="page-subtitle">Where your configurations are stored</p>
+                </div>
+              </div>
+            </div>
+            <div className="badge font-mono" style={{ padding: 'var(--spacing-3)' }}>
+              ~/Documents/agentzero/
+            </div>
+          </div>
         </div>
       </div>
     </div>

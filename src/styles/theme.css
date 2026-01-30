@@ -1,83 +1,237 @@
+/* ============================================================================
+   DESIGN TOKENS
+   All design decisions are centralized here.
+   Components use these tokens via CSS custom properties.
+   To change the look, edit THIS file only.
+   ============================================================================ */
+
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  --font-size: 16px;
-  --background: #ffffff;
-  --foreground: oklch(0.145 0 0);
+  /* ========================================================================
+     COLORS - Semantic color palette
+     ======================================================================== */
+
+  /* Background & Foreground */
+  --background: #f5f5f7;
+  --foreground: #1d1d1f;
+
+  /* Card surfaces */
   --card: #ffffff;
-  --card-foreground: oklch(0.145 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.145 0 0);
-  --primary: #030213;
-  --primary-foreground: oklch(1 0 0);
-  --secondary: oklch(0.95 0.0058 264.53);
-  --secondary-foreground: #030213;
-  --muted: #ececf0;
-  --muted-foreground: #717182;
-  --accent: #e9ebef;
-  --accent-foreground: #030213;
-  --destructive: #d4183d;
+  --card-foreground: #1d1d1f;
+
+  /* Popover/Dropdown */
+  --popover: #ffffff;
+  --popover-foreground: #1d1d1f;
+
+  /* Primary brand color */
+  --primary: #5856d6;
+  --primary-hover: #4a48c7;
+  --primary-foreground: #ffffff;
+  --primary-muted: rgba(88, 86, 214, 0.1);
+
+  /* Secondary */
+  --secondary: #f5f5f7;
+  --secondary-hover: #e8e8ed;
+  --secondary-foreground: #6e6e73;
+
+  /* Muted elements */
+  --muted: #f5f5f7;
+  --muted-foreground: #86868b;
+
+  /* Accent highlights */
+  --accent: #e9d5ff;
+  --accent-foreground: #7c3aed;
+
+  /* Selection (list items, sidebar) */
+  --selection: #e9d5ff;
+  --selection-border: #9333ea;
+
+  /* Semantic: Destructive/Error */
+  --destructive: #ff3b30;
+  --destructive-hover: #e6352b;
   --destructive-foreground: #ffffff;
-  --border: rgba(0, 0, 0, 0.1);
-  --input: transparent;
-  --input-background: #f3f3f5;
-  --switch-background: #cbced4;
-  --font-weight-medium: 500;
-  --font-weight-normal: 400;
-  --ring: oklch(0.708 0 0);
-  --chart-1: oklch(0.646 0.222 41.116);
-  --chart-2: oklch(0.6 0.118 184.704);
-  --chart-3: oklch(0.398 0.07 227.392);
-  --chart-4: oklch(0.828 0.189 84.429);
-  --chart-5: oklch(0.769 0.188 70.08);
-  --radius: 0.625rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.145 0 0);
-  --sidebar-primary: #030213;
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.97 0 0);
-  --sidebar-accent-foreground: oklch(0.205 0 0);
-  --sidebar-border: oklch(0.922 0 0);
-  --sidebar-ring: oklch(0.708 0 0);
+  --destructive-muted: rgba(255, 59, 48, 0.1);
+
+  /* Semantic: Success */
+  --success: #34c759;
+  --success-hover: #2eb350;
+  --success-foreground: #ffffff;
+  --success-muted: rgba(52, 199, 89, 0.1);
+
+  /* Semantic: Warning */
+  --warning: #ff9500;
+  --warning-hover: #e68600;
+  --warning-foreground: #ffffff;
+  --warning-muted: rgba(255, 149, 0, 0.1);
+
+  /* Borders & Inputs */
+  --border: #e5e5ea;
+  --input: #e5e5ea;
+  --input-background: #ffffff;
+
+  /* Focus ring */
+  --ring: #5856d6;
+  --ring-muted: rgba(88, 86, 214, 0.2);
+
+  /* Overlay */
+  --overlay: rgba(0, 0, 0, 0.5);
+
+  /* ========================================================================
+     SIDEBAR - Dark themed sidebar
+     ======================================================================== */
+  --sidebar: #1c1c1e;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: #5856d6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #2c2c2e;
+  --sidebar-accent-hover: rgba(44, 44, 46, 0.5);
+  --sidebar-border: #38383a;
+  --sidebar-ring: #5856d6;
+  --sidebar-muted: #98989d;
+
+  /* ========================================================================
+     TYPOGRAPHY
+     ======================================================================== */
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+  --text-xs: 0.75rem;      /* 12px */
+  --text-sm: 0.875rem;     /* 14px */
+  --text-base: 1rem;       /* 16px */
+  --text-lg: 1.125rem;     /* 18px */
+  --text-xl: 1.25rem;      /* 20px */
+  --text-2xl: 1.5rem;      /* 24px */
+  --text-3xl: 1.875rem;    /* 30px */
+
+  /* ========================================================================
+     SPACING - Consistent spacing scale
+     ======================================================================== */
+  --spacing-0-5: 0.125rem;  /* 2px */
+  --spacing-1: 0.25rem;     /* 4px */
+  --spacing-1-5: 0.375rem;  /* 6px */
+  --spacing-2: 0.5rem;      /* 8px */
+  --spacing-2-5: 0.625rem;  /* 10px */
+  --spacing-3: 0.75rem;     /* 12px */
+  --spacing-4: 1rem;        /* 16px */
+  --spacing-5: 1.25rem;     /* 20px */
+  --spacing-6: 1.5rem;      /* 24px */
+  --spacing-8: 2rem;        /* 32px */
+  --spacing-10: 2.5rem;     /* 40px */
+  --spacing-12: 3rem;       /* 48px */
+
+  /* ========================================================================
+     BORDER RADIUS
+     ======================================================================== */
+  --radius-sm: 0.375rem;    /* 6px */
+  --radius-md: 0.5rem;      /* 8px */
+  --radius-lg: 0.75rem;     /* 12px */
+  --radius-xl: 1rem;        /* 16px */
+  --radius-full: 9999px;
+
+  /* ========================================================================
+     SHADOWS
+     ======================================================================== */
+  --shadow-card: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.04);
+  --shadow-card-hover: 0 2px 8px rgba(0, 0, 0, 0.06), 0 8px 24px rgba(0, 0, 0, 0.08);
+  --shadow-modal: 0 4px 24px rgba(0, 0, 0, 0.12), 0 16px 48px rgba(0, 0, 0, 0.16);
+  --shadow-dropdown: 0 4px 24px rgba(0, 0, 0, 0.08);
+
+  /* ========================================================================
+     LAYOUT DIMENSIONS
+     ======================================================================== */
+  --sidebar-width: 14rem;           /* 224px */
+  --panel-sidebar-width: 18rem;     /* 288px */
+  --content-max-width: 64rem;       /* 1024px */
+  --content-narrow-width: 32rem;    /* 512px */
+  --modal-width: 28rem;             /* 448px */
+  --modal-sm-width: 24rem;          /* 384px */
+  --modal-lg-width: 36rem;          /* 576px */
+
+  /* ========================================================================
+     CHARTS (for data visualization)
+     ======================================================================== */
+  --chart-1: #5856d6;
+  --chart-2: #34c759;
+  --chart-3: #ff9500;
+  --chart-4: #ff2d55;
+  --chart-5: #5ac8fa;
 }
 
+/* ============================================================================
+   DARK MODE
+   ============================================================================ */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.145 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.145 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.985 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.396 0.141 25.723);
-  --destructive-foreground: oklch(0.637 0.237 25.331);
-  --border: oklch(0.269 0 0);
-  --input: oklch(0.269 0 0);
-  --ring: oklch(0.439 0 0);
-  --font-weight-medium: 500;
-  --font-weight-normal: 400;
-  --chart-1: oklch(0.488 0.243 264.376);
-  --chart-2: oklch(0.696 0.17 162.48);
-  --chart-3: oklch(0.769 0.188 70.08);
-  --chart-4: oklch(0.627 0.265 303.9);
-  --chart-5: oklch(0.645 0.246 16.439);
-  --sidebar: oklch(0.205 0 0);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.488 0.243 264.376);
-  --sidebar-primary-foreground: oklch(0.985 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
-  --sidebar-border: oklch(0.269 0 0);
-  --sidebar-ring: oklch(0.439 0 0);
+  --background: #000000;
+  --foreground: #f5f5f7;
+
+  --card: #1c1c1e;
+  --card-foreground: #f5f5f7;
+
+  --popover: #1c1c1e;
+  --popover-foreground: #f5f5f7;
+
+  --primary: #5e5ce6;
+  --primary-hover: #6e6cf0;
+  --primary-foreground: #ffffff;
+  --primary-muted: rgba(94, 92, 230, 0.15);
+
+  --secondary: #2c2c2e;
+  --secondary-hover: #3a3a3c;
+  --secondary-foreground: #f5f5f7;
+
+  --muted: #2c2c2e;
+  --muted-foreground: #98989d;
+
+  --accent: #3b1d5e;
+  --accent-foreground: #e9d5ff;
+
+  --selection: #3b1d5e;
+  --selection-border: #a855f7;
+
+  --destructive: #ff453a;
+  --destructive-hover: #ff5c52;
+  --destructive-foreground: #ffffff;
+  --destructive-muted: rgba(255, 69, 58, 0.15);
+
+  --success: #30d158;
+  --success-hover: #40e168;
+  --success-foreground: #ffffff;
+  --success-muted: rgba(48, 209, 88, 0.15);
+
+  --warning: #ff9f0a;
+  --warning-hover: #ffaf2a;
+  --warning-foreground: #ffffff;
+  --warning-muted: rgba(255, 159, 10, 0.15);
+
+  --border: #38383a;
+  --input: #38383a;
+  --input-background: #1c1c1e;
+
+  --ring: #5e5ce6;
+  --ring-muted: rgba(94, 92, 230, 0.3);
+
+  --sidebar: #000000;
+  --sidebar-foreground: #f5f5f7;
+  --sidebar-primary: #5e5ce6;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #1c1c1e;
+  --sidebar-accent-hover: rgba(28, 28, 30, 0.5);
+  --sidebar-border: #38383a;
+  --sidebar-ring: #5e5ce6;
+  --sidebar-muted: #98989d;
+
+  --chart-1: #5e5ce6;
+  --chart-2: #30d158;
+  --chart-3: #ff9f0a;
+  --chart-4: #ff375f;
+  --chart-5: #64d2ff;
 }
 
+/* ============================================================================
+   TAILWIND THEME INTEGRATION
+   Maps CSS variables to Tailwind's theming system
+   ============================================================================ */
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -95,20 +249,23 @@
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
   --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-input-background: var(--input-background);
-  --color-switch-background: var(--switch-background);
   --color-ring: var(--ring);
   --color-chart-1: var(--chart-1);
   --color-chart-2: var(--chart-2);
   --color-chart-3: var(--chart-3);
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
   --color-sidebar: var(--sidebar);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
@@ -117,71 +274,50 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-muted: var(--sidebar-muted);
 }
 
+/* ============================================================================
+   BASE STYLES
+   ============================================================================ */
 @layer base {
   * {
-    @apply border-border outline-ring/50;
+    border-color: var(--border);
   }
 
-  body {
-    @apply bg-background text-foreground;
+  /* Text selection colors */
+  ::selection {
+    background-color: #9333ea;
+    color: #ffffff;
   }
 
-  /* Ensure all Radix UI Select dropdowns have dark theme */
-  [data-radix-select-content] {
-    background-color: #1a1a1a !important;
-  }
-
-  /* Also target the portal wrapper */
-  [data-radix-select-content] *,
-  [data-radix-select-viewport] {
-    background-color: transparent;
+  ::-moz-selection {
+    background-color: #9333ea;
+    color: #ffffff;
   }
 
   html {
-    font-size: var(--font-size);
+    font-family: var(--font-sans);
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 
-  h1 {
-    font-size: var(--text-2xl);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
   }
 
-  h2 {
-    font-size: var(--text-xl);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
+  /* Radix UI Select styling */
+  [data-radix-select-content] {
+    background-color: var(--card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-dropdown);
   }
 
-  h3 {
-    font-size: var(--text-lg);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
-  }
-
-  h4 {
-    font-size: var(--text-base);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
-  }
-
-  label {
-    font-size: var(--text-base);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
-  }
-
-  button {
-    font-size: var(--text-base);
-    font-weight: var(--font-weight-medium);
-    line-height: 1.5;
-  }
-
-  input {
-    font-size: var(--text-base);
-    font-weight: var(--font-weight-normal);
-    line-height: 1.5;
+  [data-radix-select-content] *,
+  [data-radix-select-viewport] {
+    background-color: transparent;
   }
 }
