@@ -1,185 +1,343 @@
-# Agent Zero - Architecture
+# Agent Zero — Technical Architecture
+
+## System Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           CLIENTS                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────┐       ┌─────────────────────────┐          │
+│  │     Web Dashboard       │       │          CLI            │          │
+│  │    (React + Vite)       │       │        (zero)           │          │
+│  │    localhost:3000       │       │                         │          │
+│  └───────────┬─────────────┘       └───────────┬─────────────┘          │
+│              │ HTTP/WebSocket                   │ HTTP/WebSocket         │
+└──────────────┼──────────────────────────────────┼────────────────────────┘
+               │                                  │
+               └────────────────┬─────────────────┘
+                                │
+┌───────────────────────────────┴─────────────────────────────────────────┐
+│                           DAEMON (zerod)                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                         GATEWAY                                  │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
+│  │  │  HTTP API   │  │  WebSocket  │  │   Static    │              │    │
+│  │  │   :18791    │  │   :18790    │  │   Files     │              │    │
+│  │  │   (Axum)    │  │  (tokio-    │  │  (tower)    │              │    │
+│  │  │             │  │  tungstenite)│  │             │              │    │
+│  │  └──────┬──────┘  └──────┬──────┘  └─────────────┘              │    │
+│  │         │                │                                       │    │
+│  │         └────────┬───────┘                                       │    │
+│  │                  │                                               │    │
+│  │         ┌────────┴────────┐                                      │    │
+│  │         │    Event Bus    │ ◄─── Broadcast streaming events      │    │
+│  │         └────────┬────────┘                                      │    │
+│  └──────────────────┼───────────────────────────────────────────────┘    │
+│                     │                                                    │
+│  ┌──────────────────┴───────────────────────────────────────────────┐    │
+│  │                      AGENT RUNTIME                                │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
+│  │  │  Executor   │  │ LLM Client  │  │    Tool     │              │    │
+│  │  │   (loop)    │──│  (OpenAI    │  │  Registry   │              │    │
+│  │  │             │  │ compatible) │  │             │              │    │
+│  │  └──────┬──────┘  └─────────────┘  └──────┬──────┘              │    │
+│  │         │                                  │                     │    │
+│  │         │         ┌─────────────┐         │                     │    │
+│  │         └─────────│ MCP Manager │─────────┘                     │    │
+│  │                   └─────────────┘                               │    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DATA LAYER                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ~/Documents/agentzero/                                                  │
+│  ├── conversations.db          # SQLite: conversations, messages        │
+│  ├── agents/{name}/            # Agent configurations                   │
+│  │   ├── config.yaml           #   Model, provider, temperature         │
+│  │   └── AGENTS.md             #   System instructions                  │
+│  ├── agents_data/{id}/         # Per-agent runtime data                 │
+│  │   └── memory.json           #   Persistent key-value storage         │
+│  ├── skills/{name}/            # Skill definitions                      │
+│  │   └── SKILL.md              #   Instructions + frontmatter           │
+│  ├── providers.json            # LLM provider configurations            │
+│  └── mcps.json                 # MCP server configurations              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Technology Stack
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 19 + TypeScript + Vite |
-| UI | Radix UI + Tailwind CSS v4 |
-| Backend | Rust daemon (gateway + runtime) |
-| Database | SQLite (sqlx) |
-| Async | tokio |
-| API | HTTP REST + WebSocket |
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Frontend | React 19 + TypeScript | UI components |
+| Build | Vite | Fast dev server, bundling |
+| UI | Tailwind CSS v4 + Radix UI | Styling, accessible primitives |
+| HTTP Server | Axum | Async HTTP framework |
+| WebSocket | tokio-tungstenite | Real-time streaming |
+| Async Runtime | tokio | Async I/O |
+| Database | SQLite (rusqlite) | Conversation persistence |
+| Serialization | serde + serde_json | JSON handling |
 
-## System Architecture
+## Crate Structure
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                      Web Browser                             │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │              React Frontend (Vite)                   │    │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │    │
-│  │  │   Chat   │ │  Agents  │ │ Providers│            │    │
-│  │  └──────────┘ └──────────┘ └──────────┘            │    │
-│  │                     │                               │    │
-│  │              Transport Layer                        │    │
-│  │         (HTTP Client + WebSocket)                   │    │
-│  └─────────────────────┬───────────────────────────────┘    │
-└─────────────────────────┼───────────────────────────────────┘
-                          │
-          ┌───────────────┴───────────────┐
-          │ HTTP :18791    WebSocket :18790│
-          └───────────────┬───────────────┘
-                          │
-┌─────────────────────────┴───────────────────────────────────┐
-│                    Daemon (zerod)                            │
-│  ┌─────────────────────────────────────────────────────┐    │
-│  │                    Gateway                           │    │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │    │
-│  │  │ HTTP API │ │WebSocket │ │  Static  │            │    │
-│  │  │ (Axum)   │ │ Server   │ │  Files   │            │    │
-│  │  └──────────┘ └──────────┘ └──────────┘            │    │
-│  └─────────────────────┬───────────────────────────────┘    │
-│                        │                                     │
-│  ┌─────────────────────┴───────────────────────────────┐    │
-│  │               Agent Runtime                          │    │
-│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │    │
-│  │  │ Executor │ │   LLM    │ │  Tools   │            │    │
-│  │  │          │ │  Client  │ │ Registry │            │    │
-│  │  └──────────┘ └──────────┘ └──────────┘            │    │
-│  └─────────────────────────────────────────────────────┘    │
-└─────────────────────────────────────────────────────────────┘
-                          │
-                          ▼
-              ~/Documents/agentzero/
-```
+### Zero Framework (`crates/`)
 
-## Workspace Structure
+Core abstractions that can be used independently of Agent Zero:
 
 ```
-agentzero/
-├── src/                       # Frontend (React)
-│   ├── features/              # Feature modules
-│   │   ├── agent/             # Chat + agent management
-│   │   ├── skills/            # Skill management
-│   │   ├── integrations/      # Provider management
-│   │   └── cron/              # Scheduled tasks
-│   ├── services/transport/    # HTTP/WebSocket client
-│   └── shared/                # UI components, types
-├── crates/                    # Zero Framework
-│   ├── zero-core/             # Core traits (Agent, Tool, Session)
-│   ├── zero-llm/              # LLM abstractions
-│   ├── zero-agent/            # Agent implementations
-│   ├── zero-session/          # Session management
-│   ├── zero-mcp/              # MCP integration
-│   └── zero-app/              # Meta-package
-├── application/               # Application crates
-│   ├── daemon/                # Main binary (zerod)
-│   ├── gateway/               # HTTP + WebSocket server
-│   ├── agent-runtime/         # Agent executor
-│   ├── agent-tools/           # Built-in tools
-│   ├── zero-cli/              # CLI tool
-│   └── knowledge-graph/       # Semantic memory
-└── dist/                      # Built frontend (served by daemon)
+crates/
+├── zero-core/           # Core traits: Agent, Tool, Session, Llm
+├── zero-agent/          # Agent implementations (LLM, Sequential, etc.)
+├── zero-session/        # Session management and persistence
+├── zero-mcp/            # Model Context Protocol integration
+└── zero-app/            # Meta-package for convenience
+```
+
+### Application (`application/`)
+
+Agent Zero-specific crates:
+
+```
+application/
+├── daemon/              # Main binary (zerod)
+│   └── main.rs          #   CLI args, server startup
+├── gateway/             # HTTP + WebSocket server
+│   ├── http/            #   REST API routes
+│   ├── websocket/       #   WebSocket handler
+│   ├── execution/       #   Agent invocation
+│   ├── database/        #   SQLite persistence
+│   └── services/        #   Agent, Provider, Skill services
+├── agent-runtime/       # Agent execution engine
+│   ├── executor.rs      #   LLM loop, tool execution
+│   ├── llm/             #   OpenAI-compatible client
+│   └── tools/           #   Tool context, registry
+├── agent-tools/         # Built-in tools
+│   ├── file.rs          #   read_file, write_file, list_dir
+│   ├── shell.rs         #   execute_command
+│   ├── memory.rs        #   get, set, search memory
+│   └── introspection.rs #   list_skills, list_tools
+└── zero-cli/            # Command-line interface
 ```
 
 ## Core Abstractions
 
+### Agent Trait
 ```rust
-// Agent - invokable AI entity
-trait Agent {
-    async fn invoke(&self, context: InvocationContext) -> Result<EventStream>;
-}
+#[async_trait]
+pub trait Agent: Send + Sync {
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
 
-// Tool - callable function with permissions
-trait Tool {
+    async fn invoke(
+        &self,
+        context: InvocationContext,
+    ) -> Result<EventStream>;
+}
+```
+
+### Tool Trait
+```rust
+#[async_trait]
+pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
     fn parameters_schema(&self) -> Option<Value>;
     fn permissions(&self) -> ToolPermissions;
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
-}
 
-// Session - conversation state
-trait Session {
-    async fn append(&self, event: Event) -> Result<()>;
-    async fn events(&self) -> Result<Vec<Event>>;
-}
-
-// Llm - language model client
-trait Llm {
-    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse>;
+    async fn execute(
+        &self,
+        ctx: Arc<dyn ToolContext>,
+        args: Value,
+    ) -> Result<Value>;
 }
 ```
 
-## API Endpoints
+### LLM Client
+```rust
+#[async_trait]
+pub trait LlmClient: Send + Sync {
+    async fn chat_completion_stream(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[Value]>,
+        callback: &mut dyn FnMut(StreamEvent),
+    ) -> Result<()>;
+}
+```
 
-### HTTP API (port 18791)
+## Execution Flow
+
+```
+User Message
+     │
+     ▼
+┌─────────────────┐
+│   WebSocket     │ ◄── { type: "invoke", message: "..." }
+│   Handler       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Execution     │
+│   Runner        │
+├─────────────────┤
+│ 1. Load agent   │
+│ 2. Load history │ ◄── SQLite
+│ 3. Create LLM   │
+│ 4. Build tools  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Agent         │
+│   Executor      │
+├─────────────────┤
+│ while !done {   │
+│   llm.call()    │──► Stream tokens ──► WebSocket ──► UI
+│   if tool_call {│
+│     execute()   │──► Stream result ──► WebSocket ──► UI
+│   }             │
+│ }               │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Save Messages  │ ──► SQLite
+└─────────────────┘
+```
+
+## API Reference
+
+### HTTP Endpoints (port 18791)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health` | Health check |
-| GET | `/api/status` | Gateway status |
-| GET/POST | `/api/agents` | List/create agents |
-| GET/PUT/DELETE | `/api/agents/:id` | Agent CRUD |
-| GET/POST | `/api/providers` | List/create providers |
-| POST | `/api/providers/:id/default` | Set default provider |
-| GET/POST | `/api/skills` | List/create skills |
+| GET | `/api/status` | Daemon status |
+| GET | `/api/agents` | List agents |
+| POST | `/api/agents` | Create agent |
+| GET | `/api/agents/:id` | Get agent |
+| PUT | `/api/agents/:id` | Update agent |
+| DELETE | `/api/agents/:id` | Delete agent |
+| GET | `/api/providers` | List providers |
+| POST | `/api/providers` | Create provider |
+| POST | `/api/providers/:id/default` | Set default |
+| POST | `/api/providers/test` | Test connection |
+| GET | `/api/skills` | List skills |
+| POST | `/api/skills` | Create skill |
 
-### WebSocket (port 18790)
+### WebSocket Protocol (port 18790)
 
-**Commands (client → server):**
-```json
-{ "type": "invoke", "agent_id": "root", "conversation_id": "...", "message": "..." }
-{ "type": "stop", "conversation_id": "..." }
-{ "type": "continue", "conversation_id": "..." }
+**Client Commands:**
+```typescript
+// Invoke agent
+{ type: "invoke", agent_id: string, conversation_id: string, message: string }
+
+// Stop execution
+{ type: "stop", conversation_id: string }
+
+// Continue after max iterations
+{ type: "continue", conversation_id: string }
 ```
 
-**Events (server → client):**
-```json
-{ "type": "agent_started", "timestamp": 123, "agent_id": "...", "model": "..." }
-{ "type": "token", "timestamp": 123, "content": "..." }
-{ "type": "tool_call", "timestamp": 123, "tool_id": "...", "tool_name": "...", "args": {} }
-{ "type": "tool_result", "timestamp": 123, "tool_id": "...", "result": "..." }
-{ "type": "agent_finished", "timestamp": 123, "final_message": "..." }
-{ "type": "error", "timestamp": 123, "error": "...", "recoverable": false }
+**Server Events:**
+```typescript
+// Agent started processing
+{ type: "agent_started", agent_id: string, conversation_id: string }
+
+// Streaming token
+{ type: "token", agent_id: string, conversation_id: string, delta: string }
+
+// Tool being called
+{ type: "tool_call", agent_id: string, conversation_id: string,
+  tool_id: string, tool_name: string, args: object }
+
+// Tool result
+{ type: "tool_result", agent_id: string, conversation_id: string,
+  tool_id: string, result: string, error?: string }
+
+// Agent finished
+{ type: "agent_completed", agent_id: string, conversation_id: string,
+  result: string }
+
+// Error occurred
+{ type: "error", agent_id?: string, conversation_id?: string,
+  message: string }
 ```
 
-## Storage
+## Database Schema
 
-**Data Directory**: `~/Documents/agentzero/`
-
-```
-agentzero/
-├── agents/{name}/
-│   ├── config.yaml           # Metadata
-│   └── AGENTS.md             # Instructions
-├── agents_data/{agent_id}/   # Per-agent workspace
-│   ├── outputs/              # Generated files
-│   ├── code/                 # Scripts
-│   ├── data/                 # Persistent data
-│   └── memory.json           # Agent memory
-├── skills/{name}/
-│   └── SKILL.md              # Skill with frontmatter
-├── db/
-│   └── sessions.db           # Sessions, messages
-├── providers.json            # LLM providers
-└── mcps.json                 # MCP server configs
+### conversations
+```sql
+CREATE TABLE conversations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata TEXT
+);
 ```
 
-## Agent Execution Flow
-
+### messages
+```sql
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,           -- user, assistant, tool
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    token_count INTEGER DEFAULT 0,
+    tool_calls TEXT,              -- JSON array
+    tool_results TEXT,            -- JSON array
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
 ```
-User Message → WebSocket → Gateway → Load Agent Config →
-Create LLM Client → Initialize MCPs → Create Tools →
-Build Executor → Agent Loop (LLM ↔ Tools) → Stream Events
-```
 
-## Key Design Principles
+## Built-in Tools
 
-1. **Web + CLI**: No desktop wrapper, browser-based dashboard
-2. **Single daemon**: Gateway + runtime in one process
-3. **Instructions in AGENTS.md**: Not in config.yaml
-4. **Orchestrator-first**: AI plans and routes to capabilities
-5. **Tool permissions**: Every tool declares risk level
-6. **Streaming-first**: Real-time event streaming via WebSocket
+| Tool | Description | Permissions |
+|------|-------------|-------------|
+| `read_file` | Read file contents | Safe |
+| `write_file` | Write content to file | Moderate |
+| `list_dir` | List directory contents | Safe |
+| `execute_command` | Run shell command | Dangerous |
+| `memory` | Persistent key-value store | Safe |
+| `list_skills` | List available skills | Safe |
+| `list_tools` | List available tools | Safe |
+| `list_mcps` | List MCP servers | Safe |
+| `load_skill` | Load skill instructions | Safe |
+
+## Design Decisions
+
+### Why No Desktop Wrapper?
+- Browsers are more capable than custom webviews
+- Easier deployment (no native installers)
+- Better developer experience (standard web tools)
+- Cross-platform without platform-specific builds
+
+### Why Single Daemon?
+- Simpler deployment and debugging
+- Shared state without IPC complexity
+- Single port configuration
+- Memory efficiency
+
+### Why SQLite?
+- Zero configuration
+- Portable (single file)
+- ACID transactions
+- Fast for local workloads
+
+### Why Rust?
+- Memory safety without GC
+- Excellent async story (tokio)
+- Great tooling (cargo, clippy)
+- Single binary distribution
+
+### Why Instructions in AGENTS.md?
+- Human-readable and editable
+- Version control friendly
+- Markdown rendering in UI
+- Separates behavior from configuration

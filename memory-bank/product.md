@@ -1,93 +1,150 @@
-# Agent Zero - Product Definition
+# Agent Zero — Product Definition
 
 ## Vision
 
-Agent Zero is an AI agent platform with a web dashboard and CLI. Build specialized AI assistants with custom instructions, integrate with multiple LLM providers, extend capabilities through skills and MCP servers.
+Agent Zero is a local-first AI agent platform that puts you in control. Run sophisticated AI assistants on your own machine with full data ownership, multi-provider flexibility, and unlimited extensibility through skills and MCP servers.
+
+## Core Principles
+
+1. **Local-First** — Your data stays on your machine. No cloud lock-in.
+2. **Provider-Agnostic** — Use any LLM: OpenAI, Anthropic, DeepSeek, Ollama, self-hosted.
+3. **Extensible** — Skills and MCP servers let you add any capability.
+4. **Open Standards** — Built on Agent Skills and Model Context Protocol specifications.
+5. **Simple Deployment** — Single daemon binary + static web files.
 
 ## Interfaces
 
 ### Web Dashboard
-Browser-based interface for managing agents, providers, and conversations. Served by the daemon at `http://localhost:18791`.
+Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, and conversations.
 
 ### CLI (zero)
-Command-line interface for scripting, automation, and terminal-based workflows.
+Command-line interface for scripting, automation, and terminal-based workflows. Connects to the same daemon as the web dashboard.
 
 ## Target Users
 
-- **Developers**: Building AI-powered workflows and automation
-- **Power Users**: Creating specialized assistants for specific tasks
-- **Teams**: Managing multiple AI agents with different capabilities
+| User | Use Case |
+|------|----------|
+| **Developers** | Building AI-powered workflows, automation, code assistants |
+| **Power Users** | Creating specialized assistants for research, writing, analysis |
+| **Teams** | Managing multiple agents with different capabilities and contexts |
+| **Privacy-Conscious** | Running AI locally without sending data to third parties |
 
 ## Core Features
 
 ### 1. Chat Interface
-Conversational interface with real-time streaming responses and tool execution visibility.
+Conversational interface with real-time streaming. See tool calls as they happen. Continue conversations across sessions with full history preserved in SQLite.
 
 ### 2. Agent Management
-Create AI agents with custom instructions, provider/model selection, and capability configuration.
+Create agents with:
+- Custom system instructions (AGENTS.md files)
+- Provider and model selection
+- Temperature and token limits
+- Skill and MCP server assignments
 
 ### 3. Provider Management
-Multi-provider support: OpenAI, Anthropic, DeepSeek, Z.AI, Groq, Ollama, any OpenAI-compatible API. Set a default provider for the root agent.
+Supported providers:
+- OpenAI (GPT-4, GPT-4o, etc.)
+- Anthropic (Claude 3, Claude 3.5)
+- DeepSeek
+- Groq
+- Ollama (local models)
+- Any OpenAI-compatible API
+
+Set a default provider for the root agent. Per-agent provider overrides supported.
 
 ### 4. Skill System
-Reusable skills with frontmatter metadata and markdown instructions following the Agent Skills specification.
+Reusable instruction packages following the Agent Skills specification:
+
+```markdown
+---
+name: code-review
+description: Reviews code for quality and bugs
+category: development
+---
+
+# Code Review Skill
+
+When reviewing code:
+1. Check for security vulnerabilities
+2. Identify performance issues
+3. Suggest improvements
+...
+```
+
+Skills are stored in `~/Documents/agentzero/skills/{name}/SKILL.md`.
 
 ### 5. MCP Server Integration
-Model Context Protocol servers for external tool access.
+Connect to external tools via Model Context Protocol servers. Configure in `mcps.json`:
 
-### 6. Scheduled Tasks
-Cron-based scheduling for automated agent invocations.
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-filesystem"]
+    }
+  }
+}
+```
+
+### 6. Persistent Memory
+Per-agent key-value storage for facts, preferences, and context:
+
+```
+memory set user_name "Alice"
+memory get user_name
+memory search preferences
+```
+
+Stored in `agents_data/{agent_id}/memory.json`.
+
+### 7. Scheduled Tasks (Planned)
+Cron-based scheduling for automated agent invocations. Define recurring tasks that run agents on a schedule.
 
 ## Technology Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Frontend | React 19 + TypeScript + Vite |
 | UI | Tailwind CSS v4 + Radix UI |
-| Backend | Rust daemon (Axum + tokio) |
-| Database | SQLite |
+| Backend | Rust (Axum + tokio) |
+| Database | SQLite (rusqlite) |
 | API | HTTP REST + WebSocket |
 
-## Architecture
+## Data Model
 
-```
-┌────────────────┐     ┌────────────────┐
-│  Web Browser   │     │      CLI       │
-│  (Dashboard)   │     │    (zero)      │
-└───────┬────────┘     └───────┬────────┘
-        │                      │
-        └──────────┬───────────┘
-                   │
-        ┌──────────┴──────────┐
-        │    Daemon (zerod)   │
-        │  HTTP :18791        │
-        │  WebSocket :18790   │
-        └──────────┬──────────┘
-                   │
-        ┌──────────┴──────────┐
-        │  ~/Documents/       │
-        │    agentzero/       │
-        └─────────────────────┘
-```
+### Conversations
+Persisted to SQLite with full message history:
+- Conversation metadata (agent, timestamps)
+- Messages (role, content, tool calls)
+- Automatic context loading (last 50 messages)
 
-## Storage
+### Agent Memory
+JSON-based key-value store per agent:
+- Store facts: `memory set fact_key "value"`
+- Tag-based organization
+- Full-text search across values
 
-**Data Directory**: `~/Documents/agentzero/`
+### Agent Configuration
+File-based configuration:
+- `config.yaml` — Model, provider, temperature
+- `AGENTS.md` — System instructions (markdown)
 
-```
-agentzero/
-├── agents/                 # Agent configs
-├── agents_data/            # Per-agent workspace
-├── skills/                 # Skill definitions
-├── db/                     # SQLite databases
-├── providers.json          # LLM providers
-└── mcps.json               # MCP configs
-```
+## Differentiators
 
-## Key Differentiators
+| Feature | Agent Zero | Cloud AI Platforms |
+|---------|------------|-------------------|
+| Data Location | Local machine | Cloud servers |
+| Provider Lock-in | None | Usually locked |
+| Offline Capable | Yes (with Ollama) | No |
+| Cost | API costs only | Subscription + API |
+| Customization | Unlimited | Limited |
+| Privacy | Full control | Varies |
 
-1. **Local-first**: Full data control, runs on your machine
-2. **Multi-provider**: Not locked to single LLM vendor
-3. **Extensible**: Skills + MCP servers for unlimited capabilities
-4. **Open Standards**: Agent Skills and MCP specifications
-5. **Simple deployment**: Single daemon binary + static web files
+## Roadmap Highlights
+
+1. **v0.1** — Core chat, providers, skills ✓
+2. **v0.2** — Persistent memory, SQLite conversations ✓
+3. **v0.3** — MCP integration, CLI improvements
+4. **v0.4** — Scheduled tasks, multi-agent workflows
+5. **v1.0** — Stable API, documentation, packaging

@@ -18,12 +18,13 @@ AI agent platform with Web dashboard and CLI interfaces.
 
 - **Frontend**: React 19 + TypeScript + Vite
 - **Backend**: Rust daemon (gateway + agent runtime)
-- **Database**: SQLite
+- **Database**: SQLite (conversations.db)
 - **API**: HTTP REST + WebSocket streaming
 
 See `memory-bank/` for detailed documentation:
 - `product.md` - Product definition
 - `architecture.md` - Technical architecture
+- `plans/roadmap.md` - Development roadmap
 
 ## Key Directories
 
@@ -44,6 +45,24 @@ application/
 ├── agent-runtime/            # Agent executor
 ├── agent-tools/              # Built-in tools
 └── zero-cli/                 # CLI tool
+```
+
+## Data Directory
+
+All data stored in `~/Documents/agentzero/`:
+
+```
+agentzero/
+├── conversations.db          # SQLite database
+├── agents/{name}/            # Agent configs
+│   ├── config.yaml           # Metadata
+│   └── AGENTS.md             # Instructions
+├── agents_data/{id}/         # Per-agent data
+│   └── memory.json           # Persistent memory
+├── skills/{name}/
+│   └── SKILL.md              # Skill instructions
+├── providers.json            # LLM providers
+└── mcps.json                 # MCP configs
 ```
 
 ## Running
@@ -77,3 +96,4 @@ cargo run -p zerod -- --static-dir ./dist
 1. Instructions in `AGENTS.md` files, not `config.yaml`
 2. Single data directory: `~/Documents/agentzero/`
 3. Frontend generates invocation IDs before backend calls
+4. All state persisted to SQLite or JSON files

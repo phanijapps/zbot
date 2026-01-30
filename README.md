@@ -1,106 +1,154 @@
 # Agent Zero
 
-A desktop application for creating and managing AI agents with visual workflow orchestration, multi-provider support, and extensible capabilities.
+A local-first AI agent platform with web dashboard and CLI.
+
+Build specialized AI assistants with custom instructions, integrate multiple LLM providers, and extend capabilities through skills and MCP servers—all running on your machine.
 
 ## Features
 
-- **Agent Management** - Create AI agents with custom instructions, provider/model selection, and capability configuration
-- **Visual Workflow Builder** - BPMN-inspired workflow editor for multi-agent orchestration with real-time execution visualization
-- **Agent Channels** - Discord-like interface for daily conversations with knowledge graph memory
-- **Multi-Provider** - Support for OpenAI, Anthropic, DeepSeek, Z.AI, and any OpenAI-compatible API
-- **MCP Integration** - Connect to external tools via Model Context Protocol servers
-- **Skill System** - Create reusable skills with frontmatter metadata and markdown instructions
-- **Multi-Vault** - Organize data across isolated vaults with full portability
+- **Multi-Provider Support** — OpenAI, Anthropic, DeepSeek, Groq, Ollama, any OpenAI-compatible API
+- **Extensible Skills** — Reusable instruction sets following the Agent Skills specification
+- **MCP Integration** — Connect external tools via Model Context Protocol servers
+- **Persistent Memory** — Per-agent key-value storage for facts and preferences
+- **Real-time Streaming** — WebSocket-based event streaming for responsive UX
+- **Local Data** — SQLite conversations, file-based configs, full data ownership
 
 ## Quick Start
 
 ### Prerequisites
 
-**Windows:**
-- [WebView2 Runtime](https://developer.microsoft.com/en-us/microsoft-edge/webview2/)
-- [Microsoft C++ Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)
-
-**macOS:** No additional dependencies.
-
-**Linux (Ubuntu/Debian):**
-```bash
-sudo apt install libwebkit2gtk-4.1-dev build-essential curl wget file \
-                 libssl-dev libayatana-appindicator3-dev librsvg2-dev
-```
-
-See [Tauri Prerequisites](https://tauri.app/guides/prerequisites/) for complete details.
+- Node.js 18+ and npm
+- Rust 1.75+ with cargo
+- An LLM API key (OpenAI, Anthropic, etc.)
 
 ### Installation
 
 ```bash
-# Install dependencies
+git clone https://github.com/phanijapps/agentzero.git
+cd agentzero
 npm install
-
-# Run in development mode
-npm run tauri dev
 ```
 
-### Build
+### Running
+
+**Development (two terminals):**
 
 ```bash
-npm run tauri build
+# Terminal 1: Daemon with auto-reload
+npm run daemon
+
+# Terminal 2: Frontend dev server
+npm run dev
 ```
 
-Output: `src-tauri/target/release/bundle/`
+Open http://localhost:3000 (proxies to daemon).
 
-## Technology Stack
+**Production:**
 
-| Layer | Technology |
-|-------|------------|
-| Desktop | Tauri 2.x |
-| Frontend | React 19 + TypeScript + Vite |
-| UI | Radix UI + Tailwind CSS v4 |
-| Workflow | XY Flow (React Flow v12+) |
-| State | Zustand |
-| Backend | Rust (Cargo workspace) |
-| Database | SQLite |
+```bash
+npm run build
+cargo run -p zerod -- --static-dir ./dist
+```
+
+Open http://localhost:18791.
+
+### First Run
+
+1. Go to **Integrations** → Add your LLM provider (OpenAI, Anthropic, etc.)
+2. Click **Set as Default** on your preferred provider
+3. Start chatting with the root agent
+
+## Architecture
+
+```
+┌────────────────┐     ┌────────────────┐
+│  Web Browser   │     │      CLI       │
+│   (React)      │     │    (zero)      │
+└───────┬────────┘     └───────┬────────┘
+        │ HTTP/WS              │ HTTP/WS
+        └──────────┬───────────┘
+                   │
+        ┌──────────┴──────────┐
+        │   Daemon (zerod)    │
+        │  HTTP API  :18791   │
+        │  WebSocket :18790   │
+        └──────────┬──────────┘
+                   │
+        ┌──────────┴──────────┐
+        │ ~/Documents/agentzero│
+        │  SQLite + Files     │
+        └─────────────────────┘
+```
 
 ## Project Structure
 
 ```
 agentzero/
-├── src/                       # Frontend (React + TypeScript)
-│   ├── features/              # Feature modules (workflow-ide, agent-channels, etc.)
-│   ├── shared/                # UI components, types
-│   └── services/              # Tauri IPC wrappers
-├── crates/                    # Zero Framework (reusable Rust crates)
-│   ├── zero-core/             # Core traits: Agent, Tool, Session
-│   ├── zero-llm/              # LLM abstractions
-│   ├── zero-agent/            # Agent implementations
-│   └── zero-mcp/              # MCP protocol
-├── application/               # Application-specific crates
-│   ├── agent-runtime/         # Agent executor
-│   ├── agent-tools/           # Built-in tools
-│   └── workflow-executor/     # Workflow execution
-├── src-tauri/                 # Tauri application
-└── memory-bank/               # Architecture documentation
+├── src/                          # Frontend (React 19 + TypeScript)
+│   ├── features/
+│   │   ├── agent/                # Chat interface
+│   │   ├── skills/               # Skill management
+│   │   ├── integrations/         # Provider config
+│   │   └── cron/                 # Scheduled tasks
+│   ├── services/transport/       # HTTP/WebSocket client
+│   └── shared/                   # UI components, types
+├── crates/                       # Zero Framework
+│   ├── zero-core/                # Core traits
+│   ├── zero-agent/               # Agent implementations
+│   ├── zero-session/             # Session management
+│   └── zero-mcp/                 # MCP protocol
+├── application/                  # Application crates
+│   ├── daemon/                   # Main binary (zerod)
+│   ├── gateway/                  # HTTP + WebSocket server
+│   ├── agent-runtime/            # Agent executor
+│   ├── agent-tools/              # Built-in tools
+│   └── zero-cli/                 # CLI tool
+└── memory-bank/                  # Documentation
 ```
+
+## Data Directory
+
+All data stored in `~/Documents/agentzero/`:
+
+```
+agentzero/
+├── conversations.db              # Conversations & messages
+├── agents/{name}/
+│   ├── config.yaml               # Model, temperature, etc.
+│   └── AGENTS.md                 # System instructions
+├── agents_data/{id}/
+│   └── memory.json               # Persistent memory
+├── skills/{name}/
+│   └── SKILL.md                  # Skill instructions
+├── providers.json                # LLM providers
+└── mcps.json                     # MCP configs
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `npm install` | Install frontend dependencies |
+| `npm run dev` | Vite dev server (port 3000) |
+| `npm run build` | Build frontend to `dist/` |
+| `npm run daemon` | Run daemon with auto-reload |
+| `cargo run -p zerod` | Run daemon |
+| `cargo check --workspace` | Type-check Rust |
+| `npx tsc --noEmit` | Type-check TypeScript |
+
+## Ports
+
+| Port | Service |
+|------|---------|
+| 18791 | HTTP API (+ static files in production) |
+| 18790 | WebSocket streaming |
+| 3000 | Vite dev server (development) |
 
 ## Documentation
 
-| Document | Description |
-|----------|-------------|
-| `memory-bank/product.md` | Product definition and features |
-| `memory-bank/architecture.md` | Technical architecture |
-| `memory-bank/technical_map.md` | Key modules, decisions, fixes |
-
-## Development
-
-```bash
-# Type check frontend
-npx tsc --noEmit
-
-# Check Rust code
-cd src-tauri && cargo check
-
-# Run tests
-cargo test --workspace
-```
+- [Product Definition](memory-bank/product.md) — Vision, features, users
+- [Architecture](memory-bank/architecture.md) — Technical design
+- [Roadmap](memory-bank/plans/roadmap.md) — Development phases
 
 ## License
 
