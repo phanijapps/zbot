@@ -45,9 +45,9 @@ A simple, powerful AI agent platform where users state goals and the orchestrato
 
 - [x] 1.1 Add Tool Policy Framework (permissions, risk levels) ✓
 - [x] 1.2 Add WebFetchTool (HTTP requests) ✓
-- [ ] 1.3 Add MemoryTool (persistent key-value)
-- [ ] 1.4 Improve system prompt
-- [ ] 1.5 Update documentation
+- [x] 1.3 Add MemoryTool (persistent key-value) ✓
+- [x] 1.4 Improve system prompt ✓
+- [x] 1.5 Update documentation ✓
 
 ### Phase 2: Orchestrator Core
 **Goal:** Replace workflow execution with orchestrator
@@ -57,30 +57,53 @@ A simple, powerful AI agent platform where users state goals and the orchestrato
 - [ ] 2.3 Implement TaskGraph
 - [ ] 2.4 Implement Orchestrator (plan/route/execute)
 - [ ] 2.5 Add ExecutionTrace
-- [ ] 2.6 Remove workflow-ide feature
+- [x] 2.6 Remove workflow-ide feature ✓
 
-### Phase 3: Gateway Extraction
+### Phase 3: Gateway Extraction ✅
 **Goal:** Separate runtime from Tauri into standalone daemon
 
-- [ ] 3.1 Create zero-gateway crate
-- [ ] 3.2 Create zero-daemon binary
-- [ ] 3.3 WebSocket + HTTP API
-- [ ] 3.4 Refactor Tauri to connect via gateway
+- [x] 3.1 Create `application/gateway/` crate (HTTP + WebSocket APIs) ✓
+- [x] 3.2 Create `application/daemon/` binary (standalone server) ✓
+- [x] 3.3 Connect gateway to agent runtime (ExecutionRunner, RuntimeService) ✓
+- [x] 3.4 Refactor Tauri to connect via gateway ✓
+  - Gateway client module in Tauri
+  - Settings UI for gateway mode
+  - Automatic execution routing
+  - Status bar indicator
+  - Daemon auto-start
 
-### Phase 4: CLI Interface
+See `memory-bank/plans/phase3_gateway.md` for detailed plan.
+
+### Phase 4: CLI Interface (In Progress)
 **Goal:** Full-featured CLI for headless operation
 
-- [ ] 4.1 Create zero-cli crate
-- [ ] 4.2 Daemon management commands
-- [ ] 4.3 Agent invocation commands
-- [ ] 4.4 Interactive chat mode
+- [x] 4.1 Create zero-cli crate ✓
+- [x] 4.2 Daemon management commands ✓
+- [x] 4.3 Agent invocation commands ✓
+- [x] 4.4 Interactive chat mode (TUI) ✓
 
-### Phase 5: Web Dashboard
+See `application/zero-cli/` for implementation.
+
+### Phase 5: Web Dashboard (In Progress)
 **Goal:** Standalone web UI
 
-- [ ] 5.1 Refactor services to use gateway client
-- [ ] 5.2 Build as standalone web app
-- [ ] 5.3 Serve from daemon
+- [x] 5.1 Refactor services to use gateway client ✓
+  - Created transport abstraction layer (`src/services/transport/`)
+  - HttpTransport for web (fetch + WebSocket)
+  - TauriTransport wrapper for existing IPC
+  - Auto-detection of runtime environment
+- [x] 5.2 Build as standalone web app ✓
+  - `vite.web.config.ts` for web-only builds
+  - `index.web.html` entry point
+  - `App.web.tsx` web-specific app component
+  - `WebChatPanel.tsx` transport-based chat
+  - npm scripts: `dev:web`, `build:web`, `preview:web`
+- [x] 5.3 Serve from daemon ✓
+  - `--static-dir` flag for serving dashboard
+  - `--no-dashboard` flag to disable
+  - Static file serving via tower-http
+
+See `src/services/transport/` for transport layer implementation.
 
 ---
 
@@ -186,10 +209,85 @@ A simple, powerful AI agent platform where users state goals and the orchestrato
 
 ## Current Status
 
-**Branch:** `timeline_zero`
-**Phase:** 1 (Foundation)
-**Next Step:** 1.3 MemoryTool
+**Branch:** `cc`
+**Phase:** 5 (Web Dashboard) - In Progress
+**Next Step:** Test and iterate on web dashboard, remove Tauri dependency
 
-### Completed
-- 1.1 Tool Policy Framework (commit 990d1a6)
-- 1.2 WebFetchTool (HTTP requests with security)
+### Phase 1 Completed ✅
+- 1.1 Tool Policy Framework (risk levels, permissions)
+- 1.2 WebFetchTool (HTTP with security)
+- 1.3 MemoryTool (persistent key-value)
+- 1.4 System prompt improvements
+- 1.5 Documentation updates
+
+### Phase 2 Completed ✅
+- 2.1 Capability abstraction (`crates/zero-core/src/capability.rs`)
+  - CapabilityKind (Tool, Skill, McpServer, SubAgent)
+  - CapabilityDescriptor with routing score
+  - CapabilityProvider trait
+- 2.2 CapabilityRegistry (`crates/zero-core/src/registry.rs`)
+  - UnifiedCapabilityRegistry for all capability kinds
+  - Capability routing with scoring
+- 2.3 TaskGraph (`crates/zero-agent/src/orchestrator/task_graph.rs`)
+  - DAG with cycle detection
+  - Topological sort, parallel groups
+- 2.4 Orchestrator (`crates/zero-agent/src/orchestrator/mod.rs`)
+  - OrchestratorAgent with execute_graph()
+  - Capability-based routing
+- 2.5 ExecutionTrace (`crates/zero-agent/src/orchestrator/trace.rs`)
+  - TraceEvent, TraceMetrics, TraceBuilder
+- 2.6 Remove workflow-ide ✅
+
+### Phase 3 Completed ✅
+- 3.1 Gateway crate (`application/gateway/`)
+  - HTTP API with Axum (health, agents, conversations)
+  - WebSocket handler for real-time streaming
+  - EventBus for broadcast
+- 3.2 Daemon binary (`application/daemon/`)
+  - Standalone server with CLI args
+  - Signal handling, graceful shutdown
+- 3.3 Executor integration
+  - ExecutionRunner converts StreamEvent to GatewayEvent
+  - RuntimeService wraps execution lifecycle
+- 3.4 Tauri gateway integration
+  - Gateway client module (WebSocket)
+  - Settings UI (use_gateway, ports, auto_start)
+  - ConversationService routes to gateway/direct
+  - StatusBar with connection indicator
+  - Daemon auto-start capability
+
+See `memory-bank/plans/phase3_gateway.md` for detailed implementation plan.
+
+### Phase 4 Completed ✅
+- 4.1 zero-cli crate (`application/zero-cli/`)
+  - Binary name: `zero`
+  - Uses ratatui for rich TUI
+  - Uses crossterm for terminal handling
+- 4.2 Daemon management commands
+  - `zero status` - Check gateway status
+  - `zero daemon status` - Check if daemon is running
+  - `zero daemon info` - Show daemon details
+- 4.3 Agent invocation commands
+  - `zero agents` - List available agents
+  - `zero agents -v` - List with descriptions
+  - `zero invoke <agent> "message"` - Single message invocation with streaming
+- 4.4 Interactive chat mode (TUI)
+  - `zero chat <agent>` - Interactive chat with rich UI
+  - Features: message history, tool call visualization, iteration tracking
+  - Keybinds: `i` to input, `Enter` to send, `Esc` to cancel, `Ctrl+C` to quit
+
+### Phase 5 In Progress
+- 5.1 Transport abstraction layer (`src/services/transport/`)
+  - `HttpTransport` - Web-native fetch + WebSocket
+  - `TauriTransport` - Wrapper for existing IPC
+  - Auto-detection via `__TAURI__` global
+- 5.2 Web-only build configuration
+  - `vite.web.config.ts` - Standalone build config
+  - `index.web.html` - Web entry HTML
+  - `src/main.web.tsx` - Web entry point
+  - `src/App.web.tsx` - Web app component
+  - `src/features/agent/WebChatPanel.tsx` - Transport-based chat
+  - npm scripts: `dev:web`, `build:web`, `preview:web`
+- 5.3 Daemon static file serving
+  - `--static-dir PATH` - Serve dashboard from path
+  - `--no-dashboard` - Disable dashboard serving

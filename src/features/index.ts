@@ -1,12 +1,10 @@
 // ============================================================================
 // FEATURE MODULES EXPORTS
+// Web-only features (Tauri removed)
 // ============================================================================
 
-export { ConversationsPanel } from "./conversations/ConversationsPanel";
-export { AgentChannelPanel } from "./agent-channels";
-export { AgentsPanel } from "./agents/AgentsPanel";
-export { ProvidersPanel } from "./providers/ProvidersPanel";
-export { MCPServersPanel } from "./mcp/MCPServersPanel";
-export { SkillsPanel } from "./skills/SkillsPanel";
-export { SettingsPanel } from "./settings/SettingsPanel";
-export { SearchPanel } from "./search/SearchPanel";
+export { WebChatPanel } from "./agent/WebChatPanel";
+export { WebAgentsPanel } from "./agent/WebAgentsPanel";
+export { WebSkillsPanel } from "./skills/WebSkillsPanel";
+export { WebCronPanel } from "./cron/WebCronPanel";
+export { WebIntegrationsPanel } from "./integrations/WebIntegrationsPanel";

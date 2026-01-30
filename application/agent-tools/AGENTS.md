@@ -1,71 +1,131 @@
-# agent-tools
+# Agent Tools
 
-Built-in tools for the agentzero application.
+Built-in tools for the AgentZero application.
 
-## Setup
+## Overview
 
-```bash
-# Build
-cargo build
+This crate provides all built-in tools that agents can use. Tools are organized by category and registered via `builtin_tools_with_fs()`.
 
-# Run tests
-cargo test
-```
+## Tool Categories
 
-## Code Style
+### File I/O
+| Tool | Risk | Description |
+|------|------|-------------|
+| `read` | Safe | Read file contents with optional offset/limit |
+| `write` | Moderate | Write/append content to agent workspace |
+| `edit` | Moderate | Search and replace in files |
 
-- Each tool in its own module under `src/tools/`
-- Re-export tools in `mod.rs`
-- Use `FileSystemContext` for file operations
+### Search
+| Tool | Risk | Description |
+|------|------|-------------|
+| `grep` | Safe | Regex search in files |
+| `glob` | Safe | File pattern matching |
 
-## Available Tools
+### Execution
+| Tool | Risk | Description |
+|------|------|-------------|
+| `python` | Dangerous | Execute Python code |
+| `shell` | Dangerous | Execute shell commands |
+| `load_skill` | Safe | Load skill instructions |
 
-### File Tools
+### Web
+| Tool | Risk | Description |
+|------|------|-------------|
+| `web_fetch` | Moderate | HTTP requests (GET/POST/PUT/DELETE) |
 
-- `ReadTool` - Read file contents
-- `WriteTool` - Write file contents (supports conversation-scoped paths)
-- `EditTool` - Edit file with exact string replacement
+### Memory
+| Tool | Risk | Description |
+|------|------|-------------|
+| `memory` | Safe | Persistent key-value storage |
 
-### Search Tools
+### Knowledge Graph
+| Tool | Risk | Description |
+|------|------|-------------|
+| `list_entities` | Safe | List all entities |
+| `search_entities` | Safe | Search entities by name |
+| `get_entity_relationships` | Safe | Get entity relationships |
+| `add_entity` | Moderate | Add new entity |
+| `add_relationship` | Moderate | Add entity relationship |
 
-- `GrepTool` - Search file contents with regex
-- `GlobTool` - Find files by pattern
+### UI
+| Tool | Risk | Description |
+|------|------|-------------|
+| `request_input` | Safe | Collect structured user input |
+| `show_content` | Safe | Display content in UI |
 
-### Execution Tools
+### Agent
+| Tool | Risk | Description |
+|------|------|-------------|
+| `create_agent` | Moderate | Create new agent |
+| `todos` | Safe | Manage TODO list |
 
-- `PythonTool` - Execute Python code
-- `LoadSkillTool` - Load and execute skill files
+## Adding New Tools
 
-### UI Tools
+1. Create a new file in `src/tools/` or add to existing category
+2. Implement the `Tool` trait:
 
-- `RequestInputTool` - Request user input
-- `ShowContentTool` - Display content to user
-
-## Conversation-Scoped File Operations
-
-The `WriteTool` and `EditTool` support conversation-scoped paths:
-- When `conversation_id` is set, paths are resolved to `~/.config/zeroagent/logs/<conversation_id>/`
-- Relative paths are scoped to the conversation directory
-- Absolute paths are used as-is
-
-**Known Issue:** Path resolution currently has issues - see `memory-bank/known_issues.md`
-
-## Factory Function
-
-Use `builtin_tools_with_fs(fs, conversation_id)` to create all tools:
 ```rust
-let tools = builtin_tools_with_fs(
-    Arc::new(fs_context),
-    Some(conversation_id.clone())
-);
+use zero_core::{Tool, ToolContext, ToolPermissions, Result};
+
+pub struct MyTool;
+
+#[async_trait]
+impl Tool for MyTool {
+    fn name(&self) -> &str { "my_tool" }
+    
+    fn description(&self) -> &str { "Description shown to agent" }
+    
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": { ... },
+            "required": [...]
+        }))
+    }
+    
+    fn permissions(&self) -> ToolPermissions {
+        // Choose appropriate risk level
+        ToolPermissions::safe()           // Read-only
+        ToolPermissions::moderate(vec![]) // Controlled side effects
+        ToolPermissions::dangerous(vec![])// System affecting
+    }
+    
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Implementation
+    }
+}
 ```
 
-## Testing
+3. Export in `mod.rs`
+4. Add to `builtin_tools_with_fs()` factory
 
-Test with various file states (missing, readable, writable).
+## Security Guidelines
 
-## Important Notes
+### Path Sanitization (File Tools)
+- Reject paths with `..`
+- Reject absolute paths starting with `/` or `\`
+- Resolve paths relative to agent's data directory
 
-- WriteTool requires `path` and `content` parameters
-- EditTool requires `path`, `old_string`, and `new_string` parameters
-- GrepTool supports `-i`, `-C`, `-A`, `-B` flags via parameters
+### Network Security (Web Tools)
+- Block internal/private networks (localhost, 10.x, 192.168.x)
+- Block cloud metadata endpoints (169.254.169.254)
+- Enforce size limits and timeouts
+
+### Shell Security
+- Block 40+ dangerous commands (see `shell.rs`)
+- Detect suspicious patterns (curl|sh, base64 -d)
+- Disable when running as root/administrator
+- Enforce timeouts and output limits
+
+## Context Access
+
+Tools receive `ToolContext` which provides:
+- `get_state(key)` / `set_state(key, value)` - Session state
+- `function_call_id()` - Current tool call ID
+- `user_content()` - Original user message
+- `agent_name()` - Current agent
+
+Common state keys:
+- `app:agent_id` - Current agent ID
+- `app:root_agent_id` - Parent agent (for subagents)
+- `app:conversation_id` - Current conversation

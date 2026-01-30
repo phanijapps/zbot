@@ -4,7 +4,6 @@
 
 use std::sync::Arc;
 
-use async_stream::stream;
 use async_trait::async_trait;
 use serde_json::Value;
 use tracing::{debug, info, warn};
@@ -292,12 +291,21 @@ impl Agent for LlmAgent {
         let ctx_clone = ctx.clone();
 
         let stream = async_stream::try_stream! {
-            let max_iterations = ctx_clone.run_config().max_iterations.unwrap_or(50);
+            let max_iterations = ctx_clone.run_config().max_iterations.unwrap_or(25);
 
             for iteration in 0..max_iterations {
+                // Check for stop signal (either via ended() or execution_control::stop state)
                 if ctx_clone.ended() {
-                    debug!("Invocation ended, stopping");
+                    debug!("Invocation ended, stopping at iteration {}", iteration);
                     break;
+                }
+
+                // Also check for stop via session state (for mid-stream stop requests)
+                if let Some(stop_value) = ctx_clone.get_state("execution_control::stop") {
+                    if stop_value.as_bool().unwrap_or(false) {
+                        info!("Stop requested via session state at iteration {}", iteration);
+                        break;
+                    }
                 }
 
                 debug!("Starting iteration {}", iteration);
@@ -499,6 +507,7 @@ impl LlmAgentBuilder {
 mod tests {
     use super::*;
     use std::pin::Pin;
+    use async_stream::stream;
     use futures::Stream;
     use zero_tool::ToolRegistry;
 

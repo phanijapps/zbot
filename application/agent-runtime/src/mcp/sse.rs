@@ -16,6 +16,7 @@ use super::tool::McpTool;
 
 /// SSE-based MCP client
 pub(super) struct SseMcpClient {
+    #[allow(dead_code)] // Reserved for future connection tracking
     id: String,
     name: String,
     url: String,

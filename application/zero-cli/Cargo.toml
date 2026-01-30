@@ -1,0 +1,44 @@
+[package]
+name = "zero-cli"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Zero Agent CLI with rich TUI interface"
+
+[[bin]]
+name = "zero"
+path = "src/main.rs"
+
+[dependencies]
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { workspace = true }
+futures-util = "0.3"
+
+# HTTP/WebSocket client
+reqwest = { workspace = true }
+tokio-tungstenite = "0.24"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# CLI argument parsing
+clap = { version = "4", features = ["derive"] }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = "1.0"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+chrono = { workspace = true }
+uuid = { workspace = true }
+dirs = "5"

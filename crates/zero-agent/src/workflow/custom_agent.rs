@@ -39,7 +39,11 @@ pub struct CustomAgent {
     name: String,
     description: String,
     sub_agents: Vec<Arc<dyn Agent>>,
+    // Note: Callbacks are stored but not yet invoked in the run() method.
+    // Future implementation should invoke these at appropriate lifecycle points.
+    #[allow(dead_code)]
     before_callbacks: Vec<BeforeAgentCallback>,
+    #[allow(dead_code)]
     after_callbacks: Vec<AfterAgentCallback>,
     handler: RunHandler,
 }

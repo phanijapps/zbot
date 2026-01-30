@@ -133,8 +133,8 @@ impl CacheStats {
     }
 }
 
-/// Global conversation cache instance
 lazy_static::lazy_static! {
+    // Global conversation cache instance
     pub static ref CONVERSATION_CACHE: Arc<ConversationCache> =
         Arc::new(ConversationCache::new(CacheConfig::default()));
 }

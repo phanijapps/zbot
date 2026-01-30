@@ -16,6 +16,7 @@ use super::tool::McpTool;
 
 /// HTTP-based MCP client
 pub(super) struct HttpMcpClient {
+    #[allow(dead_code)] // Reserved for future connection tracking
     id: String,
     name: String,
     url: String,

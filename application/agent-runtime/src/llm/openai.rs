@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tokio_stream::StreamExt;
 
 use crate::llm::client::{
-    LlmClient, LlmError, LlmModel, ChatResponse, StreamChunk, StreamCallback, TokenUsage,
+    LlmClient, LlmError, ChatResponse, StreamChunk, StreamCallback, TokenUsage,
     ToolCallChunk,
 };
 use crate::llm::config::LlmConfig;
@@ -226,7 +226,7 @@ impl LlmClient for OpenAiClient {
         let mut full_content = String::new();
         let mut reasoning_content = String::new();
         let mut tool_calls = Vec::new();
-        let mut prompt_tokens = 0u32;
+        let prompt_tokens = 0u32;
 
         // Read streaming response
         let mut stream = response.bytes_stream();

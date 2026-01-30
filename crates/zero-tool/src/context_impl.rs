@@ -90,11 +90,13 @@ impl ToolContext for ToolContextImpl {
     }
 
     fn actions(&self) -> EventActions {
-        self.actions.lock().unwrap().clone()
+        // Handle poisoned locks gracefully by taking the inner value
+        self.actions.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 
     fn set_actions(&self, actions: EventActions) {
-        *self.actions.lock().unwrap() = actions;
+        // Handle poisoned locks gracefully by taking the inner value
+        *self.actions.lock().unwrap_or_else(|e| e.into_inner()) = actions;
     }
 }
 

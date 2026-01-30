@@ -2,11 +2,10 @@
 //!
 //! Context types for agent and tool execution.
 
-use crate::event::{Event, EventActions};
+use crate::event::EventActions;
 use crate::types::Content;
-use crate::{Agent, EventStream, Result};
-use async_trait::async_trait;
-use serde_json::{json, Value};
+use crate::Agent;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -178,6 +177,7 @@ pub trait State: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_run_config_default() {

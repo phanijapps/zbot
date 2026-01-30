@@ -21,10 +21,9 @@
 
 use std::sync::Arc;
 use serde_json::{json, Value};
-use serde::Serialize;
 
-use crate::types::{ChatMessage, StreamEvent, ToolCall};
-use crate::llm::{LlmClient, ChatResponse};
+use crate::types::{ChatMessage, StreamEvent};
+use crate::llm::LlmClient;
 use crate::tools::ToolRegistry;
 use crate::tools::context::ToolContext;
 use crate::mcp::McpManager;
@@ -233,6 +232,7 @@ impl AgentExecutor {
 
         let mut current_messages = messages;
         let mut max_iterations = 50;
+        #[allow(unused_assignments)] // Initialized here, assigned in loop exit condition
         let mut full_response = String::new();
 
         loop {

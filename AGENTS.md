@@ -1,41 +1,79 @@
 # Agent Zero
 
-Desktop application for creating AI agents with visual workflow orchestration.
+AI agent platform with Web dashboard and CLI interfaces.
 
 ## Quick Reference
 
 | Command | Purpose |
 |---------|---------|
-| `npm install` | Install dependencies |
-| `npm run tauri dev` | Development mode |
-| `npm run tauri build` | Production build |
+| `npm install` | Install frontend dependencies |
+| `npm run dev` | Frontend dev server (port 3000) |
+| `npm run build` | Build frontend to `dist/` |
+| `npm run daemon` | Run daemon with cargo-watch |
+| `cargo run -p zerod -- --static-dir ./dist` | Run daemon serving built frontend |
 | `cargo check --workspace` | Verify Rust code |
 | `npx tsc --noEmit` | Verify TypeScript |
 
 ## Architecture
 
 - **Frontend**: React 19 + TypeScript + Vite
-- **Backend**: Tauri 2.x + Rust
+- **Backend**: Rust daemon (gateway + agent runtime)
 - **Database**: SQLite
-- **Workflow**: XY Flow (React Flow v12+)
+- **API**: HTTP REST + WebSocket streaming
 
 See `memory-bank/` for detailed documentation:
 - `product.md` - Product definition
 - `architecture.md` - Technical architecture
-- `technical_map.md` - Key modules, decisions, fixes
 
 ## Key Directories
 
 ```
-src/features/workflow-ide/    # Visual workflow builder
-src/features/agent-channels/  # Chat interface
+src/                          # Frontend (React)
+├── features/
+│   ├── agent/                # Chat + agent management
+│   ├── skills/               # Skill management
+│   ├── integrations/         # Provider management
+│   └── cron/                 # Scheduled tasks
+├── services/transport/       # HTTP/WebSocket transport
+└── shared/                   # UI components, types
+
 crates/zero-*/                # Framework crates
-application/*/                # Application crates
-src-tauri/src/commands/       # Tauri IPC commands
+application/
+├── daemon/                   # Main daemon binary (zerod)
+├── gateway/                  # HTTP + WebSocket server
+├── agent-runtime/            # Agent executor
+├── agent-tools/              # Built-in tools
+└── zero-cli/                 # CLI tool
 ```
+
+## Running
+
+**Development (2 terminals):**
+```bash
+# Terminal 1: Daemon with auto-reload
+npm run daemon
+
+# Terminal 2: Frontend with hot reload
+npm run dev
+```
+
+**Production:**
+```bash
+npm run build
+cargo run -p zerod -- --static-dir ./dist
+# Access at http://localhost:18791
+```
+
+## Ports
+
+| Port | Service |
+|------|---------|
+| 18791 | HTTP API + Web UI |
+| 18790 | WebSocket (streaming) |
+| 3000 | Vite dev server (development only) |
 
 ## Conventions
 
 1. Instructions in `AGENTS.md` files, not `config.yaml`
-2. Orchestrator config at flow level, not as node
+2. Single data directory: `~/Documents/agentzero/`
 3. Frontend generates invocation IDs before backend calls

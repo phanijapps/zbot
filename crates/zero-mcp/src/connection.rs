@@ -152,7 +152,8 @@ impl McpConnectionPool {
         let mut count = 0;
 
         for conn in connections.values() {
-            if *conn.state.try_read().unwrap() == target_state {
+            // Skip connections where we can't acquire the read lock
+            if conn.state.try_read().map(|s| *s == target_state).unwrap_or(false) {
                 count += 1;
             }
         }

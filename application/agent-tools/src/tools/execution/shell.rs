@@ -332,7 +332,7 @@ impl Tool for ShellTool {
         ToolPermissions::dangerous(vec!["shell:execute".into()])
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         // Check if tool is disabled due to elevated privileges
         if self.disabled {
             return Err(ZeroError::Tool(
@@ -391,7 +391,7 @@ impl Tool for ShellTool {
         }
         cmd.arg(command);
 
-        // Set sandboxed Python virtual environment
+        // Set sandboxed Python virtual environment and Node.js modules
         if let Some(config_dir) = dirs::config_dir() {
             let agentzero_dir = config_dir.join("agentzero");
 
@@ -407,12 +407,44 @@ impl Tool for ShellTool {
             #[cfg(not(windows))]
             let venv_bin = venv_path.join("bin");
 
-            // Build PATH: venv/bin + original PATH
+            // === Agent-specific Node.js modules ===
+            // Get agent_id from context (use root_agent_id for subagents to share node_modules)
+            let agent_id = ctx
+                .get_state("app:root_agent_id")
+                .and_then(|v| v.as_str().map(String::from))
+                .or_else(|| {
+                    ctx.get_state("app:agent_id")
+                        .and_then(|v| v.as_str().map(String::from))
+                });
+
+            // Build PATH with optional agent node_modules/.bin
+            let mut path_parts: Vec<String> = vec![venv_bin.display().to_string()];
+
+            // Add agent-specific node_modules/.bin to PATH if it exists
+            if let Some(agent_id) = &agent_id {
+                let agents_data_dir = agentzero_dir.join("agents_data").join(agent_id);
+                let node_modules = agents_data_dir.join("node_modules");
+
+                if node_modules.exists() {
+                    // Set NODE_PATH for module resolution
+                    cmd.env("NODE_PATH", node_modules.display().to_string());
+
+                    // Add .bin to PATH for executables
+                    let node_bin = node_modules.join(".bin");
+                    if node_bin.exists() {
+                        path_parts.push(node_bin.display().to_string());
+                    }
+
+                    tracing::debug!("Shell: added agent node_modules for {}", agent_id);
+                }
+            }
+
+            // Build PATH: venv/bin + node_modules/.bin + original PATH
             if let Ok(current_path) = std::env::var("PATH") {
                 #[cfg(windows)]
-                let new_path = format!("{};{}", venv_bin.display(), current_path);
+                let new_path = format!("{};{}", path_parts.join(";"), current_path);
                 #[cfg(not(windows))]
-                let new_path = format!("{}:{}", venv_bin.display(), current_path);
+                let new_path = format!("{}:{}", path_parts.join(":"), current_path);
                 cmd.env("PATH", new_path);
             }
 

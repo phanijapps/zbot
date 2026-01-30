@@ -260,17 +260,12 @@ impl Session for MutexSession {
         // The conversation_history() method is the primary one that works correctly
         use once_cell::sync::Lazy;
         use std::collections::HashMap;
-        use std::sync::Mutex;
         struct EmptyState;
         impl State for EmptyState {
             fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
             fn set(&mut self, _key: String, _value: serde_json::Value) {}
             fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
         }
-        // Use Mutex to get a stable reference
-        static EMPTY_STATE: Lazy<Mutex<EmptyState>> = Lazy::new(|| Mutex::new(EmptyState));
-        // Lock and coerce to trait object - the lock is immediately dropped
-        // but we need to extend the lifetime
         static EMPTY_STATE_BOX: Lazy<Box<dyn State>> = Lazy::new(|| {
             Box::new(EmptyState) as Box<dyn State>
         });

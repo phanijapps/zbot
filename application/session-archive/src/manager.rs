@@ -10,7 +10,7 @@ use tokio::fs;
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::schema::{ArchivedMessage, ArchiveMetadata};
 use crate::writer::{ArchiveWriter, ArchiveWriterBuilder};
-use crate::reader::{ArchiveReader, ArchiveReaderBuilder};
+use crate::reader::ArchiveReader;
 
 /// High-level manager for session archives
 pub struct ArchiveManager {

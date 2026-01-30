@@ -16,6 +16,9 @@ keywords = ["ai", "agent", "llm", "mcp", "framework"]
 categories = ["development-tools"]
 
 [dependencies]
+# Internal crates
+zero-core = { path = "../../crates/zero-core" }
+
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }

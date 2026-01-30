@@ -4,6 +4,7 @@
 
 pub mod llm_agent;
 pub mod workflow;
+pub mod orchestrator;
 
 // Re-export from zero-core
 pub use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback};
@@ -21,4 +22,17 @@ pub use workflow::{
     LlmConditionalAgentBuilder,
     CustomAgent,
     CustomAgentBuilder,
+};
+
+// Re-export orchestrator
+pub use orchestrator::{
+    OrchestratorAgent,
+    OrchestratorBuilder,
+    OrchestratorConfig,
+    TaskGraph,
+    TaskNode,
+    TaskStatus,
+    ExecutionTrace,
+    TraceEvent,
+    TraceEventKind,
 };

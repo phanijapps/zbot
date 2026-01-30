@@ -9,6 +9,8 @@ mod ui;
 mod knowledge_graph;
 mod agent;
 mod web;
+mod memory;
+mod introspection;
 
 use std::sync::Arc;
 
@@ -31,6 +33,8 @@ pub use knowledge_graph::{
 };
 pub use agent::CreateAgentTool;
 pub use web::WebFetchTool;
+pub use memory::MemoryTool;
+pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
 
 // ============================================================================
 // BUILT-IN TOOLS FACTORY
@@ -74,5 +78,11 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         Arc::new(TodoTool::new()),
         // Web tools
         Arc::new(WebFetchTool::new()),
+        // Memory tool
+        Arc::new(MemoryTool::new(fs.clone())),
+        // Introspection tools - let agent query its own capabilities
+        Arc::new(ListSkillsTool::new(fs.clone())),
+        Arc::new(ListToolsTool::new()),
+        Arc::new(ListMcpsTool::new(fs.clone())),
     ]
 }

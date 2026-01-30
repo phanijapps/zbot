@@ -3,11 +3,9 @@
 //! Reads session messages from Parquet files.
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use arrow::array::*;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
-use tokio::fs;
 
 use crate::error::{ArchiveError, ArchiveResult};
 use crate::schema::ArchivedMessage;

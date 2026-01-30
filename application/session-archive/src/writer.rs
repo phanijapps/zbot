@@ -2,11 +2,9 @@
 //!
 //! Writes session messages to Parquet format.
 
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::path::PathBuf;
 
 use parquet::arrow::arrow_writer::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use tokio::fs;
 
 use crate::error::{ArchiveError, ArchiveResult};
@@ -80,7 +78,7 @@ impl ArchiveWriter {
             let record_batch = messages_to_record_batch(messages)?;
 
             // Create Parquet writer properties
-            let mut writer_props = parquet::file::properties::WriterProperties::builder()
+            let writer_props = parquet::file::properties::WriterProperties::builder()
                 .set_compression(compression)
                 .set_max_row_group_size(row_group_size)
                 .build();

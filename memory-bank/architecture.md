@@ -4,30 +4,68 @@
 
 | Layer | Technology |
 |-------|------------|
-| Desktop | Tauri 2.x |
 | Frontend | React 19 + TypeScript + Vite |
 | UI | Radix UI + Tailwind CSS v4 |
-| Workflow | XY Flow (React Flow v12+) |
-| State | Zustand |
-| Backend | Rust (Cargo workspace) |
+| Backend | Rust daemon (gateway + runtime) |
 | Database | SQLite (sqlx) |
 | Async | tokio |
+| API | HTTP REST + WebSocket |
+
+## System Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Web Browser                             │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │              React Frontend (Vite)                   │    │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │    │
+│  │  │   Chat   │ │  Agents  │ │ Providers│            │    │
+│  │  └──────────┘ └──────────┘ └──────────┘            │    │
+│  │                     │                               │    │
+│  │              Transport Layer                        │    │
+│  │         (HTTP Client + WebSocket)                   │    │
+│  └─────────────────────┬───────────────────────────────┘    │
+└─────────────────────────┼───────────────────────────────────┘
+                          │
+          ┌───────────────┴───────────────┐
+          │ HTTP :18791    WebSocket :18790│
+          └───────────────┬───────────────┘
+                          │
+┌─────────────────────────┴───────────────────────────────────┐
+│                    Daemon (zerod)                            │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                    Gateway                           │    │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │    │
+│  │  │ HTTP API │ │WebSocket │ │  Static  │            │    │
+│  │  │ (Axum)   │ │ Server   │ │  Files   │            │    │
+│  │  └──────────┘ └──────────┘ └──────────┘            │    │
+│  └─────────────────────┬───────────────────────────────┘    │
+│                        │                                     │
+│  ┌─────────────────────┴───────────────────────────────┐    │
+│  │               Agent Runtime                          │    │
+│  │  ┌──────────┐ ┌──────────┐ ┌──────────┐            │    │
+│  │  │ Executor │ │   LLM    │ │  Tools   │            │    │
+│  │  │          │ │  Client  │ │ Registry │            │    │
+│  │  └──────────┘ └──────────┘ └──────────┘            │    │
+│  └─────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────┘
+                          │
+                          ▼
+              ~/Documents/agentzero/
+```
 
 ## Workspace Structure
 
 ```
 agentzero/
 ├── src/                       # Frontend (React)
-│   ├── core/                  # Layout (AppShell, Sidebar)
-│   ├── shared/                # UI components, types, constants
 │   ├── features/              # Feature modules
-│   │   ├── workflow-ide/      # Visual workflow builder
-│   │   ├── agent-channels/    # Chat interface
-│   │   ├── agents/            # Agent management
-│   │   ├── providers/         # LLM providers
-│   │   ├── mcp/               # MCP servers
-│   │   └── skills/            # Skill editor
-│   └── services/              # Tauri IPC wrappers
+│   │   ├── agent/             # Chat + agent management
+│   │   ├── skills/            # Skill management
+│   │   ├── integrations/      # Provider management
+│   │   └── cron/              # Scheduled tasks
+│   ├── services/transport/    # HTTP/WebSocket client
+│   └── shared/                # UI components, types
 ├── crates/                    # Zero Framework
 │   ├── zero-core/             # Core traits (Agent, Tool, Session)
 │   ├── zero-llm/              # LLM abstractions
@@ -36,14 +74,13 @@ agentzero/
 │   ├── zero-mcp/              # MCP integration
 │   └── zero-app/              # Meta-package
 ├── application/               # Application crates
+│   ├── daemon/                # Main binary (zerod)
+│   ├── gateway/               # HTTP + WebSocket server
 │   ├── agent-runtime/         # Agent executor
 │   ├── agent-tools/           # Built-in tools
-│   ├── workflow-executor/     # Workflow execution
-│   ├── daily-sessions/        # Session storage
+│   ├── zero-cli/              # CLI tool
 │   └── knowledge-graph/       # Semantic memory
-└── src-tauri/                 # Tauri application
-    ├── src/commands/          # IPC commands
-    └── src/domains/           # Domain logic
+└── dist/                      # Built frontend (served by daemon)
 ```
 
 ## Core Abstractions
@@ -54,9 +91,12 @@ trait Agent {
     async fn invoke(&self, context: InvocationContext) -> Result<EventStream>;
 }
 
-// Tool - callable function
+// Tool - callable function with permissions
 trait Tool {
     fn name(&self) -> &str;
+    fn description(&self) -> &str;
+    fn parameters_schema(&self) -> Option<Value>;
+    fn permissions(&self) -> ToolPermissions;
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
 }
 
@@ -72,49 +112,74 @@ trait Llm {
 }
 ```
 
+## API Endpoints
+
+### HTTP API (port 18791)
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/status` | Gateway status |
+| GET/POST | `/api/agents` | List/create agents |
+| GET/PUT/DELETE | `/api/agents/:id` | Agent CRUD |
+| GET/POST | `/api/providers` | List/create providers |
+| POST | `/api/providers/:id/default` | Set default provider |
+| GET/POST | `/api/skills` | List/create skills |
+
+### WebSocket (port 18790)
+
+**Commands (client → server):**
+```json
+{ "type": "invoke", "agent_id": "root", "conversation_id": "...", "message": "..." }
+{ "type": "stop", "conversation_id": "..." }
+{ "type": "continue", "conversation_id": "..." }
+```
+
+**Events (server → client):**
+```json
+{ "type": "agent_started", "timestamp": 123, "agent_id": "...", "model": "..." }
+{ "type": "token", "timestamp": 123, "content": "..." }
+{ "type": "tool_call", "timestamp": 123, "tool_id": "...", "tool_name": "...", "args": {} }
+{ "type": "tool_result", "timestamp": 123, "tool_id": "...", "result": "..." }
+{ "type": "agent_finished", "timestamp": 123, "final_message": "..." }
+{ "type": "error", "timestamp": 123, "error": "...", "recoverable": false }
+```
+
 ## Storage
 
-**Global Config** (`~/.config/agentzero/`):
-- `vaults_registry.json` - Vault registry
-- `utils/` - Shared scripts
-- `venv/` - Python environment
+**Data Directory**: `~/Documents/agentzero/`
 
-**Vault Directory** (`~/Documents/{vault}/`):
 ```
-{vault}/
+agentzero/
 ├── agents/{name}/
 │   ├── config.yaml           # Metadata
-│   ├── AGENTS.md             # Instructions
-│   ├── .workflow-layout.json # Visual layout
-│   └── .subagents/           # Subagent configs
+│   └── AGENTS.md             # Instructions
+├── agents_data/{agent_id}/   # Per-agent workspace
+│   ├── outputs/              # Generated files
+│   ├── code/                 # Scripts
+│   ├── data/                 # Persistent data
+│   └── memory.json           # Agent memory
 ├── skills/{name}/
 │   └── SKILL.md              # Skill with frontmatter
 ├── db/
-│   └── agent_channels.db     # Sessions, messages, KG
-├── providers.json
-└── mcps.json
+│   └── sessions.db           # Sessions, messages
+├── providers.json            # LLM providers
+└── mcps.json                 # MCP server configs
 ```
 
 ## Agent Execution Flow
 
 ```
-User Message → Tauri Command → Load Config → Create LLM →
-Initialize MCPs → Create Tools → Build LlmAgent →
-Agent Loop (LLM → Tool Calls → Responses) → Stream Events
+User Message → WebSocket → Gateway → Load Agent Config →
+Create LLM Client → Initialize MCPs → Create Tools →
+Build Executor → Agent Loop (LLM ↔ Tools) → Stream Events
 ```
-
-## Workflow Execution
-
-1. Frontend generates `invocationId`, sets up event listeners
-2. Calls `execute_workflow` Tauri command
-3. Backend loads workflow definition, builds executable graph
-4. Orchestrator LLM receives subagents as tools
-5. Events stream via `workflow-stream://{invocationId}`
-6. Node status updates via `workflow-node://{workflowId}`
 
 ## Key Design Principles
 
-1. **Instructions in AGENTS.md** - Not in config.yaml
-2. **Flow-level orchestrator** - Not as a node
-3. **Frontend-first invocation IDs** - Prevents event race conditions
-4. **Multi-vault isolation** - Each vault is self-contained
+1. **Web + CLI**: No desktop wrapper, browser-based dashboard
+2. **Single daemon**: Gateway + runtime in one process
+3. **Instructions in AGENTS.md**: Not in config.yaml
+4. **Orchestrator-first**: AI plans and routes to capabilities
+5. **Tool permissions**: Every tool declares risk level
+6. **Streaming-first**: Real-time event streaming via WebSocket

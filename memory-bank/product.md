@@ -2,7 +2,15 @@
 
 ## Vision
 
-Agent Zero is a desktop application for creating and managing AI agents. Build specialized AI assistants with custom instructions, integrate with multiple LLM providers, extend capabilities through skills and MCP servers, and create multi-agent workflows with visual editing.
+Agent Zero is an AI agent platform with a web dashboard and CLI. Build specialized AI assistants with custom instructions, integrate with multiple LLM providers, extend capabilities through skills and MCP servers.
+
+## Interfaces
+
+### Web Dashboard
+Browser-based interface for managing agents, providers, and conversations. Served by the daemon at `http://localhost:18791`.
+
+### CLI (zero)
+Command-line interface for scripting, automation, and terminal-based workflows.
 
 ## Target Users
 
@@ -12,65 +20,74 @@ Agent Zero is a desktop application for creating and managing AI agents. Build s
 
 ## Core Features
 
-### 1. Agent Management
+### 1. Chat Interface
+Conversational interface with real-time streaming responses and tool execution visibility.
+
+### 2. Agent Management
 Create AI agents with custom instructions, provider/model selection, and capability configuration.
 
-### 2. Zero IDE (Workflow Builder)
-Visual workflow builder for multi-agent orchestration with BPMN-inspired design:
-- **Nodes**: Start, End, Subagent, Conditional (draft)
-- **Templates**: Pipeline, Swarm, Router, Map-Reduce, Hierarchical
-- **Execution**: Real-time streaming with visual node status
+### 3. Provider Management
+Multi-provider support: OpenAI, Anthropic, DeepSeek, Z.AI, Groq, Ollama, any OpenAI-compatible API. Set a default provider for the root agent.
 
-### 3. Agent Channels
-Discord-like interface for daily conversations with knowledge graph memory.
-
-### 4. Provider Management
-Multi-provider support: OpenAI, Anthropic, DeepSeek, Z.AI, any OpenAI-compatible API.
+### 4. Skill System
+Reusable skills with frontmatter metadata and markdown instructions following the Agent Skills specification.
 
 ### 5. MCP Server Integration
 Model Context Protocol servers for external tool access.
 
-### 6. Skill System
-Reusable skills with frontmatter metadata and markdown instructions.
-
-### 7. Vault Management
-Multi-vault architecture for data organization.
+### 6. Scheduled Tasks
+Cron-based scheduling for automated agent invocations.
 
 ## Technology Stack
 
 | Layer | Technology |
 |-------|-----------|
-| Desktop | Tauri 2.x |
-| Frontend | React 19 + TypeScript |
-| Workflow | XY Flow (React Flow v12+) |
-| State | Zustand |
-| Styling | Tailwind CSS v4 + Radix UI |
-| Backend | Rust (Cargo workspace) |
+| Frontend | React 19 + TypeScript + Vite |
+| UI | Tailwind CSS v4 + Radix UI |
+| Backend | Rust daemon (Axum + tokio) |
 | Database | SQLite |
+| API | HTTP REST + WebSocket |
+
+## Architecture
+
+```
+┌────────────────┐     ┌────────────────┐
+│  Web Browser   │     │      CLI       │
+│  (Dashboard)   │     │    (zero)      │
+└───────┬────────┘     └───────┬────────┘
+        │                      │
+        └──────────┬───────────┘
+                   │
+        ┌──────────┴──────────┐
+        │    Daemon (zerod)   │
+        │  HTTP :18791        │
+        │  WebSocket :18790   │
+        └──────────┬──────────┘
+                   │
+        ┌──────────┴──────────┐
+        │  ~/Documents/       │
+        │    agentzero/       │
+        └─────────────────────┘
+```
 
 ## Storage
 
-**Global Config**: `~/.config/agentzero/` (vaults registry, shared utils)
+**Data Directory**: `~/Documents/agentzero/`
 
-**Vault Structure**:
 ```
-{vault}/
-├── agents/{name}/          # Agent configs
-│   ├── config.yaml
-│   ├── AGENTS.md
-│   ├── .workflow-layout.json
-│   └── .subagents/
+agentzero/
+├── agents/                 # Agent configs
+├── agents_data/            # Per-agent workspace
 ├── skills/                 # Skill definitions
-├── agent_data/             # Runtime data
 ├── db/                     # SQLite databases
-├── providers.json
-└── mcps.json
+├── providers.json          # LLM providers
+└── mcps.json               # MCP configs
 ```
 
 ## Key Differentiators
 
-1. **Local-first**: Full data control
-2. **Multi-provider**: Not locked to single LLM
-3. **Visual Workflow**: BPMN-inspired orchestration
-4. **Extensible**: Skills + MCP servers
-5. **Open Standards**: Agent Skills and MCP specifications
+1. **Local-first**: Full data control, runs on your machine
+2. **Multi-provider**: Not locked to single LLM vendor
+3. **Extensible**: Skills + MCP servers for unlimited capabilities
+4. **Open Standards**: Agent Skills and MCP specifications
+5. **Simple deployment**: Single daemon binary + static web files

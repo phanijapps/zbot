@@ -154,7 +154,7 @@ impl Tool for WriteTool {
         // Check for error markers from truncated tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
             let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-            let truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
+            let _truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
             return Err(zero_core::ZeroError::Tool(format!(
                 "{}: {}",
                 error_type,
@@ -330,7 +330,7 @@ impl Tool for EditTool {
         // Check for error markers from truncated tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
             let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-            let truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
+            let _truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
             return Err(zero_core::ZeroError::Tool(format!(
                 "{}: {}",
                 error_type,

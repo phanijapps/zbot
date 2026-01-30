@@ -6,7 +6,7 @@
 use crate::types::Content;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::Value;
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -164,6 +164,7 @@ impl EventActions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn test_event_new() {

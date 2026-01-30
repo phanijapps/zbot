@@ -37,6 +37,8 @@ pub mod error;
 pub mod callbacks;
 pub mod filesystem;
 pub mod policy;
+pub mod capability;
+pub mod registry;
 
 // ============================================================================
 // CONVENIENCE RE-EXPORTS
@@ -58,6 +60,14 @@ pub use error::{ZeroError, Result};
 pub use callbacks::{BeforeAgentCallback, AfterAgentCallback};
 pub use filesystem::{FileSystemContext, NoFileSystemContext};
 pub use policy::{ToolPermissions, ToolRiskLevel, ResourceLimits, CapabilityCategory};
+pub use capability::{
+    Capability, AgentCapabilities, CapabilityQuery,
+    CapabilityKind, CapabilityDescriptor, CapabilityProvider,
+};
+pub use registry::{
+    CapabilityRegistry, CapabilityRouter, RoutingResult, SharedCapabilityRegistry,
+    UnifiedCapabilityRegistry, SharedUnifiedRegistry, shared_unified_registry,
+};
 
 // ============================================================================
 // STATE PREFIX CONSTANTS

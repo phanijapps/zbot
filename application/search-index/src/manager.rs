@@ -286,7 +286,7 @@ impl SearchIndexManager {
         };
 
         let created_at = DateTime::from_timestamp(timestamp, 0)
-            .unwrap_or_else(|| DateTime::from_timestamp(0, 0).unwrap());
+            .unwrap_or(DateTime::UNIX_EPOCH);
 
         Ok(SearchResult {
             message_id,

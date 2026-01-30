@@ -16,6 +16,7 @@ use super::tool::McpTool;
 
 /// Stdio-based MCP client (subprocess communication)
 pub(super) struct StdioMcpClient {
+    #[allow(dead_code)] // Reserved for future connection tracking
     id: String,
     name: String,
     command: String,

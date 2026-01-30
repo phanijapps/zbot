@@ -5,7 +5,6 @@
 [workspace]
 resolver = "2"
 members = [
-    "src-tauri",
     # Zero Framework crates
     "crates/zero-core",
     "crates/zero-llm",
@@ -23,7 +22,9 @@ members = [
     "application/search-index",
     "application/session-archive",
     "application/knowledge-graph",
-    "application/workflow-executor",
+    "application/gateway",
+    "application/daemon",
+    "application/zero-cli",
 ]
 
 [workspace.package]

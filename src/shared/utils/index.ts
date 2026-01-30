@@ -2,5 +2,9 @@
 // SHARED UTILITIES EXPORTS
 // ============================================================================
 
-// Re-export cn from core for shared use
-export { cn } from "../../core/utils/cn";
+import { clsx, type ClassValue } from "clsx";
+import { twMerge } from "tailwind-merge";
+
+export function cn(...inputs: ClassValue[]) {
+  return twMerge(clsx(inputs));
+}

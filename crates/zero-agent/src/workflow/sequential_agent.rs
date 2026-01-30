@@ -56,25 +56,9 @@ impl SequentialAgent {
         self
     }
 
-    /// Execute before callbacks.
-    async fn run_before_callbacks(&self, ctx: Arc<dyn InvocationContext>) {
-        for callback in &self.before_callbacks {
-            if let Some(content) = callback(ctx.clone()).await {
-                // In a real implementation, this would prepend to conversation
-                let _ = content;
-            }
-        }
-    }
-
-    /// Execute after callbacks.
-    async fn run_after_callbacks(&self, ctx: Arc<dyn InvocationContext>) {
-        for callback in &self.after_callbacks {
-            if let Some(content) = callback(ctx.clone()).await {
-                // In a real implementation, this would append to conversation
-                let _ = content;
-            }
-        }
-    }
+    // Note: Callbacks are stored but not yet invoked in the run() method.
+    // Future implementation should iterate over before_callbacks/after_callbacks
+    // and invoke them at the appropriate lifecycle points.
 }
 
 #[async_trait]

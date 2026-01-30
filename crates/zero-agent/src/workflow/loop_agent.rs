@@ -7,7 +7,7 @@ use async_stream::stream;
 use futures::StreamExt;
 use std::sync::Arc;
 
-use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, Event, InvocationContext, Result};
+use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, InvocationContext, Result};
 
 /// Loop agent executes sub-agents repeatedly for N iterations or until escalation.
 ///

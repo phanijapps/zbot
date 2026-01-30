@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use super::super::tools::Tool;
+use zero_core::Tool;
 
 /// Registry of all available tools
 pub struct ToolRegistry {
