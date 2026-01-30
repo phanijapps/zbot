@@ -2,6 +2,7 @@
 //!
 //! Manages agent execution and event streaming for the gateway.
 
+use crate::database::ConversationRepository;
 use crate::events::{EventBus, GatewayEvent};
 use crate::services::{AgentService, ProviderService};
 use crate::services::providers::Provider;
@@ -161,8 +162,8 @@ pub struct ExecutionRunner {
     config_dir: PathBuf,
     /// Active execution handles
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    /// Conversation history cache (conversation_id -> messages)
-    history: Arc<RwLock<HashMap<String, Vec<ChatMessage>>>>,
+    /// Conversation repository for SQLite persistence
+    conversation_repo: Arc<ConversationRepository>,
 }
 
 impl ExecutionRunner {
@@ -172,6 +173,7 @@ impl ExecutionRunner {
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
         config_dir: PathBuf,
+        conversation_repo: Arc<ConversationRepository>,
     ) -> Self {
         Self {
             event_bus,
@@ -179,7 +181,7 @@ impl ExecutionRunner {
             provider_service,
             config_dir,
             handles: Arc::new(RwLock::new(HashMap::new())),
-            history: Arc::new(RwLock::new(HashMap::new())),
+            conversation_repo,
         }
     }
 
@@ -253,11 +255,18 @@ impl ExecutionRunner {
             }
         };
 
-        // Get or create conversation history
-        let history = {
-            let hist = self.history.read().await;
-            hist.get(&config.conversation_id).cloned().unwrap_or_default()
-        };
+        // Get or create conversation in database
+        let _ = self.conversation_repo.get_or_create_conversation(
+            &config.conversation_id,
+            &config.agent_id,
+        );
+
+        // Load conversation history from database
+        let history: Vec<ChatMessage> = self
+            .conversation_repo
+            .get_recent_messages(&config.conversation_id, 50)
+            .map(|messages| self.conversation_repo.messages_to_chat_format(&messages))
+            .unwrap_or_default();
 
         // Create executor
         let executor = match self.create_executor(&agent, &config).await {
@@ -273,7 +282,7 @@ impl ExecutionRunner {
         let event_bus = self.event_bus.clone();
         let agent_id = config.agent_id.clone();
         let conversation_id = config.conversation_id.clone();
-        let history_store = self.history.clone();
+        let conversation_repo = self.conversation_repo.clone();
 
         tokio::spawn(async move {
             let mut accumulated_response = String::new();
@@ -309,27 +318,26 @@ impl ExecutionRunner {
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Store updated history
-                    {
-                        let mut hist = history_store.write().await;
-                        let entry = hist.entry(conversation_id.clone()).or_insert_with(Vec::new);
+                    // Persist messages to SQLite
+                    if let Err(e) = conversation_repo.add_message(
+                        &conversation_id,
+                        "user",
+                        &message,
+                        None,
+                        None,
+                    ) {
+                        tracing::error!("Failed to save user message: {}", e);
+                    }
 
-                        // Add user message
-                        entry.push(ChatMessage {
-                            role: "user".to_string(),
-                            content: message,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-
-                        // Add assistant response
-                        if !accumulated_response.is_empty() {
-                            entry.push(ChatMessage {
-                                role: "assistant".to_string(),
-                                content: accumulated_response.clone(),
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
+                    if !accumulated_response.is_empty() {
+                        if let Err(e) = conversation_repo.add_message(
+                            &conversation_id,
+                            "assistant",
+                            &accumulated_response,
+                            None,
+                            None,
+                        ) {
+                            tracing::error!("Failed to save assistant message: {}", e);
                         }
                     }
 

@@ -29,6 +29,7 @@
 //! - **Event Bus** - Broadcast events to all connected clients
 
 pub mod config;
+pub mod database;
 pub mod error;
 pub mod events;
 pub mod execution;

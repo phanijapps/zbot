@@ -2,6 +2,7 @@
 //!
 //! Shared state for the gateway application.
 
+use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::services::{AgentService, ProviderService, RuntimeService, SkillService};
 use std::path::PathBuf;
@@ -32,7 +33,7 @@ pub struct AppState {
 impl AppState {
     /// Create a new application state.
     ///
-    /// This creates a fully initialized state with execution runner.
+    /// This creates a fully initialized state with execution runner and SQLite database.
     pub fn new(config_dir: PathBuf) -> Self {
         let agents_dir = config_dir.join("agents");
         let skills_dir = config_dir.join("skills");
@@ -41,12 +42,20 @@ impl AppState {
         let skills = Arc::new(SkillService::new(skills_dir));
         let provider_service = Arc::new(ProviderService::new(config_dir.clone()));
 
+        // Initialize SQLite database for conversation persistence
+        let db_manager = Arc::new(
+            DatabaseManager::new(config_dir.clone())
+                .expect("Failed to initialize conversation database"),
+        );
+        let conversation_repo = Arc::new(ConversationRepository::new(db_manager));
+
         // Create runtime with execution runner
         let runtime = Arc::new(RuntimeService::with_runner(
             event_bus.clone(),
             agents.clone(),
             provider_service.clone(),
             config_dir.clone(),
+            conversation_repo,
         ));
 
         Self {

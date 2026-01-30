@@ -5,6 +5,7 @@
 //! This service coordinates agent execution through the ExecutionRunner
 //! and provides a high-level API for invoking agents.
 
+use crate::database::ConversationRepository;
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{ExecutionConfig, ExecutionHandle, ExecutionRunner};
 use crate::services::{AgentService, ProviderService};
@@ -50,12 +51,14 @@ impl RuntimeService {
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
         config_dir: PathBuf,
+        conversation_repo: Arc<ConversationRepository>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::new(
             event_bus.clone(),
             agent_service,
             provider_service,
             config_dir.clone(),
+            conversation_repo,
         ));
         Self {
             event_bus,
@@ -193,6 +196,7 @@ pub fn shared_runtime_service_with_runner(
     agent_service: Arc<AgentService>,
     provider_service: Arc<ProviderService>,
     config_dir: PathBuf,
+    conversation_repo: Arc<ConversationRepository>,
 ) -> Arc<RuntimeService> {
-    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir))
+    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo))
 }
