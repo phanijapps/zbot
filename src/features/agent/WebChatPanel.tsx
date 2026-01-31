@@ -4,10 +4,13 @@
 // ============================================================================
 
 import { useState, useEffect, useRef } from "react";
-import { MessageSquare, Send, Loader2, Wrench, User, Bot } from "lucide-react";
-import { getTransport, type StreamEvent } from "@/services/transport";
+import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import { getTransport, type StreamEvent, type MessageResponse } from "@/services/transport";
 import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
 import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
+import { SubagentActivityPanel, type SubagentActivity } from "./SubagentActivityPanel";
 
 // ============================================================================
 // Types
@@ -15,24 +18,47 @@ import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "delegation";
   content: string;
   timestamp: Date;
   toolName?: string;
   isStreaming?: boolean;
+  delegationStatus?: "started" | "completed";
+  childAgentId?: string;
 }
+
+// ActiveDelegation is now SubagentActivity from the panel component
 
 // ============================================================================
 // Component
 // ============================================================================
 
 const ROOT_AGENT_ID = "root";
+const WEB_CONV_ID_KEY = "agentzero_web_conv_id";
+
+// Get or create a stable conversation ID
+function getOrCreateConversationId(): string {
+  let convId = localStorage.getItem(WEB_CONV_ID_KEY);
+  if (!convId) {
+    convId = `web-${crypto.randomUUID()}`;
+    localStorage.setItem(WEB_CONV_ID_KEY, convId);
+  }
+  return convId;
+}
+
+// Create a new conversation ID
+function createNewConversationId(): string {
+  const convId = `web-${crypto.randomUUID()}`;
+  localStorage.setItem(WEB_CONV_ID_KEY, convId);
+  return convId;
+}
 
 export function WebChatPanel() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
-  const [conversationId, setConversationId] = useState<string>("");
+  const [conversationId, setConversationId] = useState<string>(() => getOrCreateConversationId());
+  const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -40,6 +66,39 @@ export function WebChatPanel() {
   const [canvasOpen, setCanvasOpen] = useState(false);
   const [canvasContent, setCanvasContent] = useState<ContentState>(null);
   const [, setPendingFormId] = useState<string | null>(null);
+
+  // Delegation tracking - uses SubagentActivity for detailed tracking
+  const [subagentActivities, setSubagentActivities] = useState<Map<string, SubagentActivity>>(new Map());
+
+  // Load conversation history on mount and when conversationId changes
+  useEffect(() => {
+    const loadHistory = async () => {
+      if (!conversationId) return;
+
+      setIsLoadingHistory(true);
+      try {
+        const transport = await getTransport();
+        const result = await transport.getMessages(conversationId);
+
+        if (result.success && result.data && result.data.length > 0) {
+          const loadedMessages: ChatMessage[] = result.data.map((m: MessageResponse) => ({
+            id: m.id,
+            role: m.role as "user" | "assistant" | "tool" | "delegation",
+            content: m.content,
+            timestamp: new Date(m.timestamp),
+            isStreaming: false,
+          }));
+          setMessages(loadedMessages);
+        }
+      } catch (error) {
+        console.error("Failed to load conversation history:", error);
+      } finally {
+        setIsLoadingHistory(false);
+      }
+    };
+
+    loadHistory();
+  }, [conversationId]);
 
   // Subscribe to events when conversation changes
   useEffect(() => {
@@ -145,6 +204,134 @@ export function WebChatPanel() {
         setCanvasOpen(true);
         break;
 
+      case "delegation_started": {
+        const childAgentId = event.child_agent_id as string;
+        const childConvId = event.child_conversation_id as string;
+        const task = event.task as string;
+
+        // Track the active delegation with full activity data
+        setSubagentActivities((prev) => {
+          const updated = new Map(prev);
+          updated.set(childConvId, {
+            childAgentId,
+            childConversationId: childConvId,
+            task,
+            startedAt: new Date(),
+            status: "running",
+            tokens: 0,
+            toolCalls: [],
+          });
+          return updated;
+        });
+
+        // Add delegation message to chat
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: "delegation",
+            content: `Delegating to ${childAgentId}: "${task.substring(0, 100)}${task.length > 100 ? "..." : ""}"`,
+            timestamp: new Date(),
+            delegationStatus: "started",
+            childAgentId,
+          },
+        ]);
+        break;
+      }
+
+      case "delegation_completed": {
+        const childConvId = event.child_conversation_id as string;
+        const childAgentId = event.child_agent_id as string;
+        const result = event.result as string | undefined;
+
+        // Update subagent activity to completed status
+        setSubagentActivities((prev) => {
+          const updated = new Map(prev);
+          const activity = updated.get(childConvId);
+          if (activity) {
+            updated.set(childConvId, {
+              ...activity,
+              status: "completed",
+              completedAt: new Date(),
+              result: result,
+            });
+          }
+          return updated;
+        });
+
+        // Update delegation message or add completion message
+        setMessages((prev) => {
+          // Find the corresponding started message
+          const startedIndex = prev.findIndex(
+            (m) => m.role === "delegation" && m.childAgentId === childAgentId && m.delegationStatus === "started"
+          );
+
+          if (startedIndex >= 0) {
+            const updated = [...prev];
+            updated[startedIndex] = {
+              ...updated[startedIndex],
+              delegationStatus: "completed",
+              content: `${childAgentId} completed: ${result?.substring(0, 150) || "(no result)"}${(result?.length || 0) > 150 ? "..." : ""}`,
+            };
+            return updated;
+          }
+
+          // If no started message found, add a completion message
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              role: "delegation",
+              content: `${childAgentId} completed: ${result?.substring(0, 150) || "(no result)"}`,
+              timestamp: new Date(),
+              delegationStatus: "completed",
+              childAgentId,
+            },
+          ];
+        });
+        break;
+      }
+
+      case "delegation_error": {
+        const childConvId = event.child_conversation_id as string;
+        const childAgentId = event.child_agent_id as string;
+        const error = event.error as string | undefined;
+
+        // Update subagent activity to error status
+        setSubagentActivities((prev) => {
+          const updated = new Map(prev);
+          const activity = updated.get(childConvId);
+          if (activity) {
+            updated.set(childConvId, {
+              ...activity,
+              status: "error",
+              completedAt: new Date(),
+              error: error,
+            });
+          }
+          return updated;
+        });
+
+        // Update delegation message
+        setMessages((prev) => {
+          const startedIndex = prev.findIndex(
+            (m) => m.role === "delegation" && m.childAgentId === childAgentId && m.delegationStatus === "started"
+          );
+
+          if (startedIndex >= 0) {
+            const updated = [...prev];
+            updated[startedIndex] = {
+              ...updated[startedIndex],
+              delegationStatus: "completed",
+              content: `${childAgentId} failed: ${error || "Unknown error"}`,
+            };
+            return updated;
+          }
+          return prev;
+        });
+        break;
+      }
+
       case "agent_completed":
       case "turn_complete":
       case "error":
@@ -163,10 +350,22 @@ export function WebChatPanel() {
   const handleSend = async () => {
     if (!input.trim() || isProcessing) return;
 
+    const trimmedInput = input.trim();
+
+    // Handle /new command to start a new conversation
+    if (trimmedInput === "/new") {
+      const newConvId = createNewConversationId();
+      setConversationId(newConvId);
+      setMessages([]);
+      setSubagentActivities(new Map());
+      setInput("");
+      return;
+    }
+
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: input.trim(),
+      content: trimmedInput,
       timestamp: new Date(),
     };
 
@@ -176,10 +375,7 @@ export function WebChatPanel() {
 
     try {
       const transport = await getTransport();
-      const newConversationId = conversationId || crypto.randomUUID();
-      setConversationId(newConversationId);
-
-      await transport.executeAgent(ROOT_AGENT_ID, newConversationId, userMessage.content);
+      await transport.executeAgent(ROOT_AGENT_ID, conversationId, userMessage.content);
     } catch (error) {
       console.error("Failed to send message:", error);
       setIsProcessing(false);
@@ -237,17 +433,35 @@ export function WebChatPanel() {
           </div>
           <h1 className="text-lg font-semibold text-[var(--foreground)]">Chat</h1>
         </div>
-        {isProcessing && (
-          <div className="flex items-center gap-2 text-[var(--primary)] text-sm font-medium bg-[var(--accent)] px-3 py-1.5 rounded-lg">
-            <Loader2 className="w-4 h-4 animate-spin" />
-            Processing...
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {(() => {
+            const runningCount = Array.from(subagentActivities.values()).filter(a => a.status === "running").length;
+            return runningCount > 0 && (
+              <div className="flex items-center gap-2 text-violet-600 text-sm font-medium bg-violet-50 px-3 py-1.5 rounded-lg border border-violet-200">
+                <GitBranch className="w-4 h-4" />
+                {runningCount} subagent{runningCount > 1 ? "s" : ""} working
+              </div>
+            );
+          })()}
+          {isProcessing && (
+            <div className="flex items-center gap-2 text-[var(--primary)] text-sm font-medium bg-[var(--accent)] px-3 py-1.5 rounded-lg">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Processing...
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6">
-        {messages.length === 0 ? (
+        {isLoadingHistory ? (
+          <div className="flex items-center justify-center h-full">
+            <div className="text-center">
+              <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-4" />
+              <p className="text-[var(--muted-foreground)]">Loading conversation...</p>
+            </div>
+          </div>
+        ) : messages.length === 0 ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <div className="w-20 h-20 rounded-2xl bg-[var(--muted)] flex items-center justify-center mx-auto mb-4">
@@ -255,6 +469,7 @@ export function WebChatPanel() {
               </div>
               <h2 className="text-lg font-semibold text-[var(--foreground)] mb-2">No messages yet</h2>
               <p className="text-[var(--muted-foreground)]">Start a conversation with your agent</p>
+              <p className="text-xs text-[var(--muted-foreground)] mt-2">Type <code className="bg-[var(--muted)] px-1.5 py-0.5 rounded">/new</code> to start a fresh session</p>
             </div>
           </div>
         ) : (
@@ -270,12 +485,22 @@ export function WebChatPanel() {
                     ? "bg-[var(--primary)]"
                     : message.role === "tool"
                       ? "bg-amber-100"
-                      : "bg-gradient-to-br from-indigo-500 to-purple-600"
+                      : message.role === "delegation"
+                        ? message.delegationStatus === "completed"
+                          ? "bg-emerald-100"
+                          : "bg-violet-100"
+                        : "bg-gradient-to-br from-indigo-500 to-purple-600"
                 }`}>
                   {message.role === "user" ? (
                     <User className="w-4 h-4 text-white" />
                   ) : message.role === "tool" ? (
                     <Wrench className="w-4 h-4 text-amber-600" />
+                  ) : message.role === "delegation" ? (
+                    message.delegationStatus === "completed" ? (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    ) : (
+                      <GitBranch className="w-4 h-4 text-violet-600" />
+                    )
                   ) : (
                     <Bot className="w-4 h-4 text-white" />
                   )}
@@ -288,7 +513,11 @@ export function WebChatPanel() {
                       ? "bg-[var(--primary)] text-white"
                       : message.role === "tool"
                         ? "bg-amber-50 border border-amber-200 text-amber-900"
-                        : "bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)]"
+                        : message.role === "delegation"
+                          ? message.delegationStatus === "completed"
+                            ? "bg-emerald-50 border border-emerald-200 text-emerald-900"
+                            : "bg-violet-50 border border-violet-200 text-violet-900"
+                          : "bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)]"
                   }`}
                 >
                   {message.role === "tool" && (
@@ -297,7 +526,29 @@ export function WebChatPanel() {
                       {message.toolName}
                     </div>
                   )}
-                  <div className="whitespace-pre-wrap text-sm">{message.content}</div>
+                  {message.role === "delegation" && (
+                    <div className={`text-xs font-medium mb-1 flex items-center gap-1 ${
+                      message.delegationStatus === "completed" ? "text-emerald-600" : "text-violet-600"
+                    }`}>
+                      {message.delegationStatus === "completed" ? (
+                        <>
+                          <CheckCircle2 className="w-3 h-3" />
+                          Subagent Completed
+                        </>
+                      ) : (
+                        <>
+                          <GitBranch className="w-3 h-3" />
+                          Delegating to Subagent
+                          <Loader2 className="w-3 h-3 animate-spin ml-1" />
+                        </>
+                      )}
+                    </div>
+                  )}
+                  <div className="prose prose-sm dark:prose-invert max-w-none text-sm prose-headings:mt-3 prose-headings:mb-2 prose-p:my-1 prose-pre:bg-[var(--muted)] prose-pre:border prose-pre:border-[var(--border)] prose-code:text-[var(--primary)] prose-code:bg-[var(--muted)] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
+                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                      {message.content}
+                    </ReactMarkdown>
+                  </div>
                   {message.isStreaming && (
                     <span className="inline-block w-2 h-4 bg-[var(--primary)] animate-pulse ml-1 rounded-sm" />
                   )}
@@ -308,6 +559,18 @@ export function WebChatPanel() {
           </div>
         )}
       </div>
+
+      {/* Subagent Activity Panel */}
+      <SubagentActivityPanel
+        activities={subagentActivities}
+        onClose={(conversationId) => {
+          setSubagentActivities((prev) => {
+            const updated = new Map(prev);
+            updated.delete(conversationId);
+            return updated;
+          });
+        }}
+      />
 
       {/* Input */}
       <div className="p-4 border-t border-[var(--border)] bg-[var(--card)]">
