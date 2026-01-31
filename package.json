@@ -7,6 +7,6 @@
     "build": "npm --prefix apps/ui run build",
     "preview": "npm --prefix apps/ui run preview",
     "lint": "npm --prefix apps/ui run lint",
-    "daemon": "cargo watch -x 'run -p daemon -- --static-dir ./dist'"
+    "daemon": "cargo watch -s \"cargo run -p daemon -- --static-dir ./dist\""
   }
 }

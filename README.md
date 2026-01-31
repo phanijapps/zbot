@@ -42,7 +42,7 @@ Most AI platforms lock you into their cloud, their pricing, and their rules. Age
 ### Prerequisites
 
 - **Node.js 18+** and npm
-- **Rust 1.75+** with cargo
+- **Rust 1.88+** with cargo
 - An LLM API key (OpenAI, Anthropic, etc.)
 
 ### Install & Run
