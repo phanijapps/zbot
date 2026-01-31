@@ -43,6 +43,12 @@ export interface AgentResponse {
   model: string;
   temperature: number;
   maxTokens: number;
+  thinkingEnabled: boolean;
+  voiceRecordingEnabled: boolean;
+  instructions: string;
+  mcps: string[];
+  skills: string[];
+  middleware?: string;
   createdAt?: string;
 }
 
@@ -67,9 +73,12 @@ export interface UpdateAgentRequest {
   model?: string;
   temperature?: number;
   maxTokens?: number;
+  thinkingEnabled?: boolean;
+  voiceRecordingEnabled?: boolean;
   instructions?: string;
   mcps?: string[];
   skills?: string[];
+  middleware?: string;
 }
 
 // ============================================================================
@@ -181,6 +190,78 @@ export interface ProviderTestResult {
   success: boolean;
   message: string;
   models?: string[];
+}
+
+// ============================================================================
+// MCP Types
+// ============================================================================
+
+export interface McpServerSummary {
+  id: string;
+  name: string;
+  description: string;
+  type: string;
+  enabled: boolean;
+}
+
+export interface McpListResponse {
+  servers: McpServerSummary[];
+}
+
+export interface CreateMcpRequest {
+  type: "stdio" | "http" | "sse" | "streamable-http";
+  id?: string;
+  name: string;
+  description: string;
+  // stdio fields
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  // http/sse/streamable-http fields
+  url?: string;
+  headers?: Record<string, string>;
+  enabled?: boolean;
+}
+
+export interface McpServerConfig {
+  type: "stdio" | "http" | "sse" | "streamable-http";
+  id?: string;
+  name: string;
+  description: string;
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  url?: string;
+  headers?: Record<string, string>;
+  enabled: boolean;
+  validated?: boolean;
+}
+
+export interface McpTestResult {
+  success: boolean;
+  message: string;
+  tools?: string[];
+}
+
+// ============================================================================
+// Settings Types
+// ============================================================================
+
+export interface ToolSettings {
+  grep: boolean;
+  glob: boolean;
+  python: boolean;
+  loadSkill: boolean;
+  uiTools: boolean;
+  knowledgeGraph: boolean;
+  createAgent: boolean;
+  introspection: boolean;
+}
+
+export interface ToolSettingsResponse {
+  success: boolean;
+  data?: ToolSettings;
+  error?: string;
 }
 
 // ============================================================================

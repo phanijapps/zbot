@@ -20,6 +20,12 @@ import type {
   StatusResponse,
   EventCallback,
   UnsubscribeFn,
+  McpListResponse,
+  McpServerConfig,
+  CreateMcpRequest,
+  McpTestResult,
+  MessageResponse,
+  ToolSettings,
 } from "./types";
 
 // ============================================================================
@@ -103,6 +109,35 @@ export interface Transport {
   setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>>;
 
   // =========================================================================
+  // MCP Operations
+  // =========================================================================
+
+  /** List all MCP servers */
+  listMcps(): Promise<TransportResult<McpListResponse>>;
+
+  /** Get an MCP server by ID */
+  getMcp(id: string): Promise<TransportResult<McpServerConfig>>;
+
+  /** Create a new MCP server */
+  createMcp(request: CreateMcpRequest): Promise<TransportResult<McpServerConfig>>;
+
+  /** Update an existing MCP server */
+  updateMcp(id: string, request: CreateMcpRequest): Promise<TransportResult<McpServerConfig>>;
+
+  /** Delete an MCP server */
+  deleteMcp(id: string): Promise<TransportResult<void>>;
+
+  /** Test an MCP server connection */
+  testMcp(id: string): Promise<TransportResult<McpTestResult>>;
+
+  // =========================================================================
+  // Conversation Operations
+  // =========================================================================
+
+  /** Get messages for a conversation */
+  getMessages(conversationId: string): Promise<TransportResult<MessageResponse[]>>;
+
+  // =========================================================================
   // Agent Execution
   // =========================================================================
 
@@ -115,6 +150,16 @@ export interface Transport {
 
   /** Stop an agent execution */
   stopAgent(conversationId: string): Promise<TransportResult<void>>;
+
+  // =========================================================================
+  // Settings Operations
+  // =========================================================================
+
+  /** Get tool settings */
+  getToolSettings(): Promise<TransportResult<ToolSettings>>;
+
+  /** Update tool settings */
+  updateToolSettings(settings: ToolSettings): Promise<TransportResult<ToolSettings>>;
 
   // =========================================================================
   // Event Streaming

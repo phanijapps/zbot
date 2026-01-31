@@ -22,6 +22,12 @@ import type {
   StatusResponse,
   EventCallback,
   UnsubscribeFn,
+  McpListResponse,
+  McpServerConfig,
+  CreateMcpRequest,
+  McpTestResult,
+  MessageResponse,
+  ToolSettings,
 } from "./types";
 
 const NOT_SUPPORTED = "Tauri transport is not available. Use web mode instead.";
@@ -110,6 +116,42 @@ export class TauriTransport implements Transport {
   }
 
   async setDefaultProvider(_id: string): Promise<TransportResult<ProviderResponse>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async listMcps(): Promise<TransportResult<McpListResponse>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getMcp(_id: string): Promise<TransportResult<McpServerConfig>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async createMcp(_request: CreateMcpRequest): Promise<TransportResult<McpServerConfig>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async updateMcp(_id: string, _request: CreateMcpRequest): Promise<TransportResult<McpServerConfig>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async deleteMcp(_id: string): Promise<TransportResult<void>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async testMcp(_id: string): Promise<TransportResult<McpTestResult>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getMessages(_conversationId: string): Promise<TransportResult<MessageResponse[]>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getToolSettings(): Promise<TransportResult<ToolSettings>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async updateToolSettings(_settings: ToolSettings): Promise<TransportResult<ToolSettings>> {
     return { success: false, error: NOT_SUPPORTED };
   }
 

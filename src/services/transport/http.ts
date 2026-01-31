@@ -22,6 +22,13 @@ import type {
   EventCallback,
   UnsubscribeFn,
   StreamEvent,
+  McpListResponse,
+  McpServerConfig,
+  CreateMcpRequest,
+  McpTestResult,
+  MessageResponse,
+  ToolSettings,
+  ToolSettingsResponse,
 } from "./types";
 
 // ============================================================================
@@ -137,6 +144,62 @@ export class HttpTransport implements Transport {
 
   async setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>> {
     return this.post<ProviderResponse>(`/api/providers/${encodeURIComponent(id)}/default`, {});
+  }
+
+  // =========================================================================
+  // MCP Operations
+  // =========================================================================
+
+  async listMcps(): Promise<TransportResult<McpListResponse>> {
+    return this.get<McpListResponse>("/api/mcps");
+  }
+
+  async getMcp(id: string): Promise<TransportResult<McpServerConfig>> {
+    return this.get<McpServerConfig>(`/api/mcps/${encodeURIComponent(id)}`);
+  }
+
+  async createMcp(request: CreateMcpRequest): Promise<TransportResult<McpServerConfig>> {
+    return this.post<McpServerConfig>("/api/mcps", request);
+  }
+
+  async updateMcp(id: string, request: CreateMcpRequest): Promise<TransportResult<McpServerConfig>> {
+    return this.put<McpServerConfig>(`/api/mcps/${encodeURIComponent(id)}`, request);
+  }
+
+  async deleteMcp(id: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/mcps/${encodeURIComponent(id)}`);
+  }
+
+  async testMcp(id: string): Promise<TransportResult<McpTestResult>> {
+    return this.post<McpTestResult>(`/api/mcps/${encodeURIComponent(id)}/test`, {});
+  }
+
+  // =========================================================================
+  // Conversation Operations
+  // =========================================================================
+
+  async getMessages(conversationId: string): Promise<TransportResult<MessageResponse[]>> {
+    return this.get<MessageResponse[]>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`);
+  }
+
+  // =========================================================================
+  // Settings Operations
+  // =========================================================================
+
+  async getToolSettings(): Promise<TransportResult<ToolSettings>> {
+    const result = await this.get<ToolSettingsResponse>("/api/settings/tools");
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to get tool settings" };
+  }
+
+  async updateToolSettings(settings: ToolSettings): Promise<TransportResult<ToolSettings>> {
+    const result = await this.put<ToolSettingsResponse>("/api/settings/tools", settings);
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to update tool settings" };
   }
 
   // =========================================================================

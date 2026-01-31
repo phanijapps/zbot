@@ -17,8 +17,17 @@ import {
   Loader2,
   AlertCircle,
   RefreshCw,
+  Wrench,
+  ChevronDown,
+  ChevronRight,
+  Search,
+  Terminal,
+  Layers,
+  Brain,
+  Users,
+  Eye,
 } from "lucide-react";
-import { initializeTransport, getTransport } from "@/services/transport";
+import { initializeTransport, getTransport, type ToolSettings } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
@@ -240,10 +249,107 @@ function NavLink({ to, label, icon: Icon }: NavLinkProps) {
 }
 
 // ============================================================================
-// Web Settings Panel (minimal)
+// Web Settings Panel
 // ============================================================================
 
 function WebSettingsPanel() {
+  const [toolSettings, setToolSettings] = useState<ToolSettings | null>(null);
+  const [isLoadingTools, setIsLoadingTools] = useState(true);
+  const [isSavingTools, setIsSavingTools] = useState(false);
+  const [toolsError, setToolsError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+
+  useEffect(() => {
+    loadToolSettings();
+  }, []);
+
+  const loadToolSettings = async () => {
+    setIsLoadingTools(true);
+    setToolsError(null);
+    try {
+      const transport = await getTransport();
+      const result = await transport.getToolSettings();
+      if (result.success && result.data) {
+        setToolSettings(result.data);
+      } else {
+        setToolsError(result.error || "Failed to load tool settings");
+      }
+    } catch (err) {
+      setToolsError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setIsLoadingTools(false);
+    }
+  };
+
+  const handleToolToggle = async (key: keyof ToolSettings) => {
+    if (!toolSettings) return;
+
+    const newSettings = { ...toolSettings, [key]: !toolSettings[key] };
+    setToolSettings(newSettings);
+    setIsSavingTools(true);
+
+    try {
+      const transport = await getTransport();
+      const result = await transport.updateToolSettings(newSettings);
+      if (!result.success) {
+        setToolsError(result.error || "Failed to save settings");
+        setToolSettings(toolSettings);
+      }
+    } catch (err) {
+      setToolsError(err instanceof Error ? err.message : "Unknown error");
+      setToolSettings(toolSettings);
+    } finally {
+      setIsSavingTools(false);
+    }
+  };
+
+  const toolGroups = [
+    {
+      name: "Search Tools",
+      icon: Search,
+      tools: [
+        { key: "grep" as const, label: "Grep", description: "Search file contents with patterns" },
+        { key: "glob" as const, label: "Glob", description: "Find files by name patterns" },
+      ],
+    },
+    {
+      name: "Execution",
+      icon: Terminal,
+      tools: [
+        { key: "python" as const, label: "Python", description: "Execute Python code" },
+        { key: "loadSkill" as const, label: "Load Skill", description: "Dynamically load skills" },
+      ],
+    },
+    {
+      name: "UI Tools",
+      icon: Layers,
+      tools: [
+        { key: "uiTools" as const, label: "UI Tools", description: "Interactive UI components" },
+      ],
+    },
+    {
+      name: "Knowledge",
+      icon: Brain,
+      tools: [
+        { key: "knowledgeGraph" as const, label: "Knowledge Graph", description: "Graph-based memory" },
+      ],
+    },
+    {
+      name: "Agent Tools",
+      icon: Users,
+      tools: [
+        { key: "createAgent" as const, label: "Create Agent", description: "Create new agents dynamically" },
+      ],
+    },
+    {
+      name: "Introspection",
+      icon: Eye,
+      tools: [
+        { key: "introspection" as const, label: "Introspection", description: "Self-analysis tools" },
+      ],
+    },
+  ];
+
   return (
     <div className="page">
       <div className="page-container page-container--narrow">
@@ -294,6 +400,103 @@ function WebSettingsPanel() {
             <div className="badge font-mono" style={{ padding: 'var(--spacing-3)' }}>
               ~/Documents/agentzero/
             </div>
+          </div>
+
+          {/* Advanced Options - Tool Settings */}
+          <div className="card card__padding--lg">
+            <button
+              onClick={() => setAdvancedOpen(!advancedOpen)}
+              className="w-full flex items-center justify-between"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="card__icon" style={{ backgroundColor: 'var(--warning-muted)' }}>
+                  <Wrench style={{ width: 18, height: 18, color: 'var(--warning)' }} />
+                </div>
+                <div style={{ textAlign: 'left' }}>
+                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--foreground)' }}>Advanced Options</h2>
+                  <p className="page-subtitle">Configure optional agent tools</p>
+                </div>
+              </div>
+              {advancedOpen ? (
+                <ChevronDown style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+              ) : (
+                <ChevronRight style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+              )}
+            </button>
+
+            {advancedOpen && (
+              <div style={{ marginTop: 'var(--spacing-4)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border)' }}>
+                {toolsError && (
+                  <div className="badge" style={{
+                    padding: 'var(--spacing-3)',
+                    marginBottom: 'var(--spacing-4)',
+                    backgroundColor: 'var(--destructive-muted)',
+                    color: 'var(--destructive)'
+                  }}>
+                    {toolsError}
+                  </div>
+                )}
+
+                {isLoadingTools ? (
+                  <div className="flex items-center justify-center" style={{ padding: 'var(--spacing-6)' }}>
+                    <Loader2 className="loading-spinner__icon" style={{ width: 24, height: 24 }} />
+                  </div>
+                ) : toolSettings ? (
+                  <div className="flex flex-col gap-4">
+                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--muted-foreground)' }}>
+                      Enable or disable optional tools. Core tools (shell, read, write, edit, memory, web_fetch, todo) are always available.
+                    </p>
+
+                    {toolGroups.map((group) => (
+                      <div key={group.name}>
+                        <div className="flex items-center gap-2" style={{ marginBottom: 'var(--spacing-2)' }}>
+                          <group.icon style={{ width: 14, height: 14, color: 'var(--muted-foreground)' }} />
+                          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                            {group.name}
+                          </span>
+                        </div>
+                        <div className="flex flex-col gap-2">
+                          {group.tools.map((tool) => (
+                            <label
+                              key={tool.key}
+                              className="flex items-center gap-3 cursor-pointer"
+                              style={{
+                                padding: 'var(--spacing-3)',
+                                backgroundColor: 'var(--muted)',
+                                borderRadius: 'var(--radius-md)',
+                                opacity: isSavingTools ? 0.7 : 1,
+                              }}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={toolSettings[tool.key]}
+                                onChange={() => handleToolToggle(tool.key)}
+                                disabled={isSavingTools}
+                                style={{
+                                  width: 16,
+                                  height: 16,
+                                  accentColor: 'var(--primary)',
+                                  cursor: isSavingTools ? 'not-allowed' : 'pointer',
+                                }}
+                              />
+                              <div style={{ flex: 1 }}>
+                                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
+                                  {tool.label}
+                                </div>
+                                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                                  {tool.description}
+                                </div>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
         </div>
       </div>

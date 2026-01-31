@@ -1,6 +1,6 @@
 // ============================================================================
-// AGENT TOOL
-// Tool for creating AI agents
+// AGENT TOOLS
+// Tools for managing and discovering AI agents
 // ============================================================================
 
 use std::sync::Arc;
@@ -10,6 +10,91 @@ use serde_json::{json, Value};
 
 use zero_core::{Tool, ToolContext, Result};
 use zero_core::FileSystemContext;
+
+// ============================================================================
+// LIST AGENTS TOOL
+// ============================================================================
+
+/// Tool for discovering available agents to delegate to.
+///
+/// This tool reads from a cached agent list stored in the ToolContext state.
+/// The list is populated by the execution runner when creating the executor.
+pub struct ListAgentsTool;
+
+impl ListAgentsTool {
+    /// Create a new list agents tool
+    #[must_use]
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for ListAgentsTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[async_trait]
+impl Tool for ListAgentsTool {
+    fn name(&self) -> &str {
+        "list_agents"
+    }
+
+    fn description(&self) -> &str {
+        "List available agents you can delegate tasks to using delegate_to_agent. \
+         Returns agent IDs, names, and descriptions to help you choose the right agent for a task."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {},
+            "required": []
+        }))
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        // Read cached agent list from context state
+        let agents: Value = match ctx.get_state("available_agents") {
+            Some(v) => v.clone(),
+            None => json!([]),
+        };
+
+        // Get current agent ID to exclude from list
+        let current_agent_id: String = match ctx.get_state("agent_id") {
+            Some(v) => v.as_str().unwrap_or("").to_string(),
+            None => String::new(),
+        };
+
+        // Filter out current agent
+        let mut agent_list: Vec<Value> = Vec::new();
+        if let Some(arr) = agents.as_array() {
+            for agent in arr {
+                let agent_id = match agent.get("id") {
+                    Some(v) => v.as_str().unwrap_or(""),
+                    None => "",
+                };
+                if agent_id != current_agent_id {
+                    agent_list.push(agent.clone());
+                }
+            }
+        }
+
+        if agent_list.is_empty() {
+            return Ok(json!({
+                "agents": [],
+                "message": "No other agents available for delegation."
+            }));
+        }
+
+        Ok(json!({
+            "agents": agent_list,
+            "count": agent_list.len(),
+            "message": format!("Found {} agent(s) available for delegation. Use delegate_to_agent with the agent's id.", agent_list.len())
+        }))
+    }
+}
 
 // ============================================================================
 // CREATE AGENT TOOL

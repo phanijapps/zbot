@@ -29,6 +29,14 @@ export type {
   EventCallback,
   UnsubscribeFn,
   StreamEvent,
+  McpServerSummary,
+  McpListResponse,
+  McpServerConfig,
+  CreateMcpRequest,
+  McpTestResult,
+  MessageResponse,
+  ConversationResponse,
+  ToolSettings,
 } from "./types";
 
 // ============================================================================

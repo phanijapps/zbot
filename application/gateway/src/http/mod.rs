@@ -4,10 +4,14 @@
 
 mod agents;
 mod conversations;
+mod events;
 mod health;
+mod mcps;
 mod providers;
+mod settings;
 mod skills;
 mod tools;
+mod webhooks;
 
 use crate::config::GatewayConfig;
 use crate::state::AppState;
@@ -65,6 +69,36 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/skills/:id", delete(skills::delete_skill))
         // Provider endpoints
         .nest("/api/providers", providers::routes())
+        // MCP endpoints
+        .route("/api/mcps", get(mcps::list_mcps))
+        .route("/api/mcps", post(mcps::create_mcp))
+        .route("/api/mcps/:id", get(mcps::get_mcp))
+        .route("/api/mcps/:id", put(mcps::update_mcp))
+        .route("/api/mcps/:id", delete(mcps::delete_mcp))
+        .route("/api/mcps/:id/test", post(mcps::test_mcp))
+        // Webhook endpoints
+        .route(
+            "/api/webhooks/:hook_type/:hook_id",
+            post(webhooks::handle_webhook),
+        )
+        .route(
+            "/api/webhooks/:hook_type/:hook_id/verify",
+            get(webhooks::verify_webhook),
+        )
+        .route(
+            "/api/webhooks/whatsapp/:phone_number_id/messages",
+            post(webhooks::handle_whatsapp_webhook),
+        )
+        .route(
+            "/api/webhooks/telegram/:bot_id",
+            post(webhooks::handle_telegram_webhook),
+        )
+        // SSE Events endpoints
+        .route("/api/events", get(events::all_events_stream))
+        .route("/api/events/:conversation_id", get(events::event_stream))
+        // Settings endpoints
+        .route("/api/settings/tools", get(settings::get_tool_settings))
+        .route("/api/settings/tools", put(settings::update_tool_settings))
         // State
         .with_state(state);
 
