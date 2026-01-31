@@ -17,11 +17,11 @@ categories = ["web-programming"]
 
 [dependencies]
 # Internal crates
-api-logs = { path = "../api-logs" }
-agent-runtime = { path = "../agent-runtime" }
-agent-tools = { path = "../agent-tools" }
-zero-core = { path = "../../crates/zero-core" }
-zero-app = { path = "../../crates/zero-app" }
+api-logs = { path = "../services/api-logs" }
+agent-runtime = { path = "../runtime/agent-runtime" }
+agent-tools = { path = "../runtime/agent-tools" }
+zero-core = { path = "../framework/zero-core" }
+zero-app = { path = "../framework/zero-app" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws", "macros"] }

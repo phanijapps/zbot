@@ -30,7 +30,7 @@ regex = { workspace = true }
 tracing = "0.1"
 
 # LLM integration for smart extraction
-zero-app = { path = "../../crates/zero-app" }
+zero-app = { path = "../../framework/zero-app" }
 
 [dev-dependencies]
 tempfile = "3"

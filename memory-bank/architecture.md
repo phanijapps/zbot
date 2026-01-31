@@ -82,47 +82,81 @@
 
 ## Crate Structure
 
-### Zero Framework (`crates/`)
-
-Core abstractions that can be used independently of Agent Zero:
+### Layer Overview
 
 ```
-crates/
-├── zero-core/           # Core traits: Agent, Tool, Session, Llm
-├── zero-agent/          # Agent implementations (LLM, Sequential, etc.)
-├── zero-session/        # Session management and persistence
+agentzero/
+├── framework/      # Core abstractions (publishable)
+├── runtime/        # Execution engine
+├── services/       # Standalone data services
+├── gateway/        # HTTP/WebSocket server
+├── apps/           # Binaries (zerod, zero-cli)
+└── ui/             # Frontend (React + TypeScript)
+```
+
+### Framework (`framework/`)
+
+Core abstractions that can be used independently:
+
+```
+framework/
+├── zero-core/           # Core traits: Agent, Tool, Toolset, Event
+├── zero-llm/            # LLM abstractions and OpenAI client
+├── zero-tool/           # Tool registry and execution
+├── zero-session/        # Session and state management
+├── zero-agent/          # Agent implementations (LLM, workflow)
 ├── zero-mcp/            # Model Context Protocol integration
-└── zero-app/            # Meta-package for convenience
+├── zero-prompt/         # Template rendering
+├── zero-middleware/     # Message preprocessing pipelines
+└── zero-app/            # Convenience prelude
 ```
 
-### Application (`application/`)
+### Runtime (`runtime/`)
 
-Agent Zero-specific crates:
+Execution engine:
 
 ```
-application/
+runtime/
+├── agent-runtime/       # Executor, LLM loop, middleware
+└── agent-tools/         # Built-in tool implementations
+```
+
+### Services (`services/`)
+
+Standalone data services:
+
+```
+services/
+├── api-logs/            # Execution logging (SQLite)
+├── knowledge-graph/     # Entity extraction
+├── search-index/        # Full-text search (Tantivy)
+├── session-archive/     # Parquet archival
+└── daily-sessions/      # Session management
+```
+
+### Gateway (`gateway/`)
+
+Network layer:
+
+```
+gateway/
+├── src/
+│   ├── http/            # REST API routes
+│   ├── websocket/       # WebSocket handler
+│   ├── execution/       # Agent invocation + delegation
+│   ├── database/        # SQLite persistence
+│   └── services/        # Agent, Provider, Skill services
+└── templates/           # System prompt templates
+```
+
+### Apps (`apps/`)
+
+Runnable applications:
+
+```
+apps/
 ├── daemon/              # Main binary (zerod)
-│   └── main.rs          #   CLI args, server startup
-├── gateway/             # HTTP + WebSocket server
-│   ├── http/            #   REST API routes
-│   ├── websocket/       #   WebSocket handler
-│   ├── execution/       #   Agent invocation + delegation
-│   ├── database/        #   SQLite persistence
-│   └── services/        #   Agent, Provider, Skill services
-├── agent-runtime/       # Agent execution engine
-│   ├── executor.rs      #   LLM loop, tool execution
-│   ├── llm/             #   OpenAI-compatible client
-│   └── tools/           #   Tool context, registry
-├── agent-tools/         # Built-in tools
-│   ├── file.rs          #   read_file, write_file, list_dir
-│   ├── shell.rs         #   execute_command
-│   ├── memory.rs        #   get, set, search memory
-│   └── introspection.rs #   list_skills, list_tools, list_agents
-├── api-logs/            # Execution logging service
-│   ├── service.rs       #   Log storage and retrieval
-│   ├── handlers.rs      #   HTTP API handlers
-│   └── types.rs         #   LogSession, ExecutionLog types
-└── zero-cli/            # Command-line interface
+└── zero-cli/            # CLI tool with TUI
 ```
 
 ## Core Abstractions

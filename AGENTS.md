@@ -6,48 +6,53 @@ AI agent platform with Web dashboard and CLI interfaces.
 
 | Command | Purpose |
 |---------|---------|
-| `npm install` | Install frontend dependencies |
+| `cd ui && npm install` | Install frontend dependencies |
 | `npm run dev` | Frontend dev server (port 3000) |
-| `npm run build` | Build frontend to `dist/` |
+| `npm run build` | Build frontend to `ui/dist/` |
 | `npm run daemon` | Run daemon with cargo-watch |
-| `cargo run -p zerod -- --static-dir ./dist` | Run daemon serving built frontend |
+| `cargo run -p daemon -- --static-dir ./ui/dist` | Run daemon serving dashboard |
 | `cargo check --workspace` | Verify Rust code |
-| `npx tsc --noEmit` | Verify TypeScript |
 
 ## Architecture
 
-- **Frontend**: React 19 + TypeScript + Vite
-- **Backend**: Rust daemon (gateway + agent runtime)
-- **Database**: SQLite (conversations.db)
-- **API**: HTTP REST + WebSocket streaming
+```
+agentzero/
+├── framework/      # Core abstractions (zero-* crates)
+├── runtime/        # Execution engine (agent-runtime, agent-tools)
+├── services/       # Data services (logs, search, archive)
+├── gateway/        # HTTP/WebSocket server
+├── apps/           # Binaries (zerod, zero-cli)
+├── ui/             # Frontend (React + TypeScript)
+└── memory-bank/    # Documentation
+```
 
-See `memory-bank/` for detailed documentation:
-- `product.md` - Product definition
-- `architecture.md` - Technical architecture
-- `plans/roadmap.md` - Development roadmap
-
-## Key Directories
+## Layer Dependencies
 
 ```
-src/                          # Frontend (React)
-├── features/
-│   ├── agent/                # Chat + agent management
-│   ├── skills/               # Skill management
-│   ├── integrations/         # Provider management
-│   ├── logs/                 # Execution logs dashboard
-│   └── cron/                 # Scheduled tasks
-├── services/transport/       # HTTP/WebSocket transport
-└── shared/                   # UI components, types
-
-crates/zero-*/                # Framework crates
-application/
-├── daemon/                   # Main daemon binary (zerod)
-├── gateway/                  # HTTP + WebSocket server
-├── agent-runtime/            # Agent executor
-├── agent-tools/              # Built-in tools
-├── api-logs/                 # Execution logging service
-└── zero-cli/                 # CLI tool
+apps/ → gateway/ → runtime/ → framework/
+                 ↘ services/ ↗
 ```
+
+Lower layers never import upper layers. Services are standalone.
+
+## Layer Documentation
+
+| Layer | Purpose | Docs |
+|-------|---------|------|
+| `framework/` | Core traits and abstractions | [framework/AGENTS.md](framework/AGENTS.md) |
+| `runtime/` | Agent execution engine | [runtime/AGENTS.md](runtime/AGENTS.md) |
+| `services/` | Standalone data services | [services/AGENTS.md](services/AGENTS.md) |
+| `gateway/` | HTTP/WebSocket API | [gateway/AGENTS.md](gateway/AGENTS.md) |
+| `apps/` | Runnable applications | [apps/AGENTS.md](apps/AGENTS.md) |
+| `ui/` | Web dashboard | [ui/AGENTS.md](ui/AGENTS.md) |
+
+## Ports
+
+| Port | Service |
+|------|---------|
+| 18791 | HTTP API + Web UI |
+| 18790 | WebSocket (streaming) |
+| 3000 | Vite dev server (development only) |
 
 ## Data Directory
 
@@ -55,16 +60,11 @@ All data stored in `~/Documents/agentzero/`:
 
 ```
 agentzero/
-├── conversations.db          # SQLite database
-├── agents/{name}/            # Agent configs
-│   ├── config.yaml           # Metadata
-│   └── AGENTS.md             # Instructions
-├── agents_data/{id}/         # Per-agent data
-│   └── memory.json           # Persistent memory
-├── skills/{name}/
-│   └── SKILL.md              # Skill instructions
-├── providers.json            # LLM providers
-└── mcps.json                 # MCP configs
+├── conversations.db      # SQLite database
+├── agents/{name}/        # Agent configs
+├── skills/{name}/        # Skill definitions
+├── providers.json        # LLM providers
+└── mcps.json             # MCP configs
 ```
 
 ## Running
@@ -81,21 +81,6 @@ npm run dev
 **Production:**
 ```bash
 npm run build
-cargo run -p zerod -- --static-dir ./dist
+cargo run -p daemon -- --static-dir ./ui/dist
 # Access at http://localhost:18791
 ```
-
-## Ports
-
-| Port | Service |
-|------|---------|
-| 18791 | HTTP API + Web UI |
-| 18790 | WebSocket (streaming) |
-| 3000 | Vite dev server (development only) |
-
-## Conventions
-
-1. Instructions in `AGENTS.md` files, not `config.yaml`
-2. Single data directory: `~/Documents/agentzero/`
-3. Frontend generates invocation IDs before backend calls
-4. All state persisted to SQLite or JSON files

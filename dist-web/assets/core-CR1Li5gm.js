@@ -1,1 +1,0 @@
-function r(r,n=!1){return window.__TAURI_INTERNALS__.transformCallback(r,n)}async function n(r,n={},o){return window.__TAURI_INTERNALS__.invoke(r,n,o)}"function"==typeof SuppressedError&&SuppressedError;export{n as invoke,r as transformCallback};
