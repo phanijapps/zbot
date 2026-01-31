@@ -2,6 +2,7 @@
 //!
 //! Shared state for the gateway application.
 
+use api_logs::LogService;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::DelegationRegistry;
@@ -43,6 +44,9 @@ pub struct AppState {
     /// Settings service for application configuration.
     pub settings: Arc<SettingsService>,
 
+    /// Log service for execution tracing.
+    pub log_service: Arc<LogService<DatabaseManager>>,
+
     /// Configuration directory path.
     pub config_dir: PathBuf,
 }
@@ -65,7 +69,10 @@ impl AppState {
             DatabaseManager::new(config_dir.clone())
                 .expect("Failed to initialize conversation database"),
         );
-        let conversation_repo = Arc::new(ConversationRepository::new(db_manager));
+        let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
+
+        // Create log service for execution tracing
+        let log_service = Arc::new(LogService::new(db_manager));
 
         // Create runtime with execution runner
         let runtime = Arc::new(RuntimeService::with_runner(
@@ -98,6 +105,7 @@ impl AppState {
             delegation_registry,
             conversations: conversation_repo,
             settings,
+            log_service,
             config_dir,
         }
     }
@@ -113,7 +121,8 @@ impl AppState {
             DatabaseManager::new(config_dir.clone())
                 .expect("Failed to initialize conversation database"),
         );
-        let conversation_repo = Arc::new(ConversationRepository::new(db_manager));
+        let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
+        let log_service = Arc::new(LogService::new(db_manager));
 
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
@@ -126,6 +135,7 @@ impl AppState {
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations: conversation_repo,
             settings: Arc::new(SettingsService::new(config_dir.clone())),
+            log_service,
             config_dir,
         }
     }
@@ -139,6 +149,7 @@ impl AppState {
         runtime: Arc<RuntimeService>,
         event_bus: Arc<EventBus>,
         conversations: Arc<ConversationRepository>,
+        log_service: Arc<LogService<DatabaseManager>>,
         config_dir: PathBuf,
     ) -> Self {
         Self {
@@ -152,6 +163,7 @@ impl AppState {
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations,
             settings: Arc::new(SettingsService::new(config_dir.clone())),
+            log_service,
             config_dir,
         }
     }

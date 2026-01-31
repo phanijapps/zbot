@@ -17,6 +17,7 @@ categories = ["web-programming"]
 
 [dependencies]
 # Internal crates
+api-logs = { path = "../api-logs" }
 agent-runtime = { path = "../agent-runtime" }
 agent-tools = { path = "../agent-tools" }
 zero-core = { path = "../../crates/zero-core" }

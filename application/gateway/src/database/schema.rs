@@ -1,12 +1,12 @@
 // ============================================================================
 // DATABASE SCHEMA
-// SQLite schema for conversations and messages
+// SQLite schema for conversations, messages, and execution logs
 // ============================================================================
 
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 1;
+const SCHEMA_VERSION: i32 = 2;
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
@@ -64,6 +64,61 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_conversations_updated_at
          ON conversations(updated_at)",
+        [],
+    )?;
+
+    // Create execution_logs table (for api-logs crate)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS execution_logs (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            conversation_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            parent_session_id TEXT,
+            timestamp TEXT NOT NULL,
+            level TEXT NOT NULL,
+            category TEXT NOT NULL,
+            message TEXT NOT NULL,
+            metadata TEXT,
+            duration_ms INTEGER
+        )",
+        [],
+    )?;
+
+    // Create indexes for execution_logs
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_logs_session_id
+         ON execution_logs(session_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_logs_conversation_id
+         ON execution_logs(conversation_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_logs_agent_id
+         ON execution_logs(agent_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_logs_timestamp
+         ON execution_logs(timestamp)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_logs_level
+         ON execution_logs(level)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_execution_logs_parent_session_id
+         ON execution_logs(parent_session_id)",
         [],
     )?;
 

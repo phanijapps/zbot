@@ -3,6 +3,7 @@
 // Manages SQLite database connection and initialization
 // ============================================================================
 
+use api_logs::DbProvider;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -60,5 +61,19 @@ impl DatabaseManager {
         let conn = self.conn.lock()
             .map_err(|e| format!("Failed to acquire database lock: {}", e))?;
         f(&conn).map_err(|e| format!("Database operation failed: {}", e))
+    }
+}
+
+// ============================================================================
+// DB PROVIDER IMPLEMENTATION
+// Allows api-logs crate to access the database
+// ============================================================================
+
+impl DbProvider for DatabaseManager {
+    fn with_connection<F, R>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&Connection) -> Result<R, rusqlite::Error>,
+    {
+        DatabaseManager::with_connection(self, f)
     }
 }

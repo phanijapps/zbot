@@ -16,6 +16,7 @@ members = [
     "crates/zero-middleware",
     "crates/zero-app",
     # Application crates
+    "application/api-logs",
     "application/agent-runtime",
     "application/agent-tools",
     "application/daily-sessions",
