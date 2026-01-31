@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
+use tokio::sync::RwLock;
 
 /// Skill data structure
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,19 +33,49 @@ struct SkillFrontmatter {
     category: Option<String>,
 }
 
-/// Service for managing skills.
 pub struct SkillService {
     skills_dir: PathBuf,
+    cache: Arc<RwLock<Option<Vec<Skill>>>>,
 }
 
 impl SkillService {
     /// Create a new skill service.
     pub fn new(skills_dir: PathBuf) -> Self {
-        Self { skills_dir }
+        Self {
+            skills_dir,
+            cache: Arc::new(RwLock::new(None)),
+        }
     }
 
-    /// List all skills.
+    /// Preload skills into cache on startup.
+    pub async fn preload(&self) -> Result<(), String> {
+        let skills = self.load_all_skills()?;
+        *self.cache.write().await = Some(skills);
+        tracing::info!("Preloaded {} skills into cache", self.cache.read().await.as_ref().map(|s| s.len()).unwrap_or(0));
+        Ok(())
+    }
+
+    /// List all skills (from cache if available).
     pub async fn list(&self) -> Result<Vec<Skill>, String> {
+        // Check cache first
+        {
+            let cache = self.cache.read().await;
+            if let Some(skills) = cache.as_ref() {
+                return Ok(skills.clone());
+            }
+        }
+
+        // Load from disk and cache
+        let skills = self.load_all_skills()?;
+        {
+            let mut cache = self.cache.write().await;
+            *cache = Some(skills.clone());
+        }
+        Ok(skills)
+    }
+
+    /// Load all skills from disk (bypasses cache).
+    fn load_all_skills(&self) -> Result<Vec<Skill>, String> {
         if !self.skills_dir.exists() {
             return Ok(vec![]);
         }
@@ -102,6 +133,9 @@ impl SkillService {
         // Write SKILL.md
         self.write_skill_md(&skill_dir, &skill)?;
 
+        // Invalidate cache
+        self.invalidate_cache().await;
+
         Ok(Skill {
             id: skill.name.clone(),
             created_at: Some(chrono::Utc::now().to_rfc3339()),
@@ -127,6 +161,9 @@ impl SkillService {
         let target_dir = self.skills_dir.join(&skill.name);
         self.write_skill_md(&target_dir, &skill)?;
 
+        // Invalidate cache
+        self.invalidate_cache().await;
+
         Ok(skill)
     }
 
@@ -141,7 +178,16 @@ impl SkillService {
         fs::remove_dir_all(&skill_path)
             .map_err(|e| format!("Failed to delete skill directory: {}", e))?;
 
+        // Invalidate cache
+        self.invalidate_cache().await;
+
         Ok(())
+    }
+
+    /// Invalidate the skill cache.
+    pub async fn invalidate_cache(&self) {
+        let mut cache = self.cache.write().await;
+        *cache = None;
     }
 
     fn read_skill_folder(&self, skill_dir: &PathBuf) -> Result<Skill, String> {

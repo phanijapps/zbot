@@ -357,5 +357,10 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
 
         // Delegation events are internal and don't need WebSocket messages for now
         GatewayEvent::DelegationStarted { .. } | GatewayEvent::DelegationCompleted { .. } => None,
+
+        // New message added - notify frontend to refresh
+        GatewayEvent::MessageAdded { conversation_id, role, content } => {
+            Some(ServerMessage::MessageAdded { conversation_id, role, content })
+        }
     }
 }

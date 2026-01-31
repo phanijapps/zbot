@@ -189,6 +189,8 @@ pub struct ExecutionRunner {
     provider_service: Arc<ProviderService>,
     /// MCP service for loading MCP server configs
     mcp_service: Arc<McpService>,
+    /// Skill service for loading skill configs
+    skill_service: Arc<crate::services::SkillService>,
     /// Configuration directory
     config_dir: PathBuf,
     /// Active execution handles
@@ -210,6 +212,7 @@ impl ExecutionRunner {
         config_dir: PathBuf,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
+        skill_service: Arc<crate::services::SkillService>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -219,6 +222,7 @@ impl ExecutionRunner {
             agent_service,
             provider_service,
             mcp_service,
+            skill_service,
             config_dir,
             handles: Arc::new(RwLock::new(HashMap::new())),
             conversation_repo,
@@ -238,6 +242,7 @@ impl ExecutionRunner {
         let agent_service = self.agent_service.clone();
         let provider_service = self.provider_service.clone();
         let mcp_service = self.mcp_service.clone();
+        let skill_service = self.skill_service.clone();
         let config_dir = self.config_dir.clone();
         let conversation_repo = self.conversation_repo.clone();
         let handles = self.handles.clone();
@@ -259,6 +264,7 @@ impl ExecutionRunner {
                     agent_service.clone(),
                     provider_service.clone(),
                     mcp_service.clone(),
+                    skill_service.clone(),
                     config_dir.clone(),
                     conversation_repo.clone(),
                     handles.clone(),
@@ -412,9 +418,19 @@ impl ExecutionRunner {
                     let gateway_event =
                         convert_stream_event(event, &agent_id, &conversation_id);
 
-                    // Accumulate response text
-                    if let GatewayEvent::Token { delta, .. } = &gateway_event {
-                        accumulated_response.push_str(delta);
+                    // Accumulate response text from tokens and respond tool
+                    match &gateway_event {
+                        GatewayEvent::Token { delta, .. } => {
+                            accumulated_response.push_str(delta);
+                        }
+                        GatewayEvent::Respond { message, .. } => {
+                            // Capture respond tool messages (important for subagents)
+                            if !accumulated_response.is_empty() {
+                                accumulated_response.push_str("\n\n");
+                            }
+                            accumulated_response.push_str(message);
+                        }
+                        _ => {}
                     }
 
                     // Broadcast event (fire and forget in sync context)
@@ -649,6 +665,21 @@ impl ExecutionRunner {
             );
         }
 
+        // Cache available skills for list_skills tool
+        if let Ok(all_skills) = self.skill_service.list().await {
+            let skills_summary: Vec<serde_json::Value> = all_skills
+                .iter()
+                .map(|s| serde_json::json!({
+                    "name": s.name,
+                    "description": s.description,
+                }))
+                .collect();
+            executor_config = executor_config.with_initial_state(
+                "available_skills",
+                serde_json::Value::Array(skills_summary),
+            );
+        }
+
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
             provider.base_url.clone(),
@@ -755,6 +786,7 @@ async fn spawn_delegated_agent(
     agent_service: Arc<AgentService>,
     provider_service: Arc<ProviderService>,
     mcp_service: Arc<McpService>,
+    skill_service: Arc<crate::services::SkillService>,
     config_dir: PathBuf,
     conversation_repo: Arc<ConversationRepository>,
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
@@ -834,6 +866,21 @@ async fn spawn_delegated_agent(
         executor_config = executor_config.with_initial_state(
             "available_agents",
             serde_json::Value::Array(agents_summary),
+        );
+    }
+
+    // Cache available skills for list_skills tool
+    if let Ok(all_skills) = skill_service.list().await {
+        let skills_summary: Vec<serde_json::Value> = all_skills
+            .iter()
+            .map(|s| serde_json::json!({
+                "name": s.name,
+                "description": s.description,
+            }))
+            .collect();
+        executor_config = executor_config.with_initial_state(
+            "available_skills",
+            serde_json::Value::Array(skills_summary),
         );
     }
 
@@ -966,8 +1013,19 @@ async fn spawn_delegated_agent(
 
                 let gateway_event = convert_stream_event(event, &agent_id, &conv_id);
 
-                if let GatewayEvent::Token { delta, .. } = &gateway_event {
-                    accumulated_response.push_str(delta);
+                // Accumulate response text from tokens and respond tool
+                match &gateway_event {
+                    GatewayEvent::Token { delta, .. } => {
+                        accumulated_response.push_str(delta);
+                    }
+                    GatewayEvent::Respond { message, .. } => {
+                        // Capture respond tool messages
+                        if !accumulated_response.is_empty() {
+                            accumulated_response.push_str("\n\n");
+                        }
+                        accumulated_response.push_str(message);
+                    }
+                    _ => {}
                 }
 
                 let event_bus = event_bus.clone();
@@ -1078,6 +1136,15 @@ async fn spawn_delegated_agent(
                                 "Failed to add callback message: {}", e
                             );
                         } else {
+                            // Emit event so frontend can refresh
+                            event_bus
+                                .publish(GatewayEvent::MessageAdded {
+                                    conversation_id: parent_conv.clone(),
+                                    role: "system".to_string(),
+                                    content: callback_msg.clone(),
+                                })
+                                .await;
+
                             tracing::info!(
                                 parent_agent = %parent_agent,
                                 parent_conv = %parent_conv,
@@ -1092,13 +1159,64 @@ async fn spawn_delegated_agent(
                 delegation_registry.remove(&conv_id);
             }
             Err(e) => {
+                // Publish error event
                 event_bus
                     .publish(GatewayEvent::Error {
-                        agent_id: Some(agent_id),
+                        agent_id: Some(agent_id.clone()),
                         conversation_id: Some(conv_id.clone()),
                         message: e.to_string(),
                     })
                     .await;
+
+                // Send error feedback to parent conversation
+                let agent_display_name = agent_id
+                    .split('-')
+                    .map(|word| {
+                        let mut chars = word.chars();
+                        match chars.next() {
+                            Some(first) => first.to_uppercase().chain(chars).collect(),
+                            None => String::new(),
+                        }
+                    })
+                    .collect::<Vec<String>>()
+                    .join(" ");
+
+                let error_msg = format!(
+                    "## Delegation Failed\n\n**Agent:** {}\n**Error:** {}\n\n---\n_Conversation: `{}`_",
+                    agent_display_name,
+                    e,
+                    conv_id
+                );
+
+                if let Err(err) = conversation_repo.add_message(
+                    &parent_conv,
+                    "system",
+                    &error_msg,
+                    None,
+                    None,
+                ) {
+                    tracing::error!(
+                        parent_conv = %parent_conv,
+                        "Failed to add error callback message: {}", err
+                    );
+                } else {
+                    // Emit event so frontend can refresh
+                    event_bus
+                        .publish(GatewayEvent::MessageAdded {
+                            conversation_id: parent_conv.clone(),
+                            role: "system".to_string(),
+                            content: error_msg.clone(),
+                        })
+                        .await;
+
+                    tracing::warn!(
+                        parent_agent = %parent_agent,
+                        parent_conv = %parent_conv,
+                        child_agent = %agent_id,
+                        error = %e,
+                        "Sent error callback to parent conversation"
+                    );
+                }
 
                 delegation_registry.remove(&conv_id);
             }

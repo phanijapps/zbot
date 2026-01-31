@@ -127,6 +127,17 @@ pub enum GatewayEvent {
         child_conversation_id: String,
         result: Option<String>,
     },
+
+    /// New message added to conversation.
+    ///
+    /// Emitted when a message is added outside of normal streaming
+    /// (e.g., delegation callbacks, system messages).
+    /// Frontend should refresh the conversation to show the new message.
+    MessageAdded {
+        conversation_id: String,
+        role: String,
+        content: String,
+    },
 }
 
 impl GatewayEvent {
@@ -151,6 +162,7 @@ impl GatewayEvent {
             Self::DelegationCompleted {
                 parent_agent_id, ..
             } => Some(parent_agent_id),
+            Self::MessageAdded { .. } => None,
         }
     }
 
@@ -177,6 +189,7 @@ impl GatewayEvent {
                 parent_conversation_id,
                 ..
             } => Some(parent_conversation_id),
+            Self::MessageAdded { conversation_id, .. } => Some(conversation_id),
         }
     }
 }

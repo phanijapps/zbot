@@ -4,13 +4,14 @@
 // ============================================================================
 
 import { useState, useEffect, useRef } from "react";
-import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2 } from "lucide-react";
+import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getTransport, type StreamEvent, type MessageResponse } from "@/services/transport";
 import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
 import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 import { SubagentActivityPanel, type SubagentActivity } from "./SubagentActivityPanel";
+import { TruncatedContent } from "./TruncatedContent";
 
 // ============================================================================
 // Types
@@ -18,7 +19,7 @@ import { SubagentActivityPanel, type SubagentActivity } from "./SubagentActivity
 
 interface ChatMessage {
   id: string;
-  role: "user" | "assistant" | "tool" | "delegation";
+  role: "user" | "assistant" | "tool" | "delegation" | "system";
   content: string;
   timestamp: Date;
   toolName?: string;
@@ -332,6 +333,25 @@ export function WebChatPanel() {
         break;
       }
 
+      case "message_added": {
+        // A message was added to the conversation (e.g., delegation callback)
+        // Add it directly to the messages array
+        const role = event.role as string;
+        const content = event.content as string;
+
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: crypto.randomUUID(),
+            role: role as "user" | "assistant" | "tool" | "delegation" | "system",
+            content,
+            timestamp: new Date(),
+            isStreaming: false,
+          },
+        ]);
+        break;
+      }
+
       case "agent_completed":
       case "turn_complete":
       case "error":
@@ -489,7 +509,9 @@ export function WebChatPanel() {
                         ? message.delegationStatus === "completed"
                           ? "bg-emerald-100"
                           : "bg-violet-100"
-                        : "bg-gradient-to-br from-indigo-500 to-purple-600"
+                        : message.role === "system"
+                          ? "bg-blue-100"
+                          : "bg-gradient-to-br from-indigo-500 to-purple-600"
                 }`}>
                   {message.role === "user" ? (
                     <User className="w-4 h-4 text-white" />
@@ -501,6 +523,8 @@ export function WebChatPanel() {
                     ) : (
                       <GitBranch className="w-4 h-4 text-violet-600" />
                     )
+                  ) : message.role === "system" ? (
+                    <Info className="w-4 h-4 text-blue-600" />
                   ) : (
                     <Bot className="w-4 h-4 text-white" />
                   )}
@@ -517,13 +541,21 @@ export function WebChatPanel() {
                           ? message.delegationStatus === "completed"
                             ? "bg-emerald-50 border border-emerald-200 text-emerald-900"
                             : "bg-violet-50 border border-violet-200 text-violet-900"
-                          : "bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)]"
+                          : message.role === "system"
+                            ? "bg-blue-50 border border-blue-200 text-blue-900"
+                            : "bg-[var(--card)] border border-[var(--border)] text-[var(--foreground)]"
                   }`}
                 >
                   {message.role === "tool" && (
                     <div className="text-xs font-medium text-amber-600 mb-1 flex items-center gap-1">
                       <Wrench className="w-3 h-3" />
                       {message.toolName}
+                    </div>
+                  )}
+                  {message.role === "system" && (
+                    <div className="text-xs font-medium text-blue-600 mb-1 flex items-center gap-1">
+                      <Info className="w-3 h-3" />
+                      System
                     </div>
                   )}
                   {message.role === "delegation" && (
@@ -544,11 +576,21 @@ export function WebChatPanel() {
                       )}
                     </div>
                   )}
-                  <div className="prose prose-sm dark:prose-invert max-w-none text-sm prose-headings:mt-3 prose-headings:mb-2 prose-p:my-1 prose-pre:bg-[var(--muted)] prose-pre:border prose-pre:border-[var(--border)] prose-code:text-[var(--primary)] prose-code:bg-[var(--muted)] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
-                    <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                      {message.content}
-                    </ReactMarkdown>
-                  </div>
+                  {/* Use TruncatedContent for long messages, regular markdown for streaming/short */}
+                  {message.isStreaming || message.role === "user" || message.role === "tool" ? (
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-sm prose-headings:mt-3 prose-headings:mb-2 prose-p:my-1 prose-pre:bg-[var(--muted)] prose-pre:border prose-pre:border-[var(--border)] prose-code:text-[var(--primary)] prose-code:bg-[var(--muted)] prose-code:px-1 prose-code:py-0.5 prose-code:rounded prose-code:before:content-none prose-code:after:content-none">
+                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        {message.content}
+                      </ReactMarkdown>
+                    </div>
+                  ) : (
+                    <TruncatedContent
+                      id={message.id}
+                      content={message.content}
+                      maxWords={400}
+                      className="text-sm"
+                    />
+                  )}
                   {message.isStreaming && (
                     <span className="inline-block w-2 h-4 bg-[var(--primary)] animate-pulse ml-1 rounded-sm" />
                   )}

@@ -10,7 +10,7 @@ use crate::database::ConversationRepository;
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{ExecutionConfig, ExecutionHandle, ExecutionRunner};
 use crate::hooks::HookContext;
-use crate::services::{AgentService, McpService, ProviderService};
+use crate::services::{AgentService, McpService, ProviderService, SkillService};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -55,6 +55,7 @@ impl RuntimeService {
         config_dir: PathBuf,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
+        skill_service: Arc<SkillService>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::new(
             event_bus.clone(),
@@ -63,6 +64,7 @@ impl RuntimeService {
             config_dir.clone(),
             conversation_repo,
             mcp_service,
+            skill_service,
         ));
         Self {
             event_bus,
@@ -230,6 +232,7 @@ pub fn shared_runtime_service_with_runner(
     config_dir: PathBuf,
     conversation_repo: Arc<ConversationRepository>,
     mcp_service: Arc<McpService>,
+    skill_service: Arc<SkillService>,
 ) -> Arc<RuntimeService> {
-    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo, mcp_service))
+    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo, mcp_service, skill_service))
 }

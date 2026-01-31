@@ -13,6 +13,9 @@ use zero_core::{FileSystemContext, Tool, ToolContext, Result};
 // ============================================================================
 
 /// Tool for listing available skills
+///
+/// This tool reads from cached skill data in the context state when available,
+/// falling back to reading from disk if no cache is present.
 pub struct ListSkillsTool {
     fs: Arc<dyn FileSystemContext>,
 }
@@ -30,7 +33,7 @@ impl Tool for ListSkillsTool {
     }
 
     fn description(&self) -> &str {
-        "List all available skills that can be loaded with load_skill. Returns skill names and their descriptions from the skills directory."
+        "List all available skills that can be loaded with load_skill. Returns skill names and their descriptions."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -41,7 +44,19 @@ impl Tool for ListSkillsTool {
         }))
     }
 
-    async fn execute(&self, _ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        // Try to read cached skill list from context state first
+        if let Some(cached_skills) = ctx.get_state("available_skills") {
+            if let Some(skills_array) = cached_skills.as_array() {
+                return Ok(json!({
+                    "skills": skills_array,
+                    "count": skills_array.len(),
+                    "usage": "Use load_skill with the skill name to load a skill's instructions"
+                }));
+            }
+        }
+
+        // Fall back to reading from disk if no cache
         let skills_dir = match self.fs.skills_dir() {
             Some(dir) => dir,
             None => return Ok(json!({
@@ -83,7 +98,6 @@ impl Tool for ListSkillsTool {
                     skills.push(json!({
                         "name": skill_name,
                         "description": description,
-                        "path": path.display().to_string()
                     }));
                 }
             }

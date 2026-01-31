@@ -128,6 +128,14 @@ pub enum ServerMessage {
 
     /// Connected successfully.
     Connected { session_id: String },
+
+    /// New message added to conversation (for delegation callbacks, system messages).
+    /// Frontend should refresh conversation to show the new message.
+    MessageAdded {
+        conversation_id: String,
+        role: String,
+        content: String,
+    },
 }
 
 impl ServerMessage {

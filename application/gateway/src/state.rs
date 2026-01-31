@@ -75,6 +75,7 @@ impl AppState {
             config_dir.clone(),
             conversation_repo.clone(),
             mcp_service.clone(),
+            skills.clone(),
         ));
 
         // Create hook registry
@@ -183,6 +184,11 @@ impl AppState {
         // Seed default agents
         if let Err(e) = self.agents.seed_default_agents(&default_provider_id).await {
             tracing::warn!("Failed to seed default agents: {}", e);
+        }
+
+        // Preload skills into cache
+        if let Err(e) = self.skills.preload().await {
+            tracing::warn!("Failed to preload skills: {}", e);
         }
     }
 }
