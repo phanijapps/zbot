@@ -90,8 +90,8 @@ agentzero/
 ├── runtime/        # Execution engine
 ├── services/       # Standalone data services
 ├── gateway/        # HTTP/WebSocket server
-├── apps/           # Binaries (zerod, zero-cli)
-└── ui/             # Frontend (React + TypeScript)
+├── apps/           # Applications (daemon, cli, ui)
+└── dist/           # Frontend build output
 ```
 
 ### Framework (`framework/`)

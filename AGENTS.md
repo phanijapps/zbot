@@ -6,11 +6,11 @@ AI agent platform with Web dashboard and CLI interfaces.
 
 | Command | Purpose |
 |---------|---------|
-| `cd ui && npm install` | Install frontend dependencies |
+| `cd apps/ui && npm install` | Install frontend dependencies |
 | `npm run dev` | Frontend dev server (port 3000) |
-| `npm run build` | Build frontend to `ui/dist/` |
+| `npm run build` | Build frontend to `dist/` |
 | `npm run daemon` | Run daemon with cargo-watch |
-| `cargo run -p daemon -- --static-dir ./ui/dist` | Run daemon serving dashboard |
+| `cargo run -p daemon -- --static-dir ./dist` | Run daemon serving dashboard |
 | `cargo check --workspace` | Verify Rust code |
 
 ## Architecture
@@ -21,8 +21,8 @@ agentzero/
 ├── runtime/        # Execution engine (agent-runtime, agent-tools)
 ├── services/       # Data services (logs, search, archive)
 ├── gateway/        # HTTP/WebSocket server
-├── apps/           # Binaries (zerod, zero-cli)
-├── ui/             # Frontend (React + TypeScript)
+├── apps/           # Applications (daemon, cli, ui)
+├── dist/           # Frontend build output
 └── memory-bank/    # Documentation
 ```
 
@@ -44,7 +44,6 @@ Lower layers never import upper layers. Services are standalone.
 | `services/` | Standalone data services | [services/AGENTS.md](services/AGENTS.md) |
 | `gateway/` | HTTP/WebSocket API | [gateway/AGENTS.md](gateway/AGENTS.md) |
 | `apps/` | Runnable applications | [apps/AGENTS.md](apps/AGENTS.md) |
-| `ui/` | Web dashboard | [ui/AGENTS.md](ui/AGENTS.md) |
 
 ## Ports
 
@@ -81,6 +80,6 @@ npm run dev
 **Production:**
 ```bash
 npm run build
-cargo run -p daemon -- --static-dir ./ui/dist
+cargo run -p daemon -- --static-dir ./dist
 # Access at http://localhost:18791
 ```

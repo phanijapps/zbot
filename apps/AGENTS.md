@@ -2,15 +2,22 @@
 
 Runnable applications built on the gateway.
 
-## Binaries
+## Structure
 
-### zerod (daemon)
+```
+apps/
+├── daemon/     # HTTP/WebSocket server (zerod)
+├── cli/        # Terminal UI client
+└── ui/         # Web dashboard (React)
+```
+
+## Daemon
 
 Standalone HTTP/WebSocket server running the full agent platform.
 
 ```bash
 # Run with dashboard
-cargo run -p daemon -- --static-dir ./ui/dist
+cargo run -p daemon -- --static-dir ./dist
 
 # Run on custom port
 cargo run -p daemon -- --port 8080
@@ -25,16 +32,16 @@ cargo run -p daemon -- --config-dir ~/.agentzero
 - `--ws-port` - WebSocket port (default: 18790)
 - `--config-dir` - Configuration directory
 
-### zero-cli
+## CLI
 
 Terminal UI client for interacting with agents.
 
 ```bash
 # Connect to local daemon
-cargo run -p zero-cli
+cargo run -p cli
 
 # Connect to remote daemon
-cargo run -p zero-cli -- --url http://remote:18791
+cargo run -p cli -- --url http://remote:18791
 ```
 
 **Features:**
@@ -43,9 +50,26 @@ cargo run -p zero-cli -- --url http://remote:18791
 - Conversation management
 - Agent selection
 
+## UI
+
+Web dashboard for Agent Zero. React 19 + TypeScript + Vite.
+
+```bash
+# Install dependencies
+cd apps/ui && npm install
+
+# Start dev server (port 3000)
+npm run dev
+
+# Build for production (outputs to workspace dist/)
+npm run build
+```
+
+See [ui/AGENTS.md](ui/AGENTS.md) for detailed frontend documentation.
+
 ## Data Directory
 
-Both apps use `~/Documents/agentzero/` by default:
+All apps use `~/Documents/agentzero/` by default:
 
 ```
 agentzero/
@@ -60,8 +84,8 @@ agentzero/
 
 ```bash
 # Run daemon with auto-reload
-cargo watch -x 'run -p daemon -- --static-dir ./ui/dist'
+cargo watch -x 'run -p daemon -- --static-dir ./dist'
 
 # Build release
-cargo build --release -p daemon -p zero-cli
+cargo build --release -p daemon -p cli
 ```

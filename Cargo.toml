@@ -32,7 +32,7 @@ members = [
 
     # Apps - Runnable applications
     "apps/daemon",
-    "apps/zero-cli",
+    "apps/cli",
 ]
 
 [workspace.package]

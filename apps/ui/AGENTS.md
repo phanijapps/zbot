@@ -25,17 +25,13 @@ ui/
 ## Development
 
 ```bash
-# Install dependencies
-cd ui && npm install
+# Install dependencies (from workspace root)
+cd apps/ui && npm install
 
-# Start dev server (port 3000)
-npm run dev
-
-# Build for production
-npm run build
-
-# Preview production build
-npm run preview
+# Or use workspace scripts
+npm run dev       # Start dev server (port 3000)
+npm run build     # Build for production
+npm run preview   # Preview production build
 ```
 
 ## Tech Stack
@@ -79,4 +75,4 @@ await transport.invoke({ agent_id, conversation_id, message });
 
 ## Build Output
 
-Production build goes to `ui/dist/`. The daemon serves this via `--static-dir ./ui/dist`.
+Production build goes to workspace root `dist/`. The daemon serves this via `--static-dir ./dist`.

@@ -3,10 +3,10 @@
   "private": true,
   "description": "AI agent platform with Web dashboard and CLI",
   "scripts": {
-    "dev": "npm --prefix ui run dev",
-    "build": "npm --prefix ui run build",
-    "preview": "npm --prefix ui run preview",
-    "lint": "npm --prefix ui run lint",
-    "daemon": "cargo watch -x 'run -p daemon -- --static-dir ./ui/dist'"
+    "dev": "npm --prefix apps/ui run dev",
+    "build": "npm --prefix apps/ui run build",
+    "preview": "npm --prefix apps/ui run preview",
+    "lint": "npm --prefix apps/ui run lint",
+    "daemon": "cargo watch -x 'run -p daemon -- --static-dir ./dist'"
   }
 }
