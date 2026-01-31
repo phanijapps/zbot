@@ -106,7 +106,7 @@ application/
 ├── gateway/             # HTTP + WebSocket server
 │   ├── http/            #   REST API routes
 │   ├── websocket/       #   WebSocket handler
-│   ├── execution/       #   Agent invocation
+│   ├── execution/       #   Agent invocation + delegation
 │   ├── database/        #   SQLite persistence
 │   └── services/        #   Agent, Provider, Skill services
 ├── agent-runtime/       # Agent execution engine
@@ -117,7 +117,11 @@ application/
 │   ├── file.rs          #   read_file, write_file, list_dir
 │   ├── shell.rs         #   execute_command
 │   ├── memory.rs        #   get, set, search memory
-│   └── introspection.rs #   list_skills, list_tools
+│   └── introspection.rs #   list_skills, list_tools, list_agents
+├── api-logs/            # Execution logging service
+│   ├── service.rs       #   Log storage and retrieval
+│   ├── handlers.rs      #   HTTP API handlers
+│   └── types.rs         #   LogSession, ExecutionLog types
 └── zero-cli/            # Command-line interface
 ```
 
@@ -227,6 +231,9 @@ User Message
 | POST | `/api/providers/test` | Test connection |
 | GET | `/api/skills` | List skills |
 | POST | `/api/skills` | Create skill |
+| GET | `/api/logs/sessions` | List execution sessions |
+| GET | `/api/logs/sessions/:id` | Get session with logs |
+| DELETE | `/api/logs/sessions/:id` | Delete session |
 
 ### WebSocket Protocol (port 18790)
 
@@ -296,6 +303,23 @@ CREATE TABLE messages (
 );
 ```
 
+### execution_logs
+```sql
+CREATE TABLE execution_logs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,        -- Groups logs for one agent invocation
+    conversation_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    parent_session_id TEXT,          -- For delegated agents, links to parent
+    timestamp TEXT NOT NULL,
+    level TEXT NOT NULL,             -- debug, info, warn, error
+    category TEXT NOT NULL,          -- session, tool_call, tool_result, delegation, error
+    message TEXT NOT NULL,
+    metadata TEXT,                   -- JSON with tool args, results, etc.
+    duration_ms INTEGER
+);
+```
+
 ## Built-in Tools
 
 | Tool | Description | Permissions |
@@ -308,7 +332,10 @@ CREATE TABLE messages (
 | `list_skills` | List available skills | Safe |
 | `list_tools` | List available tools | Safe |
 | `list_mcps` | List MCP servers | Safe |
+| `list_agents` | List available agents | Safe |
 | `load_skill` | Load skill instructions | Safe |
+| `delegate_to_agent` | Delegate task to subagent | Safe |
+| `respond` | Send response to user | Safe |
 
 ## Design Decisions
 

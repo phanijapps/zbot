@@ -34,6 +34,7 @@ src/                          # Frontend (React)
 │   ├── agent/                # Chat + agent management
 │   ├── skills/               # Skill management
 │   ├── integrations/         # Provider management
+│   ├── logs/                 # Execution logs dashboard
 │   └── cron/                 # Scheduled tasks
 ├── services/transport/       # HTTP/WebSocket transport
 └── shared/                   # UI components, types
@@ -44,6 +45,7 @@ application/
 ├── gateway/                  # HTTP + WebSocket server
 ├── agent-runtime/            # Agent executor
 ├── agent-tools/              # Built-in tools
+├── api-logs/                 # Execution logging service
 └── zero-cli/                 # CLI tool
 ```
 
