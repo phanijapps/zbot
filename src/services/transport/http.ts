@@ -29,6 +29,9 @@ import type {
   MessageResponse,
   ToolSettings,
   ToolSettingsResponse,
+  LogSession,
+  SessionDetail,
+  LogFilter,
 } from "./types";
 
 // ============================================================================
@@ -200,6 +203,57 @@ export class HttpTransport implements Transport {
       return { success: true, data: result.data.data };
     }
     return { success: false, error: result.error || result.data?.error || "Failed to update tool settings" };
+  }
+
+  // =========================================================================
+  // Execution Log Operations
+  // =========================================================================
+
+  async listLogSessions(filter?: LogFilter): Promise<TransportResult<LogSession[]>> {
+    const params = new URLSearchParams();
+    if (filter?.agent_id) params.set("agent_id", filter.agent_id);
+    if (filter?.level) params.set("level", filter.level);
+    if (filter?.from_time) params.set("from_time", filter.from_time);
+    if (filter?.to_time) params.set("to_time", filter.to_time);
+    if (filter?.limit) params.set("limit", String(filter.limit));
+    if (filter?.offset) params.set("offset", String(filter.offset));
+    
+    const query = params.toString();
+    const url = query ? `/api/logs/sessions?${query}` : "/api/logs/sessions";
+    return this.get<LogSession[]>(url);
+  }
+
+  async getLogSession(sessionId: string): Promise<TransportResult<SessionDetail>> {
+    return this.get<SessionDetail>(`/api/logs/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async deleteLogSession(sessionId: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/logs/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>> {
+    if (!this.config) {
+      return { success: false, error: "Transport not initialized" };
+    }
+
+    try {
+      const response = await fetch(`${this.config.httpUrl}/api/logs/cleanup?older_than_days=${olderThanDays}`, {
+        method: "DELETE",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        return { success: false, error: text || `HTTP ${response.status}` };
+      }
+
+      const data = await response.json();
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
   }
 
   // =========================================================================

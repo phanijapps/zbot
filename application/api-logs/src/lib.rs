@@ -61,7 +61,7 @@ where
     Router::new()
         .route("/sessions", get(handlers::list_sessions::<D>))
         .route(
-            "/sessions/{id}",
+            "/sessions/:id",
             get(handlers::get_session::<D>).delete(handlers::delete_session::<D>),
         )
         .route("/cleanup", delete(handlers::cleanup_old_logs::<D>))

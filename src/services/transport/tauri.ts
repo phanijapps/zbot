@@ -28,6 +28,9 @@ import type {
   McpTestResult,
   MessageResponse,
   ToolSettings,
+  LogSession,
+  SessionDetail,
+  LogFilter,
 } from "./types";
 
 const NOT_SUPPORTED = "Tauri transport is not available. Use web mode instead.";
@@ -152,6 +155,22 @@ export class TauriTransport implements Transport {
   }
 
   async updateToolSettings(_settings: ToolSettings): Promise<TransportResult<ToolSettings>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async listLogSessions(_filter?: LogFilter): Promise<TransportResult<LogSession[]>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getLogSession(_sessionId: string): Promise<TransportResult<SessionDetail>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async deleteLogSession(_sessionId: string): Promise<TransportResult<void>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async cleanupOldLogs(_olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>> {
     return { success: false, error: NOT_SUPPORTED };
   }
 

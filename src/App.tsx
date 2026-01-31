@@ -26,6 +26,7 @@ import {
   Brain,
   Users,
   Eye,
+  Activity,
 } from "lucide-react";
 import { initializeTransport, getTransport, type ToolSettings } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
@@ -34,6 +35,7 @@ import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
 import { WebCronPanel } from "./features/cron/WebCronPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
 import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
+import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 
 // ============================================================================
 // Types
@@ -163,6 +165,7 @@ function App() {
           <Route path="/cron" element={<WebCronPanel />} />
           <Route path="/integrations" element={<WebIntegrationsPanel />} />
           <Route path="/mcps" element={<WebMcpsPanel />} />
+          <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
         </Routes>
       </WebAppShell>
@@ -186,6 +189,7 @@ const navItems = [
   { to: "/cron", label: "Schedules", icon: Calendar },
   { to: "/integrations", label: "Integrations", icon: Plug },
   { to: "/mcps", label: "MCP Servers", icon: Server },
+  { to: "/logs", label: "Logs", icon: Activity },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

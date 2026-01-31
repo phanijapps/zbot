@@ -83,6 +83,7 @@ impl AppState {
             conversation_repo.clone(),
             mcp_service.clone(),
             skills.clone(),
+            log_service.clone(),
         ));
 
         // Create hook registry

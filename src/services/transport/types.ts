@@ -282,3 +282,59 @@ export interface StreamEvent {
 
 export type EventCallback = (event: StreamEvent) => void;
 export type UnsubscribeFn = () => void;
+
+// ============================================================================
+// Execution Log Types
+// ============================================================================
+
+export type LogLevel = "debug" | "info" | "warn" | "error";
+export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system";
+export type SessionStatus = "running" | "completed" | "error" | "stopped";
+
+/** A single execution log entry (snake_case from API) */
+export interface ExecutionLog {
+  id: string;
+  session_id: string;
+  conversation_id: string;
+  agent_id: string;
+  parent_session_id?: string;
+  timestamp: string;
+  level: LogLevel;
+  category: LogCategory;
+  message: string;
+  metadata?: Record<string, unknown>;
+  duration_ms?: number;
+}
+
+/** Session summary (snake_case from API) */
+export interface LogSession {
+  session_id: string;
+  conversation_id: string;
+  agent_id: string;
+  agent_name: string;
+  parent_session_id?: string;
+  started_at: string;
+  ended_at?: string;
+  status: SessionStatus;
+  token_count: number;
+  tool_call_count: number;
+  error_count: number;
+  duration_ms?: number;
+  child_session_ids: string[];
+}
+
+/** Session with all its logs */
+export interface SessionDetail {
+  session: LogSession;
+  logs: ExecutionLog[];
+}
+
+/** Filter for querying logs */
+export interface LogFilter {
+  agent_id?: string;
+  level?: LogLevel;
+  from_time?: string;
+  to_time?: string;
+  limit?: number;
+  offset?: number;
+}

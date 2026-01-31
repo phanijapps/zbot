@@ -1,9 +1,9 @@
 //! # Execution Runner
-//! # Execution Runner
 //!
 //! Manages agent execution and event streaming for the gateway.
 
-use crate::database::ConversationRepository;
+use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService, SessionStatus};
+use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::hooks::HookContext;
 use crate::services::providers::Provider;
@@ -201,6 +201,8 @@ pub struct ExecutionRunner {
     delegation_registry: Arc<super::DelegationRegistry>,
     /// Channel for delegation requests
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    /// Log service for execution tracing
+    log_service: Arc<LogService<DatabaseManager>>,
 }
 
 impl ExecutionRunner {
@@ -213,6 +215,7 @@ impl ExecutionRunner {
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<crate::services::SkillService>,
+        log_service: Arc<LogService<DatabaseManager>>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -228,6 +231,7 @@ impl ExecutionRunner {
             conversation_repo,
             delegation_registry: Arc::new(super::DelegationRegistry::new()),
             delegation_tx,
+            log_service,
         };
 
         // Spawn delegation handler task
@@ -248,6 +252,7 @@ impl ExecutionRunner {
         let handles = self.handles.clone();
         let delegation_registry = self.delegation_registry.clone();
         let delegation_tx = self.delegation_tx.clone();
+        let log_service = self.log_service.clone();
 
         tokio::spawn(async move {
             while let Some(request) = rx.recv().await {
@@ -270,6 +275,7 @@ impl ExecutionRunner {
                     handles.clone(),
                     delegation_registry.clone(),
                     delegation_tx.clone(),
+                    log_service.clone(),
                 )
                 .await
                 {
@@ -295,6 +301,12 @@ impl ExecutionRunner {
         let handle = ExecutionHandle::new(config.max_iterations);
         let handle_clone = handle.clone();
 
+        // Generate session ID for logging
+        let session_id = format!(
+            "sess-{}",
+            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+        );
+
         // Store handle
         {
             let mut handles = self.handles.write().await;
@@ -308,6 +320,24 @@ impl ExecutionRunner {
                 conversation_id: config.conversation_id.clone(),
             })
             .await;
+
+        // Log session start
+        tracing::info!(
+            session_id = %session_id,
+            conversation_id = %config.conversation_id,
+            agent_id = %config.agent_id,
+            "Logging session start"
+        );
+        if let Err(e) = self.log_service.log_session_start(
+            &session_id,
+            &config.conversation_id,
+            &config.agent_id,
+            None,
+        ) {
+            tracing::warn!("Failed to log session start: {}", e);
+        } else {
+            tracing::info!(session_id = %session_id, "Session start logged successfully");
+        }
 
         // Load agent configuration (or create default for "root" agent)
         let agent = match self.agent_service.get(&config.agent_id).await {
@@ -383,6 +413,8 @@ impl ExecutionRunner {
         let conversation_id = config.conversation_id.clone();
         let conversation_repo = self.conversation_repo.clone();
         let delegation_tx = self.delegation_tx.clone();
+        let log_service = self.log_service.clone();
+        let session_id_clone = session_id.clone();
 
         tokio::spawn(async move {
             let mut accumulated_response = String::new();
@@ -412,6 +444,70 @@ impl ExecutionRunner {
                             task: delegate_task.clone(),
                             context: delegate_context.clone(),
                         });
+
+                        // Log delegation
+                        let _ = log_service.log(ExecutionLog::new(
+                            &session_id_clone,
+                            &conversation_id,
+                            &agent_id,
+                            LogLevel::Info,
+                            LogCategory::Delegation,
+                            format!("Delegating to {}", delegate_agent),
+                        ).with_metadata(serde_json::json!({
+                            "child_agent": delegate_agent,
+                            "task": delegate_task,
+                        })));
+                    }
+
+                    // Log tool calls and results
+                    match &event {
+                        StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                            let _ = log_service.log(ExecutionLog::new(
+                                &session_id_clone,
+                                &conversation_id,
+                                &agent_id,
+                                LogLevel::Info,
+                                LogCategory::ToolCall,
+                                format!("Calling tool: {}", tool_name),
+                            ).with_metadata(serde_json::json!({
+                                "tool_id": tool_id,
+                                "tool_name": tool_name,
+                                "args": args,
+                            })));
+                        }
+                        StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                            // Tool failures are expected behavior, use Warn not Error
+                            let level = if error.is_some() { LogLevel::Warn } else { LogLevel::Info };
+                            // Truncate result for logging
+                            let truncated = if result.len() > 500 {
+                                format!("{}...", &result[..500])
+                            } else {
+                                result.clone()
+                            };
+                            let _ = log_service.log(ExecutionLog::new(
+                                &session_id_clone,
+                                &conversation_id,
+                                &agent_id,
+                                level,
+                                LogCategory::ToolResult,
+                                if error.is_some() { "Tool returned error" } else { "Tool completed" },
+                            ).with_metadata(serde_json::json!({
+                                "tool_id": tool_id,
+                                "result": truncated,
+                                "error": error,
+                            })));
+                        }
+                        StreamEvent::Error { error, .. } => {
+                            let _ = log_service.log(ExecutionLog::new(
+                                &session_id_clone,
+                                &conversation_id,
+                                &agent_id,
+                                LogLevel::Error,
+                                LogCategory::Error,
+                                error,
+                            ));
+                        }
+                        _ => {}
                     }
 
                     // Convert and broadcast event
@@ -468,6 +564,15 @@ impl ExecutionRunner {
                         }
                     }
 
+                    // Log session end
+                    let _ = log_service.log_session_end(
+                        &session_id_clone,
+                        &conversation_id,
+                        &agent_id,
+                        SessionStatus::Completed,
+                        Some("Session completed successfully"),
+                    );
+
                     // Emit completion
                     event_bus
                         .publish(GatewayEvent::AgentCompleted {
@@ -478,6 +583,15 @@ impl ExecutionRunner {
                         .await;
                 }
                 Err(e) => {
+                    // Log session error
+                    let _ = log_service.log_session_end(
+                        &session_id_clone,
+                        &conversation_id,
+                        &agent_id,
+                        SessionStatus::Error,
+                        Some(&e.to_string()),
+                    );
+
                     event_bus
                         .publish(GatewayEvent::Error {
                             agent_id: Some(agent_id.clone()),
@@ -490,6 +604,15 @@ impl ExecutionRunner {
 
             // Check if stopped
             if handle_clone.is_stop_requested() {
+                // Log session stopped
+                let _ = log_service.log_session_end(
+                    &session_id_clone,
+                    &conversation_id,
+                    &agent_id,
+                    SessionStatus::Stopped,
+                    Some("Stopped by user"),
+                );
+
                 event_bus
                     .publish(GatewayEvent::AgentStopped {
                         agent_id,
@@ -792,6 +915,7 @@ async fn spawn_delegated_agent(
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     delegation_registry: Arc<super::DelegationRegistry>,
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    log_service: Arc<LogService<DatabaseManager>>,
 ) -> Result<String, String> {
     // Generate child conversation ID
     let child_conversation_id = format!(
@@ -799,6 +923,22 @@ async fn spawn_delegated_agent(
         request.parent_conversation_id,
         uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
     );
+
+    // Generate session ID for logging (linked to parent session)
+    let session_id = format!(
+        "sess-{}",
+        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+    );
+
+    // Log session start with parent session context
+    if let Err(e) = log_service.log_session_start(
+        &session_id,
+        &child_conversation_id,
+        &request.child_agent_id,
+        Some(&request.parent_conversation_id),
+    ) {
+        tracing::warn!("Failed to log delegated session start: {}", e);
+    }
 
     // Register the delegation
     let delegation_context = super::DelegationContext::new(
@@ -982,6 +1122,8 @@ async fn spawn_delegated_agent(
     let task_msg = request.task.clone();
     let parent_agent = request.parent_agent_id.clone();
     let parent_conv = request.parent_conversation_id.clone();
+    let session_id_clone = session_id.clone();
+    let log_service_clone = log_service.clone();
 
     tokio::spawn(async move {
         let mut accumulated_response = String::new();
@@ -1009,6 +1151,69 @@ async fn spawn_delegated_agent(
                         task: delegate_task.clone(),
                         context: delegate_context.clone(),
                     });
+
+                    // Log delegation
+                    let _ = log_service_clone.log(ExecutionLog::new(
+                        &session_id_clone,
+                        &conv_id,
+                        &agent_id,
+                        LogLevel::Info,
+                        LogCategory::Delegation,
+                        format!("Delegating to {}", delegate_agent),
+                    ).with_metadata(serde_json::json!({
+                        "child_agent": delegate_agent,
+                        "task": delegate_task,
+                    })));
+                }
+
+                // Log tool calls and results
+                match &event {
+                    StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                        let _ = log_service_clone.log(ExecutionLog::new(
+                            &session_id_clone,
+                            &conv_id,
+                            &agent_id,
+                            LogLevel::Info,
+                            LogCategory::ToolCall,
+                            format!("Calling tool: {}", tool_name),
+                        ).with_metadata(serde_json::json!({
+                            "tool_id": tool_id,
+                            "tool_name": tool_name,
+                            "args": args,
+                        })));
+                    }
+                    StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                        // Tool failures are expected behavior, use Warn not Error
+                        let level = if error.is_some() { LogLevel::Warn } else { LogLevel::Info };
+                        let truncated = if result.len() > 500 {
+                            format!("{}...", &result[..500])
+                        } else {
+                            result.clone()
+                        };
+                        let _ = log_service_clone.log(ExecutionLog::new(
+                            &session_id_clone,
+                            &conv_id,
+                            &agent_id,
+                            level,
+                            LogCategory::ToolResult,
+                            if error.is_some() { "Tool returned error" } else { "Tool completed" },
+                        ).with_metadata(serde_json::json!({
+                            "tool_id": tool_id,
+                            "result": truncated,
+                            "error": error,
+                        })));
+                    }
+                    StreamEvent::Error { error, .. } => {
+                        let _ = log_service_clone.log(ExecutionLog::new(
+                            &session_id_clone,
+                            &conv_id,
+                            &agent_id,
+                            LogLevel::Error,
+                            LogCategory::Error,
+                            error,
+                        ));
+                    }
+                    _ => {}
                 }
 
                 let gateway_event = convert_stream_event(event, &agent_id, &conv_id);
@@ -1060,6 +1265,15 @@ async fn spawn_delegated_agent(
                         tracing::error!("Failed to save assistant message: {}", e);
                     }
                 }
+
+                // Log session end
+                let _ = log_service_clone.log_session_end(
+                    &session_id_clone,
+                    &conv_id,
+                    &agent_id,
+                    SessionStatus::Completed,
+                    Some("Delegated session completed successfully"),
+                );
 
                 // Emit completion
                 event_bus
@@ -1159,6 +1373,15 @@ async fn spawn_delegated_agent(
                 delegation_registry.remove(&conv_id);
             }
             Err(e) => {
+                // Log session error
+                let _ = log_service_clone.log_session_end(
+                    &session_id_clone,
+                    &conv_id,
+                    &agent_id,
+                    SessionStatus::Error,
+                    Some(&e.to_string()),
+                );
+
                 // Publish error event
                 event_bus
                     .publish(GatewayEvent::Error {

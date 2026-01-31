@@ -37,6 +37,13 @@ export type {
   MessageResponse,
   ConversationResponse,
   ToolSettings,
+  LogLevel,
+  LogCategory,
+  SessionStatus,
+  ExecutionLog,
+  LogSession,
+  SessionDetail,
+  LogFilter,
 } from "./types";
 
 // ============================================================================

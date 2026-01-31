@@ -26,6 +26,9 @@ import type {
   McpTestResult,
   MessageResponse,
   ToolSettings,
+  LogSession,
+  SessionDetail,
+  LogFilter,
 } from "./types";
 
 // ============================================================================
@@ -160,6 +163,22 @@ export interface Transport {
 
   /** Update tool settings */
   updateToolSettings(settings: ToolSettings): Promise<TransportResult<ToolSettings>>;
+
+  // =========================================================================
+  // Execution Log Operations
+  // =========================================================================
+
+  /** List all log sessions */
+  listLogSessions(filter?: LogFilter): Promise<TransportResult<LogSession[]>>;
+
+  /** Get a session with its logs */
+  getLogSession(sessionId: string): Promise<TransportResult<SessionDetail>>;
+
+  /** Delete a log session */
+  deleteLogSession(sessionId: string): Promise<TransportResult<void>>;
+
+  /** Cleanup old logs */
+  cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>>;
 
   // =========================================================================
   // Event Streaming
