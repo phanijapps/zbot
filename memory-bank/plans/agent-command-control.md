@@ -2,7 +2,7 @@
 
 ## Vision
 
-A real-time operational dashboard that sits **in front of chat** as a side panel. Think DevOps for AI agents — see what's running, how much it's costing, and intervene when needed.
+A real-time operational dashboard available as a **tab in the side panel** (alongside Chat, Logs, MCPs, etc.). Think DevOps for AI agents — see what's running, how much it's costing, and intervene when needed.
 
 **Not a logs page.** This is mission control.
 
@@ -184,30 +184,51 @@ fn estimate_progress(session: &Session) -> f32 {
 
 ## Panel Placement
 
-The Command Control panel sits **to the left of chat**:
+Command Control is a **tab in the side panel** alongside Chat, Logs, MCPs, etc:
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────┐
-│                              HEADER                                         │
-├─────────────────────────┬──────────────────────────────────────────────────┤
-│                         │                                                  │
-│   COMMAND CONTROL       │              CHAT PANEL                          │
-│   (Collapsible)         │                                                  │
-│                         │   [Conversation list]                            │
-│   ● Live Status         │   [Message history]                              │
-│   ● Token Metrics       │   [Input box]                                    │
-│   ● Agent Cards         │                                                  │
-│   ● Execution History   │                                                  │
-│                         │                                                  │
-│   [Collapse ◀]          │                                                  │
-│                         │                                                  │
-└─────────────────────────┴──────────────────────────────────────────────────┘
+│  HEADER                                                                    │
+├────────┬───────────────────────────────────────────────────────────────────┤
+│        │                                                                   │
+│  NAV   │                      MAIN CONTENT AREA                            │
+│        │                                                                   │
+│ ┌────┐ │   (Shows selected panel content)                                  │
+│ │💬  │ │                                                                   │
+│ │Chat│ │   When "Command" is selected:                                     │
+│ └────┘ │   ┌─────────────────────────────────────────────────────────────┐ │
+│ ┌────┐ │   │ AGENT COMMAND CONTROL               ● Live  Tokens: Today ▾│ │
+│ │⚡  │ │   ├─────────────────────────────────────────────────────────────┤ │
+│ │Cmd │◄│   │ SYSTEM SNAPSHOT                                            │ │
+│ └────┘ │   │ Agents: 4 Running  Subagents: 9  ✓ 27  ✗ 2                 │ │
+│ ┌────┐ │   │ Tokens: 1.82M IN  612K OUT  Burn: HIGH                     │ │
+│ │📋  │ │   ├─────────────────────────────────────────────────────────────┤ │
+│ │Logs│ │   │ LIVE AGENTS          │  ACTIVE SUBAGENTS                   │ │
+│ └────┘ │   │ ...                  │  ...                                │ │
+│ ┌────┐ │   └─────────────────────────────────────────────────────────────┘ │
+│ │🔌  │ │                                                                   │
+│ │MCPs│ │                                                                   │
+│ └────┘ │                                                                   │
+│        │                                                                   │
+└────────┴───────────────────────────────────────────────────────────────────┘
 ```
 
-### Collapsed State
-When collapsed, show minimal status bar:
+### Navigation Tabs
+| Tab | Icon | Description |
+|-----|------|-------------|
+| Chat | 💬 | Conversations and chat interface |
+| Command | ⚡ | Agent Command Control (this feature) |
+| Logs | 📋 | Execution logs and history |
+| MCPs | 🔌 | MCP server management |
+| Skills | 📚 | Skill management |
+| Settings | ⚙️ | Provider and app settings |
+
+### Status Badge on Tab
+When agents are running, show indicator on Command tab:
 ```
-│ ● 4 agents │ 1.82M tokens │ [Expand ▶]
+│ ⚡  │
+│ Cmd │
+│ ●4  │  ← "4 running" badge
 ```
 
 ---
@@ -300,9 +321,9 @@ CREATE INDEX idx_tokens_parent ON session_tokens(parent_session_id);
 
 ### Phase 4: Integration
 
-1. Add panel to main layout
+1. Add "Command" tab to side navigation
 2. Connect WebSocket for real-time updates
-3. Implement collapse/expand
+3. Add status badge on tab when agents running
 4. Add click-through to chat context
 5. Time range selector (Today/Week/All)
 
