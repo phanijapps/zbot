@@ -923,6 +923,12 @@ async fn spawn_delegated_agent(
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
 
+    // Create conversation in database for the subagent
+    let _ = conversation_repo.get_or_create_conversation(
+        &child_conversation_id,
+        &request.child_agent_id,
+    );
+
     // Spawn the child agent execution
     let agent_id = request.child_agent_id.clone();
     let conv_id = child_conversation_id.clone();
