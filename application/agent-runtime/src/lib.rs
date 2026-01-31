@@ -74,6 +74,7 @@ pub use llm::{
 pub use tools::{
     Tool, ToolRegistry, ToolContext,
     FileSystemContext, NoFileSystemContext,
+    RespondTool, DelegateTool,
 };
 pub use tools::error::ToolError as ToolExecError;
 

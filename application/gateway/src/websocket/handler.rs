@@ -6,6 +6,7 @@ use super::messages::{ClientMessage, ServerMessage};
 use super::session::{SessionRegistry, WsSession};
 use crate::error::{GatewayError, Result};
 use crate::events::{EventBus, GatewayEvent};
+use crate::hooks::HookContext;
 use crate::services::RuntimeService;
 use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
@@ -199,10 +200,23 @@ async fn handle_client_message(
                 session_id, agent_id, conversation_id, message
             );
 
-            // Invoke the agent via runtime service
-            match runtime.invoke(&agent_id, &conversation_id, &message).await {
+            // Create hook context for WebSocket connection
+            let mut hook_context = HookContext::web(session_id);
+            hook_context.metadata.insert(
+                "conversation_id".to_string(),
+                serde_json::Value::String(conversation_id.clone()),
+            );
+
+            // Invoke the agent via runtime service with hook context
+            match runtime
+                .invoke_with_hook(&agent_id, &conversation_id, &message, hook_context)
+                .await
+            {
                 Ok(_handle) => {
-                    debug!("Agent {} invocation started for conversation {}", agent_id, conversation_id);
+                    debug!(
+                        "Agent {} invocation started for conversation {}",
+                        agent_id, conversation_id
+                    );
                     // Events will be broadcast via EventBus -> ServerMessage forwarding
                 }
                 Err(e) => {
@@ -332,5 +346,16 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 message,
             })
         }
+
+        // Respond events are handled by the hook system, not WebSocket directly
+        GatewayEvent::Respond { conversation_id, message, .. } => {
+            Some(ServerMessage::TurnComplete {
+                conversation_id,
+                final_message: Some(message),
+            })
+        }
+
+        // Delegation events are internal and don't need WebSocket messages for now
+        GatewayEvent::DelegationStarted { .. } | GatewayEvent::DelegationCompleted { .. } => None,
     }
 }

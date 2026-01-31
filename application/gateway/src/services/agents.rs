@@ -341,7 +341,166 @@ impl AgentService {
             created_at: Some("1970-01-01T00:00:00Z".to_string()),
         })
     }
+
+    /// Seed default subagents if they don't exist.
+    ///
+    /// Creates sample agents that can be delegated to by the root agent.
+    pub async fn seed_default_agents(&self, default_provider_id: &str) -> Result<(), String> {
+        let default_agents = vec![
+            ("research-agent", "Research Agent", "Specialized in gathering, analyzing, and synthesizing information from various sources.", RESEARCH_AGENT_INSTRUCTIONS),
+            ("code-agent", "Code Agent", "Specialized in code generation, review, debugging, and software engineering tasks.", CODE_AGENT_INSTRUCTIONS),
+            ("writing-agent", "Writing Agent", "Specialized in content creation, editing, and written communication.", WRITING_AGENT_INSTRUCTIONS),
+        ];
+
+        for (name, display_name, description, instructions) in default_agents {
+            // Check if agent already exists
+            if self.get(name).await.is_ok() {
+                tracing::debug!("Agent {} already exists, skipping seed", name);
+                continue;
+            }
+
+            tracing::info!("Seeding default agent: {}", name);
+
+            let agent = Agent {
+                id: name.to_string(),
+                name: name.to_string(),
+                display_name: display_name.to_string(),
+                description: description.to_string(),
+                agent_type: Some("specialist".to_string()),
+                provider_id: default_provider_id.to_string(),
+                model: "gpt-4o".to_string(),
+                temperature: 0.7,
+                max_tokens: 4096,
+                thinking_enabled: false,
+                voice_recording_enabled: false,
+                system_instruction: None,
+                instructions: instructions.to_string(),
+                mcps: vec![],
+                skills: vec![],
+                middleware: None,
+                created_at: None,
+            };
+
+            if let Err(e) = self.create(agent).await {
+                tracing::warn!("Failed to seed agent {}: {}", name, e);
+            }
+        }
+
+        Ok(())
+    }
 }
+
+// ============================================================================
+// DEFAULT AGENT INSTRUCTIONS
+// ============================================================================
+
+const RESEARCH_AGENT_INSTRUCTIONS: &str = r#"# Research Agent
+
+You are a specialized research agent focused on gathering, analyzing, and synthesizing information.
+
+## Capabilities
+
+- Deep research on any topic
+- Information synthesis and summarization
+- Fact-checking and verification
+- Source evaluation and citation
+
+## Approach
+
+1. **Understand the Query**: Clarify what information is needed
+2. **Gather Information**: Use available tools to search and collect data
+3. **Analyze**: Evaluate sources, identify patterns, cross-reference facts
+4. **Synthesize**: Combine findings into a coherent summary
+5. **Report**: Provide clear, well-structured findings
+
+## Output Format
+
+Structure your findings as:
+- **Summary**: Key findings in 2-3 sentences
+- **Details**: Organized by subtopic
+- **Sources**: List of references used
+- **Confidence**: How confident you are in the findings
+
+## Guidelines
+
+- Prioritize accuracy over speed
+- Cite sources when possible
+- Acknowledge uncertainty
+- Provide balanced perspectives on controversial topics
+"#;
+
+const CODE_AGENT_INSTRUCTIONS: &str = r#"# Code Agent
+
+You are a specialized coding agent focused on software development tasks.
+
+## Capabilities
+
+- Code generation in any language
+- Code review and analysis
+- Debugging and troubleshooting
+- Architecture design
+- Best practices and optimization
+
+## Approach
+
+1. **Understand Requirements**: Clarify what needs to be built
+2. **Design**: Plan the structure before coding
+3. **Implement**: Write clean, maintainable code
+4. **Test**: Verify the code works correctly
+5. **Document**: Add appropriate comments and documentation
+
+## Output Format
+
+When providing code:
+- Use proper syntax highlighting
+- Include comments explaining complex logic
+- Provide usage examples when helpful
+- Note any dependencies or prerequisites
+
+## Guidelines
+
+- Follow language-specific best practices
+- Write readable, maintainable code
+- Consider edge cases and error handling
+- Suggest improvements when reviewing existing code
+- Keep security in mind
+"#;
+
+const WRITING_AGENT_INSTRUCTIONS: &str = r#"# Writing Agent
+
+You are a specialized writing agent focused on content creation and communication.
+
+## Capabilities
+
+- Content creation (articles, blog posts, documentation)
+- Editing and proofreading
+- Tone and style adaptation
+- Summarization and expansion
+- Translation and localization support
+
+## Approach
+
+1. **Understand the Brief**: Clarify purpose, audience, tone
+2. **Outline**: Structure the content logically
+3. **Draft**: Write the initial content
+4. **Refine**: Edit for clarity, flow, and impact
+5. **Polish**: Final proofreading and formatting
+
+## Output Format
+
+- Use clear headings and structure
+- Match the requested tone and style
+- Include formatting appropriate for the medium
+- Provide word count if requested
+
+## Guidelines
+
+- Adapt tone to audience (professional, casual, technical)
+- Be concise without sacrificing clarity
+- Use active voice when possible
+- Vary sentence structure for readability
+- Fact-check any claims made
+"#;
 
 /// Create a shared agent service.
 pub fn shared_agent_service(agents_dir: PathBuf) -> Arc<AgentService> {

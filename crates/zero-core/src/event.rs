@@ -128,6 +128,46 @@ pub struct EventActions {
     /// Escalate to human
     #[serde(default)]
     pub escalate: bool,
+
+    /// Response action from the respond tool
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub respond: Option<RespondAction>,
+
+    /// Delegation action from the delegate tool
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delegate: Option<DelegateAction>,
+}
+
+/// Action for the respond tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RespondAction {
+    /// The response message.
+    pub message: String,
+
+    /// Format of the message (text, markdown, html).
+    pub format: String,
+
+    /// Conversation ID for routing.
+    pub conversation_id: Option<String>,
+
+    /// Session ID for web hooks.
+    pub session_id: Option<String>,
+}
+
+/// Action for the delegate tool.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegateAction {
+    /// Target agent ID to delegate to.
+    pub agent_id: String,
+
+    /// Task description for the subagent.
+    pub task: String,
+
+    /// Task-scoped context to pass to the subagent.
+    pub context: Option<Value>,
+
+    /// Whether to wait for the result.
+    pub wait_for_result: bool,
 }
 
 impl EventActions {

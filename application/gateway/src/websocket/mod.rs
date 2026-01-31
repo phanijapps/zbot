@@ -8,4 +8,4 @@ mod session;
 
 pub use handler::WebSocketHandler;
 pub use messages::{ClientMessage, ServerMessage};
-pub use session::WsSession;
+pub use session::{SessionRegistry, WsSession};

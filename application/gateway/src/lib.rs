@@ -33,6 +33,7 @@ pub mod database;
 pub mod error;
 pub mod events;
 pub mod execution;
+pub mod hooks;
 pub mod http;
 pub mod server;
 pub mod services;
@@ -42,9 +43,10 @@ pub mod websocket;
 
 pub use config::GatewayConfig;
 pub use error::{GatewayError, Result};
-pub use execution::{ExecutionRunner, ExecutionConfig, ExecutionHandle};
+pub use execution::{DelegationContext, DelegationRegistry, ExecutionRunner, ExecutionConfig, ExecutionHandle};
+pub use hooks::{Attachment, Hook, HookContext, HookRegistry, HookType, ResponseFormat};
 pub use server::GatewayServer;
-pub use services::{AgentService, RuntimeService};
+pub use services::{AgentRegistry, AgentService, RuntimeService};
 pub use state::AppState;
 
 /// Default WebSocket port

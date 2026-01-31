@@ -190,6 +190,7 @@ impl Default for ContextEditingBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zero_core::Content;
 
     fn create_tool_result(id: &str, response: &str) -> MiddlewareMessage {
         Content {

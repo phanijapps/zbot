@@ -11,7 +11,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-/// Agent response (simplified view for API).
+/// Agent response (full view for API).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct AgentResponse {
     pub id: String,
@@ -25,6 +25,15 @@ pub struct AgentResponse {
     pub temperature: f64,
     #[serde(rename = "maxTokens")]
     pub max_tokens: u32,
+    #[serde(rename = "thinkingEnabled")]
+    pub thinking_enabled: bool,
+    #[serde(rename = "voiceRecordingEnabled")]
+    pub voice_recording_enabled: bool,
+    pub instructions: String,
+    pub mcps: Vec<String>,
+    pub skills: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub middleware: Option<String>,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
 }
@@ -40,6 +49,12 @@ impl From<Agent> for AgentResponse {
             model: agent.model,
             temperature: agent.temperature,
             max_tokens: agent.max_tokens,
+            thinking_enabled: agent.thinking_enabled,
+            voice_recording_enabled: agent.voice_recording_enabled,
+            instructions: agent.instructions,
+            mcps: agent.mcps,
+            skills: agent.skills,
+            middleware: agent.middleware,
             created_at: agent.created_at,
         }
     }
@@ -76,9 +91,14 @@ pub struct UpdateAgentRequest {
     pub temperature: Option<f64>,
     #[serde(rename = "maxTokens")]
     pub max_tokens: Option<u32>,
+    #[serde(rename = "thinkingEnabled")]
+    pub thinking_enabled: Option<bool>,
+    #[serde(rename = "voiceRecordingEnabled")]
+    pub voice_recording_enabled: Option<bool>,
     pub instructions: Option<String>,
     pub mcps: Option<Vec<String>>,
     pub skills: Option<Vec<String>>,
+    pub middleware: Option<String>,
 }
 
 /// GET /api/agents - List all agents.
@@ -163,13 +183,13 @@ pub async fn update_agent(
         model: request.model.unwrap_or(existing.model),
         temperature: request.temperature.unwrap_or(existing.temperature),
         max_tokens: request.max_tokens.unwrap_or(existing.max_tokens),
-        thinking_enabled: existing.thinking_enabled,
-        voice_recording_enabled: existing.voice_recording_enabled,
+        thinking_enabled: request.thinking_enabled.unwrap_or(existing.thinking_enabled),
+        voice_recording_enabled: request.voice_recording_enabled.unwrap_or(existing.voice_recording_enabled),
         system_instruction: existing.system_instruction,
         instructions: request.instructions.unwrap_or(existing.instructions),
         mcps: request.mcps.unwrap_or(existing.mcps),
         skills: request.skills.unwrap_or(existing.skills),
-        middleware: existing.middleware,
+        middleware: request.middleware.or(existing.middleware),
         created_at: existing.created_at,
     };
 

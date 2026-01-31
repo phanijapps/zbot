@@ -4,8 +4,9 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import { Bot, Plus, Trash2, Cpu, Thermometer, Hash, X, Loader2 } from "lucide-react";
+import { Bot, Plus, Trash2, Cpu, Thermometer, Hash, X, Loader2, Pencil } from "lucide-react";
 import { getTransport, type AgentResponse, type CreateAgentRequest, type ProviderResponse } from "@/services/transport";
+import { AgentEditPanel } from "./AgentEditPanel";
 
 // ============================================================================
 // Component
@@ -26,6 +27,7 @@ export function WebAgentsPanel() {
     temperature: 0.7,
     maxTokens: 4096,
   });
+  const [editingAgent, setEditingAgent] = useState<AgentResponse | null>(null);
 
   useEffect(() => {
     loadData();
@@ -308,12 +310,20 @@ export function WebAgentsPanel() {
                       <p className="text-xs text-[var(--muted-foreground)]">{agent.id}</p>
                     </div>
                   </div>
-                  <button
-                    onClick={() => handleDeleteAgent(agent.id)}
-                    className="opacity-0 group-hover:opacity-100 text-[var(--muted-foreground)] hover:text-[var(--destructive)] transition-all p-1.5 hover:bg-[var(--destructive)]/10 rounded-lg"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-all">
+                    <button
+                      onClick={() => setEditingAgent(agent)}
+                      className="text-[var(--muted-foreground)] hover:text-[var(--primary)] p-1.5 hover:bg-[var(--primary)]/10 rounded-lg transition-colors"
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={() => handleDeleteAgent(agent.id)}
+                      className="text-[var(--muted-foreground)] hover:text-[var(--destructive)] p-1.5 hover:bg-[var(--destructive)]/10 rounded-lg transition-colors"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
 
                 {agent.description && (
@@ -339,6 +349,15 @@ export function WebAgentsPanel() {
               </div>
             ))}
           </div>
+        )}
+
+        {/* Edit Agent Panel */}
+        {editingAgent && (
+          <AgentEditPanel
+            agent={editingAgent}
+            onClose={() => setEditingAgent(null)}
+            onSave={loadAgents}
+          />
         )}
       </div>
     </div>

@@ -138,6 +138,44 @@ For tasks with 2+ steps, create TODOs FIRST:
 
 ---
 
+## Delegation
+
+You can delegate tasks to specialized subagents when the task requires specific expertise:
+
+**Available Tools:**
+- `respond` - Send a message back to the user
+- `delegate_to_agent` - Delegate a task to a subagent
+
+**When to Delegate:**
+- Complex research tasks → delegate to a research-focused agent
+- Code generation/review → delegate to a code-focused agent
+- Tasks that benefit from specialized expertise
+- When you need to work on multiple things in parallel
+
+**How to Delegate:**
+```json
+{
+  "agent_id": "research-agent",
+  "task": "Research the latest developments in quantum computing",
+  "context": { "depth": "comprehensive" },
+  "wait_for_result": false
+}
+```
+
+**Delegation Flow:**
+1. You call `delegate_to_agent` with the task
+2. The subagent works independently
+3. When complete, you receive a callback message with results
+4. You can then synthesize and respond to the user
+
+**Best Practices:**
+- Be specific about what you need from the subagent
+- Provide relevant context in the `context` field
+- Use `wait_for_result: false` for fire-and-forget delegation
+- Combine results from multiple subagents when needed
+
+---
+
 ## Security
 
 - Never execute arbitrary code without user confirmation for dangerous operations

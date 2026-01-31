@@ -94,6 +94,39 @@ pub enum GatewayEvent {
         iteration: u32,
         message: String,
     },
+
+    /// Response from the respond tool.
+    ///
+    /// This event is emitted when an agent uses the `respond` tool
+    /// to send a message back to the originating hook.
+    Respond {
+        conversation_id: String,
+        message: String,
+        /// Session ID for web hooks (optional).
+        session_id: Option<String>,
+    },
+
+    /// Delegation started event.
+    ///
+    /// Emitted when an agent delegates to a subagent.
+    DelegationStarted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        task: String,
+    },
+
+    /// Delegation completed event.
+    ///
+    /// Emitted when a delegated subagent completes.
+    DelegationCompleted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        result: Option<String>,
+    },
 }
 
 impl GatewayEvent {
@@ -111,6 +144,13 @@ impl GatewayEvent {
             Self::TurnComplete { agent_id, .. } => Some(agent_id),
             Self::IterationUpdate { agent_id, .. } => Some(agent_id),
             Self::ContinuationPrompt { agent_id, .. } => Some(agent_id),
+            Self::Respond { .. } => None,
+            Self::DelegationStarted {
+                parent_agent_id, ..
+            } => Some(parent_agent_id),
+            Self::DelegationCompleted {
+                parent_agent_id, ..
+            } => Some(parent_agent_id),
         }
     }
 
@@ -128,6 +168,15 @@ impl GatewayEvent {
             Self::TurnComplete { conversation_id, .. } => Some(conversation_id),
             Self::IterationUpdate { conversation_id, .. } => Some(conversation_id),
             Self::ContinuationPrompt { conversation_id, .. } => Some(conversation_id),
+            Self::Respond { conversation_id, .. } => Some(conversation_id),
+            Self::DelegationStarted {
+                parent_conversation_id,
+                ..
+            } => Some(parent_conversation_id),
+            Self::DelegationCompleted {
+                parent_conversation_id,
+                ..
+            } => Some(parent_conversation_id),
         }
     }
 }

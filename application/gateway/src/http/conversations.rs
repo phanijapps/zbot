@@ -1,9 +1,6 @@
 //! # Conversation Endpoints
 //!
 //! CRUD operations for conversations.
-//!
-//! Note: In the AgentZero architecture, conversations are managed per-agent
-//! as daily sessions. Full conversation management will be connected in Phase 3b.
 
 use crate::state::AppState;
 use axum::{
@@ -85,9 +82,27 @@ pub async fn delete_conversation(
 
 /// GET /api/conversations/:id/messages - List messages in a conversation.
 pub async fn list_messages(
-    State(_state): State<AppState>,
-    Path(_id): Path<String>,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
 ) -> Result<Json<Vec<MessageResponse>>, StatusCode> {
-    // TODO: Connect to daily_sessions in Phase 3b
-    Err(StatusCode::NOT_FOUND)
+    match state.conversations.get_messages(&id) {
+        Ok(messages) => {
+            let responses: Vec<MessageResponse> = messages
+                .into_iter()
+                .map(|m| MessageResponse {
+                    id: m.id,
+                    role: m.role,
+                    content: m.content,
+                    timestamp: m.created_at,
+                    metadata: None,
+                })
+                .collect();
+            Ok(Json(responses))
+        }
+        Err(e) => {
+            tracing::warn!("Failed to get messages for conversation {}: {}", id, e);
+            // Return empty array if conversation doesn't exist yet
+            Ok(Json(vec![]))
+        }
+    }
 }

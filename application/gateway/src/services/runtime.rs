@@ -1,4 +1,5 @@
 //! # Runtime Service
+//! # Runtime Service
 //!
 //! Service for managing agent execution runtime.
 //!
@@ -8,7 +9,8 @@
 use crate::database::ConversationRepository;
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{ExecutionConfig, ExecutionHandle, ExecutionRunner};
-use crate::services::{AgentService, ProviderService};
+use crate::hooks::HookContext;
+use crate::services::{AgentService, McpService, ProviderService};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -52,6 +54,7 @@ impl RuntimeService {
         provider_service: Arc<ProviderService>,
         config_dir: PathBuf,
         conversation_repo: Arc<ConversationRepository>,
+        mcp_service: Arc<McpService>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::new(
             event_bus.clone(),
@@ -59,6 +62,7 @@ impl RuntimeService {
             provider_service,
             config_dir.clone(),
             conversation_repo,
+            mcp_service,
         ));
         Self {
             event_bus,
@@ -99,6 +103,34 @@ impl RuntimeService {
             conversation_id.to_string(),
             config_dir,
         );
+
+        runner.invoke(config, message.to_string()).await
+    }
+
+    /// Invoke an agent with a message and hook context.
+    ///
+    /// The hook context is passed to tools so they can route responses
+    /// back to the originating channel (WebSocket, webhook, etc).
+    pub async fn invoke_with_hook(
+        &self,
+        agent_id: &str,
+        conversation_id: &str,
+        message: &str,
+        hook_context: HookContext,
+    ) -> Result<ExecutionHandle, String> {
+        let runner = self.runner.as_ref().ok_or_else(|| {
+            "Runtime not initialized with executor. Call with_runner() first.".to_string()
+        })?;
+
+        let config_dir = self.config_dir.clone().ok_or_else(|| {
+            "Config directory not set".to_string()
+        })?;
+
+        let config = ExecutionConfig::new(
+            agent_id.to_string(),
+            conversation_id.to_string(),
+            config_dir,
+        ).with_hook_context(hook_context);
 
         runner.invoke(config, message.to_string()).await
     }
@@ -197,6 +229,7 @@ pub fn shared_runtime_service_with_runner(
     provider_service: Arc<ProviderService>,
     config_dir: PathBuf,
     conversation_repo: Arc<ConversationRepository>,
+    mcp_service: Arc<McpService>,
 ) -> Arc<RuntimeService> {
-    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo))
+    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo, mcp_service))
 }

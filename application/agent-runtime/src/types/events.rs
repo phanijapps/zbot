@@ -107,6 +107,32 @@ pub enum StreamEvent {
         schema: Value,
         submit_button: Option<String>,
     },
+
+    // ========================================================================
+    // ACTION EVENTS
+    // ========================================================================
+
+    /// Respond action from the respond tool.
+    /// Signals that a response should be sent to the originating hook.
+    #[serde(rename = "action_respond")]
+    ActionRespond {
+        timestamp: u64,
+        message: String,
+        format: String,
+        conversation_id: Option<String>,
+        session_id: Option<String>,
+    },
+
+    /// Delegate action from the delegate tool.
+    /// Signals that a task should be delegated to a subagent.
+    #[serde(rename = "action_delegate")]
+    ActionDelegate {
+        timestamp: u64,
+        agent_id: String,
+        task: String,
+        context: Option<Value>,
+        wait_for_result: bool,
+    },
 }
 
 impl StreamEvent {
@@ -123,7 +149,9 @@ impl StreamEvent {
             | Self::Done { timestamp, .. }
             | Self::Error { timestamp, .. }
             | Self::ShowContent { timestamp, .. }
-            | Self::RequestInput { timestamp, .. } => *timestamp,
+            | Self::RequestInput { timestamp, .. }
+            | Self::ActionRespond { timestamp, .. }
+            | Self::ActionDelegate { timestamp, .. } => *timestamp,
         }
     }
 

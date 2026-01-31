@@ -114,11 +114,27 @@ impl ToolContext {
         conversation_id: Option<String>,
         available_skills: Vec<String>,
     ) -> Self {
-        let mut state = HashMap::new();
+        Self::full_with_state(agent_id, conversation_id, available_skills, HashMap::new())
+    }
+
+    /// Create a full context with all parameters and initial state
+    #[must_use]
+    pub fn full_with_state(
+        agent_id: String,
+        conversation_id: Option<String>,
+        available_skills: Vec<String>,
+        initial_state: HashMap<String, Value>,
+    ) -> Self {
+        let mut state = initial_state;
         // Set agent_id in state for tools that need it (like memory tool)
         state.insert("app:agent_id".to_string(), Value::String(agent_id.clone()));
         if let Some(ref conv_id) = conversation_id {
             state.insert("app:conversation_id".to_string(), Value::String(conv_id.clone()));
+        }
+        // Also store agent_id and conversation_id without prefix for tools like respond/delegate
+        state.insert("agent_id".to_string(), Value::String(agent_id.clone()));
+        if let Some(ref conv_id) = conversation_id {
+            state.insert("conversation_id".to_string(), Value::String(conv_id.clone()));
         }
         Self {
             agent_id: Some(agent_id),

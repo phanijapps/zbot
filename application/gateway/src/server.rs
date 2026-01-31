@@ -79,6 +79,9 @@ impl GatewayServer {
     /// This spawns both HTTP and WebSocket servers and returns immediately.
     /// Use `shutdown()` to stop the servers.
     pub async fn start(&mut self) -> Result<()> {
+        // Seed default agents and other initial data
+        self.state.seed_defaults().await;
+
         let (shutdown_tx, _) = broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 

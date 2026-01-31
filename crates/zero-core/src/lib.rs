@@ -54,7 +54,7 @@ pub use context::{
     RunConfig,
     StreamingMode,
 };
-pub use event::{Event, EventActions};
+pub use event::{Event, EventActions, RespondAction, DelegateAction};
 pub use types::{Content, Part};
 pub use error::{ZeroError, Result};
 pub use callbacks::{BeforeAgentCallback, AfterAgentCallback};
