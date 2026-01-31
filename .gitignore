@@ -89,7 +89,8 @@ out/
 .fusebox/
 .dynamodb/
 .tern-port
-.claude/
+.claude/*
+!.claude/commands/
 .mcp.json
 
 # -----------------------------------------------------------------------------
