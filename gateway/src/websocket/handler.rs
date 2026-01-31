@@ -280,6 +280,87 @@ async fn handle_client_message(
                 let _ = session.send(ServerMessage::Pong);
             }
         }
+        ClientMessage::Pause { session_id: exec_session_id } => {
+            debug!(
+                "Session {} pausing execution session {}",
+                session_id, exec_session_id
+            );
+
+            match runtime.pause(&exec_session_id).await {
+                Ok(()) => {
+                    debug!("Execution session {} paused", exec_session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::SessionPaused {
+                            session_id: exec_session_id,
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to pause session {}: {}", exec_session_id, e);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::error(
+                            None,
+                            "pause_failed",
+                            &e,
+                        ));
+                    }
+                }
+            }
+        }
+        ClientMessage::Resume { session_id: exec_session_id } => {
+            debug!(
+                "Session {} resuming execution session {}",
+                session_id, exec_session_id
+            );
+
+            match runtime.resume(&exec_session_id).await {
+                Ok(()) => {
+                    debug!("Execution session {} resumed", exec_session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::SessionResumed {
+                            session_id: exec_session_id,
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to resume session {}: {}", exec_session_id, e);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::error(
+                            None,
+                            "resume_failed",
+                            &e,
+                        ));
+                    }
+                }
+            }
+        }
+        ClientMessage::Cancel { session_id: exec_session_id } => {
+            debug!(
+                "Session {} cancelling execution session {}",
+                session_id, exec_session_id
+            );
+
+            match runtime.cancel(&exec_session_id).await {
+                Ok(()) => {
+                    debug!("Execution session {} cancelled", exec_session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::SessionCancelled {
+                            session_id: exec_session_id,
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to cancel session {}: {}", exec_session_id, e);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::error(
+                            None,
+                            "cancel_failed",
+                            &e,
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(())
@@ -361,6 +442,11 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
         // New message added - notify frontend to refresh
         GatewayEvent::MessageAdded { conversation_id, role, content } => {
             Some(ServerMessage::MessageAdded { conversation_id, role, content })
+        }
+
+        // Token usage update for real-time metrics
+        GatewayEvent::TokenUsage { conversation_id, session_id, tokens_in, tokens_out } => {
+            Some(ServerMessage::TokenUsage { conversation_id, session_id, tokens_in, tokens_out })
         }
     }
 }

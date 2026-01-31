@@ -7,6 +7,7 @@
 //! and provides a high-level API for invoking agents.
 
 use api_logs::LogService;
+use execution_state::StateService;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{ExecutionConfig, ExecutionHandle, ExecutionRunner};
@@ -58,6 +59,7 @@ impl RuntimeService {
         mcp_service: Arc<McpService>,
         skill_service: Arc<SkillService>,
         log_service: Arc<LogService<DatabaseManager>>,
+        state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::new(
             event_bus.clone(),
@@ -68,6 +70,7 @@ impl RuntimeService {
             mcp_service,
             skill_service,
             log_service,
+            state_service,
         ));
         Self {
             event_bus,
@@ -203,6 +206,33 @@ impl RuntimeService {
         }
     }
 
+    /// Pause an agent execution.
+    pub async fn pause(&self, session_id: &str) -> Result<(), String> {
+        if let Some(runner) = &self.runner {
+            runner.pause(session_id).await
+        } else {
+            Err("Runtime not initialized with executor".to_string())
+        }
+    }
+
+    /// Resume a paused agent execution.
+    pub async fn resume(&self, session_id: &str) -> Result<(), String> {
+        if let Some(runner) = &self.runner {
+            runner.resume(session_id).await
+        } else {
+            Err("Runtime not initialized with executor".to_string())
+        }
+    }
+
+    /// Cancel an agent execution.
+    pub async fn cancel(&self, session_id: &str) -> Result<(), String> {
+        if let Some(runner) = &self.runner {
+            runner.cancel(session_id).await
+        } else {
+            Err("Runtime not initialized with executor".to_string())
+        }
+    }
+
     /// Get execution handle for a conversation.
     pub async fn get_handle(&self, conversation_id: &str) -> Option<ExecutionHandle> {
         if let Some(runner) = &self.runner {
@@ -237,6 +267,7 @@ pub fn shared_runtime_service_with_runner(
     mcp_service: Arc<McpService>,
     skill_service: Arc<SkillService>,
     log_service: Arc<LogService<DatabaseManager>>,
+    state_service: Arc<StateService<DatabaseManager>>,
 ) -> Arc<RuntimeService> {
-    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo, mcp_service, skill_service, log_service))
+    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo, mcp_service, skill_service, log_service, state_service))
 }

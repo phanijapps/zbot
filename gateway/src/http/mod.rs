@@ -101,6 +101,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/tools", put(settings::update_tool_settings))
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
+        // Execution state endpoints (from execution-state crate)
+        .nest_service("/api/executions", execution_state::routes(state.state_service.clone()))
         // State
         .with_state(state);
 

@@ -36,6 +36,7 @@ import { WebCronPanel } from "./features/cron/WebCronPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
 import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
+import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 
 // ============================================================================
 // Types
@@ -56,48 +57,69 @@ function App() {
     connected: false,
   });
   const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
 
-    const init = async () => {
-      if (cancelled) return;
-      await initializeApp();
+    const initializeApp = async () => {
+      try {
+        await initializeTransport();
+
+        // Check if cancelled before proceeding
+        if (cancelled) return;
+
+        const transport = await getTransport();
+        const healthResult = await transport.health();
+
+        if (cancelled) return;
+
+        if (!healthResult.success) {
+          setError(`Cannot connect to gateway: ${healthResult.error}`);
+          setConnectionStatus({ connected: false, error: healthResult.error });
+          return;
+        }
+
+        // Check again before connecting WebSocket
+        if (cancelled) return;
+
+        const connectResult = await transport.connect();
+
+        if (cancelled) {
+          // If cancelled during connect, disconnect immediately
+          transport.disconnect();
+          return;
+        }
+
+        if (connectResult.success) {
+          setConnectionStatus({ connected: true });
+        } else {
+          setConnectionStatus({ connected: true });
+        }
+      } catch (err) {
+        if (cancelled) return;
+        const errorMessage = err instanceof Error ? err.message : String(err);
+        setError(errorMessage);
+        setConnectionStatus({ connected: false, error: errorMessage });
+      } finally {
+        if (!cancelled) {
+          setIsInitializing(false);
+        }
+      }
     };
 
-    init();
+    initializeApp();
 
     return () => {
       cancelled = true;
       getTransport().then(t => t.disconnect());
     };
-  }, []);
+  }, [retryCount]);
 
-  const initializeApp = async () => {
-    try {
-      await initializeTransport();
-      const transport = await getTransport();
-      const healthResult = await transport.health();
-
-      if (!healthResult.success) {
-        setError(`Cannot connect to gateway: ${healthResult.error}`);
-        setConnectionStatus({ connected: false, error: healthResult.error });
-        return;
-      }
-
-      const connectResult = await transport.connect();
-      if (connectResult.success) {
-        setConnectionStatus({ connected: true });
-      } else {
-        setConnectionStatus({ connected: true });
-      }
-    } catch (err) {
-      const errorMessage = err instanceof Error ? err.message : String(err);
-      setError(errorMessage);
-      setConnectionStatus({ connected: false, error: errorMessage });
-    } finally {
-      setIsInitializing(false);
-    }
+  const handleRetry = () => {
+    setError(null);
+    setIsInitializing(true);
+    setRetryCount(c => c + 1);
   };
 
   if (isInitializing) {
@@ -128,11 +150,7 @@ function App() {
             </code>
           </p>
           <button
-            onClick={() => {
-              setError(null);
-              setIsInitializing(true);
-              initializeApp();
-            }}
+            onClick={handleRetry}
             className="btn btn--primary btn--md"
           >
             <RefreshCw style={{ width: 16, height: 16 }} />
@@ -160,6 +178,7 @@ function App() {
       <WebAppShell connectionStatus={connectionStatus}>
         <Routes>
           <Route path="/" element={<WebChatPanel />} />
+          <Route path="/dashboard" element={<WebOpsDashboard />} />
           <Route path="/agents" element={<WebAgentsPanel />} />
           <Route path="/skills" element={<WebSkillsPanel />} />
           <Route path="/cron" element={<WebCronPanel />} />
@@ -183,13 +202,14 @@ interface WebAppShellProps {
 }
 
 const navItems = [
+  { to: "/dashboard", label: "Dashboard", icon: Activity },
   { to: "/", label: "Chat", icon: MessageSquare },
   { to: "/agents", label: "Agents", icon: Bot },
   { to: "/skills", label: "Skills", icon: Zap },
   { to: "/cron", label: "Schedules", icon: Calendar },
   { to: "/integrations", label: "Integrations", icon: Plug },
   { to: "/mcps", label: "MCP Servers", icon: Server },
-  { to: "/logs", label: "Logs", icon: Activity },
+  { to: "/logs", label: "Logs", icon: Eye },
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 

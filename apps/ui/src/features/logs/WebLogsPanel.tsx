@@ -578,6 +578,25 @@ export function WebLogsPanel() {
     }
   };
 
+  // Clear all logs and execution sessions
+  const clearAll = async () => {
+    if (!confirm("Clear all logs and execution history? This cannot be undone.")) return;
+
+    try {
+      const transport = await getTransport();
+      // Clear both logs and execution sessions
+      await Promise.all([
+        transport.cleanupOldLogs(0), // 0 days = delete all
+        transport.cleanupExecutionSessions(), // delete all execution sessions
+      ]);
+      setSessions([]);
+      setExpandedSessions(new Set());
+      setSessionDetails(new Map());
+    } catch (err) {
+      console.error("Failed to clear logs:", err);
+    }
+  };
+
   // Filter and build tree
   const filteredSessions = useMemo(() => {
     if (!filter.search) return sessions;
@@ -602,11 +621,17 @@ export function WebLogsPanel() {
             <h1 className="page-title">Execution Logs</h1>
             <p className="page-subtitle">Monitor agent activity and trace execution</p>
           </div>
-          <div className="page-header__actions">
+          <div className="page-header__actions" style={{ display: "flex", gap: "var(--spacing-2)" }}>
             <button onClick={loadSessions} className="btn btn--secondary btn--sm" disabled={isLoading}>
               <RefreshCw style={{ width: 16, height: 16 }} className={isLoading ? "animate-spin" : ""} />
               Refresh
             </button>
+            {sessions.length > 0 && (
+              <button onClick={clearAll} className="btn btn--destructive btn--sm">
+                <Trash2 style={{ width: 16, height: 16 }} />
+                Clear All
+              </button>
+            )}
           </div>
         </div>
 

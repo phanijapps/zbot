@@ -32,6 +32,9 @@ import type {
   LogSession,
   SessionDetail,
   LogFilter,
+  ExecutionSession,
+  ExecutionSessionFilter,
+  ExecutionStats,
 } from "./types";
 
 // ============================================================================
@@ -247,6 +250,112 @@ export class HttpTransport implements Transport {
       if (!response.ok) {
         const text = await response.text();
         return { success: false, error: text || `HTTP ${response.status}` };
+      }
+
+      const data = await response.json();
+      return { success: true, data };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
+  // =========================================================================
+  // Execution Session Operations
+  // =========================================================================
+
+  async listExecutionSessions(filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>> {
+    const params = new URLSearchParams();
+    if (filter?.agent_id) params.set("agent_id", filter.agent_id);
+    if (filter?.status) params.set("status", filter.status);
+    if (filter?.limit) params.set("limit", String(filter.limit));
+    if (filter?.offset) params.set("offset", String(filter.offset));
+
+    const query = params.toString();
+    const url = query ? `/api/executions/sessions?${query}` : "/api/executions/sessions";
+    return this.get<ExecutionSession[]>(url);
+  }
+
+  async getExecutionSession(sessionId: string): Promise<TransportResult<ExecutionSession>> {
+    return this.get<ExecutionSession>(`/api/executions/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async getExecutionStats(): Promise<TransportResult<ExecutionStats>> {
+    return this.get<ExecutionStats>("/api/executions/stats/counts");
+  }
+
+  async pauseSession(sessionId: string): Promise<TransportResult<void>> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { success: false, error: "WebSocket not connected" };
+    }
+
+    const command = {
+      type: "pause",
+      session_id: sessionId,
+    };
+
+    try {
+      this.ws.send(JSON.stringify(command));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
+  async resumeSession(sessionId: string): Promise<TransportResult<void>> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { success: false, error: "WebSocket not connected" };
+    }
+
+    const command = {
+      type: "resume",
+      session_id: sessionId,
+    };
+
+    try {
+      this.ws.send(JSON.stringify(command));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
+  async cancelSession(sessionId: string): Promise<TransportResult<void>> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { success: false, error: "WebSocket not connected" };
+    }
+
+    const command = {
+      type: "cancel",
+      session_id: sessionId,
+    };
+
+    try {
+      this.ws.send(JSON.stringify(command));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
+  async cleanupExecutionSessions(olderThan?: string): Promise<TransportResult<{ deleted: number }>> {
+    if (!this.config) {
+      return { success: false, error: "Transport not initialized" };
+    }
+
+    // If no timestamp provided, use a future date to delete everything
+    const timestamp = olderThan || new Date(Date.now() + 86400000).toISOString();
+
+    try {
+      const response = await fetch(
+        `${this.config.httpUrl}/api/executions/cleanup?older_than=${encodeURIComponent(timestamp)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+
+      if (!response.ok) {
+        return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
       }
 
       const data = await response.json();

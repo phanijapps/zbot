@@ -29,6 +29,9 @@ import type {
   LogSession,
   SessionDetail,
   LogFilter,
+  ExecutionSession,
+  ExecutionSessionFilter,
+  ExecutionStats,
 } from "./types";
 
 // ============================================================================
@@ -179,6 +182,31 @@ export interface Transport {
 
   /** Cleanup old logs */
   cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>>;
+
+  // =========================================================================
+  // Execution Session Operations
+  // =========================================================================
+
+  /** List execution sessions */
+  listExecutionSessions(filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>>;
+
+  /** Get an execution session by ID */
+  getExecutionSession(sessionId: string): Promise<TransportResult<ExecutionSession>>;
+
+  /** Get execution session stats */
+  getExecutionStats(): Promise<TransportResult<ExecutionStats>>;
+
+  /** Pause an execution session */
+  pauseSession(sessionId: string): Promise<TransportResult<void>>;
+
+  /** Resume a paused execution session */
+  resumeSession(sessionId: string): Promise<TransportResult<void>>;
+
+  /** Cancel an execution session */
+  cancelSession(sessionId: string): Promise<TransportResult<void>>;
+
+  /** Cleanup old execution sessions */
+  cleanupExecutionSessions(olderThan?: string): Promise<TransportResult<{ deleted: number }>>;
 
   // =========================================================================
   // Event Streaming

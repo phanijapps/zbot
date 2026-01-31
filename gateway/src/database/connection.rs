@@ -4,6 +4,7 @@
 // ============================================================================
 
 use api_logs::DbProvider;
+use execution_state::StateDbProvider;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -70,6 +71,20 @@ impl DatabaseManager {
 // ============================================================================
 
 impl DbProvider for DatabaseManager {
+    fn with_connection<F, R>(&self, f: F) -> Result<R, String>
+    where
+        F: FnOnce(&Connection) -> Result<R, rusqlite::Error>,
+    {
+        DatabaseManager::with_connection(self, f)
+    }
+}
+
+// ============================================================================
+// STATE DB PROVIDER IMPLEMENTATION
+// Allows execution-state crate to access the database
+// ============================================================================
+
+impl StateDbProvider for DatabaseManager {
     fn with_connection<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> Result<R, rusqlite::Error>,

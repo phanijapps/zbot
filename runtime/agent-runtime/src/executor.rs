@@ -269,6 +269,10 @@ impl AgentExecutor {
         #[allow(unused_assignments)] // Initialized here, assigned in loop exit condition
         let mut full_response = String::new();
 
+        // Track cumulative token usage across the session
+        let mut total_tokens_in: u64 = 0;
+        let mut total_tokens_out: u64 = 0;
+
         loop {
             if max_iterations == 0 {
                 return Err(ExecutorError::MaxIterationsReached);
@@ -280,6 +284,18 @@ impl AgentExecutor {
                 .chat(current_messages.clone(), tools_schema.clone())
                 .await
                 .map_err(|e| ExecutorError::LlmError(e.to_string()))?;
+
+            // Update cumulative token counts and emit event
+            if let Some(usage) = &response.usage {
+                total_tokens_in += usage.prompt_tokens as u64;
+                total_tokens_out += usage.completion_tokens as u64;
+
+                on_event(StreamEvent::TokenUpdate {
+                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    tokens_in: total_tokens_in,
+                    tokens_out: total_tokens_out,
+                });
+            }
 
             tracing::debug!("LLM response - content: '{}', tool_calls: {}",
                 response.content, response.tool_calls.as_ref().map_or(0, |v| v.len()));

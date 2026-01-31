@@ -31,6 +31,9 @@ import type {
   LogSession,
   SessionDetail,
   LogFilter,
+  ExecutionSession,
+  ExecutionSessionFilter,
+  ExecutionStats,
 } from "./types";
 
 const NOT_SUPPORTED = "Tauri transport is not available. Use web mode instead.";
@@ -171,6 +174,34 @@ export class TauriTransport implements Transport {
   }
 
   async cleanupOldLogs(_olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async listExecutionSessions(_filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getExecutionSession(_sessionId: string): Promise<TransportResult<ExecutionSession>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getExecutionStats(): Promise<TransportResult<ExecutionStats>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async pauseSession(_sessionId: string): Promise<TransportResult<void>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async resumeSession(_sessionId: string): Promise<TransportResult<void>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async cancelSession(_sessionId: string): Promise<TransportResult<void>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async cleanupExecutionSessions(_olderThan?: string): Promise<TransportResult<{ deleted: number }>> {
     return { success: false, error: NOT_SUPPORTED };
   }
 

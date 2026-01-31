@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 2;
+const SCHEMA_VERSION: i32 = 3;
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
@@ -119,6 +119,58 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_execution_logs_parent_session_id
          ON execution_logs(parent_session_id)",
+        [],
+    )?;
+
+    // Create execution_sessions table (for execution-state crate)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS execution_sessions (
+            id TEXT PRIMARY KEY,
+            conversation_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            parent_session_id TEXT,
+            status TEXT NOT NULL DEFAULT 'queued',
+            created_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            tokens_in INTEGER DEFAULT 0,
+            tokens_out INTEGER DEFAULT 0,
+            checkpoint TEXT,
+            error TEXT,
+            FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_session_id) REFERENCES execution_sessions(id) ON DELETE SET NULL
+        )",
+        [],
+    )?;
+
+    // Create indexes for execution_sessions
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_status
+         ON execution_sessions(status)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_conversation
+         ON execution_sessions(conversation_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_parent
+         ON execution_sessions(parent_session_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_created
+         ON execution_sessions(created_at)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_agent
+         ON execution_sessions(agent_id)",
         [],
     )?;
 

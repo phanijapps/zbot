@@ -133,6 +133,21 @@ pub enum StreamEvent {
         context: Option<Value>,
         wait_for_result: bool,
     },
+
+    // ========================================================================
+    // METRICS EVENTS
+    // ========================================================================
+
+    /// Token usage update after an LLM call.
+    /// Cumulative counts of tokens consumed in the session.
+    #[serde(rename = "token_update")]
+    TokenUpdate {
+        timestamp: u64,
+        /// Cumulative input tokens (prompt tokens)
+        tokens_in: u64,
+        /// Cumulative output tokens (completion tokens)
+        tokens_out: u64,
+    },
 }
 
 impl StreamEvent {
@@ -151,7 +166,8 @@ impl StreamEvent {
             | Self::ShowContent { timestamp, .. }
             | Self::RequestInput { timestamp, .. }
             | Self::ActionRespond { timestamp, .. }
-            | Self::ActionDelegate { timestamp, .. } => *timestamp,
+            | Self::ActionDelegate { timestamp, .. }
+            | Self::TokenUpdate { timestamp, .. } => *timestamp,
         }
     }
 

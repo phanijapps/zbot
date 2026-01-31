@@ -33,6 +33,15 @@ pub enum ClientMessage {
         additional_iterations: u32,
     },
 
+    /// Pause a running session.
+    Pause { session_id: String },
+
+    /// Resume a paused or crashed session.
+    Resume { session_id: String },
+
+    /// Cancel a session.
+    Cancel { session_id: String },
+
     /// Ping for keepalive.
     Ping,
 }
@@ -136,6 +145,23 @@ pub enum ServerMessage {
         role: String,
         content: String,
     },
+
+    /// Token usage update for real-time metrics.
+    TokenUsage {
+        conversation_id: String,
+        session_id: String,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
+
+    /// Session paused.
+    SessionPaused { session_id: String },
+
+    /// Session resumed.
+    SessionResumed { session_id: String },
+
+    /// Session cancelled.
+    SessionCancelled { session_id: String },
 }
 
 impl ServerMessage {

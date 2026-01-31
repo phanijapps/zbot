@@ -138,6 +138,16 @@ pub enum GatewayEvent {
         role: String,
         content: String,
     },
+
+    /// Token usage update for a session.
+    ///
+    /// Emitted after each LLM call with cumulative token counts.
+    TokenUsage {
+        conversation_id: String,
+        session_id: String,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
 }
 
 impl GatewayEvent {
@@ -163,6 +173,7 @@ impl GatewayEvent {
                 parent_agent_id, ..
             } => Some(parent_agent_id),
             Self::MessageAdded { .. } => None,
+            Self::TokenUsage { .. } => None,
         }
     }
 
@@ -190,6 +201,7 @@ impl GatewayEvent {
                 ..
             } => Some(parent_conversation_id),
             Self::MessageAdded { conversation_id, .. } => Some(conversation_id),
+            Self::TokenUsage { conversation_id, .. } => Some(conversation_id),
         }
     }
 }

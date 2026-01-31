@@ -338,3 +338,43 @@ export interface LogFilter {
   limit?: number;
   offset?: number;
 }
+
+// ============================================================================
+// Execution State Types
+// ============================================================================
+
+/** Execution session status */
+export type ExecutionStatus =
+  | "queued"
+  | "running"
+  | "paused"
+  | "crashed"
+  | "cancelled"
+  | "completed";
+
+/** Execution session (snake_case from API) */
+export interface ExecutionSession {
+  id: string;
+  conversation_id: string;
+  agent_id: string;
+  parent_session_id?: string;
+  status: ExecutionStatus;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  tokens_in: number;
+  tokens_out: number;
+  checkpoint?: string;
+  error?: string;
+}
+
+/** Filter for querying execution sessions */
+export interface ExecutionSessionFilter {
+  agent_id?: string;
+  status?: ExecutionStatus;
+  limit?: number;
+  offset?: number;
+}
+
+/** Stats for execution sessions - status counts map */
+export type ExecutionStats = Record<string, number>;

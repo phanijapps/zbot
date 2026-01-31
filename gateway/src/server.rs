@@ -79,6 +79,9 @@ impl GatewayServer {
     /// This spawns both HTTP and WebSocket servers and returns immediately.
     /// Use `shutdown()` to stop the servers.
     pub async fn start(&mut self) -> Result<()> {
+        // Mark any RUNNING sessions as CRASHED (daemon was interrupted)
+        self.recover_crashed_sessions();
+
         // Seed default agents and other initial data
         self.state.seed_defaults().await;
 
@@ -137,6 +140,26 @@ impl GatewayServer {
         if let Some(tx) = &self.shutdown_tx {
             let _ = tx.send(());
             info!("Gateway shutdown signal sent");
+        }
+    }
+
+    /// Recover sessions that were interrupted by daemon crash.
+    ///
+    /// Marks any sessions in RUNNING state as CRASHED so they can be resumed.
+    fn recover_crashed_sessions(&self) {
+        match self.state.state_service.mark_running_as_crashed() {
+            Ok(count) if count > 0 => {
+                warn!(
+                    "Recovered {} interrupted session(s) - marked as CRASHED",
+                    count
+                );
+            }
+            Ok(_) => {
+                info!("No interrupted sessions to recover");
+            }
+            Err(e) => {
+                warn!("Failed to recover crashed sessions: {}", e);
+            }
         }
     }
 }

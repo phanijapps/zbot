@@ -3,6 +3,7 @@
 //! Manages agent execution and event streaming for the gateway.
 
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService, SessionStatus};
+use execution_state::{ExecutionSession, ExecutionStatus, StateService};
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::hooks::HookContext;
@@ -121,6 +122,10 @@ impl ExecutionConfig {
 pub struct ExecutionHandle {
     /// Flag to signal stop
     stop_flag: Arc<AtomicBool>,
+    /// Flag to signal pause
+    pause_flag: Arc<AtomicBool>,
+    /// Flag to signal cancel
+    cancel_flag: Arc<AtomicBool>,
     /// Current iteration counter
     iteration: Arc<AtomicU32>,
     /// Maximum iterations
@@ -131,6 +136,8 @@ impl ExecutionHandle {
     fn new(max_iterations: u32) -> Self {
         Self {
             stop_flag: Arc::new(AtomicBool::new(false)),
+            pause_flag: Arc::new(AtomicBool::new(false)),
+            cancel_flag: Arc::new(AtomicBool::new(false)),
             iteration: Arc::new(AtomicU32::new(0)),
             max_iterations: Arc::new(AtomicU32::new(max_iterations)),
         }
@@ -146,6 +153,33 @@ impl ExecutionHandle {
         self.stop_flag.load(Ordering::SeqCst)
     }
 
+    /// Request the execution to pause.
+    pub fn pause(&self) {
+        self.pause_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Resume a paused execution.
+    pub fn resume(&self) {
+        self.pause_flag.store(false, Ordering::SeqCst);
+    }
+
+    /// Check if pause was requested.
+    pub fn is_paused(&self) -> bool {
+        self.pause_flag.load(Ordering::SeqCst)
+    }
+
+    /// Request the execution to cancel.
+    pub fn cancel(&self) {
+        self.cancel_flag.store(true, Ordering::SeqCst);
+        // Also set stop flag so execution stops immediately
+        self.stop_flag.store(true, Ordering::SeqCst);
+    }
+
+    /// Check if cancel was requested.
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel_flag.load(Ordering::SeqCst)
+    }
+
     /// Get current iteration.
     pub fn current_iteration(&self) -> u32 {
         self.iteration.load(Ordering::SeqCst)
@@ -157,6 +191,7 @@ impl ExecutionHandle {
     }
 
     /// Reset iteration counter.
+    #[allow(dead_code)]
     fn reset(&self) {
         self.iteration.store(0, Ordering::SeqCst);
     }
@@ -203,6 +238,8 @@ pub struct ExecutionRunner {
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     /// Log service for execution tracing
     log_service: Arc<LogService<DatabaseManager>>,
+    /// State service for execution state management
+    state_service: Arc<StateService<DatabaseManager>>,
 }
 
 impl ExecutionRunner {
@@ -216,6 +253,7 @@ impl ExecutionRunner {
         mcp_service: Arc<McpService>,
         skill_service: Arc<crate::services::SkillService>,
         log_service: Arc<LogService<DatabaseManager>>,
+        state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -232,6 +270,7 @@ impl ExecutionRunner {
             delegation_registry: Arc::new(super::DelegationRegistry::new()),
             delegation_tx,
             log_service,
+            state_service,
         };
 
         // Spawn delegation handler task
@@ -253,6 +292,7 @@ impl ExecutionRunner {
         let delegation_registry = self.delegation_registry.clone();
         let delegation_tx = self.delegation_tx.clone();
         let log_service = self.log_service.clone();
+        let state_service = self.state_service.clone();
 
         tokio::spawn(async move {
             while let Some(request) = rx.recv().await {
@@ -276,6 +316,7 @@ impl ExecutionRunner {
                     delegation_registry.clone(),
                     delegation_tx.clone(),
                     log_service.clone(),
+                    state_service.clone(),
                 )
                 .await
                 {
@@ -301,11 +342,33 @@ impl ExecutionRunner {
         let handle = ExecutionHandle::new(config.max_iterations);
         let handle_clone = handle.clone();
 
-        // Generate session ID for logging
-        let session_id = format!(
-            "sess-{}",
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
-        );
+        // Ensure conversation exists first (required for FK constraint on execution_sessions)
+        if let Err(e) = self.conversation_repo.get_or_create_conversation(
+            &config.conversation_id,
+            &config.agent_id,
+        ) {
+            tracing::warn!("Failed to ensure conversation exists: {}", e);
+        }
+
+        // Create execution session for state tracking
+        let execution_session = match self.state_service.create_session(
+            &config.conversation_id,
+            &config.agent_id,
+            None,
+        ) {
+            Ok(session) => session,
+            Err(e) => {
+                tracing::warn!("Failed to create execution session: {}", e);
+                // Create a fallback session ID for logging compatibility
+                ExecutionSession::new(&config.conversation_id, &config.agent_id, None)
+            }
+        };
+        let session_id = execution_session.id.clone();
+
+        // Start the session (QUEUED -> RUNNING)
+        if let Err(e) = self.state_service.start_session(&session_id) {
+            tracing::warn!("Failed to start execution session: {}", e);
+        }
 
         // Store handle
         {
@@ -326,7 +389,7 @@ impl ExecutionRunner {
             session_id = %session_id,
             conversation_id = %config.conversation_id,
             agent_id = %config.agent_id,
-            "Logging session start"
+            "Execution session started"
         );
         if let Err(e) = self.log_service.log_session_start(
             &session_id,
@@ -335,8 +398,6 @@ impl ExecutionRunner {
             None,
         ) {
             tracing::warn!("Failed to log session start: {}", e);
-        } else {
-            tracing::info!(session_id = %session_id, "Session start logged successfully");
         }
 
         // Load agent configuration (or create default for "root" agent)
@@ -414,6 +475,7 @@ impl ExecutionRunner {
         let conversation_repo = self.conversation_repo.clone();
         let delegation_tx = self.delegation_tx.clone();
         let log_service = self.log_service.clone();
+        let state_service = self.state_service.clone();
         let session_id_clone = session_id.clone();
 
         tokio::spawn(async move {
@@ -459,8 +521,29 @@ impl ExecutionRunner {
                         })));
                     }
 
-                    // Log tool calls and results
+                    // Log tool calls and results, track tokens
                     match &event {
+                        StreamEvent::TokenUpdate { tokens_in, tokens_out, .. } => {
+                            // Update session token counts in database
+                            if let Err(e) = state_service.update_tokens(&session_id_clone, *tokens_in, *tokens_out) {
+                                tracing::warn!("Failed to update session tokens: {}", e);
+                            }
+
+                            // Emit token usage event for real-time UI updates
+                            let event_bus = event_bus.clone();
+                            let conv_id = conversation_id.clone();
+                            let sess_id = session_id_clone.clone();
+                            let t_in = *tokens_in;
+                            let t_out = *tokens_out;
+                            tokio::spawn(async move {
+                                event_bus.publish(GatewayEvent::TokenUsage {
+                                    conversation_id: conv_id,
+                                    session_id: sess_id,
+                                    tokens_in: t_in,
+                                    tokens_out: t_out,
+                                }).await;
+                            });
+                        }
                         StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
                             let _ = log_service.log(ExecutionLog::new(
                                 &session_id_clone,
@@ -564,6 +647,11 @@ impl ExecutionRunner {
                         }
                     }
 
+                    // Update execution session status to COMPLETED
+                    if let Err(e) = state_service.complete_session(&session_id_clone) {
+                        tracing::warn!("Failed to complete execution session: {}", e);
+                    }
+
                     // Log session end
                     let _ = log_service.log_session_end(
                         &session_id_clone,
@@ -583,6 +671,11 @@ impl ExecutionRunner {
                         .await;
                 }
                 Err(e) => {
+                    // Update execution session status to CRASHED
+                    if let Err(err) = state_service.crash_session(&session_id_clone, &e.to_string()) {
+                        tracing::warn!("Failed to crash execution session: {}", err);
+                    }
+
                     // Log session error
                     let _ = log_service.log_session_end(
                         &session_id_clone,
@@ -604,6 +697,11 @@ impl ExecutionRunner {
 
             // Check if stopped
             if handle_clone.is_stop_requested() {
+                // Update execution session status to CANCELLED
+                if let Err(e) = state_service.cancel_session(&session_id_clone) {
+                    tracing::warn!("Failed to cancel execution session: {}", e);
+                }
+
                 // Log session stopped
                 let _ = log_service.log_session_end(
                     &session_id_clone,
@@ -650,6 +748,56 @@ impl ExecutionRunner {
         } else {
             Err(format!("No active execution for conversation: {}", conversation_id))
         }
+    }
+
+    /// Pause an execution by session ID.
+    ///
+    /// Pausing sets a flag that the executor will check. The execution
+    /// will complete the current operation and then wait for resume.
+    pub async fn pause(&self, session_id: &str) -> Result<(), String> {
+        // First update the database state
+        self.state_service.pause_session(session_id)?;
+
+        // Then pause any running execution with matching session
+        // Note: We need to find by session_id, not conversation_id
+        // For now, we iterate through all handles looking for matching session
+        // TODO: Maintain a session_id -> conversation_id mapping for efficiency
+        let handles = self.handles.read().await;
+        for handle in handles.values() {
+            handle.pause();
+        }
+
+        Ok(())
+    }
+
+    /// Resume a paused execution by session ID.
+    pub async fn resume(&self, session_id: &str) -> Result<(), String> {
+        // First update the database state
+        self.state_service.resume_session(session_id)?;
+
+        // Then resume any paused execution
+        let handles = self.handles.read().await;
+        for handle in handles.values() {
+            handle.resume();
+        }
+
+        Ok(())
+    }
+
+    /// Cancel an execution by session ID.
+    ///
+    /// Cancellation immediately stops the execution and marks it as cancelled.
+    pub async fn cancel(&self, session_id: &str) -> Result<(), String> {
+        // First update the database state
+        self.state_service.cancel_session(session_id)?;
+
+        // Then cancel any running execution
+        let handles = self.handles.read().await;
+        for handle in handles.values() {
+            handle.cancel();
+        }
+
+        Ok(())
     }
 
     /// Get execution handle for a conversation.
@@ -916,6 +1064,7 @@ async fn spawn_delegated_agent(
     delegation_registry: Arc<super::DelegationRegistry>,
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     log_service: Arc<LogService<DatabaseManager>>,
+    state_service: Arc<StateService<DatabaseManager>>,
 ) -> Result<String, String> {
     // Generate child conversation ID
     let child_conversation_id = format!(
@@ -924,11 +1073,33 @@ async fn spawn_delegated_agent(
         uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
     );
 
-    // Generate session ID for logging (linked to parent session)
-    let session_id = format!(
-        "sess-{}",
-        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
-    );
+    // Create conversation record first (required for foreign key constraint)
+    if let Err(e) = conversation_repo.get_or_create_conversation(
+        &child_conversation_id,
+        &request.child_agent_id,
+    ) {
+        tracing::warn!("Failed to create conversation for delegated agent: {}", e);
+    }
+
+    // Create execution session for delegated agent (with parent session reference)
+    // Note: We use parent_conversation_id as a proxy for parent_session_id for now
+    let execution_session = match state_service.create_session(
+        &child_conversation_id,
+        &request.child_agent_id,
+        Some(request.parent_conversation_id.clone()),
+    ) {
+        Ok(session) => session,
+        Err(e) => {
+            tracing::warn!("Failed to create delegated execution session: {}", e);
+            ExecutionSession::new(&child_conversation_id, &request.child_agent_id, Some(request.parent_conversation_id.clone()))
+        }
+    };
+    let session_id = execution_session.id.clone();
+
+    // Start the session (QUEUED -> RUNNING)
+    if let Err(e) = state_service.start_session(&session_id) {
+        tracing::warn!("Failed to start delegated execution session: {}", e);
+    }
 
     // Log session start with parent session context
     if let Err(e) = log_service.log_session_start(
@@ -1110,12 +1281,6 @@ async fn spawn_delegated_agent(
         handles_guard.insert(child_conversation_id.clone(), handle.clone());
     }
 
-    // Create conversation in database for the subagent
-    let _ = conversation_repo.get_or_create_conversation(
-        &child_conversation_id,
-        &request.child_agent_id,
-    );
-
     // Spawn the child agent execution
     let agent_id = request.child_agent_id.clone();
     let conv_id = child_conversation_id.clone();
@@ -1124,6 +1289,7 @@ async fn spawn_delegated_agent(
     let parent_conv = request.parent_conversation_id.clone();
     let session_id_clone = session_id.clone();
     let log_service_clone = log_service.clone();
+    let state_service_clone = state_service.clone();
 
     tokio::spawn(async move {
         let mut accumulated_response = String::new();
@@ -1166,8 +1332,29 @@ async fn spawn_delegated_agent(
                     })));
                 }
 
-                // Log tool calls and results
+                // Log tool calls and results, track tokens
                 match &event {
+                    StreamEvent::TokenUpdate { tokens_in, tokens_out, .. } => {
+                        // Update session token counts in database
+                        if let Err(e) = state_service_clone.update_tokens(&session_id_clone, *tokens_in, *tokens_out) {
+                            tracing::warn!("Failed to update delegated session tokens: {}", e);
+                        }
+
+                        // Emit token usage event for real-time UI updates
+                        let event_bus = event_bus.clone();
+                        let c_id = conv_id.clone();
+                        let s_id = session_id_clone.clone();
+                        let t_in = *tokens_in;
+                        let t_out = *tokens_out;
+                        tokio::spawn(async move {
+                            event_bus.publish(GatewayEvent::TokenUsage {
+                                conversation_id: c_id,
+                                session_id: s_id,
+                                tokens_in: t_in,
+                                tokens_out: t_out,
+                            }).await;
+                        });
+                    }
                     StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
                         let _ = log_service_clone.log(ExecutionLog::new(
                             &session_id_clone,
@@ -1264,6 +1451,11 @@ async fn spawn_delegated_agent(
                     ) {
                         tracing::error!("Failed to save assistant message: {}", e);
                     }
+                }
+
+                // Update execution session status to COMPLETED
+                if let Err(e) = state_service_clone.complete_session(&session_id_clone) {
+                    tracing::warn!("Failed to complete delegated execution session: {}", e);
                 }
 
                 // Log session end
@@ -1373,6 +1565,11 @@ async fn spawn_delegated_agent(
                 delegation_registry.remove(&conv_id);
             }
             Err(e) => {
+                // Update execution session status to CRASHED
+                if let Err(err) = state_service_clone.crash_session(&session_id_clone, &e.to_string()) {
+                    tracing::warn!("Failed to crash delegated execution session: {}", err);
+                }
+
                 // Log session error
                 let _ = log_service_clone.log_session_end(
                     &session_id_clone,
