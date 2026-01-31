@@ -2,123 +2,102 @@
 
 ## Problem Statement
 
-Agent executions (root and subagents) have no persistent state tracking. If the daemon crashes or is killed while an agent is running:
-- The execution is lost
-- User loses context of what was happening
-- No way to resume from where it stopped
+Agent executions have no persistent state tracking. If the daemon crashes while an agent is running, the execution is lost with no way to resume.
 
 ## Goals
 
 1. **Crash Recovery**: Resume interrupted executions after daemon restart
 2. **User Control**: Pause, resume, and cancel executions
-3. **Visibility**: Dashboard showing all execution states
+3. **Visibility**: Track execution state for Command Control panel
 4. **Cascade Control**: Pause/cancel propagates to subagents
+
+---
+
+## Architecture Placement
+
+Following the layer structure in AGENTS.md:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ apps/ui/                                                                │
+│   └── features/command/           UI components for Command Control     │
+├─────────────────────────────────────────────────────────────────────────┤
+│ gateway/                                                                │
+│   ├── execution/runner.rs         Emit state changes, save checkpoints │
+│   ├── websocket/handler.rs        Pause/resume/cancel WebSocket cmds   │
+│   └── http/execution.rs           HTTP API for session management      │
+├─────────────────────────────────────────────────────────────────────────┤
+│ services/                                                               │
+│   └── execution-state/  [NEW]     Standalone state & token tracking    │
+│       ├── types.rs                Session, Checkpoint, TokenMetrics    │
+│       ├── repository.rs           Database operations                  │
+│       ├── service.rs              Business logic                       │
+│       └── handlers.rs             HTTP handlers                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│ runtime/                                                                │
+│   └── agent-runtime/executor.rs   Track tokens, emit to callback       │
+├─────────────────────────────────────────────────────────────────────────┤
+│ framework/                                                              │
+│   └── zero-core/events.rs         Add TokenUpdate event type           │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Why a New Service?
+
+The `api-logs` service handles **historical log records**. Execution state is different:
+- **Mutable state** (RUNNING → PAUSED → RUNNING)
+- **Token metrics** (continuously updated counters)
+- **Checkpoints** (restore points for recovery)
+
+Creating `services/execution-state/` keeps concerns separated and follows the existing service pattern.
 
 ---
 
 ## Execution States
 
 ```
-                    ┌─────────────┐
-                    │   QUEUED    │ ← Initial state when created
-                    └──────┬──────┘
-                           │ start()
-                           ▼
-                    ┌─────────────┐
-          ┌────────►│  RUNNING    │◄────────┐
-          │         └──────┬──────┘         │
-          │                │                │
-          │    ┌───────────┼───────────┐    │
-          │    │           │           │    │
-          │    ▼           ▼           ▼    │
-     resume() ┌─────┐  ┌────────┐  ┌───────┐│
-          │   │PAUSED│  │CRASHED │  │CANCEL-││ resume()
-          │   └──┬──┘  └────────┘  │  LED  ││
-          │      │                 └───────┘│
-          │      │ (user action)            │
-          └──────┘                          │
-                                            │
-                    ┌─────────────┐          │
-                    │  COMPLETED  │◄─────────┘
-                    └─────────────┘     (normal finish)
+QUEUED → RUNNING → PAUSED ⇄ RUNNING → COMPLETED
+                 → CRASHED ⇄ RUNNING
+                 → CANCELLED
 ```
 
-### State Definitions
-
-| State | Description | Transitions |
-|-------|-------------|-------------|
-| `QUEUED` | Created but not started | → RUNNING |
-| `RUNNING` | Actively executing | → PAUSED, COMPLETED, CRASHED, CANCELLED |
-| `PAUSED` | User-initiated pause | → RUNNING (resume), CANCELLED |
-| `CRASHED` | Daemon died during execution | → RUNNING (resume), CANCELLED |
-| `CANCELLED` | User cancelled | Terminal state |
-| `COMPLETED` | Finished successfully | Terminal state |
+| State | Description | Can Transition To |
+|-------|-------------|-------------------|
+| `Queued` | Created, not started | Running |
+| `Running` | Actively executing | Paused, Completed, Crashed, Cancelled |
+| `Paused` | User paused | Running, Cancelled |
+| `Crashed` | Daemon died mid-execution | Running (resume), Cancelled |
+| `Cancelled` | User cancelled | (terminal) |
+| `Completed` | Finished successfully | (terminal) |
 
 ---
 
-## Database Schema
+## New Service: `services/execution-state/`
 
-### New Table: `execution_sessions`
+### Cargo.toml
 
-```sql
-CREATE TABLE execution_sessions (
-    id TEXT PRIMARY KEY,                    -- Session UUID
-    conversation_id TEXT NOT NULL,          -- Link to conversation
-    agent_id TEXT NOT NULL,                 -- Which agent
-    parent_session_id TEXT,                 -- For subagents
+```toml
+[package]
+name = "execution-state"
+version.workspace = true
+edition.workspace = true
 
-    -- State management
-    status TEXT NOT NULL DEFAULT 'QUEUED',  -- QUEUED|RUNNING|PAUSED|CRASHED|CANCELLED|COMPLETED
-
-    -- Timing
-    created_at TEXT NOT NULL,
-    started_at TEXT,
-    paused_at TEXT,
-    completed_at TEXT,
-
-    -- Recovery data
-    last_checkpoint TEXT,                   -- JSON: last known good state
-    checkpoint_message_id TEXT,             -- Last processed message
-
-    -- Metadata
-    error_message TEXT,                     -- If crashed/cancelled with error
-    metadata TEXT,                          -- JSON: additional context
-
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
-    FOREIGN KEY (parent_session_id) REFERENCES execution_sessions(id) ON DELETE SET NULL
-);
-
-CREATE INDEX idx_sessions_status ON execution_sessions(status);
-CREATE INDEX idx_sessions_conversation ON execution_sessions(conversation_id);
-CREATE INDEX idx_sessions_parent ON execution_sessions(parent_session_id);
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+rusqlite = "0.32"
+axum = "0.8"
 ```
 
-### Checkpoint Data Structure
-
-```json
-{
-  "llm_turn": 5,
-  "last_message_id": "msg-123",
-  "pending_tool_calls": [
-    {"id": "tc-1", "name": "read_file", "args": {...}, "status": "pending"}
-  ],
-  "context_state": {...},
-  "subagent_sessions": ["session-abc", "session-def"]
-}
-```
-
----
-
-## Implementation Plan
-
-### Phase 1: Core State Tracking
-
-#### 1.1 Add ExecutionSession Model
-
-**File:** `gateway/src/models/execution_session.rs`
+### types.rs
 
 ```rust
-#[derive(Debug, Clone, Serialize, Deserialize)]
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum ExecutionStatus {
     Queued,
     Running,
@@ -135,12 +114,21 @@ pub struct ExecutionSession {
     pub agent_id: String,
     pub parent_session_id: Option<String>,
     pub status: ExecutionStatus,
+
+    // Timing
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
-    pub paused_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
-    pub last_checkpoint: Option<Checkpoint>,
-    pub error_message: Option<String>,
+
+    // Tokens
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+
+    // Recovery
+    pub checkpoint: Option<Checkpoint>,
+
+    // Outcome
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,187 +136,296 @@ pub struct Checkpoint {
     pub llm_turn: u32,
     pub last_message_id: String,
     pub pending_tool_calls: Vec<PendingToolCall>,
-    pub context_state: Value,
-    pub subagent_sessions: Vec<String>,
+    pub context_snapshot: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PendingToolCall {
+    pub id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TokenUpdate {
+    pub session_id: String,
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyTokenSummary {
+    pub date: String,
+    pub total_in: u64,
+    pub total_out: u64,
+    pub session_count: u64,
+    pub failure_count: u64,
 }
 ```
 
-#### 1.2 Add Session Repository
-
-**File:** `gateway/src/database/sessions.rs`
+### repository.rs (Trait Pattern)
 
 ```rust
-impl SessionRepository {
-    pub fn create(&self, session: &ExecutionSession) -> Result<()>;
+use rusqlite::Connection;
+
+/// Trait for database access - gateway implements this
+pub trait StateDbProvider: Send + Sync {
+    fn get_connection(&self) -> &Connection;
+}
+
+pub struct StateRepository<D: StateDbProvider> {
+    db: Arc<D>,
+}
+
+impl<D: StateDbProvider> StateRepository<D> {
+    // Session CRUD
+    pub fn create_session(&self, session: &ExecutionSession) -> Result<()>;
+    pub fn get_session(&self, id: &str) -> Result<ExecutionSession>;
     pub fn update_status(&self, id: &str, status: ExecutionStatus) -> Result<()>;
+    pub fn update_tokens(&self, id: &str, tokens_in: u64, tokens_out: u64) -> Result<()>;
     pub fn save_checkpoint(&self, id: &str, checkpoint: &Checkpoint) -> Result<()>;
-    pub fn get(&self, id: &str) -> Result<ExecutionSession>;
-    pub fn get_by_conversation(&self, conv_id: &str) -> Result<Vec<ExecutionSession>>;
-    pub fn get_resumable(&self) -> Result<Vec<ExecutionSession>>; // CRASHED or PAUSED
+
+    // Queries
+    pub fn get_by_status(&self, status: ExecutionStatus) -> Result<Vec<ExecutionSession>>;
     pub fn get_children(&self, parent_id: &str) -> Result<Vec<ExecutionSession>>;
+    pub fn get_resumable(&self) -> Result<Vec<ExecutionSession>>;  // Paused + Crashed
+    pub fn get_running(&self) -> Result<Vec<ExecutionSession>>;
+
+    // Aggregates
+    pub fn get_daily_summary(&self, date: &str) -> Result<DailyTokenSummary>;
 }
 ```
 
-#### 1.3 Integrate with Execution Runner
+### Schema SQL
 
-**File:** `gateway/src/execution/runner.rs`
+```sql
+CREATE TABLE IF NOT EXISTS execution_sessions (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    parent_session_id TEXT,
 
-Modify `invoke()` to:
-1. Create ExecutionSession with status QUEUED
-2. Update to RUNNING when starting
-3. Save checkpoints after each LLM turn
-4. Update to COMPLETED/CRASHED on finish/error
+    status TEXT NOT NULL DEFAULT 'queued',
+
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+
+    checkpoint TEXT,  -- JSON
+    error TEXT,
+
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+    FOREIGN KEY (parent_session_id) REFERENCES execution_sessions(id) ON DELETE SET NULL
+);
+
+CREATE INDEX idx_sessions_status ON execution_sessions(status);
+CREATE INDEX idx_sessions_conversation ON execution_sessions(conversation_id);
+CREATE INDEX idx_sessions_parent ON execution_sessions(parent_session_id);
+CREATE INDEX idx_sessions_created ON execution_sessions(created_at);
+```
+
+---
+
+## Gateway Integration
+
+### execution/runner.rs
 
 ```rust
-async fn invoke(&self, ...) -> Result<EventStream> {
-    // Create session record
-    let session = ExecutionSession::new(conversation_id, agent_id, parent_session_id);
-    self.session_repo.create(&session)?;
+use execution_state::{ExecutionSession, ExecutionStatus, StateService};
 
-    // Update to running
-    self.session_repo.update_status(&session.id, ExecutionStatus::Running)?;
+impl ExecutionRunner {
+    pub async fn invoke(&self, ...) -> Result<EventStream> {
+        // 1. Create session record
+        let session = ExecutionSession::new(conversation_id, agent_id, parent_session_id);
+        self.state_service.create_session(&session)?;
 
-    // Execute with checkpointing
-    let result = self.execute_with_checkpoints(session.id, ...).await;
+        // 2. Update to running
+        self.state_service.update_status(&session.id, ExecutionStatus::Running)?;
 
-    // Update final status
-    match result {
-        Ok(_) => self.session_repo.update_status(&session.id, ExecutionStatus::Completed)?,
-        Err(e) => {
-            self.session_repo.update_status(&session.id, ExecutionStatus::Crashed)?;
-            self.session_repo.set_error(&session.id, &e.to_string())?;
+        // 3. Execute with state tracking
+        let handle = ExecutionHandle::new(session.id.clone(), self.state_service.clone());
+        let result = self.execute_with_tracking(handle, ...).await;
+
+        // 4. Update final status
+        match result {
+            Ok(_) => self.state_service.update_status(&session.id, ExecutionStatus::Completed)?,
+            Err(e) => {
+                self.state_service.update_status(&session.id, ExecutionStatus::Crashed)?;
+                self.state_service.set_error(&session.id, &e.to_string())?;
+            }
         }
     }
 }
 ```
 
-### Phase 2: Pause/Resume/Cancel
-
-#### 2.1 Add Control Commands
-
-**File:** `gateway/src/websocket/handler.rs`
-
-New WebSocket commands:
-```typescript
-{ type: "pause", session_id: string }
-{ type: "resume", session_id: string }
-{ type: "cancel", session_id: string }
-```
-
-#### 2.2 ExecutionHandle Enhancement
-
-**File:** `gateway/src/execution/runner.rs`
+### ExecutionHandle (Control Interface)
 
 ```rust
 pub struct ExecutionHandle {
     session_id: String,
+    state_service: Arc<StateService>,
     cancel_token: CancellationToken,
-    pause_signal: Arc<AtomicBool>,
-    session_repo: Arc<SessionRepository>,
+    pause_flag: Arc<AtomicBool>,
 }
 
 impl ExecutionHandle {
     pub async fn pause(&self) -> Result<()> {
-        self.pause_signal.store(true, Ordering::SeqCst);
-        self.session_repo.update_status(&self.session_id, ExecutionStatus::Paused)?;
-        // Pause all child sessions
-        for child in self.session_repo.get_children(&self.session_id)? {
-            self.pause_child(&child.id).await?;
+        self.pause_flag.store(true, Ordering::SeqCst);
+        self.state_service.update_status(&self.session_id, ExecutionStatus::Paused)?;
+
+        // Cascade to children
+        for child in self.state_service.get_children(&self.session_id)? {
+            // Emit pause command for child session
         }
         Ok(())
     }
 
     pub async fn resume(&self) -> Result<()> {
-        self.pause_signal.store(false, Ordering::SeqCst);
-        self.session_repo.update_status(&self.session_id, ExecutionStatus::Running)?;
-        // Resume is handled by executor checking pause_signal
+        self.pause_flag.store(false, Ordering::SeqCst);
+        self.state_service.update_status(&self.session_id, ExecutionStatus::Running)?;
         Ok(())
     }
 
     pub async fn cancel(&self) -> Result<()> {
         self.cancel_token.cancel();
-        self.session_repo.update_status(&self.session_id, ExecutionStatus::Cancelled)?;
-        // Cancel all child sessions
-        for child in self.session_repo.get_children(&self.session_id)? {
-            self.cancel_child(&child.id).await?;
+        self.state_service.update_status(&self.session_id, ExecutionStatus::Cancelled)?;
+
+        // Cascade to children
+        for child in self.state_service.get_children(&self.session_id)? {
+            // Emit cancel command for child session
         }
         Ok(())
     }
-}
-```
 
-#### 2.3 Executor Pause Loop
+    pub fn update_tokens(&self, tokens_in: u64, tokens_out: u64) -> Result<()> {
+        self.state_service.update_tokens(&self.session_id, tokens_in, tokens_out)
+    }
 
-```rust
-async fn execute_llm_loop(&self, ...) -> Result<()> {
-    loop {
-        // Check pause signal
-        while self.handle.is_paused() {
-            tokio::time::sleep(Duration::from_millis(100)).await;
-            if self.handle.is_cancelled() {
-                return Err(ExecutionCancelled);
-            }
-        }
-
-        // Check cancel
-        if self.handle.is_cancelled() {
-            return Err(ExecutionCancelled);
-        }
-
-        // Normal LLM call...
-        let response = self.llm_client.call(...).await?;
-
-        // Save checkpoint after each turn
-        self.save_checkpoint()?;
+    pub fn save_checkpoint(&self, checkpoint: &Checkpoint) -> Result<()> {
+        self.state_service.save_checkpoint(&self.session_id, checkpoint)
     }
 }
 ```
 
-### Phase 3: Crash Recovery
+### websocket/handler.rs
 
-#### 3.1 Startup Recovery Check
+```rust
+// New WebSocket commands
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ClientCommand {
+    Invoke { ... },
+    Stop { ... },
 
-**File:** `gateway/src/state.rs`
+    // NEW
+    Pause { session_id: String },
+    Resume { session_id: String },
+    Cancel { session_id: String },
+}
+```
 
-On daemon startup:
+---
+
+## Runtime Integration
+
+### agent-runtime/executor.rs
+
+Track tokens from LLM responses and emit via callback:
+
+```rust
+impl AgentExecutor {
+    async fn call_llm(&mut self, ...) -> Result<LlmResponse> {
+        let response = self.llm_client.chat_completion(...).await?;
+
+        // Track tokens
+        self.tokens_in += response.usage.prompt_tokens;
+        self.tokens_out += response.usage.completion_tokens;
+
+        // Emit token update via callback
+        if let Some(callback) = &self.token_callback {
+            callback(TokenUpdate {
+                session_id: self.session_id.clone(),
+                tokens_in: self.tokens_in,
+                tokens_out: self.tokens_out,
+            });
+        }
+
+        Ok(response)
+    }
+}
+```
+
+---
+
+## Framework Changes
+
+### zero-core/events.rs
+
+Add token event type:
+
+```rust
+#[derive(Debug, Clone, Serialize)]
+pub enum AgentEvent {
+    // Existing...
+    Started { agent_id: String },
+    Token { delta: String },
+    ToolCall { ... },
+    ToolResult { ... },
+    Completed { result: String },
+    Error { message: String },
+
+    // NEW
+    TokenUpdate {
+        session_id: String,
+        tokens_in: u64,
+        tokens_out: u64
+    },
+    StatusChanged {
+        session_id: String,
+        status: String,
+    },
+}
+```
+
+---
+
+## Crash Recovery
+
+### On Daemon Startup (gateway/state.rs)
+
 ```rust
 impl AppState {
-    pub async fn recover_crashed_sessions(&self) -> Result<()> {
-        // Find sessions that were RUNNING when daemon died
-        let crashed = self.session_repo.get_by_status(ExecutionStatus::Running)?;
-
-        for session in crashed {
-            // Mark as CRASHED (not RUNNING anymore)
-            self.session_repo.update_status(&session.id, ExecutionStatus::Crashed)?;
-            tracing::warn!("Session {} marked as crashed (daemon restart)", session.id);
+    pub async fn recover_sessions(&self) -> Result<()> {
+        // Mark RUNNING sessions as CRASHED
+        let running = self.state_service.get_by_status(ExecutionStatus::Running)?;
+        for session in running {
+            self.state_service.update_status(&session.id, ExecutionStatus::Crashed)?;
+            tracing::warn!("Session {} marked crashed (daemon restart)", session.id);
         }
-
         Ok(())
     }
 }
 ```
 
-#### 3.2 Resume from Checkpoint
-
-**File:** `gateway/src/execution/runner.rs`
+### Resume Flow
 
 ```rust
 pub async fn resume_session(&self, session_id: &str) -> Result<EventStream> {
-    let session = self.session_repo.get(session_id)?;
+    let session = self.state_service.get_session(session_id)?;
 
     match session.status {
         ExecutionStatus::Paused | ExecutionStatus::Crashed => {
-            // Load checkpoint
-            let checkpoint = session.last_checkpoint
-                .ok_or("No checkpoint available")?;
+            let checkpoint = session.checkpoint.ok_or("No checkpoint")?;
 
-            // Restore state
-            let mut executor = self.create_executor_from_checkpoint(&checkpoint).await?;
+            // Restore executor state from checkpoint
+            let mut executor = self.create_executor_from_checkpoint(&checkpoint)?;
 
-            // Update status
-            self.session_repo.update_status(session_id, ExecutionStatus::Running)?;
+            self.state_service.update_status(session_id, ExecutionStatus::Running)?;
 
-            // Continue execution from checkpoint
+            // Continue from checkpoint
             executor.continue_from(checkpoint.llm_turn).await
         }
         _ => Err("Session not resumable".into())
@@ -336,110 +433,59 @@ pub async fn resume_session(&self, session_id: &str) -> Result<EventStream> {
 }
 ```
 
-### Phase 4: HTTP API
-
-**File:** `gateway/src/http/sessions.rs`
-
-```rust
-// GET /api/sessions - List sessions with filters
-// GET /api/sessions/:id - Get session details
-// POST /api/sessions/:id/pause - Pause session
-// POST /api/sessions/:id/resume - Resume session
-// POST /api/sessions/:id/cancel - Cancel session
-// DELETE /api/sessions/:id - Delete session record
-// GET /api/sessions/resumable - Get all paused/crashed sessions
-```
-
 ---
 
-## UI Integration
+## Files Summary
 
-### Sessions Dashboard
-
-New page: `/sessions` showing:
-
-1. **Active Sessions** - Currently RUNNING
-2. **Paused Sessions** - User-paused, can resume
-3. **Crashed Sessions** - Need attention, can resume or delete
-4. **Recent Completed** - History
-
-Each session card shows:
-- Agent name
-- Status badge (color-coded)
-- Duration / time paused
-- Last activity
-- Actions: Pause/Resume/Cancel/Delete
-
-### Real-time Updates
-
-WebSocket events for session state changes:
-```typescript
-{ type: "session_state_changed", session_id: string, status: string }
-```
-
----
-
-## Files to Modify
-
-| File | Changes |
-|------|---------|
-| `gateway/src/database/schema.rs` | Add execution_sessions table |
-| `gateway/src/database/sessions.rs` | **NEW** Session repository |
-| `gateway/src/models/execution_session.rs` | **NEW** Session model |
-| `gateway/src/execution/runner.rs` | Session lifecycle, checkpointing |
-| `gateway/src/websocket/handler.rs` | Pause/resume/cancel commands |
-| `gateway/src/http/sessions.rs` | **NEW** Session HTTP API |
-| `gateway/src/state.rs` | Startup recovery |
-| `apps/ui/src/features/sessions/` | **NEW** Sessions dashboard |
+| Layer | File | Changes |
+|-------|------|---------|
+| **services/** | `execution-state/` | **NEW CRATE** - Session state, tokens, checkpoints |
+| **gateway** | `Cargo.toml` | Add `execution-state` dependency |
+| **gateway** | `database/schema.rs` | Add `execution_sessions` table |
+| **gateway** | `state.rs` | Add StateService, crash recovery |
+| **gateway** | `execution/runner.rs` | Emit state changes, checkpointing |
+| **gateway** | `execution/handle.rs` | **NEW** - Control interface (pause/resume/cancel) |
+| **gateway** | `websocket/handler.rs` | Add pause/resume/cancel commands |
+| **gateway** | `http/sessions.rs` | **NEW** - Session management API |
+| **runtime** | `agent-runtime/executor.rs` | Track tokens, emit updates |
+| **framework** | `zero-core/events.rs` | Add TokenUpdate, StatusChanged events |
 
 ---
 
 ## Implementation Order
 
-1. **Week 1**: Core state tracking
-   - Database schema
-   - Session model and repository
-   - Basic status updates in runner
+### Week 1: Service Foundation
+1. Create `services/execution-state/` crate
+2. Define types, repository trait, schema
+3. Add to workspace Cargo.toml
 
-2. **Week 2**: Checkpointing
-   - Checkpoint data structure
-   - Save checkpoints during execution
-   - Crash detection on startup
+### Week 2: Gateway Integration
+4. Implement StateDbProvider in gateway
+5. Wire StateService into AppState
+6. Update runner to create sessions and update status
 
-3. **Week 3**: Control commands
-   - Pause/resume/cancel
-   - Cascade to subagents
-   - WebSocket commands
+### Week 3: Token Tracking
+7. Add token tracking to executor
+8. Emit TokenUpdate events
+9. Update tokens in database
 
-4. **Week 4**: Resume from checkpoint
-   - Load checkpoint
-   - Restore executor state
-   - Continue execution
+### Week 4: Control Commands
+10. Add ExecutionHandle with pause/resume/cancel
+11. Add WebSocket commands
+12. Implement cascade to subagents
 
-5. **Week 5**: UI
-   - Sessions dashboard
-   - Real-time status updates
-   - Action buttons
+### Week 5: Checkpointing & Recovery
+13. Save checkpoints during execution
+14. Add crash recovery on startup
+15. Implement resume_session
 
 ---
 
 ## Verification
 
-### Test Cases
-
-1. **Normal execution**: Status transitions QUEUED → RUNNING → COMPLETED
-2. **User pause**: RUNNING → PAUSED → RUNNING (resume) → COMPLETED
-3. **User cancel**: RUNNING → CANCELLED
-4. **Crash recovery**: Kill daemon while RUNNING → restart → status is CRASHED → resume → COMPLETED
-5. **Subagent cascade**: Pause parent → all children paused
-
-### Manual Testing
-
-```bash
-# Start a long-running agent task
-# Kill daemon: Ctrl+C or kill -9
-# Restart daemon
-# Check /api/sessions/resumable
-# Resume session via UI or API
-# Verify it continues from checkpoint
-```
+1. **Session lifecycle**: QUEUED → RUNNING → COMPLETED
+2. **Pause/Resume**: Status changes correctly, execution pauses
+3. **Cancel**: Execution stops, subagents cancelled
+4. **Token tracking**: IN/OUT updated after each LLM call
+5. **Crash recovery**: Kill daemon → restart → sessions marked CRASHED
+6. **Resume**: Crashed session resumes from checkpoint

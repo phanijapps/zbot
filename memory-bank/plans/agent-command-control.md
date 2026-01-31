@@ -273,66 +273,159 @@ CREATE INDEX idx_tokens_parent ON session_tokens(parent_session_id);
 
 ---
 
+## Architecture Placement
+
+Following the layer structure in AGENTS.md:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│ apps/ui/src/features/command/        UI LAYER                           │
+│   ├── CommandControl.tsx             Main panel component               │
+│   ├── SystemSnapshot.tsx             Top metrics bar                    │
+│   ├── LiveAgentCard.tsx              Running agent card                 │
+│   ├── SubagentList.tsx               Active subagents                   │
+│   ├── ExecutionHistory.tsx           Today's executions                 │
+│   ├── TokenBadge.tsx                 Compact token display              │
+│   └── BurnIndicator.tsx              Burn rate visual                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│ gateway/                             GATEWAY LAYER                      │
+│   ├── http/command.rs                HTTP API for command control       │
+│   └── websocket/handler.rs           Real-time event streaming          │
+├─────────────────────────────────────────────────────────────────────────┤
+│ services/execution-state/            SERVICE LAYER (from other plan)   │
+│   └── (provides session & token data)                                   │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Key principle:** Command Control is a **consumer** of the execution-state service. It doesn't add new backend services—it surfaces data that execution-state already tracks.
+
+---
+
 ## Implementation Plan
 
-### Phase 1: Token Tracking Infrastructure
+### Phase 1: Backend API (Gateway)
 
-**Backend:**
-1. Add `session_tokens` table to schema
-2. Create `TokenTracker` service
-3. Instrument executor to emit token events
-4. Add token aggregation queries
+**Depends on:** `services/execution-state/` from Execution State Management plan
 
-**Files:**
-- `gateway/src/database/schema.rs` — Add table
-- `gateway/src/services/tokens.rs` — Token tracking service
-- `gateway/src/execution/runner.rs` — Emit token events
-- `runtime/agent-runtime/src/executor.rs` — Track LLM response tokens
+**File:** `gateway/src/http/command.rs` (NEW)
 
-### Phase 2: Real-time Events
+```rust
+// Snapshot endpoint
+GET /api/command/snapshot
+→ {
+    agents_running: 4,
+    subagents_active: 9,
+    executions_today: 27,
+    failures_today: 2,
+    tokens_today: { in: 1820000, out: 612000 }
+}
 
-**Backend:**
-1. Add WebSocket events for token updates
-2. Throttle token events (batch every 2 sec)
-3. Add session status events
+// Live agents
+GET /api/command/live
+→ {
+    agents: [...],      // Root agents currently running
+    subagents: [...]    // Their active subagents
+}
 
-**Files:**
-- `gateway/src/websocket/handler.rs` — New event types
-- `gateway/src/events/mod.rs` — Token event definitions
-
-### Phase 3: Command Control Panel UI
-
-**Frontend:**
-1. Create `CommandControl` component
-2. System snapshot header
-3. Live agents grid
-4. Active subagents list
-5. Execution history table
-6. Collapsible panel behavior
+// Execution history
+GET /api/command/history?date=2024-01-31&limit=20
+→ { executions: [...] }
+```
 
 **Files:**
-- `apps/ui/src/features/command/CommandControl.tsx`
-- `apps/ui/src/features/command/SystemSnapshot.tsx`
-- `apps/ui/src/features/command/LiveAgentCard.tsx`
-- `apps/ui/src/features/command/SubagentList.tsx`
-- `apps/ui/src/features/command/ExecutionHistory.tsx`
-- `apps/ui/src/features/command/TokenBadge.tsx`
-- `apps/ui/src/features/command/BurnIndicator.tsx`
+- `gateway/src/http/command.rs` — NEW: Command Control HTTP handlers
+- `gateway/src/http/mod.rs` — Register command routes
 
-### Phase 4: Integration
+### Phase 2: Real-time Events (Gateway)
 
-1. Add "Command" tab to side navigation
-2. Connect WebSocket for real-time updates
-3. Add status badge on tab when agents running
-4. Add click-through to chat context
-5. Time range selector (Today/Week/All)
+**File:** `gateway/src/websocket/handler.rs`
 
-### Phase 5: Actions
+Add WebSocket event types (if not already from execution-state plan):
 
-1. Pause/Resume from panel
-2. Cancel running agent
-3. Retry failed execution
-4. Quick-jump to conversation
+```typescript
+// Server → Client events
+{ type: "session_started", session: {...} }
+{ type: "session_status", session_id, status }
+{ type: "token_update", session_id, tokens_in, tokens_out }
+{ type: "session_completed", session_id, result }
+```
+
+**Files:**
+- `gateway/src/websocket/handler.rs` — Ensure events are broadcast
+- `gateway/src/events/mod.rs` — Event type definitions
+
+### Phase 3: UI Components (apps/ui)
+
+**File:** `apps/ui/src/features/command/` (NEW directory)
+
+```
+command/
+├── index.ts                    # Exports
+├── CommandControl.tsx          # Main panel
+├── components/
+│   ├── SystemSnapshot.tsx      # Top metrics bar
+│   ├── LiveAgentCard.tsx       # Agent card with progress
+│   ├── SubagentRow.tsx         # Subagent list item
+│   ├── ExecutionRow.tsx        # History row
+│   ├── TokenDisplay.tsx        # "148K → 21K" format
+│   └── BurnIndicator.tsx       # LOW/MED/HIGH/SPIKE
+├── hooks/
+│   ├── useCommandData.ts       # Fetch snapshot + live data
+│   └── useCommandStream.ts     # WebSocket subscription
+└── types.ts                    # TypeScript interfaces
+```
+
+### Phase 4: Navigation Integration (apps/ui)
+
+**File:** `apps/ui/src/App.tsx`
+
+Add Command tab to navigation:
+
+```tsx
+const NAV_ITEMS = [
+  { id: 'chat', icon: MessageSquare, label: 'Chat' },
+  { id: 'command', icon: Zap, label: 'Command', badge: runningCount },  // NEW
+  { id: 'logs', icon: FileText, label: 'Logs' },
+  { id: 'mcps', icon: Plug, label: 'MCPs' },
+  // ...
+];
+```
+
+**Files:**
+- `apps/ui/src/App.tsx` — Add Command nav item
+- `apps/ui/src/shared/types/index.ts` — Add command-related types
+
+### Phase 5: Actions & Polish
+
+1. Pause/Resume/Cancel buttons on agent cards
+2. Click agent card → jump to conversation
+3. Badge on nav showing running count
+4. Time range selector
+5. Auto-refresh toggle
+
+---
+
+## Files Summary
+
+| Layer | File | Changes |
+|-------|------|---------|
+| **gateway** | `http/command.rs` | **NEW** - Command Control API |
+| **gateway** | `http/mod.rs` | Register command routes |
+| **gateway** | `websocket/handler.rs` | Ensure events broadcast |
+| **apps/ui** | `features/command/` | **NEW** - All UI components |
+| **apps/ui** | `App.tsx` | Add Command nav tab |
+| **apps/ui** | `shared/types/` | Command-related types |
+
+---
+
+## Dependencies
+
+This plan **depends on** Execution State Management plan:
+- Session status tracking (RUNNING, PAUSED, etc.)
+- Token metrics (IN/OUT per session)
+- WebSocket events for real-time updates
+
+Command Control is purely a **presentation layer** on top of execution-state data.
 
 ---
 
