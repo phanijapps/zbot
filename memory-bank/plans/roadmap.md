@@ -19,7 +19,7 @@
 ### In Progress
 
 - [ ] **Execution State Management** — [Plan](execution-state-management.md)
-- [ ] **Logs Dashboard V2** — [Plan](logs-dashboard-v2.md)
+- [ ] **Agent Command Control** — [Plan](agent-command-control.md)
 
 ---
 
@@ -76,15 +76,16 @@ agentzero/
 
 **Plan:** [execution-state-management.md](execution-state-management.md)
 
-### 3.2 Logs Dashboard V2
-- [ ] Dedicated `/logs` monitoring page
-- [ ] Timeline view (chronological activity stream)
-- [ ] Tree view (delegation hierarchy)
-- [ ] Table view (sortable, filterable)
-- [ ] Real-time live tailing
-- [ ] Session detail panel with actions
+### 3.2 Agent Command Control
+- [ ] Side panel command center (not a separate page)
+- [ ] System snapshot (agents, subagents, tokens, failures)
+- [ ] Live agent cards with progress, tokens, burn rate
+- [ ] Active subagents list with current tool
+- [ ] Token economics (IN/OUT, daily totals, burn rate)
+- [ ] Execution history with token summary
+- [ ] Real-time WebSocket updates
 
-**Plan:** [logs-dashboard-v2.md](logs-dashboard-v2.md)
+**Plan:** [agent-command-control.md](agent-command-control.md)
 
 ### 3.3 Error Handling
 - [ ] Graceful degradation
@@ -141,7 +142,7 @@ agentzero/
 | v0.2.0 | SQLite + Memory | ✓ |
 | v0.3.0 | MCP + Logs | ✓ |
 | v0.4.0 | Execution State Management | In Progress |
-| v0.5.0 | Logs Dashboard V2 | Planned |
+| v0.5.0 | Agent Command Control | Planned |
 | v0.6.0 | Multi-agent orchestration | Planned |
 | v1.0.0 | Production ready | Planned |
 
