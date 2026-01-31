@@ -714,6 +714,11 @@ impl ExecutionRunner {
         final_config.max_tokens = agent.max_tokens;
         final_config.mcps = agent.mcps.clone(); // Set MCP IDs so executor can gather tools
 
+        // Configure tool result offload settings
+        final_config.offload_large_results = tool_settings.offload_large_results;
+        final_config.offload_threshold_chars = tool_settings.offload_threshold_tokens * 4; // tokens to chars
+        final_config.offload_dir = Some(config.config_dir.join("temp"));
+
         AgentExecutor::new(
             final_config,
             llm_client,
@@ -892,6 +897,11 @@ async fn spawn_delegated_agent(
     executor_config.temperature = agent.temperature;
     executor_config.max_tokens = agent.max_tokens;
     executor_config.mcps = agent.mcps.clone(); // Set MCP IDs so executor can gather tools
+
+    // Configure tool result offload settings
+    executor_config.offload_large_results = tool_settings.offload_large_results;
+    executor_config.offload_threshold_chars = tool_settings.offload_threshold_tokens * 4; // tokens to chars
+    executor_config.offload_dir = Some(config_dir.join("temp"));
 
     // Create executor
     let executor = AgentExecutor::new(

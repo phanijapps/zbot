@@ -53,6 +53,8 @@ pub struct UpdateToolSettingsRequest {
     #[serde(default)]
     pub python: bool,
     #[serde(default)]
+    pub web_fetch: bool,
+    #[serde(default)]
     pub load_skill: bool,
     #[serde(default)]
     pub ui_tools: bool,
@@ -62,6 +64,14 @@ pub struct UpdateToolSettingsRequest {
     pub create_agent: bool,
     #[serde(default)]
     pub introspection: bool,
+    #[serde(default)]
+    pub offload_large_results: bool,
+    #[serde(default = "default_offload_threshold")]
+    pub offload_threshold_tokens: usize,
+}
+
+fn default_offload_threshold() -> usize {
+    5000
 }
 
 impl From<UpdateToolSettingsRequest> for ToolSettings {
@@ -70,11 +80,14 @@ impl From<UpdateToolSettingsRequest> for ToolSettings {
             grep: req.grep,
             glob: req.glob,
             python: req.python,
+            web_fetch: req.web_fetch,
             load_skill: req.load_skill,
             ui_tools: req.ui_tools,
             knowledge_graph: req.knowledge_graph,
             create_agent: req.create_agent,
             introspection: req.introspection,
+            offload_large_results: req.offload_large_results,
+            offload_threshold_tokens: req.offload_threshold_tokens,
         }
     }
 }

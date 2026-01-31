@@ -44,7 +44,7 @@ pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
 /// Settings for optional tools.
 ///
 /// These settings control which optional tools are enabled beyond the core set.
-/// Core tools (shell, read, write, edit, memory, web_fetch, todo) are always enabled.
+/// Core tools (shell, read, write, edit, memory, todo) are always enabled.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSettings {
@@ -59,6 +59,11 @@ pub struct ToolSettings {
     /// Enable python tool (run Python scripts)
     #[serde(default)]
     pub python: bool,
+
+    /// Enable web_fetch tool (HTTP requests).
+    /// Disabled by default as large responses can cause context explosion.
+    #[serde(default)]
+    pub web_fetch: bool,
 
     /// Enable load_skill tool
     #[serde(default)]
@@ -79,13 +84,32 @@ pub struct ToolSettings {
     /// Enable introspection tools (list_skills, list_tools, list_mcps)
     #[serde(default)]
     pub introspection: bool,
+
+    /// Offload large tool results to filesystem instead of keeping in context.
+    /// When a tool result exceeds the token threshold, it's saved to a temp file
+    /// and the agent is instructed to read it with a CLI tool.
+    #[serde(default = "default_offload_enabled")]
+    pub offload_large_results: bool,
+
+    /// Token threshold for offloading tool results (default: 5000 tokens ≈ 20000 chars).
+    /// Results larger than this are saved to filesystem.
+    #[serde(default = "default_offload_threshold")]
+    pub offload_threshold_tokens: usize,
+}
+
+fn default_offload_threshold() -> usize {
+    5000 // ~20000 characters
+}
+
+fn default_offload_enabled() -> bool {
+    true // Enabled by default to prevent context explosion
 }
 
 // ============================================================================
 // BUILT-IN TOOLS FACTORY
 // ============================================================================
 
-/// Get core tools that are always enabled (7 tools).
+/// Get core tools that are always enabled (6 tools).
 ///
 /// Core tools:
 /// - shell: Run any command
@@ -93,11 +117,11 @@ pub struct ToolSettings {
 /// - write: Write files
 /// - edit: Edit files
 /// - memory: Persist/recall information
-/// - web_fetch: Fetch web content
 /// - todo: Track task progress
 ///
 /// Note: respond, delegate_to_agent, and list_agents are registered separately
 /// in the runner as action tools.
+/// Note: web_fetch is now optional due to potential for large responses causing context explosion.
 #[must_use]
 pub fn core_tools(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
     vec![
@@ -106,7 +130,6 @@ pub fn core_tools(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
         Arc::new(WriteTool::new(fs.clone())),
         Arc::new(EditTool::new(fs.clone())),
         Arc::new(MemoryTool::new(fs.clone())),
-        Arc::new(WebFetchTool::new()),
         Arc::new(TodoTool::new()),
     ]
 }
@@ -128,6 +151,10 @@ pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -
 
     if settings.python {
         tools.push(Arc::new(PythonTool::new(fs.clone())));
+    }
+
+    if settings.web_fetch {
+        tools.push(Arc::new(WebFetchTool::new()));
     }
 
     if settings.load_skill {
@@ -171,11 +198,14 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         grep: true,
         glob: true,
         python: true,
+        web_fetch: true, // Include in legacy function
         load_skill: true,
         ui_tools: true,
         knowledge_graph: true,
         create_agent: true,
         introspection: true,
+        offload_large_results: false, // Not relevant for this legacy function
+        offload_threshold_tokens: default_offload_threshold(),
     };
 
     let mut tools = core_tools(fs.clone());

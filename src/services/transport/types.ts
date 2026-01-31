@@ -251,11 +251,17 @@ export interface ToolSettings {
   grep: boolean;
   glob: boolean;
   python: boolean;
+  /** Enable web_fetch tool (disabled by default - large responses can cause context explosion) */
+  webFetch: boolean;
   loadSkill: boolean;
   uiTools: boolean;
   knowledgeGraph: boolean;
   createAgent: boolean;
   introspection: boolean;
+  /** Offload large tool results to filesystem instead of keeping in context */
+  offloadLargeResults: boolean;
+  /** Token threshold for offloading (default: 5000 tokens ≈ 20000 chars) */
+  offloadThresholdTokens: number;
 }
 
 export interface ToolSettingsResponse {

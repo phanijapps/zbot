@@ -22,7 +22,7 @@
 use std::sync::Arc;
 use serde_json::{json, Value};
 
-use crate::types::{ChatMessage, StreamEvent};
+use crate::types::{ChatMessage, StreamEvent, ToolCall};
 use crate::llm::LlmClient;
 use crate::tools::ToolRegistry;
 use crate::tools::context::ToolContext;
@@ -30,6 +30,15 @@ use crate::mcp::McpManager;
 use crate::middleware::MiddlewarePipeline;
 use crate::middleware::traits::MiddlewareContext;
 use crate::middleware::token_counter::estimate_total_tokens;
+use zero_core::event::EventActions;
+use zero_core::CallbackContext;
+use zero_core::ToolContext as ZeroToolContext;
+
+/// Result from tool execution including any actions set by the tool
+struct ToolExecutionResult {
+    output: String,
+    actions: EventActions,
+}
 
 // ============================================================================
 // EXECUTOR CONFIGURATION
@@ -70,6 +79,20 @@ pub struct ExecutorConfig {
 
     /// Conversation ID for scoping
     pub conversation_id: Option<String>,
+
+    /// Initial state to inject into tool context.
+    /// This allows passing hook context, delegation context, etc.
+    #[allow(dead_code)]
+    pub initial_state: std::collections::HashMap<String, Value>,
+
+    /// Offload large tool results to filesystem instead of keeping in context.
+    pub offload_large_results: bool,
+
+    /// Character threshold for offloading (default: 20000 chars ≈ 5000 tokens).
+    pub offload_threshold_chars: usize,
+
+    /// Directory to save offloaded tool results.
+    pub offload_dir: Option<std::path::PathBuf>,
 }
 
 impl ExecutorConfig {
@@ -88,7 +111,18 @@ impl ExecutorConfig {
             mcps: Vec::new(),
             skills: Vec::new(),
             conversation_id: None,
+            initial_state: std::collections::HashMap::new(),
+            offload_large_results: false,
+            offload_threshold_chars: 20_000, // ~5000 tokens
+            offload_dir: None,
         }
+    }
+
+    /// Add initial state that will be injected into tool context
+    #[must_use]
+    pub fn with_initial_state(mut self, key: impl Into<String>, value: Value) -> Self {
+        self.initial_state.insert(key.into(), value);
+        self
     }
 }
 
@@ -279,11 +313,17 @@ impl AgentExecutor {
             }
 
             // Handle tool calls
-            // Add the assistant message with all tool calls
+            // Add the assistant message with TRUNCATED tool calls to prevent context explosion
+            let truncated_tool_calls: Vec<ToolCall> = tool_calls.iter().map(|tc| {
+                // Truncate arguments to prevent exponential context growth
+                let truncated_args = truncate_tool_args(&tc.arguments, 500);
+                ToolCall::new(tc.id.clone(), tc.name.clone(), truncated_args)
+            }).collect();
+
             current_messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: response.content.clone(),
-                tool_calls: Some(tool_calls.clone()),
+                tool_calls: Some(truncated_tool_calls),
                 tool_call_id: None,
             });
 
@@ -304,8 +344,33 @@ impl AgentExecutor {
                 let result = self.execute_tool(tool_name, args).await;
 
                 match result {
-                    Ok(output) => {
+                    Ok(tool_result) => {
+                        let output = tool_result.output;
+                        let actions = tool_result.actions;
+                        
                         tracing::debug!("Tool result: {}", output);
+                        
+                        // Check for respond action
+                        if let Some(respond) = &actions.respond {
+                            on_event(StreamEvent::ActionRespond {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                message: respond.message.clone(),
+                                format: respond.format.clone(),
+                                conversation_id: respond.conversation_id.clone(),
+                                session_id: respond.session_id.clone(),
+                            });
+                        }
+                        
+                        // Check for delegate action
+                        if let Some(delegate) = &actions.delegate {
+                            on_event(StreamEvent::ActionDelegate {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                agent_id: delegate.agent_id.clone(),
+                                task: delegate.task.clone(),
+                                context: delegate.context.clone(),
+                                wait_for_result: delegate.wait_for_result,
+                            });
+                        }
 
                         // Check for generative UI markers
                         if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
@@ -388,10 +453,13 @@ impl AgentExecutor {
                             error: None,
                         });
 
+                        // Process tool result (potentially offload large results to filesystem)
+                        let processed_output = self.process_tool_result(tool_name, output);
+
                         // Add tool result message
                         current_messages.push(ChatMessage {
                             role: "tool".to_string(),
-                            content: output,
+                            content: processed_output,
                             tool_calls: None,
                             tool_call_id: Some(tool_call.id.clone()),
                         });
@@ -434,35 +502,78 @@ impl AgentExecutor {
         Ok(())
     }
 
-    async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<String, String> {
+    async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<ToolExecutionResult, String> {
         // First try built-in tools
         if let Some(tool) = self.tool_registry.find(tool_name) {
-            // Create tool context with agent_id, conversation_id, and skills
-            // This ensures tools like memory can find the agent's data directory
-            let ctx = Arc::new(ToolContext::full(
+            // Create tool context with agent_id, conversation_id, skills, and initial state
+            // This ensures tools have access to hook context, delegation context, etc.
+            let ctx = Arc::new(ToolContext::full_with_state(
                 self.config.agent_id.clone(),
                 self.config.conversation_id.clone(),
                 self.config.skills.clone(),
+                self.config.initial_state.clone(),
             ));
-            let result = tool.execute(ctx, arguments.clone()).await
+            let result = tool.execute(ctx.clone(), arguments.clone()).await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
-            return Ok(serde_json::to_string(&result)
-                .unwrap_or_else(|_| "null".to_string()));
+            
+            // Get any actions that were set by the tool
+            let actions = ctx.actions();
+            
+            return Ok(ToolExecutionResult {
+                output: serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string()),
+                actions,
+            });
         }
 
         // Try MCP tools
-        // MCP tools have format: {normalized_server_id}__{tool_name}
+        // MCP tools have format: {normalized_server_id}__{normalized_tool_name}
         if tool_name.contains("__") {
             let parts: Vec<&str> = tool_name.splitn(2, "__").collect();
             if parts.len() == 2 {
                 let normalized_server_id = parts[0];
-                let actual_tool = parts[1];
-                // Convert normalized ID back to original (replace _ with -)
-                let server_id = normalized_server_id.replace('_', "-");
+                let normalized_tool = parts[1];
+
+                // Find the original server ID by checking which one matches when normalized
+                let mut original_server_id: Option<String> = None;
+                for mcp_id in &self.config.mcps {
+                    if normalize_tool_name(mcp_id) == normalized_server_id {
+                        original_server_id = Some(mcp_id.clone());
+                        break;
+                    }
+                }
+
+                let server_id = match original_server_id {
+                    Some(id) => id,
+                    None => {
+                        // Fallback: try the normalized ID directly (old behavior)
+                        normalized_server_id.replace('_', "-")
+                    }
+                };
+
+                // Find the original tool name by listing tools from this server
+                let actual_tool = if let Some(client) = self.mcp_manager.get_client(&server_id).await {
+                    if let Ok(tools) = client.list_tools().await {
+                        tools.into_iter()
+                            .find(|t| normalize_tool_name(&t.name) == normalized_tool)
+                            .map(|t| t.name)
+                            .unwrap_or_else(|| normalized_tool.to_string())
+                    } else {
+                        normalized_tool.to_string()
+                    }
+                } else {
+                    normalized_tool.to_string()
+                };
+
                 tracing::debug!("Executing MCP tool: server={}, tool={}", server_id, actual_tool);
-                return self.mcp_manager.execute_tool(&server_id, actual_tool, arguments.clone()).await
+                let output = self.mcp_manager.execute_tool(&server_id, &actual_tool, arguments.clone()).await
                     .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string()))
-                    .map_err(|e| e.to_string());
+                    .map_err(|e| e.to_string())?;
+
+                // MCP tools don't support actions (yet)
+                return Ok(ToolExecutionResult {
+                    output,
+                    actions: EventActions::default(),
+                });
             }
         }
 
@@ -531,8 +642,10 @@ impl AgentExecutor {
 
                 for mcp_tool in mcp_tools {
                     // Convert MCP ID and tool name to valid OpenAI tool name format
-                    let mcp_id_normalized = mcp_id.replace('-', "_");
-                    let tool_name = format!("{}__{}", mcp_id_normalized, mcp_tool.name);
+                    // Pattern must match: ^[a-zA-Z0-9_-]+$
+                    let mcp_id_normalized = normalize_tool_name(mcp_id);
+                    let tool_name_normalized = normalize_tool_name(&mcp_tool.name);
+                    let tool_name = format!("{}__{}", mcp_id_normalized, tool_name_normalized);
 
                     // Normalize parameters to OpenAI format (must have type: "object")
                     let parameters = Self::normalize_mcp_parameters(mcp_tool.parameters);
@@ -569,6 +682,96 @@ impl AgentExecutor {
 
         Ok(final_response)
     }
+
+    /// Process tool result, potentially offloading large results to filesystem.
+    ///
+    /// If offload is enabled and the result exceeds the threshold, saves to a temp file
+    /// and returns instructions for the agent to read it with a CLI tool.
+    fn process_tool_result(&self, tool_name: &str, result: String) -> String {
+        // Check if offload is enabled and result exceeds threshold
+        if !self.config.offload_large_results {
+            return result;
+        }
+
+        if result.len() <= self.config.offload_threshold_chars {
+            return result;
+        }
+
+        // Get offload directory
+        let offload_dir = match &self.config.offload_dir {
+            Some(dir) => dir.clone(),
+            None => {
+                // Default to ~/Documents/agentzero/temp
+                if let Some(home) = dirs::home_dir() {
+                    home.join("Documents").join("agentzero").join("temp")
+                } else {
+                    tracing::warn!("Could not determine home directory for offload");
+                    return result;
+                }
+            }
+        };
+
+        // Create directory if it doesn't exist
+        if let Err(e) = std::fs::create_dir_all(&offload_dir) {
+            tracing::warn!("Failed to create offload directory: {}", e);
+            return result;
+        }
+
+        // Generate unique filename
+        let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
+        let sanitized_tool = tool_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
+        let filename = format!("{}_{}.txt", sanitized_tool, timestamp);
+        let file_path = offload_dir.join(&filename);
+
+        // Write result to file
+        if let Err(e) = std::fs::write(&file_path, &result) {
+            tracing::warn!("Failed to write offloaded result: {}", e);
+            return result;
+        }
+
+        let result_size = result.len();
+        let result_tokens = result_size / 4; // rough estimate
+
+        tracing::info!(
+            "Offloaded large tool result ({} chars, ~{} tokens) to: {}",
+            result_size,
+            result_tokens,
+            file_path.display()
+        );
+
+        // Return instructions for the agent
+        format!(
+            "Tool result was too large for context ({} chars, ~{} tokens).\n\
+            Result saved to: {}\n\n\
+            To access the full result, use the `read` tool:\n\
+            ```json\n\
+            {{\"path\": \"{}\"}}\n\
+            ```\n\n\
+            Or use shell: `head -100 \"{}\"` to preview, `grep \"pattern\" \"{}\"` to search.",
+            result_size,
+            result_tokens,
+            file_path.display(),
+            file_path.display(),
+            file_path.display(),
+            file_path.display()
+        )
+    }
+}
+
+/// Normalize a string to be a valid OpenAI tool name.
+///
+/// OpenAI requires tool names to match: ^[a-zA-Z0-9_-]+$
+/// This function replaces any invalid characters with underscores.
+fn normalize_tool_name(name: &str) -> String {
+    name.chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 /// Executor errors
@@ -614,4 +817,39 @@ pub async fn create_executor(
         mcp_manager,
         middleware_pipeline,
     )
+}
+
+/// Truncate tool arguments to prevent context explosion.
+///
+/// When LLMs generate tool calls with massive arguments (e.g., including
+/// full conversation context), storing these in message history causes
+/// exponential growth. This function truncates arguments to a reasonable size.
+fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
+    let args_str = serde_json::to_string(args).unwrap_or_default();
+    if args_str.len() <= max_chars {
+        return args.clone();
+    }
+
+    // For objects, try to truncate string values
+    if let Some(obj) = args.as_object() {
+        let mut truncated = serde_json::Map::new();
+        for (key, value) in obj {
+            if let Some(s) = value.as_str() {
+                if s.len() > 200 {
+                    truncated.insert(
+                        key.clone(),
+                        Value::String(format!("{}... [truncated, {} chars]", &s[..200], s.len())),
+                    );
+                } else {
+                    truncated.insert(key.clone(), value.clone());
+                }
+            } else {
+                truncated.insert(key.clone(), value.clone());
+            }
+        }
+        return Value::Object(truncated);
+    }
+
+    // Fallback: return a placeholder
+    json!({"_truncated": true, "_original_size": args_str.len()})
 }
