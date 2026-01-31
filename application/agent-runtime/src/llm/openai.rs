@@ -72,11 +72,40 @@ impl OpenAiClient {
             }
         }
 
-        // Debug: log tools being sent (only count, no verbose logging)
+        // Debug: log request size estimation
+        let request_json = serde_json::to_string(&body_obj).unwrap_or_default();
+        let estimated_chars = request_json.len();
+        let estimated_tokens = estimated_chars / 4; // rough estimate: ~4 chars per token
+
+        tracing::info!(
+            "Request size: ~{} chars (~{} tokens estimated)",
+            estimated_chars,
+            estimated_tokens
+        );
+
+        // Log tools count and size
         if let Some(tools_val) = &tools {
             if let Some(tools_array) = tools_val.as_array() {
-                tracing::info!("Sending {} tools to LLM", tools_array.len());
+                let tools_json = serde_json::to_string(tools_val).unwrap_or_default();
+                let tools_tokens = tools_json.len() / 4;
+                tracing::info!(
+                    "Tools: {} tools, ~{} chars (~{} tokens)",
+                    tools_array.len(),
+                    tools_json.len(),
+                    tools_tokens
+                );
             }
+        }
+
+        // Log messages size
+        if let Some(messages_val) = body_obj.get("messages") {
+            let messages_json = serde_json::to_string(messages_val).unwrap_or_default();
+            let messages_tokens = messages_json.len() / 4;
+            tracing::info!(
+                "Messages: ~{} chars (~{} tokens)",
+                messages_json.len(),
+                messages_tokens
+            );
         }
 
         if self.config.thinking_enabled {

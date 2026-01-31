@@ -712,6 +712,7 @@ impl ExecutionRunner {
         final_config.conversation_id = Some(config.conversation_id.clone());
         final_config.temperature = agent.temperature;
         final_config.max_tokens = agent.max_tokens;
+        final_config.mcps = agent.mcps.clone(); // Set MCP IDs so executor can gather tools
 
         AgentExecutor::new(
             final_config,
@@ -890,6 +891,7 @@ async fn spawn_delegated_agent(
     executor_config.conversation_id = Some(child_conversation_id.clone());
     executor_config.temperature = agent.temperature;
     executor_config.max_tokens = agent.max_tokens;
+    executor_config.mcps = agent.mcps.clone(); // Set MCP IDs so executor can gather tools
 
     // Create executor
     let executor = AgentExecutor::new(
