@@ -1081,17 +1081,18 @@ async fn spawn_delegated_agent(
         tracing::warn!("Failed to create conversation for delegated agent: {}", e);
     }
 
-    // Create execution session for delegated agent (with parent session reference)
-    // Note: We use parent_conversation_id as a proxy for parent_session_id for now
+    // Create execution session for delegated agent
+    // Note: parent_session_id is None since DelegationRequest only has conversation_id
+    // TODO: Pass actual parent session ID through delegation request
     let execution_session = match state_service.create_session(
         &child_conversation_id,
         &request.child_agent_id,
-        Some(request.parent_conversation_id.clone()),
+        None,
     ) {
         Ok(session) => session,
         Err(e) => {
             tracing::warn!("Failed to create delegated execution session: {}", e);
-            ExecutionSession::new(&child_conversation_id, &request.child_agent_id, Some(request.parent_conversation_id.clone()))
+            ExecutionSession::new(&child_conversation_id, &request.child_agent_id, None)
         }
     };
     let session_id = execution_session.id.clone();
