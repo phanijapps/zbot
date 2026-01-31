@@ -1029,19 +1029,40 @@ async fn spawn_delegated_agent(
                 // Send callback message to parent conversation if enabled
                 if let Some(ctx) = delegation_ctx {
                     if ctx.callback_on_complete {
-                        // Format the callback message as JSON
-                        let callback_data = serde_json::json!({
-                            "convid": conv_id,
-                            "agent": agent_id,
-                            "response": if accumulated_response.is_empty() {
-                                "(no response)".to_string()
+                        // Format agent name nicely (e.g., "research-agent" -> "Research Agent")
+                        let agent_display_name = agent_id
+                            .split('-')
+                            .map(|word| {
+                                let mut chars = word.chars();
+                                match chars.next() {
+                                    Some(first) => first.to_uppercase().chain(chars).collect(),
+                                    None => String::new(),
+                                }
+                            })
+                            .collect::<Vec<String>>()
+                            .join(" ");
+
+                        // Format the callback message as markdown
+                        let response_content = if accumulated_response.is_empty() {
+                            "_No response generated._".to_string()
+                        } else {
+                            // Check if response looks like JSON and format it
+                            if accumulated_response.trim().starts_with('{') || accumulated_response.trim().starts_with('[') {
+                                if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(&accumulated_response) {
+                                    format!("```json\n{}\n```", serde_json::to_string_pretty(&json_val).unwrap_or(accumulated_response.clone()))
+                                } else {
+                                    accumulated_response.clone()
+                                }
                             } else {
                                 accumulated_response.clone()
                             }
-                        });
+                        };
+
                         let callback_msg = format!(
-                            "[Delegation Result]\n{}",
-                            serde_json::to_string_pretty(&callback_data).unwrap_or_default()
+                            "## From {}\n\n{}\n\n---\n_Conversation: `{}`_",
+                            agent_display_name,
+                            response_content,
+                            conv_id
                         );
 
                         // Add callback message to parent's conversation
