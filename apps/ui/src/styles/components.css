@@ -776,14 +776,14 @@
   inset: 0;
   background-color: rgba(0, 0, 0, 0.3);
   opacity: 0;
-  visibility: hidden;
-  transition: opacity 0.3s ease, visibility 0.3s ease;
+  pointer-events: none;
+  transition: opacity 0.3s ease;
   z-index: 40;
 }
 
 .chat-slider__backdrop--visible {
   opacity: 1;
-  visibility: visible;
+  pointer-events: auto;
 }
 
 .chat-slider {
@@ -791,19 +791,21 @@
   top: 0;
   right: 0;
   bottom: 0;
-  width: calc(100% - var(--sidebar-width) - 80px);
+  width: calc(100% - var(--sidebar-width) - 60px);
   max-width: 1200px;
   min-width: 400px;
   background-color: var(--background);
-  box-shadow: var(--shadow-xl);
+  box-shadow: var(--shadow-modal);
   transform: translateX(100%);
   transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   z-index: 50;
   display: flex;
+  pointer-events: none;
 }
 
 .chat-slider--open {
   transform: translateX(0);
+  pointer-events: auto;
 }
 
 .chat-slider__handle {
@@ -824,6 +826,7 @@
   color: var(--muted-foreground);
   transition: background-color 0.15s ease, color 0.15s ease;
   box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+  pointer-events: auto;
 }
 
 .chat-slider__handle:hover {

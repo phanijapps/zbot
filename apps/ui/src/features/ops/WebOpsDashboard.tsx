@@ -523,9 +523,9 @@ export function WebOpsDashboard() {
         {/* Two-column layout for sessions */}
         <div className="grid grid-cols-2 gap-6">
           {/* Active Sessions */}
-          <div className="card">
+          <div className="card" style={{ minHeight: "400px", display: "flex", flexDirection: "column" }}>
             <div className="card__header flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <Activity size={18} className="text-primary" />
                 <h2 className="font-semibold">Active Sessions</h2>
                 <span className="badge">{activeSessions.length}</span>
@@ -533,51 +533,59 @@ export function WebOpsDashboard() {
             </div>
 
             {/* Active Filter */}
-            <div className="px-4 py-2 border-b border-border flex items-center gap-2">
+            <div
+              className="border-b border-border flex items-center gap-3"
+              style={{ padding: "12px 16px" }}
+            >
               <span className="text-xs text-muted-foreground">Filter:</span>
-              {(["all", ...ACTIVE_STATUSES] as const).map((status) => (
-                <button
-                  key={status}
-                  className={`btn btn--xs ${
-                    activeFilter === status ? "btn--primary" : "btn--ghost"
-                  }`}
-                  onClick={() => setActiveFilter(status)}
-                >
-                  {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
-                </button>
-              ))}
-            </div>
-
-            {filteredActiveSessions.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">
-                <Activity size={40} className="mx-auto mb-3 opacity-30" />
-                <p className="text-sm">No active sessions</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto">
-                {filteredActiveSessions.map((session) => (
-                  <SessionRow
-                    key={session.id}
-                    session={session}
-                    isExpanded={expandedSession === session.id}
-                    onToggle={() =>
-                      setExpandedSession(expandedSession === session.id ? null : session.id)
-                    }
-                    onPause={() => handlePause(session.id)}
-                    onResume={() => handleResume(session.id)}
-                    onCancel={() => handleCancel(session.id)}
-                    isProcessing={processingSession === session.id}
-                    showControls={true}
-                  />
+              <div className="flex gap-1">
+                {(["all", ...ACTIVE_STATUSES] as const).map((status) => (
+                  <button
+                    key={status}
+                    className={`btn ${
+                      activeFilter === status ? "btn--primary" : "btn--ghost"
+                    }`}
+                    style={{ padding: "6px 12px", fontSize: "12px" }}
+                    onClick={() => setActiveFilter(status)}
+                  >
+                    {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
+                  </button>
                 ))}
               </div>
-            )}
+            </div>
+
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {filteredActiveSessions.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground" style={{ height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
+                  <Activity size={40} className="mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No active sessions</p>
+                </div>
+              ) : (
+                <>
+                  {filteredActiveSessions.map((session) => (
+                    <SessionRow
+                      key={session.id}
+                      session={session}
+                      isExpanded={expandedSession === session.id}
+                      onToggle={() =>
+                        setExpandedSession(expandedSession === session.id ? null : session.id)
+                      }
+                      onPause={() => handlePause(session.id)}
+                      onResume={() => handleResume(session.id)}
+                      onCancel={() => handleCancel(session.id)}
+                      isProcessing={processingSession === session.id}
+                      showControls={true}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
           </div>
 
           {/* Session History */}
-          <div className="card">
+          <div className="card" style={{ minHeight: "400px", display: "flex", flexDirection: "column" }}>
             <div className="card__header flex items-center justify-between">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-3">
                 <History size={18} className="text-muted-foreground" />
                 <h2 className="font-semibold">Session History</h2>
                 <span className="badge">{closedSessions.length}</span>
@@ -585,47 +593,55 @@ export function WebOpsDashboard() {
             </div>
 
             {/* History Filter */}
-            <div className="px-4 py-2 border-b border-border flex items-center gap-2">
+            <div
+              className="border-b border-border flex items-center gap-3"
+              style={{ padding: "12px 16px" }}
+            >
               <span className="text-xs text-muted-foreground">Filter:</span>
-              {(["all", ...CLOSED_STATUSES] as const).map((status) => (
-                <button
-                  key={status}
-                  className={`btn btn--xs ${
-                    historyFilter === status ? "btn--primary" : "btn--ghost"
-                  }`}
-                  onClick={() => setHistoryFilter(status)}
-                >
-                  {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
-                </button>
-              ))}
+              <div className="flex gap-1">
+                {(["all", ...CLOSED_STATUSES] as const).map((status) => (
+                  <button
+                    key={status}
+                    className={`btn ${
+                      historyFilter === status ? "btn--primary" : "btn--ghost"
+                    }`}
+                    style={{ padding: "6px 12px", fontSize: "12px" }}
+                    onClick={() => setHistoryFilter(status)}
+                  >
+                    {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            {filteredClosedSessions.length === 0 ? (
-              <div className="p-8 text-center text-muted-foreground">
-                <History size={40} className="mx-auto mb-3 opacity-30" />
-                <p className="text-sm">No session history</p>
-              </div>
-            ) : (
-              <div className="max-h-96 overflow-y-auto">
-                {filteredClosedSessions.slice(0, 50).map((session) => (
-                  <SessionRow
-                    key={session.id}
-                    session={session}
-                    isExpanded={expandedSession === session.id}
-                    onToggle={() =>
-                      setExpandedSession(expandedSession === session.id ? null : session.id)
-                    }
-                    onOpenChat={() => handleOpenChat(session)}
-                    showControls={false}
-                  />
-                ))}
-                {filteredClosedSessions.length > 50 && (
-                  <div className="p-3 text-center text-sm text-muted-foreground border-t border-border">
-                    Showing 50 of {filteredClosedSessions.length} sessions
-                  </div>
-                )}
-              </div>
-            )}
+            <div style={{ flex: 1, overflow: "auto" }}>
+              {filteredClosedSessions.length === 0 ? (
+                <div className="p-8 text-center text-muted-foreground" style={{ height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
+                  <History size={40} className="mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">No session history</p>
+                </div>
+              ) : (
+                <>
+                  {filteredClosedSessions.slice(0, 50).map((session) => (
+                    <SessionRow
+                      key={session.id}
+                      session={session}
+                      isExpanded={expandedSession === session.id}
+                      onToggle={() =>
+                        setExpandedSession(expandedSession === session.id ? null : session.id)
+                      }
+                      onOpenChat={() => handleOpenChat(session)}
+                      showControls={false}
+                    />
+                  ))}
+                  {filteredClosedSessions.length > 50 && (
+                    <div className="p-3 text-center text-sm text-muted-foreground border-t border-border">
+                      Showing 50 of {filteredClosedSessions.length} sessions
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
           </div>
         </div>
       </div>
