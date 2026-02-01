@@ -8,6 +8,34 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 
+// ============================================================================
+// DELEGATION REQUEST
+// ============================================================================
+
+/// Request to spawn a delegated subagent.
+///
+/// This is sent from the parent agent's execution to spawn a child agent
+/// that will handle a delegated task.
+#[derive(Debug, Clone)]
+pub struct DelegationRequest {
+    /// ID of the parent agent initiating the delegation
+    pub parent_agent_id: String,
+    /// Session ID (shared across the entire conversation tree)
+    pub session_id: String,
+    /// Execution ID of the parent (for linking child to parent)
+    pub parent_execution_id: String,
+    /// ID of the child agent to spawn
+    pub child_agent_id: String,
+    /// Task description for the child agent
+    pub task: String,
+    /// Optional context to pass to the child agent
+    pub context: Option<Value>,
+}
+
+// ============================================================================
+// DELEGATION CONTEXT
+// ============================================================================
+
 /// Context for delegated task execution.
 ///
 /// When a parent agent delegates to a subagent, this context tracks

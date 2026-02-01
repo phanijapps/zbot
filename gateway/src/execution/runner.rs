@@ -4,12 +4,10 @@
 
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService, SessionStatus};
 use execution_state::{
-    AgentExecution, DelegationType, ExecutionStatus, Session, SessionStatus as StateSessionStatus,
-    StateService,
+    AgentExecution, DelegationType, Session, StateService,
 };
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
-use crate::hooks::HookContext;
 use crate::services::providers::Provider;
 use crate::services::{AgentService, McpService, ProviderService, SettingsService};
 use agent_runtime::{
@@ -20,209 +18,15 @@ use agent_tools::{core_tools, optional_tools, ListAgentsTool, ToolSettings};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 use zero_core::FileSystemContext;
 
-/// Request to spawn a delegated subagent
-#[derive(Debug, Clone)]
-pub struct DelegationRequest {
-    pub parent_agent_id: String,
-    pub session_id: String,
-    pub parent_execution_id: String,
-    pub child_agent_id: String,
-    pub task: String,
-    pub context: Option<Value>,
-}
-
-// ============================================================================
-// FILE SYSTEM CONTEXT FOR GATEWAY
-// ============================================================================
-
-/// File system context for gateway execution.
-///
-/// Provides paths to the agent tools based on the vault directory structure.
-#[derive(Debug, Clone)]
-struct GatewayFileSystem {
-    /// Base vault/config directory
-    vault_dir: PathBuf,
-}
-
-impl GatewayFileSystem {
-    fn new(vault_dir: PathBuf) -> Self {
-        Self { vault_dir }
-    }
-}
-
-impl FileSystemContext for GatewayFileSystem {
-    fn conversation_dir(&self, conversation_id: &str) -> Option<PathBuf> {
-        Some(self.vault_dir.join("conversations").join(conversation_id))
-    }
-
-    fn outputs_dir(&self) -> Option<PathBuf> {
-        Some(self.vault_dir.join("outputs"))
-    }
-
-    fn skills_dir(&self) -> Option<PathBuf> {
-        Some(self.vault_dir.join("skills"))
-    }
-
-    fn agents_dir(&self) -> Option<PathBuf> {
-        Some(self.vault_dir.join("agents"))
-    }
-
-    fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf> {
-        Some(self.vault_dir.join("agents_data").join(agent_id))
-    }
-
-    fn python_executable(&self) -> Option<PathBuf> {
-        // Use system Python - could be made configurable
-        None
-    }
-
-    fn vault_path(&self) -> Option<PathBuf> {
-        Some(self.vault_dir.clone())
-    }
-}
-
-/// Configuration for agent execution.
-#[derive(Debug, Clone)]
-pub struct ExecutionConfig {
-    /// Agent ID to execute
-    pub agent_id: String,
-    /// Conversation ID for tracking (legacy, used for message persistence)
-    pub conversation_id: String,
-    /// Configuration directory (vault path)
-    pub config_dir: PathBuf,
-    /// Maximum iterations before prompting for continuation
-    pub max_iterations: u32,
-    /// Optional hook context for routing responses
-    pub hook_context: Option<HookContext>,
-    /// Optional session ID for continuing an existing session.
-    /// - None: create a new session
-    /// - Some(id): continue the existing session with this ID
-    pub session_id: Option<String>,
-}
-
-impl ExecutionConfig {
-    /// Create a new execution config.
-    pub fn new(agent_id: String, conversation_id: String, config_dir: PathBuf) -> Self {
-        Self {
-            agent_id,
-            conversation_id,
-            config_dir,
-            max_iterations: 25,
-            hook_context: None,
-            session_id: None,
-        }
-    }
-
-    /// Set the hook context for routing responses.
-    #[must_use]
-    pub fn with_hook_context(mut self, hook_context: HookContext) -> Self {
-        self.hook_context = Some(hook_context);
-        self
-    }
-
-    /// Set the session ID to continue an existing session.
-    #[must_use]
-    pub fn with_session_id(mut self, session_id: String) -> Self {
-        self.session_id = Some(session_id);
-        self
-    }
-}
-
-/// Handle to a running execution, allowing control operations.
-#[derive(Clone)]
-pub struct ExecutionHandle {
-    /// Flag to signal stop
-    stop_flag: Arc<AtomicBool>,
-    /// Flag to signal pause
-    pause_flag: Arc<AtomicBool>,
-    /// Flag to signal cancel
-    cancel_flag: Arc<AtomicBool>,
-    /// Current iteration counter
-    iteration: Arc<AtomicU32>,
-    /// Maximum iterations
-    max_iterations: Arc<AtomicU32>,
-}
-
-impl ExecutionHandle {
-    fn new(max_iterations: u32) -> Self {
-        Self {
-            stop_flag: Arc::new(AtomicBool::new(false)),
-            pause_flag: Arc::new(AtomicBool::new(false)),
-            cancel_flag: Arc::new(AtomicBool::new(false)),
-            iteration: Arc::new(AtomicU32::new(0)),
-            max_iterations: Arc::new(AtomicU32::new(max_iterations)),
-        }
-    }
-
-    /// Request the execution to stop.
-    pub fn stop(&self) {
-        self.stop_flag.store(true, Ordering::SeqCst);
-    }
-
-    /// Check if stop was requested.
-    pub fn is_stop_requested(&self) -> bool {
-        self.stop_flag.load(Ordering::SeqCst)
-    }
-
-    /// Request the execution to pause.
-    pub fn pause(&self) {
-        self.pause_flag.store(true, Ordering::SeqCst);
-    }
-
-    /// Resume a paused execution.
-    pub fn resume(&self) {
-        self.pause_flag.store(false, Ordering::SeqCst);
-    }
-
-    /// Check if pause was requested.
-    pub fn is_paused(&self) -> bool {
-        self.pause_flag.load(Ordering::SeqCst)
-    }
-
-    /// Request the execution to cancel.
-    pub fn cancel(&self) {
-        self.cancel_flag.store(true, Ordering::SeqCst);
-        // Also set stop flag so execution stops immediately
-        self.stop_flag.store(true, Ordering::SeqCst);
-    }
-
-    /// Check if cancel was requested.
-    pub fn is_cancelled(&self) -> bool {
-        self.cancel_flag.load(Ordering::SeqCst)
-    }
-
-    /// Get current iteration.
-    pub fn current_iteration(&self) -> u32 {
-        self.iteration.load(Ordering::SeqCst)
-    }
-
-    /// Increment iteration counter.
-    fn increment(&self) {
-        self.iteration.fetch_add(1, Ordering::SeqCst);
-    }
-
-    /// Reset iteration counter.
-    #[allow(dead_code)]
-    fn reset(&self) {
-        self.iteration.store(0, Ordering::SeqCst);
-    }
-
-    /// Add more iterations for continuation.
-    pub fn add_iterations(&self, additional: u32) {
-        self.max_iterations.fetch_add(additional, Ordering::SeqCst);
-        self.stop_flag.store(false, Ordering::SeqCst);
-    }
-
-    /// Get max iterations.
-    pub fn max_iterations(&self) -> u32 {
-        self.max_iterations.load(Ordering::SeqCst)
-    }
-}
+// Import types from sibling modules
+pub use super::config::{ExecutionConfig, GatewayFileSystem};
+use super::delegation::DelegationRequest;
+use super::events::convert_stream_event;
+pub use super::handle::ExecutionHandle;
 
 
 
@@ -372,7 +176,7 @@ impl ExecutionRunner {
                     if let Err(e) = self.state_service.create_execution(&execution) {
                         tracing::warn!("Failed to create execution in existing session: {}", e);
                     }
-                    (existing_session_id.clone(), execution.id)
+                    (existing_session_id.to_string(), execution.id)
                 }
                 Ok(None) => {
                     // Session not found, create new one
@@ -1721,85 +1525,4 @@ async fn spawn_delegated_agent(
     );
 
     Ok(child_conversation_id)
-}
-
-/// Convert a StreamEvent to a GatewayEvent.
-fn convert_stream_event(
-    event: StreamEvent,
-    agent_id: &str,
-    conversation_id: &str,
-    session_id: &str,
-) -> GatewayEvent {
-    match event {
-        StreamEvent::Metadata { .. } => GatewayEvent::AgentStarted {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            session_id: session_id.to_string(),
-        },
-        StreamEvent::Token { content, .. } => GatewayEvent::Token {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            delta: content,
-        },
-        StreamEvent::Reasoning { content, .. } => GatewayEvent::Thinking {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            content,
-        },
-        StreamEvent::ToolCallStart {
-            tool_id, tool_name, args, ..
-        } => GatewayEvent::ToolCall {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            tool_id,
-            tool_name,
-            args,
-        },
-        StreamEvent::ToolResult {
-            tool_id, result, error, ..
-        } => GatewayEvent::ToolResult {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            tool_id,
-            result,
-            error,
-        },
-        StreamEvent::Done { final_message, .. } => GatewayEvent::TurnComplete {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            message: final_message,
-        },
-        StreamEvent::Error { error, .. } => GatewayEvent::Error {
-            agent_id: Some(agent_id.to_string()),
-            conversation_id: Some(conversation_id.to_string()),
-            message: error,
-        },
-        // Action events from tools
-        StreamEvent::ActionRespond {
-            message,
-            session_id,
-            ..
-        } => GatewayEvent::Respond {
-            conversation_id: conversation_id.to_string(),
-            message,
-            session_id,
-        },
-        StreamEvent::ActionDelegate {
-            agent_id: child_agent_id,
-            task,
-            ..
-        } => GatewayEvent::DelegationStarted {
-            parent_agent_id: agent_id.to_string(),
-            parent_conversation_id: conversation_id.to_string(),
-            child_agent_id,
-            child_conversation_id: format!("{}-sub", conversation_id),
-            task,
-        },
-        // Handle other event types (ToolCallEnd, ShowContent, RequestInput)
-        _ => GatewayEvent::AgentStarted {
-            agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
-            session_id: session_id.to_string(),
-        },
-    }
 }
