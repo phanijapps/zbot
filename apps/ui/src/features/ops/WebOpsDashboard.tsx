@@ -95,44 +95,107 @@ interface SessionTreeNode {
 }
 
 /**
- * Build a tree structure from flat sessions list.
- * Root sessions (no parent) become top-level nodes.
- * Child sessions are nested under their parent.
+ * Represents a conversation with all its sessions grouped together.
+ * A conversation is the top-level grouping (starts with /new or hook).
  */
-function buildSessionTree(sessions: ExecutionSession[]): SessionTreeNode[] {
-  const sessionMap = new Map<string, ExecutionSession>();
-  const childrenMap = new Map<string, ExecutionSession[]>();
+interface ConversationGroup {
+  conversationId: string;
+  /** The primary/root agent session (usually "root") */
+  primarySession: ExecutionSession;
+  /** All sessions in this conversation, organized as a tree */
+  sessionTree: SessionTreeNode[];
+  /** Total token usage across all sessions */
+  totalTokens: { in: number; out: number };
+  /** Latest status from sessions */
+  latestStatus: ExecutionStatus;
+  /** Earliest created_at */
+  createdAt: string;
+}
 
-  // Index all sessions by ID and group children by parent
+/**
+ * Build conversation groups from flat sessions list.
+ * Groups sessions by their root conversation (strips -sub-* suffix).
+ * Within each group, builds parent-child hierarchy.
+ */
+function buildConversationGroups(sessions: ExecutionSession[]): ConversationGroup[] {
+  // Helper to get root conversation ID (strip -sub-* suffix)
+  const getRootConversationId = (convId: string): string => {
+    const subIndex = convId.indexOf('-sub-');
+    return subIndex > 0 ? convId.substring(0, subIndex) : convId;
+  };
+
+  // Group sessions by root conversation
+  const conversationMap = new Map<string, ExecutionSession[]>();
   for (const session of sessions) {
-    sessionMap.set(session.id, session);
-    if (session.parent_session_id) {
-      const siblings = childrenMap.get(session.parent_session_id) || [];
-      siblings.push(session);
-      childrenMap.set(session.parent_session_id, siblings);
+    const rootConvId = getRootConversationId(session.conversation_id);
+    const group = conversationMap.get(rootConvId) || [];
+    group.push(session);
+    conversationMap.set(rootConvId, group);
+  }
+
+  // Build tree for each conversation group
+  const groups: ConversationGroup[] = [];
+
+  for (const [convId, convSessions] of conversationMap) {
+    // Build session tree within this conversation
+    const sessionMap = new Map<string, ExecutionSession>();
+    const childrenMap = new Map<string, ExecutionSession[]>();
+
+    for (const session of convSessions) {
+      sessionMap.set(session.id, session);
+      if (session.parent_session_id && sessionMap.has(session.parent_session_id)) {
+        const siblings = childrenMap.get(session.parent_session_id) || [];
+        siblings.push(session);
+        childrenMap.set(session.parent_session_id, siblings);
+      }
+    }
+
+    // Build tree nodes recursively
+    function buildNode(session: ExecutionSession): SessionTreeNode {
+      const children = childrenMap.get(session.id) || [];
+      children.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+      return { session, children: children.map(buildNode) };
+    }
+
+    // Find root sessions (no parent or parent not in this conversation)
+    const roots = convSessions.filter(
+      (s) => !s.parent_session_id || !sessionMap.has(s.parent_session_id)
+    );
+    roots.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
+
+    // Calculate aggregates
+    let totalIn = 0, totalOut = 0;
+    let latestCreated = '';
+    let latestStatus: ExecutionStatus = 'completed';
+
+    for (const session of convSessions) {
+      totalIn += session.tokens_in;
+      totalOut += session.tokens_out;
+      if (!latestCreated || session.created_at > latestCreated) {
+        latestCreated = session.created_at;
+        latestStatus = session.status;
+      }
+    }
+
+    // Find primary session (first root session, usually "root" agent)
+    const primarySession = roots.find(s => s.agent_id === 'root') || roots[0];
+
+    if (primarySession) {
+      groups.push({
+        conversationId: convId,
+        primarySession,
+        sessionTree: roots.map(buildNode),
+        totalTokens: { in: totalIn, out: totalOut },
+        latestStatus,
+        createdAt: roots[0]?.created_at || latestCreated,
+      });
     }
   }
 
-  // Recursively build tree node
-  function buildNode(session: ExecutionSession): SessionTreeNode {
-    const children = childrenMap.get(session.id) || [];
-    // Sort children by created_at
-    children.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-    return {
-      session,
-      children: children.map(buildNode),
-    };
-  }
+  // Sort groups by created_at descending (newest first)
+  groups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
-  // Find root sessions (no parent, or parent not in our list)
-  const roots = sessions.filter(
-    (s) => !s.parent_session_id || !sessionMap.has(s.parent_session_id)
-  );
-
-  // Sort roots by created_at descending (newest first)
-  roots.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
-
-  return roots.map(buildNode);
+  return groups;
 }
 
 // ============================================================================
@@ -314,157 +377,147 @@ function SessionRow({
 }
 
 // ============================================================================
-// Session Tree Node Component (for hierarchical history view)
+// Conversation Group Component (for Session History)
 // ============================================================================
 
-interface SessionTreeNodeProps {
-  node: SessionTreeNode;
-  depth: number;
+interface ConversationGroupProps {
+  group: ConversationGroup;
+  isExpanded: boolean;
   expandedSessions: Set<string>;
-  expandedTrees: Set<string>;
+  onToggleGroup: () => void;
   onToggleDetails: (sessionId: string) => void;
-  onToggleTree: (sessionId: string) => void;
   onOpenChat: (session: ExecutionSession) => void;
 }
 
-function SessionTreeNodeComponent({
-  node,
-  depth,
+function ConversationGroupComponent({
+  group,
+  isExpanded,
   expandedSessions,
-  expandedTrees,
+  onToggleGroup,
   onToggleDetails,
-  onToggleTree,
   onOpenChat,
-}: SessionTreeNodeProps) {
-  const hasChildren = node.children.length > 0;
-  const isTreeExpanded = expandedTrees.has(node.session.id);
-  const isDetailsExpanded = expandedSessions.has(node.session.id);
-  const isSubagent = depth > 0;
+}: ConversationGroupProps) {
+  const totalTokens = group.totalTokens.in + group.totalTokens.out;
+  const sessionCount = group.sessionTree.reduce(
+    (count, node) => count + 1 + countChildren(node),
+    0
+  );
 
-  return (
-    <div>
-      {/* Session row */}
-      <div className={depth === 0 ? "border-b border-border" : ""}>
+  function countChildren(node: SessionTreeNode): number {
+    return node.children.reduce((sum, child) => sum + 1 + countChildren(child), 0);
+  }
+
+  // Render a session node recursively
+  function renderSessionNode(node: SessionTreeNode, depth: number): React.ReactNode {
+    const isSubagent = node.session.parent_session_id !== null;
+    const hasChildren = node.children.length > 0;
+    const isDetailsExpanded = expandedSessions.has(node.session.id);
+
+    return (
+      <div key={node.session.id}>
         <div
-          className="flex items-center gap-2 p-3 hover:bg-muted/50 cursor-pointer"
-          style={{ paddingLeft: `${12 + depth * 24}px` }}
+          className="flex items-center gap-2 py-2 hover:bg-muted/30 cursor-pointer"
+          style={{ paddingLeft: `${16 + depth * 20}px` }}
           onClick={() => onToggleDetails(node.session.id)}
         >
-          {/* Subagent connector */}
+          {/* Subagent indicator */}
           {isSubagent && (
-            <span className="text-muted-foreground/50 flex-shrink-0" style={{ marginLeft: -8 }}>↳</span>
+            <span className="text-muted-foreground/50 flex-shrink-0">↳</span>
           )}
 
-          {/* Tree expand/collapse for nodes with children */}
-          {hasChildren ? (
-            <button
-              className="p-1 hover:bg-muted rounded flex-shrink-0"
-              onClick={(e) => {
-                e.stopPropagation();
-                onToggleTree(node.session.id);
-              }}
-              title={isTreeExpanded ? "Collapse subagents" : "Expand subagents"}
-            >
-              {isTreeExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </button>
-          ) : (
-            <button
-              className="p-1 hover:bg-muted rounded flex-shrink-0"
-              onClick={() => onToggleDetails(node.session.id)}
-            >
-              {isDetailsExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            </button>
+          <Bot size={12} className={isSubagent ? "text-primary/60" : "text-muted-foreground"} />
+          <span className="text-sm truncate" style={{ minWidth: 0 }}>{node.session.agent_id}</span>
+          <StatusBadge status={node.session.status} />
+
+          {/* Token count for this session */}
+          {(node.session.tokens_in + node.session.tokens_out) > 0 && (
+            <span className="text-xs text-muted-foreground ml-auto">
+              {(node.session.tokens_in + node.session.tokens_out).toLocaleString()} tok
+            </span>
           )}
 
-          {/* Session info */}
-          <div className="flex-1 min-w-0 overflow-hidden">
-            <div className="flex items-center gap-2">
-              <Bot size={14} className={isSubagent ? "text-primary/60 flex-shrink-0" : "text-muted-foreground flex-shrink-0"} />
-              <span className="font-medium truncate text-sm" style={{ minWidth: 0 }}>{node.session.agent_id}</span>
-              {hasChildren && (
-                <span className="text-xs text-muted-foreground flex-shrink-0">
-                  +{node.children.length}
-                </span>
-              )}
-              <span className="flex-shrink-0"><StatusBadge status={node.session.status} /></span>
-            </div>
-          </div>
-
-          {/* Compact info */}
-          <div className="flex items-center gap-3 text-xs text-muted-foreground flex-shrink-0">
-            {(node.session.tokens_in + node.session.tokens_out) > 0 && (
-              <span title={`In: ${node.session.tokens_in} / Out: ${node.session.tokens_out}`}>
-                {(node.session.tokens_in + node.session.tokens_out).toLocaleString()} tok
-              </span>
-            )}
-          </div>
-
-          {/* Chat button */}
-          <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-            <button
-              className="btn btn--secondary btn--sm"
-              onClick={() => onOpenChat(node.session)}
-              title={isSubagent ? "View subagent chat (read-only)" : "Open chat"}
-            >
-              <MessageSquare size={14} />
-            </button>
-          </div>
+          <button
+            className="btn btn--ghost btn--sm p-1"
+            onClick={(e) => {
+              e.stopPropagation();
+              onOpenChat(node.session);
+            }}
+            title={isSubagent ? "View subagent chat (read-only)" : "Open chat"}
+          >
+            <MessageSquare size={12} />
+          </button>
         </div>
 
-        {/* Expanded details */}
+        {/* Session details */}
         {isDetailsExpanded && (
-          <div className="px-8 py-3 bg-muted/30 text-xs" style={{ marginLeft: depth * 24 }}>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-              <div>
-                <span className="text-muted-foreground">Conversation:</span>{" "}
-                <span className="font-mono">{node.session.conversation_id}</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Tokens:</span>{" "}
-                <span>{node.session.tokens_in.toLocaleString()} in / {node.session.tokens_out.toLocaleString()} out</span>
-              </div>
-              <div>
-                <span className="text-muted-foreground">Created:</span>{" "}
-                {new Date(node.session.created_at).toLocaleString()}
-              </div>
-              {node.session.started_at && (
-                <div>
-                  <span className="text-muted-foreground">Started:</span>{" "}
-                  {new Date(node.session.started_at).toLocaleString()}
-                </div>
-              )}
-              {node.session.completed_at && (
-                <div>
-                  <span className="text-muted-foreground">Completed:</span>{" "}
-                  {new Date(node.session.completed_at).toLocaleString()}
-                </div>
-              )}
+          <div className="py-2 text-xs bg-muted/20" style={{ paddingLeft: `${32 + depth * 20}px` }}>
+            <div className="space-y-1 text-muted-foreground">
+              <div>Created: {new Date(node.session.created_at).toLocaleString()}</div>
               {node.session.error && (
-                <div className="col-span-2">
-                  <span className="text-destructive">Error:</span>{" "}
-                  <span className="text-destructive">{node.session.error}</span>
-                </div>
+                <div className="text-destructive">Error: {node.session.error}</div>
               )}
             </div>
           </div>
         )}
+
+        {/* Render children */}
+        {hasChildren && node.children.map((child) => renderSessionNode(child, depth + 1))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="border-b border-border">
+      {/* Group header */}
+      <div
+        className="flex items-center gap-2 p-3 hover:bg-muted/50 cursor-pointer"
+        onClick={onToggleGroup}
+      >
+        <button className="p-1 hover:bg-muted rounded flex-shrink-0">
+          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+        </button>
+
+        <div className="flex-1 min-w-0 overflow-hidden">
+          <div className="flex items-center gap-2">
+            <MessageSquare size={14} className="text-muted-foreground flex-shrink-0" />
+            <span className="font-mono text-xs truncate text-muted-foreground" style={{ minWidth: 0 }}>
+              {group.conversationId.substring(0, 20)}...
+            </span>
+            {sessionCount > 1 && (
+              <span className="text-xs text-muted-foreground">
+                ({sessionCount} sessions)
+              </span>
+            )}
+            <span className="flex-shrink-0"><StatusBadge status={group.latestStatus} /></span>
+          </div>
+        </div>
+
+        {/* Aggregated info */}
+        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-shrink-0">
+          {totalTokens > 0 && (
+            <span title={`In: ${group.totalTokens.in} / Out: ${group.totalTokens.out}`}>
+              {totalTokens.toLocaleString()} tok
+            </span>
+          )}
+          <span>{new Date(group.createdAt).toLocaleDateString()}</span>
+        </div>
+
+        {/* Open primary chat */}
+        <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+          <button
+            className="btn btn--secondary btn--sm"
+            onClick={() => onOpenChat(group.primarySession)}
+            title="Open chat"
+          >
+            <MessageSquare size={14} />
+          </button>
+        </div>
       </div>
 
-      {/* Children (subagents) */}
-      {hasChildren && isTreeExpanded && (
-        <div className="border-l border-border/50" style={{ marginLeft: `${20 + depth * 24}px` }}>
-          {node.children.map((child) => (
-            <SessionTreeNodeComponent
-              key={child.session.id}
-              node={child}
-              depth={depth + 1}
-              expandedSessions={expandedSessions}
-              expandedTrees={expandedTrees}
-              onToggleDetails={onToggleDetails}
-              onToggleTree={onToggleTree}
-              onOpenChat={onOpenChat}
-            />
-          ))}
+      {/* Expanded: show session tree */}
+      {isExpanded && (
+        <div className="border-t border-border/50 bg-muted/10">
+          {group.sessionTree.map((node) => renderSessionNode(node, 0))}
         </div>
       )}
     </div>
@@ -524,7 +577,7 @@ export function WebOpsDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
   const [expandedSessions, setExpandedSessions] = useState<Set<string>>(new Set());
-  const [expandedTrees, setExpandedTrees] = useState<Set<string>>(new Set());
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [processingSession, setProcessingSession] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<ExecutionStatus | "all">("all");
   const [historyFilter, setHistoryFilter] = useState<ExecutionStatus | "all">("all");
@@ -550,14 +603,10 @@ export function WebOpsDashboard() {
     ? closedSessions
     : closedSessions.filter((s) => s.status === historyFilter);
 
-  // Build session tree for history (hierarchical view)
-  // When filtering, we still show the tree but only include matching sessions
-  const sessionTree = buildSessionTree(filteredClosedSessions);
+  // Build conversation groups for history (grouped by conversation)
+  const conversationGroups = buildConversationGroups(filteredClosedSessions);
 
-  // Count root sessions (for display)
-  const rootSessionCount = sessionTree.length;
-
-  // Toggle handlers for tree view
+  // Toggle handlers for group view
   const handleToggleDetails = useCallback((sessionId: string) => {
     setExpandedSessions((prev) => {
       const next = new Set(prev);
@@ -570,13 +619,13 @@ export function WebOpsDashboard() {
     });
   }, []);
 
-  const handleToggleTree = useCallback((sessionId: string) => {
-    setExpandedTrees((prev) => {
+  const handleToggleGroup = useCallback((conversationId: string) => {
+    setExpandedGroups((prev) => {
       const next = new Set(prev);
-      if (next.has(sessionId)) {
-        next.delete(sessionId);
+      if (next.has(conversationId)) {
+        next.delete(conversationId);
       } else {
-        next.add(sessionId);
+        next.add(conversationId);
       }
       return next;
     });
@@ -851,8 +900,8 @@ export function WebOpsDashboard() {
               <div className="flex items-center gap-3">
                 <History size={18} className="text-muted-foreground" />
                 <h2 className="font-semibold">Session History</h2>
-                <span className="badge" title={`${rootSessionCount} root sessions, ${filteredClosedSessions.length} total`}>
-                  {rootSessionCount}
+                <span className="badge" title={`${conversationGroups.length} conversations, ${filteredClosedSessions.length} total sessions`}>
+                  {conversationGroups.length}
                 </span>
               </div>
             </div>
@@ -880,28 +929,27 @@ export function WebOpsDashboard() {
             </div>
 
             <div style={{ flex: 1, overflow: "auto" }}>
-              {sessionTree.length === 0 ? (
+              {conversationGroups.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground" style={{ height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
                   <History size={40} className="mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No session history</p>
                 </div>
               ) : (
                 <>
-                  {sessionTree.slice(0, 50).map((node) => (
-                    <SessionTreeNodeComponent
-                      key={node.session.id}
-                      node={node}
-                      depth={0}
+                  {conversationGroups.slice(0, 50).map((group) => (
+                    <ConversationGroupComponent
+                      key={group.conversationId}
+                      group={group}
+                      isExpanded={expandedGroups.has(group.conversationId)}
                       expandedSessions={expandedSessions}
-                      expandedTrees={expandedTrees}
+                      onToggleGroup={() => handleToggleGroup(group.conversationId)}
                       onToggleDetails={handleToggleDetails}
-                      onToggleTree={handleToggleTree}
                       onOpenChat={handleOpenChat}
                     />
                   ))}
-                  {sessionTree.length > 50 && (
+                  {conversationGroups.length > 50 && (
                     <div className="p-3 text-center text-sm text-muted-foreground border-t border-border">
-                      Showing 50 of {sessionTree.length} root sessions
+                      Showing 50 of {conversationGroups.length} conversations
                     </div>
                   )}
                 </>
