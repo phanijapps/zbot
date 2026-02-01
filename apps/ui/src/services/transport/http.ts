@@ -240,7 +240,9 @@ export class HttpTransport implements Transport {
     }
 
     try {
-      const response = await fetch(`${this.config.httpUrl}/api/logs/cleanup?older_than_days=${olderThanDays}`, {
+      // Calculate timestamp from days ago
+      const olderThan = new Date(Date.now() - olderThanDays * 24 * 60 * 60 * 1000).toISOString();
+      const response = await fetch(`${this.config.httpUrl}/api/logs/cleanup?older_than=${encodeURIComponent(olderThan)}`, {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
@@ -372,23 +374,29 @@ export class HttpTransport implements Transport {
   async executeAgent(
     agentId: string,
     conversationId: string,
-    message: string
-  ): Promise<TransportResult<{ conversationId: string }>> {
+    message: string,
+    sessionId?: string
+  ): Promise<TransportResult<{ conversationId: string; sessionId?: string }>> {
     // Send execute command via WebSocket
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       return { success: false, error: "WebSocket not connected" };
     }
 
-    const command = {
+    const command: Record<string, unknown> = {
       type: "invoke",
       agent_id: agentId,
       conversation_id: conversationId,
       message,
     };
 
+    // Include session_id to continue an existing session
+    if (sessionId) {
+      command.session_id = sessionId;
+    }
+
     try {
       this.ws.send(JSON.stringify(command));
-      return { success: true, data: { conversationId } };
+      return { success: true, data: { conversationId, sessionId } };
     } catch (error) {
       return { success: false, error: String(error) };
     }

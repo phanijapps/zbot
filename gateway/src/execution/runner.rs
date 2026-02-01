@@ -3,7 +3,10 @@
 //! Manages agent execution and event streaming for the gateway.
 
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService, SessionStatus};
-use execution_state::{ExecutionSession, ExecutionStatus, StateService};
+use execution_state::{
+    AgentExecution, DelegationType, ExecutionStatus, Session, SessionStatus as StateSessionStatus,
+    StateService,
+};
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::hooks::HookContext;
@@ -26,8 +29,8 @@ use zero_core::FileSystemContext;
 #[derive(Debug, Clone)]
 pub struct DelegationRequest {
     pub parent_agent_id: String,
-    pub parent_conversation_id: String,
-    pub parent_session_id: String,
+    pub session_id: String,
+    pub parent_execution_id: String,
     pub child_agent_id: String,
     pub task: String,
     pub context: Option<Value>,
@@ -88,7 +91,7 @@ impl FileSystemContext for GatewayFileSystem {
 pub struct ExecutionConfig {
     /// Agent ID to execute
     pub agent_id: String,
-    /// Conversation ID for tracking
+    /// Conversation ID for tracking (legacy, used for message persistence)
     pub conversation_id: String,
     /// Configuration directory (vault path)
     pub config_dir: PathBuf,
@@ -96,6 +99,10 @@ pub struct ExecutionConfig {
     pub max_iterations: u32,
     /// Optional hook context for routing responses
     pub hook_context: Option<HookContext>,
+    /// Optional session ID for continuing an existing session.
+    /// - None: create a new session
+    /// - Some(id): continue the existing session with this ID
+    pub session_id: Option<String>,
 }
 
 impl ExecutionConfig {
@@ -107,6 +114,7 @@ impl ExecutionConfig {
             config_dir,
             max_iterations: 25,
             hook_context: None,
+            session_id: None,
         }
     }
 
@@ -114,6 +122,13 @@ impl ExecutionConfig {
     #[must_use]
     pub fn with_hook_context(mut self, hook_context: HookContext) -> Self {
         self.hook_context = Some(hook_context);
+        self
+    }
+
+    /// Set the session ID to continue an existing session.
+    #[must_use]
+    pub fn with_session_id(mut self, session_id: String) -> Self {
+        self.session_id = Some(session_id);
         self
     }
 }
@@ -335,40 +350,69 @@ impl ExecutionRunner {
     /// Invoke an agent with a message.
     ///
     /// Returns an execution handle for controlling the execution.
+    ///
+    /// Session behavior:
+    /// - If `config.session_id` is Some: continues that session with a new execution
+    /// - If `config.session_id` is None: creates a new session
     pub async fn invoke(
         &self,
         config: ExecutionConfig,
         message: String,
-    ) -> Result<ExecutionHandle, String> {
+    ) -> Result<(ExecutionHandle, String), String> {
         let handle = ExecutionHandle::new(config.max_iterations);
         let handle_clone = handle.clone();
 
-        // Ensure conversation exists first (required for FK constraint on execution_sessions)
-        if let Err(e) = self.conversation_repo.get_or_create_conversation(
-            &config.conversation_id,
-            &config.agent_id,
-        ) {
-            tracing::warn!("Failed to ensure conversation exists: {}", e);
-        }
-
-        // Create execution session for state tracking
-        let execution_session = match self.state_service.create_session(
-            &config.conversation_id,
-            &config.agent_id,
-            None,
-        ) {
-            Ok(session) => session,
-            Err(e) => {
-                tracing::warn!("Failed to create execution session: {}", e);
-                // Create a fallback session ID for logging compatibility
-                ExecutionSession::new(&config.conversation_id, &config.agent_id, None)
+        // Get or create session and execution for state tracking
+        let (session_id, execution_id) = if let Some(existing_session_id) = &config.session_id {
+            // Continue existing session - create new execution within it
+            match self.state_service.get_session(existing_session_id) {
+                Ok(Some(_session)) => {
+                    // Session exists, create a new execution for this message
+                    let execution = AgentExecution::new_root(existing_session_id, &config.agent_id);
+                    if let Err(e) = self.state_service.create_execution(&execution) {
+                        tracing::warn!("Failed to create execution in existing session: {}", e);
+                    }
+                    (existing_session_id.clone(), execution.id)
+                }
+                Ok(None) => {
+                    // Session not found, create new one
+                    tracing::warn!("Session {} not found, creating new session", existing_session_id);
+                    let (session, execution) = self.state_service.create_session(&config.agent_id)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to create session: {}", e);
+                            let s = Session::new(&config.agent_id);
+                            let e = AgentExecution::new_root(&s.id, &config.agent_id);
+                            (s, e)
+                        });
+                    (session.id, execution.id)
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to get session: {}", e);
+                    let (session, execution) = self.state_service.create_session(&config.agent_id)
+                        .unwrap_or_else(|e| {
+                            tracing::warn!("Failed to create session: {}", e);
+                            let s = Session::new(&config.agent_id);
+                            let e = AgentExecution::new_root(&s.id, &config.agent_id);
+                            (s, e)
+                        });
+                    (session.id, execution.id)
+                }
             }
+        } else {
+            // No session_id provided - create new session
+            let (session, execution) = self.state_service.create_session(&config.agent_id)
+                .unwrap_or_else(|e| {
+                    tracing::warn!("Failed to create session: {}", e);
+                    let s = Session::new(&config.agent_id);
+                    let e = AgentExecution::new_root(&s.id, &config.agent_id);
+                    (s, e)
+                });
+            (session.id, execution.id)
         };
-        let session_id = execution_session.id.clone();
 
-        // Start the session (QUEUED -> RUNNING)
-        if let Err(e) = self.state_service.start_session(&session_id) {
-            tracing::warn!("Failed to start execution session: {}", e);
+        // Start the execution (QUEUED -> RUNNING)
+        if let Err(e) = self.state_service.start_execution(&execution_id) {
+            tracing::warn!("Failed to start execution: {}", e);
         }
 
         // Store handle
@@ -382,19 +426,20 @@ impl ExecutionRunner {
             .publish(GatewayEvent::AgentStarted {
                 agent_id: config.agent_id.clone(),
                 conversation_id: config.conversation_id.clone(),
+                session_id: session_id.clone(),
             })
             .await;
 
         // Log session start
         tracing::info!(
             session_id = %session_id,
-            conversation_id = %config.conversation_id,
+            execution_id = %execution_id,
             agent_id = %config.agent_id,
-            "Execution session started"
+            "Execution started"
         );
         if let Err(e) = self.log_service.log_session_start(
+            &execution_id,
             &session_id,
-            &config.conversation_id,
             &config.agent_id,
             None,
         ) {
@@ -446,16 +491,16 @@ impl ExecutionRunner {
             }
         };
 
-        // Get or create conversation in database
+        // Legacy no-op (sessions/executions are created by StateService)
         let _ = self.conversation_repo.get_or_create_conversation(
             &config.conversation_id,
             &config.agent_id,
         );
 
-        // Load conversation history from database
+        // Load message history for this execution (empty for new executions)
         let history: Vec<ChatMessage> = self
             .conversation_repo
-            .get_recent_messages(&config.conversation_id, 50)
+            .get_recent_messages(&execution_id, 50)
             .map(|messages| self.conversation_repo.messages_to_chat_format(&messages))
             .unwrap_or_default();
 
@@ -478,6 +523,7 @@ impl ExecutionRunner {
         let log_service = self.log_service.clone();
         let state_service = self.state_service.clone();
         let session_id_clone = session_id.clone();
+        let execution_id_clone = execution_id.clone();
 
         tokio::spawn(async move {
             let mut accumulated_response = String::new();
@@ -502,8 +548,8 @@ impl ExecutionRunner {
                     {
                         let _ = delegation_tx.send(DelegationRequest {
                             parent_agent_id: agent_id.clone(),
-                            parent_conversation_id: conversation_id.clone(),
-                            parent_session_id: session_id_clone.clone(),
+                            session_id: session_id_clone.clone(),
+                            parent_execution_id: execution_id_clone.clone(),
                             child_agent_id: delegate_agent.clone(),
                             task: delegate_task.clone(),
                             context: delegate_context.clone(),
@@ -511,8 +557,8 @@ impl ExecutionRunner {
 
                         // Log delegation
                         let _ = log_service.log(ExecutionLog::new(
+                            &execution_id_clone,
                             &session_id_clone,
-                            &conversation_id,
                             &agent_id,
                             LogLevel::Info,
                             LogCategory::Delegation,
@@ -526,21 +572,21 @@ impl ExecutionRunner {
                     // Log tool calls and results, track tokens
                     match &event {
                         StreamEvent::TokenUpdate { tokens_in, tokens_out, .. } => {
-                            // Update session token counts in database
-                            if let Err(e) = state_service.update_tokens(&session_id_clone, *tokens_in, *tokens_out) {
-                                tracing::warn!("Failed to update session tokens: {}", e);
+                            // Update execution token counts in database
+                            if let Err(e) = state_service.update_execution_tokens(&execution_id_clone, *tokens_in, *tokens_out) {
+                                tracing::warn!("Failed to update execution tokens: {}", e);
                             }
 
                             // Emit token usage event for real-time UI updates
                             let event_bus = event_bus.clone();
-                            let conv_id = conversation_id.clone();
                             let sess_id = session_id_clone.clone();
+                            let exec_id = execution_id_clone.clone();
                             let t_in = *tokens_in;
                             let t_out = *tokens_out;
                             tokio::spawn(async move {
                                 event_bus.publish(GatewayEvent::TokenUsage {
-                                    conversation_id: conv_id,
-                                    session_id: sess_id,
+                                    conversation_id: sess_id,
+                                    session_id: exec_id,
                                     tokens_in: t_in,
                                     tokens_out: t_out,
                                 }).await;
@@ -548,8 +594,8 @@ impl ExecutionRunner {
                         }
                         StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
                             let _ = log_service.log(ExecutionLog::new(
+                                &execution_id_clone,
                                 &session_id_clone,
-                                &conversation_id,
                                 &agent_id,
                                 LogLevel::Info,
                                 LogCategory::ToolCall,
@@ -570,8 +616,8 @@ impl ExecutionRunner {
                                 result.clone()
                             };
                             let _ = log_service.log(ExecutionLog::new(
+                                &execution_id_clone,
                                 &session_id_clone,
-                                &conversation_id,
                                 &agent_id,
                                 level,
                                 LogCategory::ToolResult,
@@ -584,8 +630,8 @@ impl ExecutionRunner {
                         }
                         StreamEvent::Error { error, .. } => {
                             let _ = log_service.log(ExecutionLog::new(
+                                &execution_id_clone,
                                 &session_id_clone,
-                                &conversation_id,
                                 &agent_id,
                                 LogLevel::Error,
                                 LogCategory::Error,
@@ -597,7 +643,7 @@ impl ExecutionRunner {
 
                     // Convert and broadcast event
                     let gateway_event =
-                        convert_stream_event(event, &agent_id, &conversation_id);
+                        convert_stream_event(event, &agent_id, &conversation_id, &session_id_clone);
 
                     // Accumulate response text from tokens and respond tool
                     match &gateway_event {
@@ -626,9 +672,9 @@ impl ExecutionRunner {
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Persist messages to SQLite
+                    // Persist messages to SQLite (using execution_id)
                     if let Err(e) = conversation_repo.add_message(
-                        &conversation_id,
+                        &execution_id_clone,
                         "user",
                         &message,
                         None,
@@ -639,7 +685,7 @@ impl ExecutionRunner {
 
                     if !accumulated_response.is_empty() {
                         if let Err(e) = conversation_repo.add_message(
-                            &conversation_id,
+                            &execution_id_clone,
                             "assistant",
                             &accumulated_response,
                             None,
@@ -649,18 +695,21 @@ impl ExecutionRunner {
                         }
                     }
 
-                    // Update execution session status to COMPLETED
+                    // Update execution and session status to COMPLETED
+                    if let Err(e) = state_service.complete_execution(&execution_id_clone) {
+                        tracing::warn!("Failed to complete execution: {}", e);
+                    }
                     if let Err(e) = state_service.complete_session(&session_id_clone) {
-                        tracing::warn!("Failed to complete execution session: {}", e);
+                        tracing::warn!("Failed to complete session: {}", e);
                     }
 
                     // Log session end
                     let _ = log_service.log_session_end(
+                        &execution_id_clone,
                         &session_id_clone,
-                        &conversation_id,
                         &agent_id,
                         SessionStatus::Completed,
-                        Some("Session completed successfully"),
+                        Some("Execution completed successfully"),
                     );
 
                     // Emit completion
@@ -673,15 +722,18 @@ impl ExecutionRunner {
                         .await;
                 }
                 Err(e) => {
-                    // Update execution session status to CRASHED
-                    if let Err(err) = state_service.crash_session(&session_id_clone, &e.to_string()) {
-                        tracing::warn!("Failed to crash execution session: {}", err);
+                    // Update execution and session status to CRASHED
+                    if let Err(err) = state_service.crash_execution(&execution_id_clone, &e.to_string()) {
+                        tracing::warn!("Failed to crash execution: {}", err);
+                    }
+                    if let Err(err) = state_service.crash_session(&session_id_clone) {
+                        tracing::warn!("Failed to crash session: {}", err);
                     }
 
                     // Log session error
                     let _ = log_service.log_session_end(
+                        &execution_id_clone,
                         &session_id_clone,
-                        &conversation_id,
                         &agent_id,
                         SessionStatus::Error,
                         Some(&e.to_string()),
@@ -690,7 +742,7 @@ impl ExecutionRunner {
                     event_bus
                         .publish(GatewayEvent::Error {
                             agent_id: Some(agent_id.clone()),
-                            conversation_id: Some(conversation_id.clone()),
+                            conversation_id: Some(session_id_clone.clone()),
                             message: e.to_string(),
                         })
                         .await;
@@ -699,15 +751,15 @@ impl ExecutionRunner {
 
             // Check if stopped
             if handle_clone.is_stop_requested() {
-                // Update execution session status to CANCELLED
+                // Update execution status to CANCELLED
                 if let Err(e) = state_service.cancel_session(&session_id_clone) {
-                    tracing::warn!("Failed to cancel execution session: {}", e);
+                    tracing::warn!("Failed to cancel session: {}", e);
                 }
 
                 // Log session stopped
                 let _ = log_service.log_session_end(
+                    &execution_id_clone,
                     &session_id_clone,
-                    &conversation_id,
                     &agent_id,
                     SessionStatus::Stopped,
                     Some("Stopped by user"),
@@ -723,7 +775,7 @@ impl ExecutionRunner {
             }
         });
 
-        Ok(handle)
+        Ok((handle, session_id))
     }
 
     /// Stop an execution by conversation ID.
@@ -862,11 +914,12 @@ impl ExecutionRunner {
         // Spawn the child agent
         // Note: We pass the task as the message
         match self.invoke(config, task.to_string()).await {
-            Ok(_handle) => {
+            Ok((_handle, session_id)) => {
                 tracing::info!(
                     parent_agent = %parent_agent_id,
                     child_agent = %child_agent_id,
                     child_conversation = %child_conversation_id,
+                    session_id = %session_id,
                     "Spawned delegated subagent"
                 );
                 Ok(child_conversation_id)
@@ -1068,69 +1121,71 @@ async fn spawn_delegated_agent(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
 ) -> Result<String, String> {
-    // Generate child conversation ID
+    // Generate child conversation ID (legacy, for conversation_repo)
     let child_conversation_id = format!(
         "{}-sub-{}",
-        request.parent_conversation_id,
+        request.session_id,
         uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
     );
 
     // Create conversation record first (required for foreign key constraint)
-    if let Err(e) = conversation_repo.get_or_create_conversation(
-        &child_conversation_id,
+    // Create delegated execution (subagent) with parent linkage
+    let execution = match state_service.create_delegated_execution(
+        &request.session_id,
         &request.child_agent_id,
+        &request.parent_execution_id,
+        DelegationType::Sequential,
+        &request.task,
     ) {
-        tracing::warn!("Failed to create conversation for delegated agent: {}", e);
-    }
-
-    // Create execution session for delegated agent with parent session linkage
-    let execution_session = match state_service.create_session(
-        &child_conversation_id,
-        &request.child_agent_id,
-        Some(request.parent_session_id.clone()),
-    ) {
-        Ok(session) => session,
+        Ok(exec) => exec,
         Err(e) => {
-            tracing::warn!("Failed to create delegated execution session: {}", e);
-            ExecutionSession::new(&child_conversation_id, &request.child_agent_id, Some(request.parent_session_id.clone()))
+            tracing::warn!("Failed to create delegated execution: {}", e);
+            AgentExecution::new_delegated(
+                &request.session_id,
+                &request.child_agent_id,
+                &request.parent_execution_id,
+                DelegationType::Sequential,
+                &request.task,
+            )
         }
     };
-    let session_id = execution_session.id.clone();
+    let execution_id = execution.id.clone();
+    let session_id = request.session_id.clone();
 
-    // Start the session (QUEUED -> RUNNING)
-    if let Err(e) = state_service.start_session(&session_id) {
-        tracing::warn!("Failed to start delegated execution session: {}", e);
+    // Start the execution (QUEUED -> RUNNING)
+    if let Err(e) = state_service.start_execution(&execution_id) {
+        tracing::warn!("Failed to start delegated execution: {}", e);
     }
 
-    // Log session start with parent session context
+    // Log execution start with parent context
     if let Err(e) = log_service.log_session_start(
+        &execution_id,
         &session_id,
-        &child_conversation_id,
         &request.child_agent_id,
-        Some(&request.parent_conversation_id),
+        Some(&request.parent_execution_id),
     ) {
-        tracing::warn!("Failed to log delegated session start: {}", e);
+        tracing::warn!("Failed to log delegated execution start: {}", e);
     }
 
     // Register the delegation
     let delegation_context = super::DelegationContext::new(
         &request.parent_agent_id,
-        &request.parent_conversation_id,
+        &session_id,
     );
     let delegation_context = if let Some(ctx) = request.context.clone() {
         delegation_context.with_context(ctx)
     } else {
         delegation_context
     };
-    delegation_registry.register(&child_conversation_id, delegation_context);
+    delegation_registry.register(&execution_id, delegation_context);
 
     // Emit delegation started event
     event_bus
         .publish(GatewayEvent::DelegationStarted {
             parent_agent_id: request.parent_agent_id.clone(),
-            parent_conversation_id: request.parent_conversation_id.clone(),
+            parent_conversation_id: session_id.clone(),
             child_agent_id: request.child_agent_id.clone(),
-            child_conversation_id: child_conversation_id.clone(),
+            child_conversation_id: execution_id.clone(),
             task: request.task.clone(),
         })
         .await;
@@ -1139,7 +1194,7 @@ async fn spawn_delegated_agent(
     let agent = match agent_service.get(&request.child_agent_id).await {
         Ok(a) => a,
         Err(e) => {
-            delegation_registry.remove(&child_conversation_id);
+            delegation_registry.remove(&execution_id);
             return Err(format!("Failed to load agent {}: {}", request.child_agent_id, e));
         }
     };
@@ -1287,8 +1342,9 @@ async fn spawn_delegated_agent(
     let conv_id = child_conversation_id.clone();
     let task_msg = request.task.clone();
     let parent_agent = request.parent_agent_id.clone();
-    let parent_conv = request.parent_conversation_id.clone();
+    let parent_execution_id = request.parent_execution_id.clone(); // For callback messages
     let session_id_clone = session_id.clone();
+    let execution_id = execution_id.clone();
     let log_service_clone = log_service.clone();
     let state_service_clone = state_service.clone();
 
@@ -1313,8 +1369,8 @@ async fn spawn_delegated_agent(
                 {
                     let _ = delegation_tx.send(DelegationRequest {
                         parent_agent_id: agent_id.clone(),
-                        parent_conversation_id: conv_id.clone(),
-                        parent_session_id: session_id_clone.clone(),
+                        session_id: session_id_clone.clone(),
+                        parent_execution_id: execution_id.clone(),
                         child_agent_id: delegate_agent.clone(),
                         task: delegate_task.clone(),
                         context: delegate_context.clone(),
@@ -1322,8 +1378,8 @@ async fn spawn_delegated_agent(
 
                     // Log delegation
                     let _ = log_service_clone.log(ExecutionLog::new(
+                        &execution_id,
                         &session_id_clone,
-                        &conv_id,
                         &agent_id,
                         LogLevel::Info,
                         LogCategory::Delegation,
@@ -1337,21 +1393,21 @@ async fn spawn_delegated_agent(
                 // Log tool calls and results, track tokens
                 match &event {
                     StreamEvent::TokenUpdate { tokens_in, tokens_out, .. } => {
-                        // Update session token counts in database
-                        if let Err(e) = state_service_clone.update_tokens(&session_id_clone, *tokens_in, *tokens_out) {
-                            tracing::warn!("Failed to update delegated session tokens: {}", e);
+                        // Update execution token counts in database
+                        if let Err(e) = state_service_clone.update_execution_tokens(&execution_id, *tokens_in, *tokens_out) {
+                            tracing::warn!("Failed to update delegated execution tokens: {}", e);
                         }
 
                         // Emit token usage event for real-time UI updates
                         let event_bus = event_bus.clone();
-                        let c_id = conv_id.clone();
-                        let s_id = session_id_clone.clone();
+                        let sess_id = session_id_clone.clone();
+                        let exec_id = execution_id.clone();
                         let t_in = *tokens_in;
                         let t_out = *tokens_out;
                         tokio::spawn(async move {
                             event_bus.publish(GatewayEvent::TokenUsage {
-                                conversation_id: c_id,
-                                session_id: s_id,
+                                conversation_id: sess_id,
+                                session_id: exec_id,
                                 tokens_in: t_in,
                                 tokens_out: t_out,
                             }).await;
@@ -1359,8 +1415,8 @@ async fn spawn_delegated_agent(
                     }
                     StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
                         let _ = log_service_clone.log(ExecutionLog::new(
+                            &execution_id,
                             &session_id_clone,
-                            &conv_id,
                             &agent_id,
                             LogLevel::Info,
                             LogCategory::ToolCall,
@@ -1380,8 +1436,8 @@ async fn spawn_delegated_agent(
                             result.clone()
                         };
                         let _ = log_service_clone.log(ExecutionLog::new(
+                            &execution_id,
                             &session_id_clone,
-                            &conv_id,
                             &agent_id,
                             level,
                             LogCategory::ToolResult,
@@ -1394,8 +1450,8 @@ async fn spawn_delegated_agent(
                     }
                     StreamEvent::Error { error, .. } => {
                         let _ = log_service_clone.log(ExecutionLog::new(
+                            &execution_id,
                             &session_id_clone,
-                            &conv_id,
                             &agent_id,
                             LogLevel::Error,
                             LogCategory::Error,
@@ -1405,7 +1461,7 @@ async fn spawn_delegated_agent(
                     _ => {}
                 }
 
-                let gateway_event = convert_stream_event(event, &agent_id, &conv_id);
+                let gateway_event = convert_stream_event(event, &agent_id, &conv_id, &session_id_clone);
 
                 // Accumulate response text from tokens and respond tool
                 match &gateway_event {
@@ -1432,9 +1488,9 @@ async fn spawn_delegated_agent(
 
         match result {
             Ok(()) => {
-                // Save messages
+                // Save messages (using execution_id)
                 if let Err(e) = conversation_repo.add_message(
-                    &conv_id,
+                    &execution_id,
                     "user",
                     &task_msg,
                     None,
@@ -1445,7 +1501,7 @@ async fn spawn_delegated_agent(
 
                 if !accumulated_response.is_empty() {
                     if let Err(e) = conversation_repo.add_message(
-                        &conv_id,
+                        &execution_id,
                         "assistant",
                         &accumulated_response,
                         None,
@@ -1455,18 +1511,18 @@ async fn spawn_delegated_agent(
                     }
                 }
 
-                // Update execution session status to COMPLETED
-                if let Err(e) = state_service_clone.complete_session(&session_id_clone) {
-                    tracing::warn!("Failed to complete delegated execution session: {}", e);
+                // Update execution status to COMPLETED
+                if let Err(e) = state_service_clone.complete_execution(&execution_id) {
+                    tracing::warn!("Failed to complete delegated execution: {}", e);
                 }
 
-                // Log session end
+                // Log execution end
                 let _ = log_service_clone.log_session_end(
+                    &execution_id,
                     &session_id_clone,
-                    &conv_id,
                     &agent_id,
                     SessionStatus::Completed,
-                    Some("Delegated session completed successfully"),
+                    Some("Delegated execution completed successfully"),
                 );
 
                 // Emit completion
@@ -1485,7 +1541,7 @@ async fn spawn_delegated_agent(
                 event_bus
                     .publish(GatewayEvent::DelegationCompleted {
                         parent_agent_id: parent_agent.clone(),
-                        parent_conversation_id: parent_conv.clone(),
+                        parent_conversation_id: session_id_clone.clone(),
                         child_agent_id: agent_id.clone(),
                         child_conversation_id: conv_id.clone(),
                         result: Some(accumulated_response.clone()),
@@ -1531,23 +1587,23 @@ async fn spawn_delegated_agent(
                             conv_id
                         );
 
-                        // Add callback message to parent's conversation
+                        // Add callback message to parent's execution
                         if let Err(e) = conversation_repo.add_message(
-                            &parent_conv,
+                            &parent_execution_id,
                             "system",
                             &callback_msg,
                             None,
                             None,
                         ) {
                             tracing::error!(
-                                parent_conv = %parent_conv,
+                                parent_execution = %parent_execution_id,
                                 "Failed to add callback message: {}", e
                             );
                         } else {
                             // Emit event so frontend can refresh
                             event_bus
                                 .publish(GatewayEvent::MessageAdded {
-                                    conversation_id: parent_conv.clone(),
+                                    conversation_id: parent_execution_id.clone(),
                                     role: "system".to_string(),
                                     content: callback_msg.clone(),
                                 })
@@ -1555,9 +1611,9 @@ async fn spawn_delegated_agent(
 
                             tracing::info!(
                                 parent_agent = %parent_agent,
-                                parent_conv = %parent_conv,
+                                parent_execution = %parent_execution_id,
                                 child_agent = %agent_id,
-                                "Sent callback to parent conversation"
+                                "Sent callback to parent execution"
                             );
                         }
                     }
@@ -1567,15 +1623,15 @@ async fn spawn_delegated_agent(
                 delegation_registry.remove(&conv_id);
             }
             Err(e) => {
-                // Update execution session status to CRASHED
-                if let Err(err) = state_service_clone.crash_session(&session_id_clone, &e.to_string()) {
-                    tracing::warn!("Failed to crash delegated execution session: {}", err);
+                // Update execution status to CRASHED
+                if let Err(err) = state_service_clone.crash_execution(&execution_id, &e.to_string()) {
+                    tracing::warn!("Failed to crash delegated execution: {}", err);
                 }
 
-                // Log session error
+                // Log execution error
                 let _ = log_service_clone.log_session_end(
+                    &execution_id,
                     &session_id_clone,
-                    &conv_id,
                     &agent_id,
                     SessionStatus::Error,
                     Some(&e.to_string()),
@@ -1611,21 +1667,21 @@ async fn spawn_delegated_agent(
                 );
 
                 if let Err(err) = conversation_repo.add_message(
-                    &parent_conv,
+                    &parent_execution_id,
                     "system",
                     &error_msg,
                     None,
                     None,
                 ) {
                     tracing::error!(
-                        parent_conv = %parent_conv,
+                        parent_execution = %parent_execution_id,
                         "Failed to add error callback message: {}", err
                     );
                 } else {
                     // Emit event so frontend can refresh
                     event_bus
                         .publish(GatewayEvent::MessageAdded {
-                            conversation_id: parent_conv.clone(),
+                            conversation_id: parent_execution_id.clone(),
                             role: "system".to_string(),
                             content: error_msg.clone(),
                         })
@@ -1633,10 +1689,10 @@ async fn spawn_delegated_agent(
 
                     tracing::warn!(
                         parent_agent = %parent_agent,
-                        parent_conv = %parent_conv,
+                        parent_execution = %parent_execution_id,
                         child_agent = %agent_id,
                         error = %e,
-                        "Sent error callback to parent conversation"
+                        "Sent error callback to parent execution"
                     );
                 }
 
@@ -1660,11 +1716,13 @@ fn convert_stream_event(
     event: StreamEvent,
     agent_id: &str,
     conversation_id: &str,
+    session_id: &str,
 ) -> GatewayEvent {
     match event {
         StreamEvent::Metadata { .. } => GatewayEvent::AgentStarted {
             agent_id: agent_id.to_string(),
             conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
         },
         StreamEvent::Token { content, .. } => GatewayEvent::Token {
             agent_id: agent_id.to_string(),
@@ -1729,6 +1787,7 @@ fn convert_stream_event(
         _ => GatewayEvent::AgentStarted {
             agent_id: agent_id.to_string(),
             conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
         },
     }
 }

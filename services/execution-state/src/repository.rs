@@ -1,6 +1,6 @@
 //! # State Repository
 //!
-//! Database operations for execution sessions.
+//! Database operations for sessions and agent executions.
 
 use crate::types::*;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -11,11 +11,7 @@ use std::sync::Arc;
 // ============================================================================
 
 /// Trait for database connection access.
-///
-/// Gateway implements this with its DatabaseManager, keeping execution-state
-/// decoupled from gateway internals.
 pub trait StateDbProvider: Send + Sync {
-    /// Execute a function with a database connection.
     fn with_connection<F, R>(&self, f: F) -> Result<R, String>
     where
         F: FnOnce(&Connection) -> Result<R, rusqlite::Error>;
@@ -25,43 +21,40 @@ pub trait StateDbProvider: Send + Sync {
 // REPOSITORY
 // ============================================================================
 
-/// Repository for execution session operations.
+/// Repository for session and execution operations.
 pub struct StateRepository<D: StateDbProvider> {
     db: Arc<D>,
 }
 
 impl<D: StateDbProvider> StateRepository<D> {
-    /// Create a new repository.
     pub fn new(db: Arc<D>) -> Self {
         Self { db }
     }
 
     // =========================================================================
-    // CREATE
+    // SESSION - CREATE
     // =========================================================================
 
-    /// Insert a new session.
-    pub fn create_session(&self, session: &ExecutionSession) -> Result<(), String> {
+    /// Create a new session.
+    pub fn create_session(&self, session: &Session) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO execution_sessions (
-                    id, conversation_id, agent_id, parent_session_id,
-                    status, created_at, started_at, completed_at,
-                    tokens_in, tokens_out, checkpoint, error
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                "INSERT INTO sessions (
+                    id, status, root_agent_id, title,
+                    created_at, started_at, completed_at,
+                    total_tokens_in, total_tokens_out, metadata
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     session.id,
-                    session.conversation_id,
-                    session.agent_id,
-                    session.parent_session_id,
                     session.status.as_str(),
+                    session.root_agent_id,
+                    session.title,
                     session.created_at,
                     session.started_at,
                     session.completed_at,
-                    session.tokens_in as i64,
-                    session.tokens_out as i64,
-                    session.checkpoint.as_ref().map(|c| serde_json::to_string(c).ok()).flatten(),
-                    session.error,
+                    session.total_tokens_in as i64,
+                    session.total_tokens_out as i64,
+                    session.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten(),
                 ],
             )?;
             Ok(())
@@ -69,19 +62,17 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     // =========================================================================
-    // READ
+    // SESSION - READ
     // =========================================================================
 
     /// Get a session by ID.
-    pub fn get_session(&self, id: &str) -> Result<Option<ExecutionSession>, String> {
+    pub fn get_session(&self, id: &str) -> Result<Option<Session>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT
-                    id, conversation_id, agent_id, parent_session_id,
-                    status, created_at, started_at, completed_at,
-                    tokens_in, tokens_out, checkpoint, error
-                FROM execution_sessions
-                WHERE id = ?",
+                "SELECT id, status, root_agent_id, title,
+                        created_at, started_at, completed_at,
+                        total_tokens_in, total_tokens_out, metadata
+                 FROM sessions WHERE id = ?",
             )?;
 
             let session = stmt
@@ -92,38 +83,26 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
-    /// List sessions with optional filtering.
-    pub fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<ExecutionSession>, String> {
+    /// List sessions with filtering.
+    pub fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, String> {
         self.db.with_connection(|conn| {
             let mut sql = String::from(
-                "SELECT
-                    id, conversation_id, agent_id, parent_session_id,
-                    status, created_at, started_at, completed_at,
-                    tokens_in, tokens_out, checkpoint, error
-                FROM execution_sessions
-                WHERE 1=1",
+                "SELECT id, status, root_agent_id, title,
+                        created_at, started_at, completed_at,
+                        total_tokens_in, total_tokens_out, metadata
+                 FROM sessions WHERE 1=1",
             );
 
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
-
-            if let Some(agent_id) = &filter.agent_id {
-                sql.push_str(" AND agent_id = ?");
-                params_vec.push(Box::new(agent_id.clone()));
-            }
-
-            if let Some(conversation_id) = &filter.conversation_id {
-                sql.push_str(" AND conversation_id = ?");
-                params_vec.push(Box::new(conversation_id.clone()));
-            }
 
             if let Some(status) = &filter.status {
                 sql.push_str(" AND status = ?");
                 params_vec.push(Box::new(status.as_str().to_string()));
             }
 
-            if let Some(parent_id) = &filter.parent_session_id {
-                sql.push_str(" AND parent_session_id = ?");
-                params_vec.push(Box::new(parent_id.clone()));
+            if let Some(root_agent_id) = &filter.root_agent_id {
+                sql.push_str(" AND root_agent_id = ?");
+                params_vec.push(Box::new(root_agent_id.clone()));
             }
 
             if let Some(from_time) = &filter.from_time {
@@ -160,79 +139,83 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
-    /// Get sessions by status.
-    pub fn get_by_status(&self, status: ExecutionStatus) -> Result<Vec<ExecutionSession>, String> {
-        self.list_sessions(&SessionFilter {
-            status: Some(status),
-            ..Default::default()
-        })
+    /// Get session with all its executions.
+    pub fn get_session_with_executions(&self, id: &str) -> Result<Option<SessionWithExecutions>, String> {
+        let session = self.get_session(id)?;
+
+        match session {
+            Some(session) => {
+                let executions = self.list_executions(&ExecutionFilter {
+                    session_id: Some(id.to_string()),
+                    ..Default::default()
+                })?;
+
+                let subagent_count = executions.iter()
+                    .filter(|e| e.delegation_type != DelegationType::Root)
+                    .count() as u32;
+
+                Ok(Some(SessionWithExecutions {
+                    session,
+                    executions,
+                    subagent_count,
+                }))
+            }
+            None => Ok(None),
+        }
     }
 
-    /// Get child sessions for a parent.
-    pub fn get_children(&self, parent_session_id: &str) -> Result<Vec<ExecutionSession>, String> {
-        self.list_sessions(&SessionFilter {
-            parent_session_id: Some(parent_session_id.to_string()),
-            ..Default::default()
-        })
-    }
+    /// List sessions with their executions (for dashboard).
+    pub fn list_sessions_with_executions(
+        &self,
+        filter: &SessionFilter,
+    ) -> Result<Vec<SessionWithExecutions>, String> {
+        let sessions = self.list_sessions(filter)?;
 
-    /// Get all resumable sessions (paused or crashed).
-    pub fn get_resumable(&self) -> Result<Vec<ExecutionSession>, String> {
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT
-                    id, conversation_id, agent_id, parent_session_id,
-                    status, created_at, started_at, completed_at,
-                    tokens_in, tokens_out, checkpoint, error
-                FROM execution_sessions
-                WHERE status IN ('paused', 'crashed')
-                ORDER BY created_at DESC",
-            )?;
+        let mut result = Vec::with_capacity(sessions.len());
+        for session in sessions {
+            let executions = self.list_executions(&ExecutionFilter {
+                session_id: Some(session.id.clone()),
+                ..Default::default()
+            })?;
 
-            let sessions = stmt
-                .query_map([], |row| Self::row_to_session(row))?
-                .collect::<Result<Vec<_>, _>>()?;
+            let subagent_count = executions.iter()
+                .filter(|e| e.delegation_type != DelegationType::Root)
+                .count() as u32;
 
-            Ok(sessions)
-        })
-    }
+            result.push(SessionWithExecutions {
+                session,
+                executions,
+                subagent_count,
+            });
+        }
 
-    /// Get currently running sessions.
-    pub fn get_running(&self) -> Result<Vec<ExecutionSession>, String> {
-        self.get_by_status(ExecutionStatus::Running)
+        Ok(result)
     }
 
     // =========================================================================
-    // UPDATE
+    // SESSION - UPDATE
     // =========================================================================
 
     /// Update session status.
-    pub fn update_status(&self, id: &str, status: ExecutionStatus) -> Result<(), String> {
+    pub fn update_session_status(&self, id: &str, status: SessionStatus) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
 
         self.db.with_connection(|conn| {
-            // Set started_at when transitioning to Running
-            if status == ExecutionStatus::Running {
+            if status == SessionStatus::Running {
                 conn.execute(
-                    "UPDATE execution_sessions
+                    "UPDATE sessions
                      SET status = ?1, started_at = COALESCE(started_at, ?2)
                      WHERE id = ?3",
                     params![status.as_str(), now, id],
                 )?;
-            }
-            // Set completed_at when transitioning to terminal state
-            else if status.is_terminal() {
+            } else if status.is_terminal() {
                 conn.execute(
-                    "UPDATE execution_sessions
-                     SET status = ?1, completed_at = ?2
-                     WHERE id = ?3",
+                    "UPDATE sessions SET status = ?1, completed_at = ?2 WHERE id = ?3",
                     params![status.as_str(), now, id],
                 )?;
-            }
-            // Otherwise just update status
-            else {
+            } else {
                 conn.execute(
-                    "UPDATE execution_sessions SET status = ?1 WHERE id = ?2",
+                    "UPDATE sessions SET status = ?1 WHERE id = ?2",
                     params![status.as_str(), id],
                 )?;
             }
@@ -240,66 +223,50 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
-    /// Update token counts.
-    pub fn update_tokens(&self, id: &str, tokens_in: u64, tokens_out: u64) -> Result<(), String> {
+    /// Update session token totals.
+    pub fn update_session_tokens(&self, id: &str) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
-                "UPDATE execution_sessions
-                 SET tokens_in = ?1, tokens_out = ?2
-                 WHERE id = ?3",
-                params![tokens_in as i64, tokens_out as i64, id],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Save a checkpoint.
-    pub fn save_checkpoint(&self, id: &str, checkpoint: &Checkpoint) -> Result<(), String> {
-        let json = serde_json::to_string(checkpoint)
-            .map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
-
-        self.db.with_connection(|conn| {
-            conn.execute(
-                "UPDATE execution_sessions SET checkpoint = ?1 WHERE id = ?2",
-                params![json, id],
-            )?;
-            Ok(())
-        })
-    }
-
-    /// Set error message.
-    pub fn set_error(&self, id: &str, error: &str) -> Result<(), String> {
-        self.db.with_connection(|conn| {
-            conn.execute(
-                "UPDATE execution_sessions SET error = ?1 WHERE id = ?2",
-                params![error, id],
-            )?;
-            Ok(())
-        })
-    }
-
-    // =========================================================================
-    // DELETE
-    // =========================================================================
-
-    /// Delete a session.
-    pub fn delete_session(&self, id: &str) -> Result<bool, String> {
-        self.db.with_connection(|conn| {
-            let count = conn.execute(
-                "DELETE FROM execution_sessions WHERE id = ?",
+                "UPDATE sessions SET
+                    total_tokens_in = (SELECT COALESCE(SUM(tokens_in), 0) FROM agent_executions WHERE session_id = ?1),
+                    total_tokens_out = (SELECT COALESCE(SUM(tokens_out), 0) FROM agent_executions WHERE session_id = ?1)
+                 WHERE id = ?1",
                 params![id],
             )?;
+            Ok(())
+        })
+    }
+
+    /// Update session title.
+    pub fn update_session_title(&self, id: &str, title: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET title = ?1 WHERE id = ?2",
+                params![title, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    // =========================================================================
+    // SESSION - DELETE
+    // =========================================================================
+
+    /// Delete a session (cascades to executions and messages).
+    pub fn delete_session(&self, id: &str) -> Result<bool, String> {
+        self.db.with_connection(|conn| {
+            let count = conn.execute("DELETE FROM sessions WHERE id = ?", params![id])?;
             Ok(count > 0)
         })
     }
 
-    /// Delete old completed sessions.
+    /// Delete sessions older than a given timestamp.
+    /// Returns the number of deleted sessions.
     pub fn delete_old_sessions(&self, older_than: &str) -> Result<u64, String> {
         self.db.with_connection(|conn| {
+            // Use created_at since started_at can be NULL
             let count = conn.execute(
-                "DELETE FROM execution_sessions
-                 WHERE status IN ('completed', 'cancelled')
-                 AND completed_at < ?",
+                "DELETE FROM sessions WHERE created_at < ?",
                 params![older_than],
             )?;
             Ok(count as u64)
@@ -307,56 +274,264 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     // =========================================================================
-    // AGGREGATES
+    // EXECUTION - CREATE
     // =========================================================================
 
-    /// Get daily summary for a date (YYYY-MM-DD).
-    pub fn get_daily_summary(&self, date: &str) -> Result<DailySummary, String> {
+    /// Create a new agent execution.
+    pub fn create_execution(&self, execution: &AgentExecution) -> Result<(), String> {
         self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT
-                    COALESCE(SUM(tokens_in), 0) as total_in,
-                    COALESCE(SUM(tokens_out), 0) as total_out,
-                    COUNT(*) as session_count,
-                    SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
-                    SUM(CASE WHEN status IN ('crashed', 'cancelled') AND error IS NOT NULL THEN 1 ELSE 0 END) as failed
-                FROM execution_sessions
-                WHERE DATE(created_at) = ?",
+            conn.execute(
+                "INSERT INTO agent_executions (
+                    id, session_id, agent_id, parent_execution_id,
+                    delegation_type, task, status,
+                    started_at, completed_at,
+                    tokens_in, tokens_out, checkpoint, error, log_path
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                params![
+                    execution.id,
+                    execution.session_id,
+                    execution.agent_id,
+                    execution.parent_execution_id,
+                    execution.delegation_type.as_str(),
+                    execution.task,
+                    execution.status.as_str(),
+                    execution.started_at,
+                    execution.completed_at,
+                    execution.tokens_in as i64,
+                    execution.tokens_out as i64,
+                    execution.checkpoint.as_ref().map(|c| serde_json::to_string(c).ok()).flatten(),
+                    execution.error,
+                    execution.log_path,
+                ],
             )?;
-
-            let summary = stmt.query_row(params![date], |row| {
-                Ok(DailySummary {
-                    date: date.to_string(),
-                    total_tokens_in: row.get::<_, i64>(0)? as u64,
-                    total_tokens_out: row.get::<_, i64>(1)? as u64,
-                    session_count: row.get::<_, i64>(2)? as u64,
-                    completed_count: row.get::<_, i64>(3)? as u64,
-                    failed_count: row.get::<_, i64>(4)? as u64,
-                })
-            })?;
-
-            Ok(summary)
+            Ok(())
         })
     }
 
-    /// Get count of sessions by status.
-    pub fn get_status_counts(&self) -> Result<std::collections::HashMap<String, u64>, String> {
+    // =========================================================================
+    // EXECUTION - READ
+    // =========================================================================
+
+    /// Get an execution by ID.
+    pub fn get_execution(&self, id: &str) -> Result<Option<AgentExecution>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT status, COUNT(*) FROM execution_sessions GROUP BY status",
+                "SELECT id, session_id, agent_id, parent_execution_id,
+                        delegation_type, task, status,
+                        started_at, completed_at,
+                        tokens_in, tokens_out, checkpoint, error, log_path
+                 FROM agent_executions WHERE id = ?",
             )?;
 
-            let mut counts = std::collections::HashMap::new();
+            let execution = stmt
+                .query_row(params![id], |row| Self::row_to_execution(row))
+                .optional()?;
+
+            Ok(execution)
+        })
+    }
+
+    /// List executions with filtering.
+    pub fn list_executions(&self, filter: &ExecutionFilter) -> Result<Vec<AgentExecution>, String> {
+        self.db.with_connection(|conn| {
+            let mut sql = String::from(
+                "SELECT id, session_id, agent_id, parent_execution_id,
+                        delegation_type, task, status,
+                        started_at, completed_at,
+                        tokens_in, tokens_out, checkpoint, error, log_path
+                 FROM agent_executions WHERE 1=1",
+            );
+
+            let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+            if let Some(session_id) = &filter.session_id {
+                sql.push_str(" AND session_id = ?");
+                params_vec.push(Box::new(session_id.clone()));
+            }
+
+            if let Some(agent_id) = &filter.agent_id {
+                sql.push_str(" AND agent_id = ?");
+                params_vec.push(Box::new(agent_id.clone()));
+            }
+
+            if let Some(status) = &filter.status {
+                sql.push_str(" AND status = ?");
+                params_vec.push(Box::new(status.as_str().to_string()));
+            }
+
+            if let Some(parent_id) = &filter.parent_execution_id {
+                sql.push_str(" AND parent_execution_id = ?");
+                params_vec.push(Box::new(parent_id.clone()));
+            }
+
+            sql.push_str(" ORDER BY started_at ASC");
+
+            if let Some(limit) = filter.limit {
+                sql.push_str(&format!(" LIMIT {}", limit));
+            }
+
+            if let Some(offset) = filter.offset {
+                sql.push_str(&format!(" OFFSET {}", offset));
+            }
+
+            let params_refs: Vec<&dyn rusqlite::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+
+            let mut stmt = conn.prepare(&sql)?;
+            let executions = stmt
+                .query_map(params_refs.as_slice(), |row| Self::row_to_execution(row))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(executions)
+        })
+    }
+
+    /// Get child executions for a parent.
+    pub fn get_child_executions(&self, parent_execution_id: &str) -> Result<Vec<AgentExecution>, String> {
+        self.list_executions(&ExecutionFilter {
+            parent_execution_id: Some(parent_execution_id.to_string()),
+            ..Default::default()
+        })
+    }
+
+    /// Get root execution for a session.
+    pub fn get_root_execution(&self, session_id: &str) -> Result<Option<AgentExecution>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, parent_execution_id,
+                        delegation_type, task, status,
+                        started_at, completed_at,
+                        tokens_in, tokens_out, checkpoint, error, log_path
+                 FROM agent_executions
+                 WHERE session_id = ? AND delegation_type = 'root'",
+            )?;
+
+            let execution = stmt
+                .query_row(params![session_id], |row| Self::row_to_execution(row))
+                .optional()?;
+
+            Ok(execution)
+        })
+    }
+
+    // =========================================================================
+    // EXECUTION - UPDATE
+    // =========================================================================
+
+    /// Update execution status.
+    pub fn update_execution_status(&self, id: &str, status: ExecutionStatus) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+
+        self.db.with_connection(|conn| {
+            if status == ExecutionStatus::Running {
+                conn.execute(
+                    "UPDATE agent_executions
+                     SET status = ?1, started_at = COALESCE(started_at, ?2)
+                     WHERE id = ?3",
+                    params![status.as_str(), now, id],
+                )?;
+            } else if status.is_terminal() {
+                conn.execute(
+                    "UPDATE agent_executions SET status = ?1, completed_at = ?2 WHERE id = ?3",
+                    params![status.as_str(), now, id],
+                )?;
+            } else {
+                conn.execute(
+                    "UPDATE agent_executions SET status = ?1 WHERE id = ?2",
+                    params![status.as_str(), id],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    /// Update execution tokens.
+    pub fn update_execution_tokens(&self, id: &str, tokens_in: u64, tokens_out: u64) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET tokens_in = ?1, tokens_out = ?2 WHERE id = ?3",
+                params![tokens_in as i64, tokens_out as i64, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Save execution checkpoint.
+    pub fn save_execution_checkpoint(&self, id: &str, checkpoint: &Checkpoint) -> Result<(), String> {
+        let json = serde_json::to_string(checkpoint)
+            .map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
+
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET checkpoint = ?1 WHERE id = ?2",
+                params![json, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Set execution error.
+    pub fn set_execution_error(&self, id: &str, error: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET error = ?1 WHERE id = ?2",
+                params![error, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    // =========================================================================
+    // STATS - DASHBOARD
+    // =========================================================================
+
+    /// Get dashboard stats (pre-computed, ready to display).
+    pub fn get_dashboard_stats(&self) -> Result<DashboardStats, String> {
+        self.db.with_connection(|conn| {
+            // Session counts by status
+            let mut stmt = conn.prepare(
+                "SELECT status, COUNT(*) FROM sessions GROUP BY status",
+            )?;
+
+            let mut running = 0u64;
+            let mut paused = 0u64;
+            let mut completed = 0u64;
+            let mut crashed = 0u64;
+
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
             })?;
 
             for row in rows {
                 let (status, count) = row?;
-                counts.insert(status, count);
+                match status.as_str() {
+                    "running" => running = count,
+                    "paused" => paused = count,
+                    "completed" => completed = count,
+                    "crashed" => crashed = count,
+                    _ => {}
+                }
             }
 
-            Ok(counts)
+            // Today's stats
+            let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+            let mut stmt = conn.prepare(
+                "SELECT COUNT(*), COALESCE(SUM(total_tokens_in + total_tokens_out), 0)
+                 FROM sessions WHERE DATE(created_at) = ?",
+            )?;
+
+            let (today_count, today_tokens) = stmt.query_row(params![today], |row| {
+                Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
+            })?;
+
+            Ok(DashboardStats {
+                running,
+                paused,
+                completed,
+                crashed,
+                today_count,
+                today_tokens,
+            })
         })
     }
 
@@ -364,24 +539,44 @@ impl<D: StateDbProvider> StateRepository<D> {
     // HELPERS
     // =========================================================================
 
-    /// Convert a database row to ExecutionSession.
-    fn row_to_session(row: &rusqlite::Row) -> Result<ExecutionSession, rusqlite::Error> {
-        let status_str: String = row.get(4)?;
-        let checkpoint_json: Option<String> = row.get(10)?;
+    fn row_to_session(row: &rusqlite::Row) -> Result<Session, rusqlite::Error> {
+        let status_str: String = row.get(1)?;
+        let metadata_json: Option<String> = row.get(9)?;
 
-        Ok(ExecutionSession {
+        Ok(Session {
             id: row.get(0)?,
-            conversation_id: row.get(1)?,
+            status: status_str.parse().unwrap_or(SessionStatus::Running),
+            root_agent_id: row.get(2)?,
+            title: row.get(3)?,
+            created_at: row.get(4)?,
+            started_at: row.get(5)?,
+            completed_at: row.get(6)?,
+            total_tokens_in: row.get::<_, i64>(7)? as u64,
+            total_tokens_out: row.get::<_, i64>(8)? as u64,
+            metadata: metadata_json.and_then(|s| serde_json::from_str(&s).ok()),
+        })
+    }
+
+    fn row_to_execution(row: &rusqlite::Row) -> Result<AgentExecution, rusqlite::Error> {
+        let delegation_type_str: String = row.get(4)?;
+        let status_str: String = row.get(6)?;
+        let checkpoint_json: Option<String> = row.get(11)?;
+
+        Ok(AgentExecution {
+            id: row.get(0)?,
+            session_id: row.get(1)?,
             agent_id: row.get(2)?,
-            parent_session_id: row.get(3)?,
+            parent_execution_id: row.get(3)?,
+            delegation_type: delegation_type_str.parse().unwrap_or(DelegationType::Root),
+            task: row.get(5)?,
             status: status_str.parse().unwrap_or(ExecutionStatus::Queued),
-            created_at: row.get(5)?,
-            started_at: row.get(6)?,
-            completed_at: row.get(7)?,
-            tokens_in: row.get::<_, i64>(8)? as u64,
-            tokens_out: row.get::<_, i64>(9)? as u64,
+            started_at: row.get(7)?,
+            completed_at: row.get(8)?,
+            tokens_in: row.get::<_, i64>(9)? as u64,
+            tokens_out: row.get::<_, i64>(10)? as u64,
             checkpoint: checkpoint_json.and_then(|s| serde_json::from_str(&s).ok()),
-            error: row.get(11)?,
+            error: row.get(12)?,
+            log_path: row.get(13)?,
         })
     }
 }

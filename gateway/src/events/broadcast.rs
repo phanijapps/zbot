@@ -108,6 +108,7 @@ mod tests {
         let event = GatewayEvent::AgentStarted {
             agent_id: "agent-1".to_string(),
             conversation_id: "conv-1".to_string(),
+            session_id: "session-1".to_string(),
         };
 
         bus.publish(event.clone()).await;
@@ -124,6 +125,7 @@ mod tests {
         let event = GatewayEvent::AgentStarted {
             agent_id: "agent-1".to_string(),
             conversation_id: "conv-1".to_string(),
+            session_id: "session-1".to_string(),
         };
 
         bus.publish(event).await;

@@ -17,6 +17,9 @@ pub enum ClientMessage {
         conversation_id: String,
         /// User message
         message: String,
+        /// Optional session ID to continue (None = new session)
+        #[serde(default)]
+        session_id: Option<String>,
         /// Optional metadata
         #[serde(default)]
         metadata: Option<Value>,
@@ -58,6 +61,8 @@ pub enum ServerMessage {
     AgentStarted {
         agent_id: String,
         conversation_id: String,
+        /// Session ID for this execution (for session continuity).
+        session_id: String,
     },
 
     /// Agent completed execution.

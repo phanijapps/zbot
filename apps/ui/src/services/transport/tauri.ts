@@ -208,8 +208,9 @@ export class TauriTransport implements Transport {
   async executeAgent(
     _agentId: string,
     _conversationId: string,
-    _message: string
-  ): Promise<TransportResult<{ conversationId: string }>> {
+    _message: string,
+    _sessionId?: string
+  ): Promise<TransportResult<{ conversationId: string; sessionId?: string }>> {
     return { success: false, error: NOT_SUPPORTED };
   }
 

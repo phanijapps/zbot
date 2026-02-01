@@ -111,7 +111,8 @@ export function SessionChatViewer({
 
     try {
       const transport = await getTransport();
-      await transport.executeAgent(agentId, conversationId, userMessage.content);
+      // Pass conversationId as sessionId to continue this session
+      await transport.executeAgent(agentId, conversationId, userMessage.content, conversationId);
     } catch (err) {
       console.error("Failed to send message:", err);
     } finally {

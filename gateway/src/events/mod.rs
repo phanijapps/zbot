@@ -17,6 +17,8 @@ pub enum GatewayEvent {
     AgentStarted {
         agent_id: String,
         conversation_id: String,
+        /// Session ID for this execution (for session continuity).
+        session_id: String,
     },
 
     /// Agent completed execution.

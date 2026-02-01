@@ -36,6 +36,7 @@ interface ChatMessage {
 
 const ROOT_AGENT_ID = "root";
 const WEB_CONV_ID_KEY = "agentzero_web_conv_id";
+const WEB_SESSION_ID_KEY = "agentzero_web_session_id";
 
 // Get or create a stable conversation ID
 function getOrCreateConversationId(): string {
@@ -47,11 +48,23 @@ function getOrCreateConversationId(): string {
   return convId;
 }
 
-// Create a new conversation ID
+// Create a new conversation ID and clear session
 function createNewConversationId(): string {
   const convId = `web-${crypto.randomUUID()}`;
   localStorage.setItem(WEB_CONV_ID_KEY, convId);
+  // Clear session_id when starting a new conversation
+  localStorage.removeItem(WEB_SESSION_ID_KEY);
   return convId;
+}
+
+// Get the current session ID (if any)
+function getSessionId(): string | null {
+  return localStorage.getItem(WEB_SESSION_ID_KEY);
+}
+
+// Store the session ID from backend
+function setSessionId(sessionId: string): void {
+  localStorage.setItem(WEB_SESSION_ID_KEY, sessionId);
 }
 
 export function WebChatPanel() {
@@ -130,6 +143,10 @@ export function WebChatPanel() {
     switch (event.type) {
       case "agent_started":
         setIsProcessing(true);
+        // Capture session_id from the backend for session continuity
+        if (event.session_id && typeof event.session_id === "string") {
+          setSessionId(event.session_id);
+        }
         break;
 
       case "token":
@@ -395,7 +412,9 @@ export function WebChatPanel() {
 
     try {
       const transport = await getTransport();
-      await transport.executeAgent(ROOT_AGENT_ID, conversationId, userMessage.content);
+      // Pass session_id to continue the same session (or undefined for new session)
+      const currentSessionId = getSessionId() ?? undefined;
+      await transport.executeAgent(ROOT_AGENT_ID, conversationId, userMessage.content, currentSessionId);
     } catch (error) {
       console.error("Failed to send message:", error);
       setIsProcessing(false);
@@ -431,7 +450,8 @@ export function WebChatPanel() {
           formId,
           data,
         });
-        await transport.executeAgent(ROOT_AGENT_ID, conversationId, responseMessage);
+        const currentSessionId = getSessionId() ?? undefined;
+        await transport.executeAgent(ROOT_AGENT_ID, conversationId, responseMessage, currentSessionId);
       }
     } catch (error) {
       console.error("Failed to send form response:", error);

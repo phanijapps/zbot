@@ -193,11 +193,12 @@ async fn handle_client_message(
             agent_id,
             conversation_id,
             message,
+            session_id: exec_session_id,
             ..
         } => {
             debug!(
-                "Session {} invoking agent {} conversation {}: {}",
-                session_id, agent_id, conversation_id, message
+                "Session {} invoking agent {} conversation {} (exec_session: {:?}): {}",
+                session_id, agent_id, conversation_id, exec_session_id, message
             );
 
             // Create hook context for WebSocket connection
@@ -208,14 +209,15 @@ async fn handle_client_message(
             );
 
             // Invoke the agent via runtime service with hook context
+            // Pass session_id to continue existing session or None to create new
             match runtime
-                .invoke_with_hook(&agent_id, &conversation_id, &message, hook_context)
+                .invoke_with_hook(&agent_id, &conversation_id, &message, hook_context, exec_session_id)
                 .await
             {
-                Ok(_handle) => {
+                Ok((_handle, returned_session_id)) => {
                     debug!(
-                        "Agent {} invocation started for conversation {}",
-                        agent_id, conversation_id
+                        "Agent {} invocation started for conversation {} (session: {})",
+                        agent_id, conversation_id, returned_session_id
                     );
                     // Events will be broadcast via EventBus -> ServerMessage forwarding
                 }
@@ -369,8 +371,8 @@ async fn handle_client_message(
 /// Convert a GatewayEvent to a ServerMessage.
 fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
     match event {
-        GatewayEvent::AgentStarted { agent_id, conversation_id } => {
-            Some(ServerMessage::AgentStarted { agent_id, conversation_id })
+        GatewayEvent::AgentStarted { agent_id, conversation_id, session_id } => {
+            Some(ServerMessage::AgentStarted { agent_id, conversation_id, session_id })
         }
         GatewayEvent::AgentCompleted { agent_id, conversation_id, result } => {
             Some(ServerMessage::AgentCompleted { agent_id, conversation_id, result })

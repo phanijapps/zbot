@@ -118,17 +118,17 @@ pub async fn handle_webhook(
         "Processing webhook"
     );
 
-    // Invoke the agent
+    // Invoke the agent (creates new session for each webhook call)
     match state
         .runtime
         .invoke(agent_id, &conversation_id, &payload.message)
         .await
     {
-        Ok(_handle) => (
+        Ok((_handle, session_id)) => (
             StatusCode::OK,
             Json(WebhookResponse {
                 status: "accepted".to_string(),
-                conversation_id: Some(conversation_id),
+                conversation_id: Some(session_id), // Return session_id as conversation_id
                 error: None,
             }),
         ),

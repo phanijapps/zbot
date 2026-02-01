@@ -91,13 +91,28 @@ impl RuntimeService {
 
     /// Invoke an agent with a message.
     ///
-    /// Returns an execution handle for controlling the execution.
+    /// Returns (ExecutionHandle, session_id).
+    /// - If session_id is provided, continues that session
+    /// - If session_id is None, creates a new session
     pub async fn invoke(
         &self,
         agent_id: &str,
         conversation_id: &str,
         message: &str,
-    ) -> Result<ExecutionHandle, String> {
+    ) -> Result<(ExecutionHandle, String), String> {
+        self.invoke_with_session(agent_id, conversation_id, message, None).await
+    }
+
+    /// Invoke an agent with a message and explicit session ID.
+    ///
+    /// Returns (ExecutionHandle, session_id).
+    pub async fn invoke_with_session(
+        &self,
+        agent_id: &str,
+        conversation_id: &str,
+        message: &str,
+        session_id: Option<String>,
+    ) -> Result<(ExecutionHandle, String), String> {
         let runner = self.runner.as_ref().ok_or_else(|| {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
@@ -106,11 +121,15 @@ impl RuntimeService {
             "Config directory not set".to_string()
         })?;
 
-        let config = ExecutionConfig::new(
+        let mut config = ExecutionConfig::new(
             agent_id.to_string(),
             conversation_id.to_string(),
             config_dir,
         );
+
+        if let Some(sid) = session_id {
+            config = config.with_session_id(sid);
+        }
 
         runner.invoke(config, message.to_string()).await
     }
@@ -125,7 +144,8 @@ impl RuntimeService {
         conversation_id: &str,
         message: &str,
         hook_context: HookContext,
-    ) -> Result<ExecutionHandle, String> {
+        session_id: Option<String>,
+    ) -> Result<(ExecutionHandle, String), String> {
         let runner = self.runner.as_ref().ok_or_else(|| {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
@@ -134,11 +154,15 @@ impl RuntimeService {
             "Config directory not set".to_string()
         })?;
 
-        let config = ExecutionConfig::new(
+        let mut config = ExecutionConfig::new(
             agent_id.to_string(),
             conversation_id.to_string(),
             config_dir,
         ).with_hook_context(hook_context);
+
+        if let Some(sid) = session_id {
+            config = config.with_session_id(sid);
+        }
 
         runner.invoke(config, message.to_string()).await
     }
@@ -151,10 +175,12 @@ impl RuntimeService {
         message: &str,
     ) -> Result<(), String> {
         // Emit start event
+        let placeholder_session_id = format!("placeholder-{}", uuid::Uuid::new_v4());
         self.event_bus
             .publish(GatewayEvent::AgentStarted {
                 agent_id: agent_id.to_string(),
                 conversation_id: conversation_id.to_string(),
+                session_id: placeholder_session_id,
             })
             .await;
 

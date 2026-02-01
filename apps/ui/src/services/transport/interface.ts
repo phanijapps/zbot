@@ -151,8 +151,9 @@ export interface Transport {
   executeAgent(
     agentId: string,
     conversationId: string,
-    message: string
-  ): Promise<TransportResult<{ conversationId: string }>>;
+    message: string,
+    sessionId?: string
+  ): Promise<TransportResult<{ conversationId: string; sessionId?: string }>>;
 
   /** Stop an agent execution */
   stopAgent(conversationId: string): Promise<TransportResult<void>>;

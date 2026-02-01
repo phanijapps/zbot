@@ -652,16 +652,12 @@ export function WebOpsDashboard() {
     );
   }
 
-  // Calculate stats based on conversations, not individual sessions
-  // Active sessions still use raw counts (they're in-progress)
+  // Stats come from backend - already counted by conversation, not individual sessions
   const runningCount = statusCounts.running || 0;
   const pausedCount = statusCounts.paused || 0;
   const queuedCount = statusCounts.queued || 0;
   const activeCount = runningCount + pausedCount + queuedCount;
-
-  // Completed count = number of completed conversations (from ALL closed sessions, not filtered)
-  const allConversationGroups = buildConversationGroups(closedSessions);
-  const completedCount = allConversationGroups.filter(g => g.overallStatus === 'completed').length;
+  const completedCount = statusCounts.completed || 0;
 
   return (
     <div className="page">

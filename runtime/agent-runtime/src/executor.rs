@@ -343,6 +343,9 @@ impl AgentExecutor {
                 tool_call_id: None,
             });
 
+            // Track if respond tool was called - signals we should stop after this batch
+            let mut should_stop_after_respond = false;
+
             // Execute each tool and add its result
             for tool_call in &tool_calls {
                 let tool_name = &tool_call.name;
@@ -375,6 +378,9 @@ impl AgentExecutor {
                                 conversation_id: respond.conversation_id.clone(),
                                 session_id: respond.session_id.clone(),
                             });
+                            // Signal to stop after processing this batch of tool calls
+                            should_stop_after_respond = true;
+                            tracing::debug!("Respond action detected, will stop after current tool batch");
                         }
                         
                         // Check for delegate action
@@ -505,6 +511,12 @@ impl AgentExecutor {
                     tool_name: tool_name.clone(),
                     args: args.clone(),
                 });
+            }
+
+            // If respond tool was called, stop the loop - agent has finished responding
+            if should_stop_after_respond {
+                tracing::debug!("Stopping execution loop after respond action");
+                break;
             }
         }
 
