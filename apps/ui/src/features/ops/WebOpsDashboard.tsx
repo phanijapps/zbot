@@ -15,7 +15,6 @@ import {
   Square,
   RefreshCw,
   Activity,
-  Zap,
   AlertCircle,
   CheckCircle,
   Clock,
@@ -85,34 +84,6 @@ function StatusBadge({ status }: { status: ExecutionStatus }) {
 }
 
 // ============================================================================
-// Token Display Component
-// ============================================================================
-
-function TokenDisplay({ tokensIn, tokensOut }: { tokensIn: number; tokensOut: number }) {
-  const total = tokensIn + tokensOut;
-  // Rough cost estimate: $3/1M input, $15/1M output (Claude Sonnet pricing)
-  const estimatedCost = (tokensIn * 0.000003) + (tokensOut * 0.000015);
-
-  return (
-    <div className="flex items-center gap-4 text-sm">
-      <div className="flex items-center gap-1" title="Input tokens">
-        <Zap size={14} className="text-primary" />
-        <span>{tokensIn.toLocaleString()}</span>
-      </div>
-      <div className="flex items-center gap-1" title="Output tokens">
-        <Activity size={14} className="text-success" />
-        <span>{tokensOut.toLocaleString()}</span>
-      </div>
-      {total > 0 && (
-        <span className="text-muted-foreground text-xs">
-          ~${estimatedCost.toFixed(4)}
-        </span>
-      )}
-    </div>
-  );
-}
-
-// ============================================================================
 // Session Row Component
 // ============================================================================
 
@@ -158,37 +129,39 @@ function SessionRow({
     return `${mins}m ${secs}s`;
   };
 
+  const totalTokens = session.tokens_in + session.tokens_out;
+
   return (
     <div className="border-b border-border last:border-b-0">
       <div
-        className="flex items-center gap-3 p-3 hover:bg-muted/50 cursor-pointer"
+        className="flex items-center gap-2 p-3 hover:bg-muted/50 cursor-pointer"
         onClick={onToggle}
       >
-        <button className="p-1 hover:bg-muted rounded">
-          {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        <button className="p-1 hover:bg-muted rounded flex-shrink-0">
+          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
 
-        <Bot size={16} className="text-muted-foreground" />
-
-        <div className="flex-1 min-w-0">
+        <div className="flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2">
-            <span className="font-medium truncate">{session.agent_id}</span>
-            <StatusBadge status={session.status} />
-          </div>
-          <div className="text-xs text-muted-foreground truncate">
-            {session.conversation_id}
+            <Bot size={14} className="text-muted-foreground flex-shrink-0" />
+            <span className="font-medium truncate text-sm" style={{ minWidth: 0 }}>{session.agent_id}</span>
+            <span className="flex-shrink-0"><StatusBadge status={session.status} /></span>
           </div>
         </div>
 
-        <TokenDisplay tokensIn={session.tokens_in} tokensOut={session.tokens_out} />
+        {/* Compact info */}
+        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-shrink-0">
+          {totalTokens > 0 && (
+            <span title={`In: ${session.tokens_in} / Out: ${session.tokens_out}`}>
+              {totalTokens.toLocaleString()} tok
+            </span>
+          )}
+          {duration > 0 && (
+            <span>{formatDuration(duration)}</span>
+          )}
+        </div>
 
-        {duration > 0 && (
-          <span className="text-sm text-muted-foreground">
-            {formatDuration(duration)}
-          </span>
-        )}
-
-        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
           {showControls && canPause && onPause && (
             <button
               className="btn btn--secondary btn--sm"
@@ -232,11 +205,15 @@ function SessionRow({
       </div>
 
       {isExpanded && (
-        <div className="px-10 py-3 bg-muted/30 text-sm">
-          <div className="grid grid-cols-2 gap-4">
+        <div className="px-8 py-3 bg-muted/30 text-xs">
+          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
             <div>
-              <span className="text-muted-foreground">Session ID:</span>{" "}
-              <span className="font-mono text-xs">{session.id}</span>
+              <span className="text-muted-foreground">Conversation:</span>{" "}
+              <span className="font-mono">{session.conversation_id}</span>
+            </div>
+            <div>
+              <span className="text-muted-foreground">Tokens:</span>{" "}
+              <span>{session.tokens_in.toLocaleString()} in / {session.tokens_out.toLocaleString()} out</span>
             </div>
             <div>
               <span className="text-muted-foreground">Created:</span>{" "}
@@ -257,7 +234,7 @@ function SessionRow({
             {session.parent_session_id && (
               <div>
                 <span className="text-muted-foreground">Parent:</span>{" "}
-                <span className="font-mono text-xs">{session.parent_session_id}</span>
+                <span className="font-mono">{session.parent_session_id}</span>
               </div>
             )}
             {session.error && (
@@ -533,7 +510,7 @@ export function WebOpsDashboard() {
         {/* Two-column layout for sessions - equal width columns */}
         <div className="grid gap-6" style={{ gridTemplateColumns: "1fr 1fr" }}>
           {/* Active Sessions */}
-          <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div
               className="flex items-center justify-between border-b border-border"
               style={{ padding: "16px 20px" }}
@@ -596,7 +573,7 @@ export function WebOpsDashboard() {
           </div>
 
           {/* Session History */}
-          <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column" }}>
+          <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
             <div
               className="flex items-center justify-between border-b border-border"
               style={{ padding: "16px 20px" }}
