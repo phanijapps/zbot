@@ -534,7 +534,10 @@ export function WebOpsDashboard() {
         <div className="grid grid-cols-2 gap-6">
           {/* Active Sessions */}
           <div className="card" style={{ minHeight: "400px", display: "flex", flexDirection: "column" }}>
-            <div className="card__header flex items-center justify-between">
+            <div
+              className="flex items-center justify-between border-b border-border"
+              style={{ padding: "16px 20px" }}
+            >
               <div className="flex items-center gap-3">
                 <Activity size={18} className="text-primary" />
                 <h2 className="font-semibold">Active Sessions</h2>
@@ -594,7 +597,10 @@ export function WebOpsDashboard() {
 
           {/* Session History */}
           <div className="card" style={{ minHeight: "400px", display: "flex", flexDirection: "column" }}>
-            <div className="card__header flex items-center justify-between">
+            <div
+              className="flex items-center justify-between border-b border-border"
+              style={{ padding: "16px 20px" }}
+            >
               <div className="flex items-center gap-3">
                 <History size={18} className="text-muted-foreground" />
                 <h2 className="font-semibold">Session History</h2>
