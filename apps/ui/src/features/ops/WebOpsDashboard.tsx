@@ -26,7 +26,9 @@ import {
   History,
   XCircle,
   MessageSquare,
+  Plus,
 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 
 // ============================================================================
 // Status Badge Component
@@ -317,6 +319,7 @@ const ACTIVE_STATUSES: ExecutionStatus[] = ["running", "paused", "queued"];
 const CLOSED_STATUSES: ExecutionStatus[] = ["completed", "cancelled", "crashed"];
 
 export function WebOpsDashboard() {
+  const navigate = useNavigate();
   const [allSessions, setAllSessions] = useState<ExecutionSession[]>([]);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
@@ -457,7 +460,7 @@ export function WebOpsDashboard() {
               Monitor active sessions and view execution history
             </p>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-3">
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -473,6 +476,13 @@ export function WebOpsDashboard() {
               title="Refresh"
             >
               <RefreshCw size={16} />
+            </button>
+            <button
+              className="btn btn--primary btn--md"
+              onClick={() => navigate("/chat")}
+            >
+              <Plus size={16} />
+              <span>New Chat</span>
             </button>
           </div>
         </div>
