@@ -5,8 +5,11 @@
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
+use execution_state::{StateService, DelegationType};
+use gateway::database::DatabaseManager;
 use gateway::{http::create_http_router, AppState, GatewayConfig};
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -31,6 +34,26 @@ async fn setup_test_server() -> (TestServer, TempDir) {
     let server = TestServer::new(router).expect("Failed to create test server");
 
     (server, dir)
+}
+
+/// Create a test server with access to the state service for data insertion.
+///
+/// This is useful for tests that need to insert test data before making API calls.
+async fn setup_test_server_with_state() -> (TestServer, Arc<StateService<DatabaseManager>>, TempDir) {
+    let dir = TempDir::new().expect("Failed to create temp dir");
+
+    // Create agents and skills directories
+    std::fs::create_dir_all(dir.path().join("agents")).unwrap();
+    std::fs::create_dir_all(dir.path().join("skills")).unwrap();
+
+    let config = GatewayConfig::default();
+    let state = AppState::minimal(dir.path().to_path_buf());
+    let state_service = state.state_service.clone();
+
+    let router = create_http_router(config, state);
+    let server = TestServer::new(router).expect("Failed to create test server");
+
+    (server, state_service, dir)
 }
 
 // ============================================================================
@@ -462,4 +485,261 @@ async fn json_content_type_in_response() {
         content_type.to_str().unwrap_or("").contains("application/json"),
         "Expected application/json content type"
     );
+}
+
+// ============================================================================
+// Session Messages Endpoint Tests
+// ============================================================================
+
+#[tokio::test]
+async fn session_messages_all_scope() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session and executions
+    let (session, root_exec) = state_service.create_session("root-agent").unwrap();
+
+    // Create delegated execution
+    let delegate_exec = state_service
+        .create_delegated_execution(
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
+        )
+        .unwrap();
+
+    // Add messages
+    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
+    state_service.add_message(&root_exec.id, "assistant", "Root response", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+
+    // Get all messages
+    let response = server
+        .get(&format!("/api/executions/v2/sessions/{}/messages", session.id))
+        .await;
+
+    response.assert_status_ok();
+
+    let messages: Vec<Value> = response.json();
+    assert_eq!(messages.len(), 4, "Should return all 4 messages");
+}
+
+#[tokio::test]
+async fn session_messages_root_scope() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session and executions
+    let (session, root_exec) = state_service.create_session("root-agent").unwrap();
+
+    // Create delegated execution
+    let delegate_exec = state_service
+        .create_delegated_execution(
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
+        )
+        .unwrap();
+
+    // Add messages
+    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
+    state_service.add_message(&root_exec.id, "assistant", "Root response", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
+
+    // Get root messages only
+    let response = server
+        .get(&format!("/api/executions/v2/sessions/{}/messages?scope=root", session.id))
+        .await;
+
+    response.assert_status_ok();
+
+    let messages: Vec<Value> = response.json();
+    assert_eq!(messages.len(), 2, "Should return only 2 root messages");
+
+    // Verify all messages are from root agent
+    for msg in &messages {
+        assert_eq!(msg["agent_id"], "root-agent");
+        assert_eq!(msg["delegation_type"], "root");
+    }
+}
+
+#[tokio::test]
+async fn session_messages_delegates_scope() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session and executions
+    let (session, root_exec) = state_service.create_session("root-agent").unwrap();
+
+    // Create delegated execution
+    let delegate_exec = state_service
+        .create_delegated_execution(
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
+        )
+        .unwrap();
+
+    // Add messages
+    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+
+    // Get delegate messages only
+    let response = server
+        .get(&format!("/api/executions/v2/sessions/{}/messages?scope=delegates", session.id))
+        .await;
+
+    response.assert_status_ok();
+
+    let messages: Vec<Value> = response.json();
+    assert_eq!(messages.len(), 2, "Should return only 2 delegate messages");
+
+    // Verify all messages are from delegated execution
+    for msg in &messages {
+        assert_eq!(msg["agent_id"], "researcher");
+        assert_eq!(msg["delegation_type"], "sequential");
+    }
+}
+
+#[tokio::test]
+async fn session_messages_execution_scope() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session and executions
+    let (session, root_exec) = state_service.create_session("root-agent").unwrap();
+
+    // Create delegated execution
+    let delegate_exec = state_service
+        .create_delegated_execution(
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
+        )
+        .unwrap();
+
+    // Add messages to both executions
+    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
+    state_service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+
+    // Get messages for specific execution
+    let response = server
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages?scope=execution&execution_id={}",
+            session.id, delegate_exec.id
+        ))
+        .await;
+
+    response.assert_status_ok();
+
+    let messages: Vec<Value> = response.json();
+    assert_eq!(messages.len(), 2, "Should return only 2 messages from specified execution");
+
+    // Verify all messages are from the specified execution
+    for msg in &messages {
+        assert_eq!(msg["execution_id"], delegate_exec.id);
+    }
+}
+
+#[tokio::test]
+async fn session_messages_execution_scope_requires_id() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session
+    let (session, _) = state_service.create_session("root-agent").unwrap();
+
+    // Try to get execution scope without execution_id - should return 400
+    let response = server
+        .get(&format!("/api/executions/v2/sessions/{}/messages?scope=execution", session.id))
+        .await;
+
+    response.assert_status(StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn session_messages_agent_filter() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session and executions
+    let (session, root_exec) = state_service.create_session("root-agent").unwrap();
+
+    // Create two delegated executions with different agents
+    let researcher_exec = state_service
+        .create_delegated_execution(
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
+        )
+        .unwrap();
+
+    let writer_exec = state_service
+        .create_delegated_execution(
+            &session.id,
+            "writer",
+            &root_exec.id,
+            DelegationType::Parallel,
+            "Write task",
+        )
+        .unwrap();
+
+    // Add messages
+    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
+    state_service.add_message(&researcher_exec.id, "assistant", "Research done", None, None).unwrap();
+    state_service.add_message(&writer_exec.id, "assistant", "Writing done", None, None).unwrap();
+
+    // Filter by agent_id
+    let response = server
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages?agent_id=researcher",
+            session.id
+        ))
+        .await;
+
+    response.assert_status_ok();
+
+    let messages: Vec<Value> = response.json();
+    assert_eq!(messages.len(), 1, "Should return only 1 message from researcher");
+    assert_eq!(messages[0]["agent_id"], "researcher");
+}
+
+#[tokio::test]
+async fn session_messages_not_found() {
+    let (server, _dir) = setup_test_server().await;
+
+    // Try to get messages for non-existent session
+    let response = server
+        .get("/api/executions/v2/sessions/nonexistent-session/messages")
+        .await;
+
+    response.assert_status_ok();
+
+    // Should return empty array (session doesn't exist)
+    let messages: Vec<Value> = response.json();
+    assert!(messages.is_empty());
+}
+
+#[tokio::test]
+async fn session_messages_empty_session() {
+    let (server, state_service, _dir) = setup_test_server_with_state().await;
+
+    // Create session but don't add any messages
+    let (session, _) = state_service.create_session("root-agent").unwrap();
+
+    let response = server
+        .get(&format!("/api/executions/v2/sessions/{}/messages", session.id))
+        .await;
+
+    response.assert_status_ok();
+
+    let messages: Vec<Value> = response.json();
+    assert!(messages.is_empty(), "Should return empty array for session with no messages");
 }

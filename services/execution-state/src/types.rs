@@ -92,6 +92,20 @@ impl TriggerSource {
             Self::Plugin => "plugin",
         }
     }
+
+    /// Returns true if sessions from this source should auto-complete after execution.
+    ///
+    /// Web sessions stay open for interactive use (until `/end` or `/new`).
+    /// CLI, Cron, API, and Plugin sessions auto-complete after execution finishes.
+    pub fn should_auto_complete_session(&self) -> bool {
+        match self {
+            Self::Web => false, // Keep open for interactive use
+            Self::Cli => true,  // Complete after response
+            Self::Cron => true, // Single execution, auto-complete
+            Self::Api => true,  // Controlled by caller, default to complete
+            Self::Plugin => true,
+        }
+    }
 }
 
 impl std::fmt::Display for TriggerSource {
@@ -268,6 +282,14 @@ pub struct Session {
     /// JSON metadata
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<serde_json::Value>,
+
+    /// Number of pending delegations (subagents not yet completed)
+    #[serde(default)]
+    pub pending_delegations: u32,
+
+    /// Whether this session needs a continuation turn after delegations complete
+    #[serde(default)]
+    pub continuation_needed: bool,
 }
 
 impl Session {
@@ -290,6 +312,8 @@ impl Session {
             total_tokens_in: 0,
             total_tokens_out: 0,
             metadata: None,
+            pending_delegations: 0,
+            continuation_needed: false,
         }
     }
 
@@ -307,12 +331,26 @@ impl Session {
             total_tokens_in: 0,
             total_tokens_out: 0,
             metadata: None,
+            pending_delegations: 0,
+            continuation_needed: false,
         }
     }
 
     /// Total tokens (in + out).
     pub fn total_tokens(&self) -> u64 {
         self.total_tokens_in + self.total_tokens_out
+    }
+
+    /// Check if this session has pending delegations.
+    pub fn has_pending_delegations(&self) -> bool {
+        self.pending_delegations > 0
+    }
+
+    /// Check if this session needs a continuation turn.
+    ///
+    /// Returns true only if continuation is needed AND no delegations are pending.
+    pub fn needs_continuation(&self) -> bool {
+        self.continuation_needed && !self.has_pending_delegations()
     }
 }
 

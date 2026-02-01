@@ -42,8 +42,9 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "INSERT INTO sessions (
                     id, status, source, root_agent_id, title,
                     created_at, started_at, completed_at,
-                    total_tokens_in, total_tokens_out, metadata
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                    total_tokens_in, total_tokens_out, metadata,
+                    pending_delegations, continuation_needed
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     session.id,
                     session.status.as_str(),
@@ -56,6 +57,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                     session.total_tokens_in as i64,
                     session.total_tokens_out as i64,
                     session.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten(),
+                    session.pending_delegations as i64,
+                    session.continuation_needed as i64,
                 ],
             )?;
             Ok(())
@@ -72,7 +75,8 @@ impl<D: StateDbProvider> StateRepository<D> {
             let mut stmt = conn.prepare(
                 "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
-                        total_tokens_in, total_tokens_out, metadata
+                        total_tokens_in, total_tokens_out, metadata,
+                        pending_delegations, continuation_needed
                  FROM sessions WHERE id = ?",
             )?;
 
@@ -90,7 +94,8 @@ impl<D: StateDbProvider> StateRepository<D> {
             let mut sql = String::from(
                 "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
-                        total_tokens_in, total_tokens_out, metadata
+                        total_tokens_in, total_tokens_out, metadata,
+                        pending_delegations, continuation_needed
                  FROM sessions WHERE 1=1",
             );
 
@@ -198,6 +203,8 @@ impl<D: StateDbProvider> StateRepository<D> {
     // =========================================================================
 
     /// Update session status.
+    /// When session becomes terminal (crashed/completed/cancelled), also updates
+    /// all running/queued executions to match.
     pub fn update_session_status(&self, id: &str, status: SessionStatus) -> Result<(), String> {
         let now = chrono::Utc::now().to_rfc3339();
 
@@ -213,6 +220,21 @@ impl<D: StateDbProvider> StateRepository<D> {
                 conn.execute(
                     "UPDATE sessions SET status = ?1, completed_at = ?2 WHERE id = ?3",
                     params![status.as_str(), now, id],
+                )?;
+
+                // Cascade status to running/queued executions
+                // - If session crashed, mark running executions as crashed
+                // - If session completed, mark running executions as completed
+                let exec_status = match status {
+                    SessionStatus::Crashed => "crashed",
+                    SessionStatus::Completed => "completed",
+                    _ => "completed", // fallback for any other terminal state
+                };
+                conn.execute(
+                    "UPDATE agent_executions
+                     SET status = ?1, completed_at = ?2
+                     WHERE session_id = ?3 AND status IN ('running', 'queued')",
+                    params![exec_status, now, id],
                 )?;
             } else {
                 conn.execute(
@@ -244,6 +266,48 @@ impl<D: StateDbProvider> StateRepository<D> {
             conn.execute(
                 "UPDATE sessions SET title = ?1 WHERE id = ?2",
                 params![title, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    // =========================================================================
+    // SESSION - DELEGATION TRACKING
+    // =========================================================================
+
+    /// Increment pending delegations count.
+    pub fn increment_pending_delegations(&self, session_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET pending_delegations = pending_delegations + 1 WHERE id = ?1",
+                params![session_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Decrement pending delegations count, returns new count.
+    pub fn decrement_pending_delegations(&self, session_id: &str) -> Result<u32, String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET pending_delegations = MAX(0, pending_delegations - 1) WHERE id = ?1",
+                params![session_id],
+            )?;
+            let count: i64 = conn.query_row(
+                "SELECT pending_delegations FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get(0),
+            )?;
+            Ok(count as u32)
+        })
+    }
+
+    /// Set continuation_needed flag.
+    pub fn set_continuation_needed(&self, session_id: &str, needed: bool) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET continuation_needed = ?1 WHERE id = ?2",
+                params![needed as i32, session_id],
             )?;
             Ok(())
         })
@@ -520,9 +584,15 @@ impl<D: StateDbProvider> StateRepository<D> {
 
             // =====================================================================
             // EXECUTION COUNTS BY STATUS
+            // Only count executions from sessions that are still running/queued
+            // (executions from crashed/completed sessions are not truly "running")
             // =====================================================================
             let mut stmt = conn.prepare(
-                "SELECT status, COUNT(*) FROM agent_executions GROUP BY status",
+                "SELECT e.status, COUNT(*)
+                 FROM agent_executions e
+                 JOIN sessions s ON e.session_id = s.id
+                 WHERE s.status IN ('running', 'queued')
+                 GROUP BY e.status",
             )?;
 
             let mut executions_queued = 0u64;
@@ -596,6 +666,87 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     // =========================================================================
+    // SESSION MESSAGES
+    // =========================================================================
+
+    /// Get messages for a session with scope filtering.
+    ///
+    /// Joins messages with executions to include agent_id and delegation_type.
+    ///
+    /// Scopes:
+    /// - `all`: All messages from all executions
+    /// - `root`: Only messages from root executions
+    /// - `execution`: Messages from a specific execution
+    /// - `delegates`: Only messages from delegated executions
+    pub fn get_session_messages(
+        &self,
+        session_id: &str,
+        scope: &str,
+        execution_id: Option<&str>,
+        agent_id: Option<&str>,
+    ) -> Result<Vec<crate::handlers::SessionMessage>, String> {
+        self.db.with_connection(|conn| {
+            // Base query joining messages with executions
+            let mut sql = String::from(
+                "SELECT m.id, m.execution_id, e.agent_id, e.delegation_type,
+                        m.role, m.content, m.created_at, m.tool_calls, m.tool_results
+                 FROM messages m
+                 JOIN agent_executions e ON m.execution_id = e.id
+                 WHERE e.session_id = ?1",
+            );
+
+            // Apply scope filter
+            match scope {
+                "root" => sql.push_str(" AND e.delegation_type = 'root'"),
+                "execution" => sql.push_str(" AND e.id = ?2"),
+                "delegates" => sql.push_str(" AND e.delegation_type != 'root'"),
+                // "all" - no additional filter
+                _ => {}
+            }
+
+            // Apply agent_id filter if provided
+            if agent_id.is_some() {
+                if scope == "execution" {
+                    sql.push_str(" AND e.agent_id = ?3");
+                } else {
+                    sql.push_str(" AND e.agent_id = ?2");
+                }
+            }
+
+            // Order by execution start time, then message created_at
+            sql.push_str(" ORDER BY e.started_at ASC, m.created_at ASC");
+
+            let mut stmt = conn.prepare(&sql)?;
+
+            // Build params based on scope and filters
+            let messages: Vec<crate::handlers::SessionMessage> = match (scope, execution_id, agent_id) {
+                ("execution", Some(exec_id), Some(agent)) => {
+                    stmt.query_map(params![session_id, exec_id, agent], Self::row_to_session_message)?
+                        .filter_map(|r| r.ok())
+                        .collect()
+                }
+                ("execution", Some(exec_id), None) => {
+                    stmt.query_map(params![session_id, exec_id], Self::row_to_session_message)?
+                        .filter_map(|r| r.ok())
+                        .collect()
+                }
+                (_, _, Some(agent)) => {
+                    stmt.query_map(params![session_id, agent], Self::row_to_session_message)?
+                        .filter_map(|r| r.ok())
+                        .collect()
+                }
+                _ => {
+                    stmt.query_map(params![session_id], Self::row_to_session_message)?
+                        .filter_map(|r| r.ok())
+                        .collect()
+                }
+            };
+
+            Ok(messages)
+        })
+    }
+
+    // =========================================================================
     // HELPERS
     // =========================================================================
 
@@ -616,6 +767,8 @@ impl<D: StateDbProvider> StateRepository<D> {
             total_tokens_in: row.get::<_, i64>(8)? as u64,
             total_tokens_out: row.get::<_, i64>(9)? as u64,
             metadata: metadata_json.and_then(|s| serde_json::from_str(&s).ok()),
+            pending_delegations: row.get::<_, i64>(11).unwrap_or(0) as u32,
+            continuation_needed: row.get::<_, i64>(12).unwrap_or(0) != 0,
         })
     }
 
@@ -639,6 +792,25 @@ impl<D: StateDbProvider> StateRepository<D> {
             checkpoint: checkpoint_json.and_then(|s| serde_json::from_str(&s).ok()),
             error: row.get(12)?,
             log_path: row.get(13)?,
+        })
+    }
+
+    fn row_to_session_message(
+        row: &rusqlite::Row,
+    ) -> Result<crate::handlers::SessionMessage, rusqlite::Error> {
+        let tool_calls_json: Option<String> = row.get(7)?;
+        let tool_results_json: Option<String> = row.get(8)?;
+
+        Ok(crate::handlers::SessionMessage {
+            id: row.get(0)?,
+            execution_id: row.get(1)?,
+            agent_id: row.get(2)?,
+            delegation_type: row.get(3)?,
+            role: row.get(4)?,
+            content: row.get(5)?,
+            created_at: row.get(6)?,
+            tool_calls: tool_calls_json.and_then(|s| serde_json::from_str(&s).ok()),
+            tool_results: tool_results_json.and_then(|s| serde_json::from_str(&s).ok()),
         })
     }
 }
@@ -676,7 +848,9 @@ mod tests {
                     completed_at TEXT,
                     total_tokens_in INTEGER NOT NULL DEFAULT 0,
                     total_tokens_out INTEGER NOT NULL DEFAULT 0,
-                    metadata TEXT
+                    metadata TEXT,
+                    pending_delegations INTEGER DEFAULT 0,
+                    continuation_needed INTEGER DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (
@@ -697,8 +871,21 @@ mod tests {
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
 
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    execution_id TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    token_count INTEGER DEFAULT 0,
+                    tool_calls TEXT,
+                    tool_results TEXT,
+                    FOREIGN KEY (execution_id) REFERENCES agent_executions(id)
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_agent_executions_session ON agent_executions(session_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+                CREATE INDEX IF NOT EXISTS idx_messages_execution ON messages(execution_id);
                 "#,
             )
             .expect("Failed to create tables");
@@ -1150,5 +1337,180 @@ mod tests {
         let saved_checkpoint = updated.checkpoint.unwrap();
         assert_eq!(saved_checkpoint.llm_turn, 5);
         assert_eq!(saved_checkpoint.last_message_id, "msg-last");
+    }
+
+    // ========================================================================
+    // Session Messages Tests
+    // ========================================================================
+
+    /// Helper to add a message to an execution
+    fn add_message(repo: &StateRepository<TestDbProvider>, execution_id: &str, role: &str, content: &str) {
+        repo.db.with_connection(|conn| {
+            let id = format!("msg-{}", uuid::Uuid::new_v4());
+            let created_at = chrono::Utc::now().to_rfc3339();
+            conn.execute(
+                "INSERT INTO messages (id, execution_id, role, content, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![id, execution_id, role, content, created_at],
+            )?;
+            Ok(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn get_session_messages_all_scope() {
+        let repo = setup_repo();
+        let session = Session::new("root-agent");
+        repo.create_session(&session).unwrap();
+
+        // Create root execution
+        let mut root_exec = AgentExecution::new_root(&session.id, "claude");
+        root_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&root_exec).unwrap();
+
+        // Create subagent execution
+        let mut sub_exec = AgentExecution::new_delegated(
+            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research AI"
+        );
+        sub_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub_exec).unwrap();
+
+        // Add messages to both
+        add_message(&repo, &root_exec.id, "user", "Hello root");
+        add_message(&repo, &root_exec.id, "assistant", "Root response");
+        add_message(&repo, &sub_exec.id, "user", "Research task");
+        add_message(&repo, &sub_exec.id, "assistant", "Research result");
+
+        // Get all messages
+        let messages = repo.get_session_messages(&session.id, "all", None, None).unwrap();
+        assert_eq!(messages.len(), 4);
+    }
+
+    #[test]
+    fn get_session_messages_root_scope() {
+        let repo = setup_repo();
+        let session = Session::new("root-agent");
+        repo.create_session(&session).unwrap();
+
+        // Create root execution
+        let mut root_exec = AgentExecution::new_root(&session.id, "claude");
+        root_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&root_exec).unwrap();
+
+        // Create subagent execution
+        let mut sub_exec = AgentExecution::new_delegated(
+            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research AI"
+        );
+        sub_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub_exec).unwrap();
+
+        // Add messages to both
+        add_message(&repo, &root_exec.id, "user", "Hello root");
+        add_message(&repo, &root_exec.id, "assistant", "Root response");
+        add_message(&repo, &sub_exec.id, "user", "Research task");
+        add_message(&repo, &sub_exec.id, "assistant", "Research result");
+
+        // Get only root messages
+        let messages = repo.get_session_messages(&session.id, "root", None, None).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m| m.delegation_type == "root"));
+    }
+
+    #[test]
+    fn get_session_messages_execution_scope() {
+        let repo = setup_repo();
+        let session = Session::new("root-agent");
+        repo.create_session(&session).unwrap();
+
+        // Create root execution
+        let mut root_exec = AgentExecution::new_root(&session.id, "claude");
+        root_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&root_exec).unwrap();
+
+        // Create subagent execution
+        let mut sub_exec = AgentExecution::new_delegated(
+            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research AI"
+        );
+        sub_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub_exec).unwrap();
+
+        // Add messages
+        add_message(&repo, &root_exec.id, "user", "Hello root");
+        add_message(&repo, &sub_exec.id, "user", "Research task");
+        add_message(&repo, &sub_exec.id, "assistant", "Research result");
+
+        // Get only specific execution messages
+        let messages = repo.get_session_messages(&session.id, "execution", Some(&sub_exec.id), None).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m| m.execution_id == sub_exec.id));
+    }
+
+    #[test]
+    fn get_session_messages_delegates_scope() {
+        let repo = setup_repo();
+        let session = Session::new("root-agent");
+        repo.create_session(&session).unwrap();
+
+        // Create root execution
+        let mut root_exec = AgentExecution::new_root(&session.id, "claude");
+        root_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&root_exec).unwrap();
+
+        // Create two subagent executions
+        let mut sub1 = AgentExecution::new_delegated(
+            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research"
+        );
+        sub1.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub1).unwrap();
+
+        let mut sub2 = AgentExecution::new_delegated(
+            &session.id, "writer-agent", &root_exec.id, DelegationType::Parallel, "Write"
+        );
+        sub2.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub2).unwrap();
+
+        // Add messages
+        add_message(&repo, &root_exec.id, "user", "Root message");
+        add_message(&repo, &sub1.id, "assistant", "Research result");
+        add_message(&repo, &sub2.id, "assistant", "Writing result");
+
+        // Get only delegate messages
+        let messages = repo.get_session_messages(&session.id, "delegates", None, None).unwrap();
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m| m.delegation_type != "root"));
+    }
+
+    #[test]
+    fn get_session_messages_agent_filter() {
+        let repo = setup_repo();
+        let session = Session::new("root-agent");
+        repo.create_session(&session).unwrap();
+
+        // Create root execution
+        let mut root_exec = AgentExecution::new_root(&session.id, "claude");
+        root_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&root_exec).unwrap();
+
+        // Create two different agent executions
+        let mut sub1 = AgentExecution::new_delegated(
+            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research 1"
+        );
+        sub1.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub1).unwrap();
+
+        let mut sub2 = AgentExecution::new_delegated(
+            &session.id, "writer-agent", &root_exec.id, DelegationType::Sequential, "Write"
+        );
+        sub2.started_at = Some(chrono::Utc::now().to_rfc3339());
+        repo.create_execution(&sub2).unwrap();
+
+        // Add messages
+        add_message(&repo, &root_exec.id, "assistant", "Claude response");
+        add_message(&repo, &sub1.id, "assistant", "Research result");
+        add_message(&repo, &sub2.id, "assistant", "Writing result");
+
+        // Filter by agent_id
+        let messages = repo.get_session_messages(&session.id, "all", None, Some("research-agent")).unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].agent_id, "research-agent");
     }
 }

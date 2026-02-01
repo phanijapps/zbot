@@ -25,6 +25,8 @@ import type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  SessionMessage,
+  SessionMessagesQuery,
   ToolSettings,
   LogSession,
   SessionDetail,
@@ -147,6 +149,20 @@ export interface Transport {
 
   /** Get messages for an execution (exec-xxx) or conversation (web-xxx) */
   getMessages(id: string): Promise<TransportResult<MessageResponse[]>>;
+
+  /**
+   * Get messages for a session with scope filtering.
+   *
+   * Scopes:
+   * - `all`: All messages from all executions
+   * - `root`: Only messages from root executions (main chat view)
+   * - `execution`: Messages from a specific execution (requires execution_id)
+   * - `delegates`: Only messages from delegated executions
+   */
+  getSessionMessages(
+    sessionId: string,
+    query?: SessionMessagesQuery
+  ): Promise<TransportResult<SessionMessage[]>>;
 
   // =========================================================================
   // Agent Execution

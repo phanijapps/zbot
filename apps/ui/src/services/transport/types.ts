@@ -102,6 +102,36 @@ export interface MessageResponse {
   metadata?: Record<string, unknown>;
 }
 
+/**
+ * Extended message response for session-scoped queries.
+ * Includes execution metadata (agent_id, delegation_type) for context.
+ */
+export interface SessionMessage {
+  id: string;
+  execution_id: string;
+  agent_id: string;
+  delegation_type: string;
+  role: string;
+  content: string;
+  created_at: string;
+  tool_calls?: unknown;
+  tool_results?: unknown;
+}
+
+/**
+ * Scope for session messages query.
+ */
+export type MessageScope = 'all' | 'root' | 'execution' | 'delegates';
+
+/**
+ * Query parameters for session messages endpoint.
+ */
+export interface SessionMessagesQuery {
+  scope?: MessageScope;
+  execution_id?: string;
+  agent_id?: string;
+}
+
 // ============================================================================
 // Gateway Status Types
 // ============================================================================

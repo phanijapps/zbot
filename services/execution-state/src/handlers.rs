@@ -278,6 +278,34 @@ pub async fn get_execution_messages<D: StateDbProvider + 'static>(
     Ok(Json(messages))
 }
 
+/// Get messages for a session with scope filtering.
+///
+/// GET /v2/sessions/:id/messages?scope=all|root|execution|delegates&execution_id=...&agent_id=...
+///
+/// Scopes:
+/// - `all` (default): All messages from all executions
+/// - `root`: Only messages from root executions (main chat view)
+/// - `execution`: Messages from a specific execution (requires execution_id)
+/// - `delegates`: Only messages from delegated executions
+pub async fn get_session_messages<D: StateDbProvider + 'static>(
+    State(service): State<Arc<StateService<D>>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<SessionMessagesQuery>,
+) -> Result<Json<Vec<SessionMessage>>, ApiError> {
+    // Validate: execution scope requires execution_id
+    if matches!(query.scope, MessageScope::Execution) && query.execution_id.is_none() {
+        return Err(ApiError::BadRequest(
+            "execution_id is required when scope=execution".to_string(),
+        ));
+    }
+
+    let messages = service
+        .get_session_messages(&session_id, &query)
+        .map_err(ApiError::Database)?;
+
+    Ok(Json(messages))
+}
+
 // ============================================================================
 // CLEANUP HANDLERS
 // ============================================================================
@@ -342,4 +370,60 @@ pub struct Message {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_results: Option<serde_json::Value>,
+}
+
+/// Extended message type for session-scoped queries.
+///
+/// Includes execution metadata (agent_id, delegation_type) for context.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessage {
+    pub id: String,
+    pub execution_id: String,
+    pub agent_id: String,
+    pub delegation_type: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_results: Option<serde_json::Value>,
+}
+
+/// Scope for session messages query.
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageScope {
+    /// All messages from all executions in the session
+    #[default]
+    All,
+    /// Only messages from root executions
+    Root,
+    /// Messages from a specific execution (requires execution_id)
+    Execution,
+    /// Only messages from delegated (non-root) executions
+    Delegates,
+}
+
+impl MessageScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Root => "root",
+            Self::Execution => "execution",
+            Self::Delegates => "delegates",
+        }
+    }
+}
+
+/// Query parameters for session messages endpoint.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SessionMessagesQuery {
+    /// Scope of messages to return
+    #[serde(default)]
+    pub scope: MessageScope,
+    /// Execution ID (required when scope=execution)
+    pub execution_id: Option<String>,
+    /// Filter by agent ID
+    pub agent_id: Option<String>,
 }

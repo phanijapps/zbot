@@ -27,6 +27,8 @@ import type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  SessionMessage,
+  SessionMessagesQuery,
   ToolSettings,
   LogSession,
   SessionDetail,
@@ -155,6 +157,13 @@ export class TauriTransport implements Transport {
   }
 
   async getMessages(_id: string): Promise<TransportResult<MessageResponse[]>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getSessionMessages(
+    _sessionId: string,
+    _query?: SessionMessagesQuery
+  ): Promise<TransportResult<SessionMessage[]>> {
     return { success: false, error: NOT_SUPPORTED };
   }
 

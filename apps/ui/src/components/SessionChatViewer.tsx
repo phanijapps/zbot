@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getTransport, type MessageResponse } from "@/services/transport";
+import { getTransport, type MessageResponse, type SessionMessage, type MessageScope } from "@/services/transport";
 
 // ============================================================================
 // Types
@@ -33,10 +33,19 @@ interface ChatMessage {
   toolName?: string;
   delegationStatus?: "started" | "completed";
   childAgentId?: string;
+  /** Agent ID for session messages (to show which agent sent the message) */
+  agentId?: string;
+  /** Delegation type for session messages */
+  delegationType?: string;
 }
 
 interface SessionChatViewerProps {
-  conversationId: string;
+  /** Session ID for fetching messages (new API) */
+  sessionId?: string;
+  /** Execution ID for execution-scoped messages (optional) */
+  executionId?: string;
+  /** Legacy: Conversation ID (for backward compatibility, falls back to old API) */
+  conversationId?: string;
   agentId: string;
   readOnly?: boolean;
   onClose?: () => void;
@@ -47,6 +56,8 @@ interface SessionChatViewerProps {
 // ============================================================================
 
 export function SessionChatViewer({
+  sessionId,
+  executionId,
   conversationId,
   agentId,
   readOnly = false,
@@ -59,6 +70,9 @@ export function SessionChatViewer({
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Determine the message scope based on props
+  const scope: MessageScope = executionId ? 'execution' : 'root';
+
   // Load conversation history
   useEffect(() => {
     const loadHistory = async () => {
@@ -67,18 +81,44 @@ export function SessionChatViewer({
 
       try {
         const transport = await getTransport();
-        const result = await transport.getMessages(conversationId);
 
-        if (result.success && result.data) {
-          const loadedMessages: ChatMessage[] = result.data.map((m: MessageResponse) => ({
-            id: m.id,
-            role: m.role as ChatMessage["role"],
-            content: m.content,
-            timestamp: new Date(m.timestamp),
-          }));
-          setMessages(loadedMessages);
+        // Use new session messages API if sessionId is provided
+        if (sessionId) {
+          const result = await transport.getSessionMessages(sessionId, {
+            scope,
+            execution_id: executionId,
+          });
+
+          if (result.success && result.data) {
+            const loadedMessages: ChatMessage[] = result.data.map((m: SessionMessage) => ({
+              id: m.id,
+              role: m.role as ChatMessage["role"],
+              content: m.content,
+              timestamp: new Date(m.created_at),
+              agentId: m.agent_id,
+              delegationType: m.delegation_type,
+            }));
+            setMessages(loadedMessages);
+          } else {
+            setError(result.error || "Failed to load messages");
+          }
+        } else if (conversationId) {
+          // Fall back to legacy API for backward compatibility
+          const result = await transport.getMessages(conversationId);
+
+          if (result.success && result.data) {
+            const loadedMessages: ChatMessage[] = result.data.map((m: MessageResponse) => ({
+              id: m.id,
+              role: m.role as ChatMessage["role"],
+              content: m.content,
+              timestamp: new Date(m.timestamp),
+            }));
+            setMessages(loadedMessages);
+          } else {
+            setError(result.error || "Failed to load messages");
+          }
         } else {
-          setError(result.error || "Failed to load messages");
+          setError("No session or conversation ID provided");
         }
       } catch (err) {
         setError(String(err));
@@ -88,7 +128,7 @@ export function SessionChatViewer({
     };
 
     loadHistory();
-  }, [conversationId]);
+  }, [sessionId, executionId, conversationId, scope]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -111,8 +151,10 @@ export function SessionChatViewer({
 
     try {
       const transport = await getTransport();
-      // Pass conversationId as sessionId to continue this session
-      await transport.executeAgent(agentId, conversationId, userMessage.content, conversationId);
+      // Use sessionId if available, otherwise fall back to conversationId
+      const convId = conversationId || sessionId || "";
+      const sessId = sessionId || conversationId;
+      await transport.executeAgent(agentId, convId, userMessage.content, sessId);
     } catch (err) {
       console.error("Failed to send message:", err);
     } finally {
@@ -137,15 +179,31 @@ export function SessionChatViewer({
           </div>
           <div>
             <h1 className="text-lg font-semibold">{agentId}</h1>
-            <p className="text-xs text-muted-foreground font-mono">{conversationId}</p>
+            <p className="text-xs text-muted-foreground font-mono">
+              {executionId ? (
+                <span title={`Session: ${sessionId}`}>
+                  {executionId.slice(0, 20)}...
+                </span>
+              ) : (
+                sessionId || conversationId
+              )}
+            </p>
           </div>
         </div>
-        {readOnly && (
-          <div className="flex items-center gap-2 text-muted-foreground text-sm bg-muted px-3 py-1.5 rounded-lg">
-            <Eye className="w-4 h-4" />
-            Read-only
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          {executionId && (
+            <div className="flex items-center gap-1 text-xs text-violet-600 bg-violet-100 px-2 py-1 rounded-md">
+              <GitBranch className="w-3 h-3" />
+              Subagent View
+            </div>
+          )}
+          {readOnly && (
+            <div className="flex items-center gap-2 text-muted-foreground text-sm bg-muted px-3 py-1.5 rounded-lg">
+              <Eye className="w-4 h-4" />
+              Read-only
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Messages */}

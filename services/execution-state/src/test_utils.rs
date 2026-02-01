@@ -30,6 +30,8 @@ pub fn mock_session(id: &str, agent_id: &str) -> Session {
         total_tokens_in: 0,
         total_tokens_out: 0,
         metadata: None,
+        pending_delegations: 0,
+        continuation_needed: false,
     }
 }
 
@@ -47,6 +49,8 @@ pub fn mock_session_with_source(id: &str, agent_id: &str, source: TriggerSource)
         total_tokens_in: 0,
         total_tokens_out: 0,
         metadata: None,
+        pending_delegations: 0,
+        continuation_needed: false,
     }
 }
 
@@ -64,6 +68,8 @@ pub fn mock_queued_session(id: &str, agent_id: &str, source: TriggerSource) -> S
         total_tokens_in: 0,
         total_tokens_out: 0,
         metadata: None,
+        pending_delegations: 0,
+        continuation_needed: false,
     }
 }
 

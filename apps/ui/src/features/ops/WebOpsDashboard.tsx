@@ -484,7 +484,8 @@ export function WebOpsDashboard() {
 
   // Chat slider state
   const [selectedExecution, setSelectedExecution] = useState<{
-    executionId: string;
+    sessionId: string;
+    executionId?: string;  // Only set for subagent views
     agentId: string;
     isSubagent: boolean;
   } | null>(null);
@@ -600,8 +601,9 @@ export function WebOpsDashboard() {
   const handleOpenChat = useCallback((execution: AgentExecution) => {
     const isSubagent = execution.delegation_type !== 'root';
     setSelectedExecution({
-      // Use execution.id to fetch messages
-      executionId: execution.id,
+      sessionId: execution.session_id,
+      // Only set executionId for subagent views (to scope to that execution)
+      executionId: isSubagent ? execution.id : undefined,
       agentId: execution.agent_id,
       isSubagent,
     });
@@ -871,7 +873,8 @@ export function WebOpsDashboard() {
       <ChatSlider isOpen={selectedExecution !== null} onClose={handleCloseChat}>
         {selectedExecution && (
           <SessionChatViewer
-            conversationId={selectedExecution.executionId}
+            sessionId={selectedExecution.sessionId}
+            executionId={selectedExecution.executionId}
             agentId={selectedExecution.agentId}
             readOnly={selectedExecution.isSubagent}
           />

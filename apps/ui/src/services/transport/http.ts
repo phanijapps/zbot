@@ -27,6 +27,8 @@ import type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  SessionMessage,
+  SessionMessagesQuery,
   ToolSettings,
   ToolSettingsResponse,
   LogSession,
@@ -197,6 +199,30 @@ export class HttpTransport implements Transport {
       return this.get<MessageResponse[]>(`/api/executions/${encodeURIComponent(id)}/messages`);
     }
     return this.get<MessageResponse[]>(`/api/conversations/${encodeURIComponent(id)}/messages`);
+  }
+
+  /**
+   * Get messages for a session with scope filtering.
+   *
+   * Scopes:
+   * - `all`: All messages from all executions
+   * - `root`: Only messages from root executions (main chat view)
+   * - `execution`: Messages from a specific execution (requires execution_id)
+   * - `delegates`: Only messages from delegated executions
+   */
+  async getSessionMessages(
+    sessionId: string,
+    query?: SessionMessagesQuery
+  ): Promise<TransportResult<SessionMessage[]>> {
+    const params = new URLSearchParams();
+    if (query?.scope) params.set('scope', query.scope);
+    if (query?.execution_id) params.set('execution_id', query.execution_id);
+    if (query?.agent_id) params.set('agent_id', query.agent_id);
+
+    const queryString = params.toString();
+    const url = `/api/executions/v2/sessions/${encodeURIComponent(sessionId)}/messages${queryString ? `?${queryString}` : ''}`;
+
+    return this.get<SessionMessage[]>(url);
   }
 
   // =========================================================================
