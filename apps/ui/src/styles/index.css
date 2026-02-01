@@ -1,0 +1,12 @@
+/* ============================================================================
+   MAIN STYLESHEET ENTRY POINT
+
+   Import order matters:
+   1. Tailwind base/utilities
+   2. Design tokens (theme.css)
+   3. Component classes (components.css)
+   ============================================================================ */
+
+@import 'tailwindcss';
+@import './theme.css';
+@import './components.css';

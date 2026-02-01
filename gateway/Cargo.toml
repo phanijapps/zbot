@@ -1,0 +1,72 @@
+# ============================================================================
+# GATEWAY LIBRARY
+# HTTP and WebSocket APIs for the agent runtime
+# ============================================================================
+
+[package]
+name = "gateway"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "HTTP and WebSocket gateway for AgentZero daemon"
+repository = "https://github.com/yourusername/agentzero"
+readme = "README.md"
+keywords = ["ai", "agent", "gateway", "websocket", "api"]
+categories = ["web-programming"]
+
+[dependencies]
+# Internal crates
+api-logs = { path = "../services/api-logs" }
+execution-state = { path = "../services/execution-state" }
+agent-runtime = { path = "../runtime/agent-runtime" }
+agent-tools = { path = "../runtime/agent-tools" }
+zero-core = { path = "../framework/zero-core" }
+zero-app = { path = "../framework/zero-app" }
+
+# Web framework
+axum = { version = "0.7", features = ["ws", "macros"] }
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+
+# WebSocket
+tokio-tungstenite = "0.24"
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+dirs = "5"
+regex = "1"
+reqwest = { version = "0.12", features = ["json"] }
+rust-embed = { workspace = true }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[features]
+default = []
+
+[lib]
+name = "gateway"
+path = "src/lib.rs"

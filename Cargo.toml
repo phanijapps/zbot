@@ -5,25 +5,35 @@
 [workspace]
 resolver = "2"
 members = [
-    "src-tauri",
-    # Zero Framework crates
-    "crates/zero-core",
-    "crates/zero-llm",
-    "crates/zero-tool",
-    "crates/zero-session",
-    "crates/zero-agent",
-    "crates/zero-mcp",
-    "crates/zero-prompt",
-    "crates/zero-middleware",
-    "crates/zero-app",
-    # Application crates
-    "application/agent-runtime",
-    "application/agent-tools",
-    "application/daily-sessions",
-    "application/search-index",
-    "application/session-archive",
-    "application/knowledge-graph",
-    "application/workflow-executor",
+    # Framework - Core abstractions (publishable as zero-agent-framework)
+    "framework/zero-core",
+    "framework/zero-llm",
+    "framework/zero-tool",
+    "framework/zero-session",
+    "framework/zero-agent",
+    "framework/zero-mcp",
+    "framework/zero-prompt",
+    "framework/zero-middleware",
+    "framework/zero-app",
+
+    # Runtime - Execution engine
+    "runtime/agent-runtime",
+    "runtime/agent-tools",
+
+    # Services - Standalone data services
+    "services/api-logs",
+    "services/daily-sessions",
+    "services/execution-state",
+    "services/search-index",
+    "services/session-archive",
+    "services/knowledge-graph",
+
+    # Gateway - Network layer
+    "gateway",
+
+    # Apps - Runnable applications
+    "apps/daemon",
+    "apps/cli",
 ]
 
 [workspace.package]

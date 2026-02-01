@@ -1,263 +1,150 @@
-# Agent Zero - Product Definition
+# Agent Zero — Product Definition
 
-## Product Vision
+## Vision
 
-Agent Zero is a desktop application for creating and managing AI agents, similar to Claude Desktop. It enables users to build specialized AI assistants with custom instructions, integrate with multiple LLM providers, extend capabilities through skills, connect to external tools via MCP (Model Context Protocol) servers, and create multi-agent orchestrators with visual workflow editing.
+Agent Zero is a local-first AI agent platform that puts you in control. Run sophisticated AI assistants on your own machine with full data ownership, multi-provider flexibility, and unlimited extensibility through skills and MCP servers.
+
+## Core Principles
+
+1. **Local-First** — Your data stays on your machine. No cloud lock-in.
+2. **Provider-Agnostic** — Use any LLM: OpenAI, Anthropic, DeepSeek, Ollama, self-hosted.
+3. **Extensible** — Skills and MCP servers let you add any capability.
+4. **Open Standards** — Built on Agent Skills and Model Context Protocol specifications.
+5. **Simple Deployment** — Single daemon binary + static web files.
+
+## Interfaces
+
+### Web Dashboard
+Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, and conversations.
+
+### CLI (zero)
+Command-line interface for scripting, automation, and terminal-based workflows. Connects to the same daemon as the web dashboard.
 
 ## Target Users
 
-- **Developers**: Building AI-powered workflows and automation
-- **Power Users**: Creating specialized assistants for specific tasks
-- **Teams**: Managing multiple AI agents with different capabilities
+| User | Use Case |
+|------|----------|
+| **Developers** | Building AI-powered workflows, automation, code assistants |
+| **Power Users** | Creating specialized assistants for research, writing, analysis |
+| **Teams** | Managing multiple agents with different capabilities and contexts |
+| **Privacy-Conscious** | Running AI locally without sending data to third parties |
 
 ## Core Features
 
-### 1. Agent Management
-**Location:** `src/features/agents/`
+### 1. Chat Interface
+Conversational interface with real-time streaming. See tool calls as they happen. Continue conversations across sessions with full history preserved in SQLite.
 
-Create AI agents with custom instructions, configure providers, models, temperature, and max tokens. Full IDE-style editor for agent development.
+### 2. Agent Management
+Create agents with:
+- Custom system instructions (AGENTS.md files)
+- Provider and model selection
+- Temperature and token limits
+- Skill and MCP server assignments
 
-- **Agent IDE**: Configure agents with provider, model, temperature, max tokens
-- **Instructions Editor**: Markdown-based AGENTS.md editor with live preview
-- **File Explorer**: Create, edit, delete files within agent folders
-- **Quick Actions**: Create, edit, duplicate, delete agents from panel
-
-**Backend Commands:**
-- `list_agents()` - List all agents
-- `get_agent(id)` - Get single agent
-- `create_agent(agent)` - Create new agent
-- `update_agent(id, agent)` - Update agent
-- `delete_agent(id)` - Delete agent
-
-### 2. Zero IDE (Workflow IDE)
-**Location:** `src/features/workflow-ide/`
-
-Visual workflow builder for creating orchestrator agents with BPMN-inspired design. Build multi-agent workflows by dragging nodes onto an infinite canvas.
-
-**Key Features:**
-- **BPMN-style nodes**: Start (thin circle), End (thick circle), Subagent (card)
-- **Top-down flow**: Handles positioned for vertical connections
-- **Orchestrator config**: Flow-level LLM configuration (provider, model, tools, MCPs, skills)
-- **Properties panel**: Dynamic configuration based on selected node/edge
-- **Template system**: Pre-built workflow patterns (Pipeline, Swarm, Router, Map-Reduce, Hierarchical)
-- **Undo/Redo**: Full history management with 50-state limit
-- **New agent dialog**: Create agents with template selection
-- **Migration**: Automatic migration of legacy orchestrator nodes to flow-level config
-
-**Node Types:**
-
-| Node | Visual | Purpose | Status |
-|------|--------|---------|--------|
-| **Start** | Green thin circle (BPMN event) | Workflow entry point | ✅ Complete |
-| **End** | Red thick circle (BPMN event) | Workflow exit point | ✅ Complete |
-| **Subagent** | Purple rounded rectangle | Worker agent | ✅ Complete |
-| **Conditional** | Amber diamond | Branching logic | 🚧 Draft |
-
-**Templates:**
-- **Pipeline**: Sequential execution (A → B → C)
-- **Swarm**: Parallel execution across specialized subagents
-- **Router**: Conditional routing based on input
-- **Map-Reduce**: Parallel processing with aggregation
-- **Hierarchical**: Multi-level delegation with team structure
-
-**Access:** Click the Git branch icon in Agent Channel header or navigate to `/workflow/:agentId`
-
-**Backend Integration:**
-- `get_orchestrator_structure(agentId)` - Load workflow graph
-- `save_orchestrator_structure(agentId, graph)` - Save workflow graph
-- `validate_workflow(graph)` - Validate workflow structure
-
-### 3. Agent Channels
-**Location:** `src/features/agent-channels/`
-
-Discord-like interface for daily agent conversations with knowledge graph integration.
-
-**Key Features:**
-- **Daily Sessions**: Conversations organized by date with expandable day separators
-- **Knowledge Graph**: Semantic memory for entities and relationships
-- **Voice Recording**: Record voice inputs with automatic transcription
-- **Attachments Panel**: Manage transcript attachments
-- **History Management**: Browse past sessions with full context
-- **Vault Switching**: Switch vaults with proper state reset
-
-**Storage:** SQLite database at `{vault_path}/db/agent_channels.db`
-
-**Backend Commands:**
-- `get_or_create_today_session(agentId)` - Get or create today's session
-- `list_previous_days(agentId, limit)` - List previous days with sessions
-- `load_session_messages(sessionId)` - Load messages for a session
-- `record_session_message(...)` - Record a message to session
-
-### 4. Provider Management
-**Location:** `src/features/providers/`
-
-Configure OpenAI-compatible API providers. Support for multiple providers with per-agent selection.
-
-**Supported Providers:**
-- OpenAI
-- Anthropic
+### 3. Provider Management
+Supported providers:
+- OpenAI (GPT-4, GPT-4o, etc.)
+- Anthropic (Claude 3, Claude 3.5)
 - DeepSeek
-- Z.AI
+- Groq
+- Ollama (local models)
 - Any OpenAI-compatible API
 
-**Backend Commands:**
-- `list_providers()` - List all providers
-- `create_provider(provider)` - Create provider
-- `update_provider(id, provider)` - Update provider
-- `delete_provider(id)` - Delete provider
-- `test_provider(provider)` - Test API connection
+Set a default provider for the root agent. Per-agent provider overrides supported.
 
-### 5. MCP Server Integration
-**Location:** `src/features/mcp/`
+### 4. Skill System
+Reusable instruction packages following the Agent Skills specification:
 
-Add Model Context Protocol servers for external tools. Servers run as stdio processes or HTTP/SSE.
-
-**Configuration:** Stored in `~/.config/zeroagent/mcp_servers/{server-id}.json`
-
-**Backend Commands:**
-- `list_mcp_servers()` - List all MCP servers
-- `create_mcp_server(server)` - Create MCP server
-- `update_mcp_server(id, server)` - Update MCP server
-- `delete_mcp_server(id)` - Delete MCP server
-- `test_mcp_server(server)` - Test MCP server connection
-
-### 6. Skill System
-**Location:** `src/features/skills/`
-
-Create reusable skills following Agent Skills specification. Skills have frontmatter metadata + markdown instructions.
-
-**Skill Categories:**
-- utility
-- coding
-- writing
-- analysis
-- communication
-- productivity
-- research
-- creative
-- automation
-
-**Skill Structure:**
 ```markdown
 ---
-name: Search
-description: Search the web
-parameters: [...]
+name: code-review
+description: Reviews code for quality and bugs
+category: development
 ---
-# Skill instructions...
+
+# Code Review Skill
+
+When reviewing code:
+1. Check for security vulnerabilities
+2. Identify performance issues
+3. Suggest improvements
+...
 ```
 
-**Storage:** `~/.config/zeroagent/skills/{skill-name}/`
+Skills are stored in `~/Documents/agentzero/skills/{name}/SKILL.md`.
 
-### 7. Vault Management
-**Location:** `src/features/vaults/`
+### 5. MCP Server Integration
+Connect to external tools via Model Context Protocol servers. Configure in `mcps.json`:
 
-Manage multiple vaults for data organization.
+```json
+{
+  "servers": {
+    "filesystem": {
+      "command": "npx",
+      "args": ["-y", "@anthropic/mcp-server-filesystem"]
+    }
+  }
+}
+```
 
-**Backend Commands:**
-- `list_vaults()` - List all vaults
-- `create_vault(vault)` - Create vault
-- `update_vault(id, vault)` - Update vault
-- `delete_vault(id)` - Delete vault
-- `set_default_vault(id)` - Set default vault
+### 6. Persistent Memory
+Per-agent key-value storage for facts, preferences, and context:
 
-## Technical Stack
+```
+memory set user_name "Alice"
+memory get user_name
+memory search preferences
+```
+
+Stored in `agents_data/{agent_id}/memory.json`.
+
+### 7. Scheduled Tasks (Planned)
+Cron-based scheduling for automated agent invocations. Define recurring tasks that run agents on a schedule.
+
+## Technology Stack
 
 | Layer | Technology |
-|-------|-----------|
-| Desktop Framework | Tauri 2.x |
-| Frontend | React 19 + TypeScript |
-| Workflow Canvas | XY Flow (React Flow v12+) |
-| State Management | Zustand |
-| Styling | Tailwind CSS v4 + Radix UI |
-| Backend | Rust (Cargo workspace) |
-| Build | Vite |
-| Database | SQLite |
+|-------|------------|
+| Frontend | React 19 + TypeScript + Vite |
+| UI | Tailwind CSS v4 + Radix UI |
+| Backend | Rust (Axum + tokio) |
+| Database | SQLite (rusqlite) |
+| API | HTTP REST + WebSocket |
 
-## Storage Locations
+## Data Model
 
-| Data | Location |
-|------|----------|
-| Agents | `~/.config/zeroagent/agents/` |
-| Skills | `~/.config/zeroagent/skills/` |
-| Providers | `~/.config/zeroagent/providers.json` |
-| MCP Servers | `~/.config/zeroagent/mcp_servers/` |
-| Agent Channels | `{vault_path}/db/agent_channels.db` |
-| Workflow Layout | `~/.config/zeroagent/agents/{agent-name}/.workflow-layout.json` |
+### Conversations
+Persisted to SQLite with full message history:
+- Conversation metadata (agent, timestamps)
+- Messages (role, content, tool calls)
+- Automatic context loading (last 50 messages)
 
-## Key Differentiators
+### Agent Memory
+JSON-based key-value store per agent:
+- Store facts: `memory set fact_key "value"`
+- Tag-based organization
+- Full-text search across values
 
-1. **Local-first**: All data stored locally, full control
-2. **Extensible**: Skills and MCP servers for customization
-3. **IDE-like**: Full file management for agents and skills
-4. **Multi-provider**: Not locked into single LLM provider
-5. **Open Standards**: Uses Agent Skills and MCP specifications
-6. **Visual Workflow**: Zero IDE for orchestrator agents with BPMN-inspired design
-7. **Multi-Agent**: Dynamic subagent system for agent orchestration
-8. **Long-term Memory**: Knowledge graph for semantic memory across sessions
-9. **Template System**: Pre-built workflow patterns for common use cases
+### Agent Configuration
+File-based configuration:
+- `config.yaml` — Model, provider, temperature
+- `AGENTS.md` — System instructions (markdown)
 
-## User Journey
+## Differentiators
 
-1. **Setup Providers**: Add LLM providers (OpenAI, Anthropic, DeepSeek, Z.AI, etc.)
-2. **Create Skills** (optional): Import or create skills for specific capabilities
-3. **Configure MCP Servers** (optional): Add MCP servers for external tool access
-4. **Create Agents**:
-   - **Simple agents**: Configure with instructions, skills, MCPs
-   - **Orchestrator agents**: Use Zero IDE to design workflows with subagents
-5. **Run Conversations**: Chat with agents via Agent Channels
+| Feature | Agent Zero | Cloud AI Platforms |
+|---------|------------|-------------------|
+| Data Location | Local machine | Cloud servers |
+| Provider Lock-in | None | Usually locked |
+| Offline Capable | Yes (with Ollama) | No |
+| Cost | API costs only | Subscription + API |
+| Customization | Unlimited | Limited |
+| Privacy | Full control | Varies |
 
-## Orchestrator Agent Pattern
+## Roadmap Highlights
 
-Agents can be designed as **orchestrators** that coordinate subagents:
-
-### Architecture
-
-Each workflow flow represents a **single Orchestrator Agent** with:
-- Flow-level LLM configuration (provider, model, tools, MCPs, skills, middleware, system prompt)
-- Subagents available as tools that the orchestrator can delegate to
-- Visual workflow defining the conversation flow
-
-### Storage
-
-```
-~/.config/zeroagent/agents/my-orchestrator/
-├── config.yaml              # Agent metadata
-├── AGENTS.md                # Orchestrator instructions
-├── .workflow-layout.json    # Visual workflow layout (XY Flow positions)
-└── .subagents/              # Subagent definitions (generated from workflow)
-    ├── subagent-1/
-    │   ├── config.yaml
-    │   └── AGENTS.md
-    └── subagent-2/
-        ├── config.yaml
-        └── AGENTS.md
-```
-
-### How It Works
-
-1. User designs workflow in Zero IDE with Start, End, and Subagent nodes
-2. Orchestrator config is set at flow level (provider, model, system prompt, etc.)
-3. Subagents are generated as standalone agents in `.subagents/` folder
-4. Orchestrator's LLM can call subagents with context/task/goal parameters
-5. Bidirectional isolation: Orchestrator gets final results, subagents get injected context
-
-### Example: Chef Bot
-
-- **Orchestrator**: chef-bot (z.ai/glm-4.6)
-  - Coordinates the cooking workflow
-  - Routes to appropriate subagent based on user request
-- **Subagents**:
-  - inventory-checker (deepseek/deepseek-chat) - Validates ingredients
-  - recipe-finder (deepseek/deepseek-chat) - Finds matching recipes
-  - substituter (z.ai/glm-4.6) - Suggests ingredient substitutions
-  - instruction-formatter (z.ai/glm-4.7) - Formats cooking instructions
-
-## Related Documentation
-
-| File | Description |
-|------|-------------|
-| `AGENTS.md` | Project overview and quick start |
-| `memory-bank/architecture.md` | Technical architecture |
-| `memory-bank/known_issues.md` | Known issues and TODOs |
-| `memory-bank/learnings.md` | Architecture learnings |
+1. **v0.1** — Core chat, providers, skills ✓
+2. **v0.2** — Persistent memory, SQLite conversations ✓
+3. **v0.3** — MCP integration, CLI improvements
+4. **v0.4** — Scheduled tasks, multi-agent workflows
+5. **v1.0** — Stable API, documentation, packaging

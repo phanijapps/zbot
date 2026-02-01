@@ -1,586 +1,404 @@
-# AgentZero Architecture
+# Agent Zero — Technical Architecture
 
-## Overview
+## System Overview
 
-AgentZero is a Tauri-based desktop application for managing AI agents with MCP (Model Context Protocol) server integration, skills, and modular middleware support.
-
-The project is structured as a **Cargo workspace** with a modular framework design. The core framework is split into multiple reusable crates (`zero-*`), each with a specific responsibility, plus application-specific crates (`agent-runtime`, `agent-tools`) and the Tauri application.
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           CLIENTS                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────┐       ┌─────────────────────────┐          │
+│  │     Web Dashboard       │       │          CLI            │          │
+│  │    (React + Vite)       │       │        (zero)           │          │
+│  │    localhost:3000       │       │                         │          │
+│  └───────────┬─────────────┘       └───────────┬─────────────┘          │
+│              │ HTTP/WebSocket                   │ HTTP/WebSocket         │
+└──────────────┼──────────────────────────────────┼────────────────────────┘
+               │                                  │
+               └────────────────┬─────────────────┘
+                                │
+┌───────────────────────────────┴─────────────────────────────────────────┐
+│                           DAEMON (zerod)                                 │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────────────────────────────────────────────────────┐    │
+│  │                         GATEWAY                                  │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
+│  │  │  HTTP API   │  │  WebSocket  │  │   Static    │              │    │
+│  │  │   :18791    │  │   :18790    │  │   Files     │              │    │
+│  │  │   (Axum)    │  │  (tokio-    │  │  (tower)    │              │    │
+│  │  │             │  │  tungstenite)│  │             │              │    │
+│  │  └──────┬──────┘  └──────┬──────┘  └─────────────┘              │    │
+│  │         │                │                                       │    │
+│  │         └────────┬───────┘                                       │    │
+│  │                  │                                               │    │
+│  │         ┌────────┴────────┐                                      │    │
+│  │         │    Event Bus    │ ◄─── Broadcast streaming events      │    │
+│  │         └────────┬────────┘                                      │    │
+│  └──────────────────┼───────────────────────────────────────────────┘    │
+│                     │                                                    │
+│  ┌──────────────────┴───────────────────────────────────────────────┐    │
+│  │                      AGENT RUNTIME                                │    │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │    │
+│  │  │  Executor   │  │ LLM Client  │  │    Tool     │              │    │
+│  │  │   (loop)    │──│  (OpenAI    │  │  Registry   │              │    │
+│  │  │             │  │ compatible) │  │             │              │    │
+│  │  └──────┬──────┘  └─────────────┘  └──────┬──────┘              │    │
+│  │         │                                  │                     │    │
+│  │         │         ┌─────────────┐         │                     │    │
+│  │         └─────────│ MCP Manager │─────────┘                     │    │
+│  │                   └─────────────┘                               │    │
+│  └──────────────────────────────────────────────────────────────────┘    │
+└─────────────────────────────────────────────────────────────────────────┘
+                                │
+                                ▼
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         DATA LAYER                                       │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ~/Documents/agentzero/                                                  │
+│  ├── conversations.db          # SQLite: conversations, messages        │
+│  ├── agents/{name}/            # Agent configurations                   │
+│  │   ├── config.yaml           #   Model, provider, temperature         │
+│  │   └── AGENTS.md             #   System instructions                  │
+│  ├── agents_data/{id}/         # Per-agent runtime data                 │
+│  │   └── memory.json           #   Persistent key-value storage         │
+│  ├── skills/{name}/            # Skill definitions                      │
+│  │   └── SKILL.md              #   Instructions + frontmatter           │
+│  ├── providers.json            # LLM provider configurations            │
+│  └── mcps.json                 # MCP server configurations              │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
 ## Technology Stack
 
-### Frontend
-- **Framework**: React 19 (via Vite)
-- **Language**: TypeScript
-- **UI Components**: Radix UI primitives with Tailwind CSS v4 styling
-- **Workflow Canvas**: XY Flow (React Flow v12+) for visual workflow builder
-- **State Management**: Zustand (workflowStore, workflowHistoryStore)
-- **Routing**: react-router-dom v7
-- **Icons**: lucide-react
-- **Validation**: zod
-- **Build Tool**: Vite
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Frontend | React 19 + TypeScript | UI components |
+| Build | Vite | Fast dev server, bundling |
+| UI | Tailwind CSS v4 + Radix UI | Styling, accessible primitives |
+| HTTP Server | Axum | Async HTTP framework |
+| WebSocket | tokio-tungstenite | Real-time streaming |
+| Async Runtime | tokio | Async I/O |
+| Database | SQLite (rusqlite) | Conversation persistence |
+| Serialization | serde + serde_json | JSON handling |
 
-### Backend
-- **Framework**: Tauri 2.x
-- **Language**: Rust (Cargo workspace)
-- **Async Runtime**: tokio
-- **Serialization**: serde (JSON, YAML)
-- **Database**: SQLite (via sqlx)
+## Crate Structure
 
-### Key Dependencies
-- `tokio` - Async runtime
-- `serde` / `serde_yaml` - Serialization
-- `tauri` - Desktop framework
-- `async-trait` - Async trait support
-- `thiserror` - Error handling
-- `tracing` - Structured logging
-- `reqwest` - HTTP client for LLM APIs
-- `sqlx` - Database toolkit
-- `xyflow` - Workflow canvas library
-
-## Workspace Structure
+### Layer Overview
 
 ```
 agentzero/
-├── Cargo.toml                 # Workspace root
-├── src/                       # Frontend (React + TypeScript)
-│   ├── core/                  # Core UI infrastructure
-│   │   ├── layout/            # AppShell, Sidebar, StatusBar
-│   │   └── utils/             # Utilities (cn classnames)
-│   ├── shared/                # Shared code
-│   │   ├── ui/                # Radix UI components (button, dialog, select, etc.)
-│   │   ├── types/             # TypeScript types (agent, vault, etc.)
-│   │   └── constants/         # Routes, constants
-│   ├── features/              # Feature-based modules
-│   │   ├── agents/            # Agent management UI
-│   │   ├── workflow-ide/      # Visual workflow builder (Zero IDE)
-│   │   ├── agent-channels/    # Discord-like chat interface
-│   │   ├── providers/         # LLM provider management
-│   │   ├── mcp/               # MCP server management
-│   │   ├── skills/            # Skill editor and management
-│   │   ├── conversations/     # Chat conversations
-│   │   └── settings/          # App settings
-│   ├── domains/               # Domain-specific logic
-│   │   └── agent-runtime/     # Agent execution components
-│   └── services/              # Tauri IPC wrappers
-├── crates/                    # Zero Framework crates
-│   ├── zero-core/             # Core traits, types, errors
-│   ├── zero-llm/              # LLM abstractions & OpenAI client
-│   ├── zero-agent/            # Agent implementations
-│   ├── zero-tool/             # Tool definitions & abstractions
-│   ├── zero-session/          # Session management
-│   ├── zero-mcp/              # MCP protocol integration
-│   ├── zero-prompt/           # Prompt templates
-│   └── zero-middleware/       # Middleware system
-├── application/               # Application-specific crates
-│   ├── agent-runtime/         # Agent executor with config, MCP, skills
-│   ├── agent-tools/           # Built-in tools
-│   ├── agent-channels/        # Agent channels backend
-│   ├── daily-sessions/        # Daily session management
-│   ├── search-index/          # Full-text search
-│   ├── session-archive/       # Long-term message archival
-│   └── knowledge-graph/       # Semantic memory
-├── memory-bank/               # Project documentation
-└── src-tauri/                 # Tauri application
-    ├── templates/             # Default agents and skills
-    └── src/
-        ├── commands/          # Tauri IPC commands
-        └── domains/           # Domain layer
+├── framework/      # Core abstractions (publishable)
+├── runtime/        # Execution engine
+├── services/       # Standalone data services
+├── gateway/        # HTTP/WebSocket server
+├── apps/           # Applications (daemon, cli, ui)
+└── dist/           # Frontend build output
 ```
 
-## Framework Crate Overview
+### Framework (`framework/`)
 
-### Zero Framework (`crates/`)
-
-The **zero-* crates** form the reusable framework - independent of the Tauri application.
-
-| Crate | Purpose |
-|-------|---------|
-| `zero-core` | Core traits: `Agent`, `Tool`, `Session`, `Event`, `Content`, errors |
-| `zero-llm` | LLM trait, OpenAI client, request/response types |
-| `zero-agent` | Agent implementations: `LlmAgent`, workflow agents |
-| `zero-tool` | Tool trait and abstractions |
-| `zero-session` | Session trait and in-memory implementation |
-| `zero-mcp` | MCP client and tool bridging |
-| `zero-prompt` | Prompt template system |
-| `zero-middleware` | Middleware pipeline for request/response processing |
-| `zero-app` | Convenience meta-package importing all zero-* crates |
-
-### Application Crates (`application/`)
-
-| Crate | Purpose |
-|-------|---------|
-| `agent-runtime` | YAML config, executor, MCP managers, skill loading |
-| `agent-tools` | Built-in tools: Read, Write, Edit, Grep, Glob, Python, KG |
-| `agent-channels` | Agent channels UI and backend coordination |
-| `daily-sessions` | Daily session management with SQLite storage |
-| `search-index` | Tantivy-based full-text search across messages |
-| `session-archive` | Parquet-based long-term message archival |
-| `knowledge-graph` | Semantic memory with entities and relationships |
-
-## Frontend Architecture
-
-### Feature Modules (`src/features/`)
-
-#### Workflow IDE (`workflow-ide/`)
-
-**Purpose:** Visual workflow builder for creating orchestrator agents
-
-**Component Hierarchy:**
-```
-WorkflowIDEPage
-├── Header (navigation, save/undo/redo buttons)
-├── WorkflowEditor (main canvas)
-│   ├── NodePalette (left sidebar - drag & drop nodes)
-│   ├── ReactFlow canvas (center - visual workflow builder)
-│   └── PropertiesPanel (right sidebar - node/edge configuration)
-├── NewAgentDialog (modal for creating new agents)
-└── TemplateSelector (modal for applying workflow templates)
-```
-
-**State Management:**
-- `workflowStore` (Zustand): Nodes, edges, selection, orchestrator config, execution state
-- `workflowHistoryStore` (Zustand): Undo/redo with 50-state limit
-
-**Node Types:**
-- **Start Node** (`StartNode.tsx`): BPMN thin green circle, bottom handle
-- **End Node** (`EndNode.tsx`): BPMN thick red circle, top handle
-- **Subagent Node** (`SubagentNode.tsx`): Purple card, top+bottom handles
-- **Conditional Node** (`ConditionalNode.tsx`): Amber diamond (DRAFT)
-- **Orchestrator Node** (`OrchestratorNode.tsx`): Legacy (migrated to flow-level config)
-
-**Key Files:**
-- `WorkflowIDEPage.tsx` - Main page with migration logic
-- `WorkflowEditor.tsx` - Canvas wrapper with MiniMap, Controls
-- `components/nodes/` - Custom node components
-- `components/panels/NodePalette.tsx` - Draggable node library
-- `components/panels/PropertiesPanel.tsx` - Configuration panel
-- `stores/workflowStore.ts` - Main state management
-- `stores/workflowHistoryStore.ts` - Undo/redo history
-- `types/workflow.ts` - Type definitions
-- `types/templates.ts` - Workflow templates (Pipeline, Swarm, Router, Map-Reduce, Hierarchical)
-
-**Backend Integration:**
-- `get_orchestrator_structure(agentId)` - Load workflow graph
-- `save_orchestrator_structure(agentId, graph)` - Save workflow graph
-- `validate_workflow(graph)` - Validate workflow structure
-
-#### Agent Channels (`agent-channels/`)
-
-**Purpose:** Discord-like interface for daily agent conversations
-
-**Key Features:**
-- Daily sessions with expandable day separators
-- Knowledge graph visualization (ReactFlow + Dagre)
-- Voice recording with transcription
-- Attachments panel for transcripts
-- History management (Chrome-style clearing)
-- Vault switching with state reset
-
-**State Management:**
-- Local component state (agents, selectedAgent, messages, etc.)
-- Day-based message grouping (loadedDays array)
-- Expanded/collapsed day tracking
-
-**Key Files:**
-- `AgentChannelPanel.tsx` - Main interface (1,446 lines)
-- `DaySeparator.tsx` - Collapsible day headers
-- `ClearHistoryDialog.tsx` - History clearing
-- `VoiceRecordingDialog.tsx` - Audio recording
-- `AttachmentsPanel.tsx` - Attachment management
-- `KnowledgeGraphVisualizer.tsx` - Graph visualization
-- `TranscriptCommentDialog.tsx` - Transcript comments
-
-**Backend Integration:**
-- `get_or_create_today_session(agentId)`
-- `list_previous_days(agentId, limit)`
-- `load_session_messages(sessionId)`
-- `record_session_message(...)`
-
-### Domain Layer (`src/domains/`)
-
-#### Agent Runtime (`agent-runtime/`)
-
-**Purpose:** Agent execution UI components and business logic
-
-**Components:**
-- `ConversationView.tsx` - Main conversation view
-- `ConversationList.tsx` - Conversation history list
-- `ThinkingPanel.tsx` - Thinking mode panel
-- `ToolCallsSection.tsx` - Tool calls display
-- `GenerativeCanvas.tsx` - Generative canvas for forms
-- `useStreamEvents.ts` - Streaming events hook
-
-### Services Layer (`src/services/`)
-
-| Service | Purpose |
-|---------|---------|
-| `agent.ts` | Agent CRUD, file operations |
-| `agentChannels.ts` | Session management, message recording |
-| `workflow.ts` | Workflow graph operations, templates |
-| `provider.ts` | Provider CRUD operations |
-| `mcp.ts` | MCP server management |
-| `skills.ts` | Skill management |
-| `conversation.ts` | Chat history management |
-| `vaults.ts` | Vault management |
-| `search.ts` | Full-text search |
-| `settings.ts` | Application settings |
-
-## Backend Architecture
-
-### Commands Layer (`src-tauri/src/commands/`)
-
-Tauri commands that expose functionality to the frontend via IPC.
-
-| Module | Purpose |
-|--------|---------|
-| `agents.rs` | Agent CRUD, file management |
-| `agents_runtime.rs` | Agent execution with streaming |
-| `providers.rs` | Provider CRUD operations |
-| `mcp.rs` | MCP server management |
-| `skills.rs` | Skill management |
-| `conversations.rs` | Chat history management |
-| `tools.rs` | Tool management |
-| `settings.rs` | Application settings |
-| `vaults.rs` | Vault management |
-| `agent_channels.rs` | Daily session management |
-| `workflow.rs` | Workflow graph operations |
-
-### Domain Layer (`src-tauri/src/domains/`)
-
-#### agent_runtime
-
-Core agent execution engine.
+Core abstractions that can be used independently:
 
 ```
-agent_runtime/
-├── mod.rs                  # Module exports
-├── executor.rs             # Main executor orchestration
-├── executor_v2.rs          # V2 executor with zero-framework
-├── config_adapter.rs       # Convert agent config to LlmAgent
-├── filesystem.rs           # FileSystemContext implementation
-├── middleware_integration.rs # Middleware integration
-└── types.rs                # Additional types
+framework/
+├── zero-core/           # Core traits: Agent, Tool, Toolset, Event
+├── zero-llm/            # LLM abstractions and OpenAI client
+├── zero-tool/           # Tool registry and execution
+├── zero-session/        # Session and state management
+├── zero-agent/          # Agent implementations (LLM, workflow)
+├── zero-mcp/            # Model Context Protocol integration
+├── zero-prompt/         # Template rendering
+├── zero-middleware/     # Message preprocessing pipelines
+└── zero-app/            # Convenience prelude
 ```
 
-#### conversation_runtime
+### Runtime (`runtime/`)
 
-Chat history and database management.
-
-```
-conversation_runtime/
-├── mod.rs                  # Module exports
-├── database/
-│   ├── connection.rs       # SQLite connection
-│   └── schema.rs           # Database schema
-└── repository/
-    ├── conversations.rs    # Conversation CRUD
-    └── messages.rs         # Message CRUD
-```
-
-## Data Flow: Agent Execution
+Execution engine:
 
 ```
-User Message (Frontend)
-       │
-       ▼
-┌─────────────────────────────────────────────────────────┐
-│  Tauri Command: execute_agent_stream                    │
-│       │                                                  │
-│       ▼                                                  │
-│  1. Load Agent Configuration                            │
-│     - Read config.yaml from ~/.config/zeroagent/agents/ │
-│     - Parse YAML to AgentConfig                          │
-│       │                                                  │
-│       ▼                                                  │
-│  2. Create LLM Client                                   │
-│     - Use provider config for API key, base URL         │
-│     - Create OpenAiLlm instance                         │
-│       │                                                  │
-│       ▼                                                  │
-│  3. Initialize MCP Servers                              │
-│     - For each MCP in agent config:                      │
-│       - Start stdio or HTTP/SSE client                   │
-│       - Discover tools                                   │
-│       - Bridge to zero-core Tool trait                   │
-│       │                                                  │
-│       ▼                                                  │
-│  4. Create Tools                                       │
-│     - Built-in tools from application/agent-tools       │
-│     - MCP tools from bridges                            │
-│     - Wrap in Toolset                                   │
-│       │                                                  │
-│       ▼                                                  │
-│  5. Create LlmAgent                                    │
-│     - Using builder pattern                             │
-│     - With LLM, session, tools, system instruction      │
-│       │                                                  │
-│       ▼                                                  │
-│  6. Invoke Agent                                       │
-│     - agent.invoke(context)                             │
-│     - Stream events back to frontend                    │
-└─────────────────────────────────────────────────────────┘
-       │
-       ▼
-LlmAgent Execution Loop
-┌─────────────────────────────────────────────────────────┐
-│  1. Build Request                                      │
-│     - Get events from session                          │
-│     - Convert to Content messages                     │
-│     - Add system instruction                           │
-│       │                                                  │
-│       ▼                                                  │
-│  2. Call LLM                                           │
-│     - llm.generate(request)                            │
-│       │                                                  │
-│       ▼                                                  │
-│  3. Check for Tool Calls                               │
-│     - If tool calls present:                           │
-│       - For each tool call:                            │
-│         - Execute tool via Toolset                     │
-│         - Append tool call event to session            │
-│         - Append tool response event to session        │
-│       - Loop back to step 1                            │
-│     - If no tool calls (turn_complete = true):         │
-│       - Return final response                          │
-└─────────────────────────────────────────────────────────┘
+runtime/
+├── agent-runtime/       # Executor, LLM loop, middleware
+└── agent-tools/         # Built-in tool implementations
 ```
 
-## Storage Schema
+### Services (`services/`)
 
-### Agent Folder Structure
-
-```
-~/.config/zeroagent/agents/{agent-name}/
-├── config.yaml           # Agent metadata
-│   - name, displayName, description
-│   - providerId, model
-│   - temperature, maxTokens
-│   - thinkingEnabled
-│   - skills[]
-│   - mcps[]
-│
-├── AGENTS.md             # Agent instructions (markdown)
-├── .subagents/           # Subagent folder (for orchestrator agents)
-│   ├── {subagent-name}/
-│   │   ├── config.yaml
-│   │   └── AGENTS.md
-│   └── ...
-└── [user files]          # Additional files/folders
-```
-
-### Workflow Storage
+Standalone data services:
 
 ```
-~/.config/zeroagent/agents/{agent-name}/
-├── .workflow-layout.json  # Visual workflow layout (XY Flow positions)
-└── .subagents/           # Subagent definitions generated from workflow
-    ├── {subagent-name}/
-    │   ├── config.yaml
-    │   └── AGENTS.md
-    └── ...
+services/
+├── api-logs/            # Execution logging (SQLite)
+├── knowledge-graph/     # Entity extraction
+├── search-index/        # Full-text search (Tantivy)
+├── session-archive/     # Parquet archival
+└── daily-sessions/      # Session management
 ```
 
-### Skill Folder Structure
+### Gateway (`gateway/`)
+
+Network layer:
 
 ```
-~/.config/zeroagent/skills/{skill-name}/
-├── SKILL.md             # Skill definition (markdown with frontmatter)
-│   ---
-│   name: Search
-│   description: Search the web
-│   parameters: [...]
-│   ---
-│   # Skill instructions...
-│
-└── [additional files]
+gateway/
+├── src/
+│   ├── http/            # REST API routes
+│   ├── websocket/       # WebSocket handler
+│   ├── execution/       # Agent invocation + delegation
+│   ├── database/        # SQLite persistence
+│   └── services/        # Agent, Provider, Skill services
+└── templates/           # System prompt templates
 ```
 
-### Agent Channels Database
+### Apps (`apps/`)
+
+Runnable applications:
 
 ```
-{vault_path}/db/agent_channels.db (SQLite)
-
-daily_sessions:
-  - id (TEXT PRIMARY KEY)
-  - agent_id (TEXT)
-  - session_date (TEXT)
-  - message_count (INTEGER)
-  - summary (TEXT)
-  - previous_session_ids (TEXT - JSON array)
-  - created_at (TEXT)
-  - updated_at (TEXT)
-
-messages:
-  - id (TEXT PRIMARY KEY)
-  - session_id (TEXT)
-  - role (TEXT)
-  - content (TEXT)
-  - tool_calls (TEXT - JSON)
-  - tool_results (TEXT - JSON)
-  - created_at (TEXT)
-
-kg_entities:
-  - id (TEXT PRIMARY KEY)
-  - agent_id (TEXT)
-  - entity_type (TEXT)
-  - name (TEXT)
-  - properties (TEXT - JSON)
-  - mention_count (INTEGER)
-  - first_seen_at (TEXT)
-  - last_seen_at (TEXT)
-
-kg_relationships:
-  - id (TEXT PRIMARY KEY)
-  - source_entity_id (TEXT)
-  - target_entity_id (TEXT)
-  - relationship_type (TEXT)
-  - properties (TEXT - JSON)
-  - mention_count (INTEGER)
+apps/
+├── daemon/              # Main binary (zerod)
+└── zero-cli/            # CLI tool with TUI
 ```
 
 ## Core Abstractions
 
-### Agent (zero-core)
-
+### Agent Trait
 ```rust
 #[async_trait]
 pub trait Agent: Send + Sync {
-    async fn invoke(&self, context: InvocationContext) -> Result<EventStream>;
+    fn name(&self) -> &str;
+    fn description(&self) -> &str;
+
+    async fn invoke(
+        &self,
+        context: InvocationContext,
+    ) -> Result<EventStream>;
 }
 ```
 
-### Tool (zero-core)
-
+### Tool Trait
 ```rust
 #[async_trait]
 pub trait Tool: Send + Sync {
     fn name(&self) -> &str;
     fn description(&self) -> &str;
-    fn parameters(&self) -> Option<Value>;
-    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value>;
+    fn parameters_schema(&self) -> Option<Value>;
+    fn permissions(&self) -> ToolPermissions;
+
+    async fn execute(
+        &self,
+        ctx: Arc<dyn ToolContext>,
+        args: Value,
+    ) -> Result<Value>;
 }
 ```
 
-### Session (zero-session)
-
+### LLM Client
 ```rust
 #[async_trait]
-pub trait Session: Send + Sync {
-    async fn append(&self, event: Event) -> Result<()>;
-    async fn events(&self) -> Result<Vec<Event>>;
+pub trait LlmClient: Send + Sync {
+    async fn chat_completion_stream(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&[Value]>,
+        callback: &mut dyn FnMut(StreamEvent),
+    ) -> Result<()>;
 }
 ```
 
-### Llm (zero-llm)
+## Execution Flow
 
-```rust
-#[async_trait]
-pub trait Llm: Send + Sync {
-    async fn generate(&self, request: LlmRequest) -> Result<LlmResponse>;
-    async fn generate_stream(&self, request: LlmRequest) -> Result<LlmResponseStream>;
-}
+```
+User Message
+     │
+     ▼
+┌─────────────────┐
+│   WebSocket     │ ◄── { type: "invoke", message: "..." }
+│   Handler       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Execution     │
+│   Runner        │
+├─────────────────┤
+│ 1. Load agent   │
+│ 2. Load history │ ◄── SQLite
+│ 3. Create LLM   │
+│ 4. Build tools  │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Agent         │
+│   Executor      │
+├─────────────────┤
+│ while !done {   │
+│   llm.call()    │──► Stream tokens ──► WebSocket ──► UI
+│   if tool_call {│
+│     execute()   │──► Stream result ──► WebSocket ──► UI
+│   }             │
+│ }               │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│  Save Messages  │ ──► SQLite
+└─────────────────┘
 ```
 
-## Type System
+## API Reference
 
-### Shared Types (`src/shared/types/`)
+### HTTP Endpoints (port 18791)
 
-**Vault:**
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/health` | Health check |
+| GET | `/api/status` | Daemon status |
+| GET | `/api/agents` | List agents |
+| POST | `/api/agents` | Create agent |
+| GET | `/api/agents/:id` | Get agent |
+| PUT | `/api/agents/:id` | Update agent |
+| DELETE | `/api/agents/:id` | Delete agent |
+| GET | `/api/providers` | List providers |
+| POST | `/api/providers` | Create provider |
+| POST | `/api/providers/:id/default` | Set default |
+| POST | `/api/providers/test` | Test connection |
+| GET | `/api/skills` | List skills |
+| POST | `/api/skills` | Create skill |
+| GET | `/api/logs/sessions` | List execution sessions |
+| GET | `/api/logs/sessions/:id` | Get session with logs |
+| DELETE | `/api/logs/sessions/:id` | Delete session |
+
+### WebSocket Protocol (port 18790)
+
+**Client Commands:**
 ```typescript
-interface Vault {
-  id: string;
-  name: string;
-  path: string;
-  isDefault: boolean;
-  createdAt: string;
-  lastAccessed: string;
-}
+// Invoke agent
+{ type: "invoke", agent_id: string, conversation_id: string, message: string }
+
+// Stop execution
+{ type: "stop", conversation_id: string }
+
+// Continue after max iterations
+{ type: "continue", conversation_id: string }
 ```
 
-**Agent:**
+**Server Events:**
 ```typescript
-interface Agent {
-  id: string;
-  name: string;
-  displayName: string;
-  description: string;
-  providerId: string;
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  thinkingEnabled?: boolean;
-  voiceRecordingEnabled?: boolean;
-  instructions: string;
-  mcps: string[];
-  skills: string[];
-  middleware?: string;
-  agentType?: "llm" | "sequential" | "parallel" | "loop" | "conditional" | "custom";
-  subAgents?: Agent[];
-  createdAt: string;
-}
+// Agent started processing
+{ type: "agent_started", agent_id: string, conversation_id: string }
+
+// Streaming token
+{ type: "token", agent_id: string, conversation_id: string, delta: string }
+
+// Tool being called
+{ type: "tool_call", agent_id: string, conversation_id: string,
+  tool_id: string, tool_name: string, args: object }
+
+// Tool result
+{ type: "tool_result", agent_id: string, conversation_id: string,
+  tool_id: string, result: string, error?: string }
+
+// Agent finished
+{ type: "agent_completed", agent_id: string, conversation_id: string,
+  result: string }
+
+// Error occurred
+{ type: "error", agent_id?: string, conversation_id?: string,
+  message: string }
 ```
 
-**Provider:**
-```typescript
-interface Provider {
-  id: string;
-  name: string;
-  description: string;
-  apiKey: string;
-  baseUrl: string;
-  models: string[];
-  embeddingModels?: string[];
-  verified?: boolean;
-  createdAt: string;
-}
+## Database Schema
+
+### conversations
+```sql
+CREATE TABLE conversations (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    title TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    metadata TEXT
+);
 ```
 
-**Workflow Graph:**
-```typescript
-interface WorkflowGraph {
-  nodes: WorkflowNode[];
-  edges: WorkflowEdge[];
-  orchestrator?: OrchestratorConfig;
-}
-
-interface WorkflowNode {
-  id: string;
-  type: string;  // "start" | "end" | "subagent" | "conditional" | "orchestrator"
-  position: { x: number; y: number };
-  data: WorkflowNodeData;
-}
-
-interface OrchestratorConfig {
-  displayName: string;
-  description?: string;
-  providerId: string;
-  model: string;
-  temperature: number;
-  maxTokens: number;
-  systemInstructions: string;
-  mcps: string[];
-  skills: string[];
-  middleware?: string;
-}
+### messages
+```sql
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    role TEXT NOT NULL,           -- user, assistant, tool
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    token_count INTEGER DEFAULT 0,
+    tool_calls TEXT,              -- JSON array
+    tool_results TEXT,            -- JSON array
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+);
 ```
 
-## Configuration Files
+### execution_logs
+```sql
+CREATE TABLE execution_logs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,        -- Groups logs for one agent invocation
+    conversation_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    parent_session_id TEXT,          -- For delegated agents, links to parent
+    timestamp TEXT NOT NULL,
+    level TEXT NOT NULL,             -- debug, info, warn, error
+    category TEXT NOT NULL,          -- session, tool_call, tool_result, delegation, error
+    message TEXT NOT NULL,
+    metadata TEXT,                   -- JSON with tool args, results, etc.
+    duration_ms INTEGER
+);
+```
 
-### Cargo Workspace (`Cargo.toml`)
+## Built-in Tools
 
-Defines workspace members and shared dependencies.
+| Tool | Description | Permissions |
+|------|-------------|-------------|
+| `read_file` | Read file contents | Safe |
+| `write_file` | Write content to file | Moderate |
+| `list_dir` | List directory contents | Safe |
+| `execute_command` | Run shell command | Dangerous |
+| `memory` | Persistent key-value store | Safe |
+| `list_skills` | List available skills | Safe |
+| `list_tools` | List available tools | Safe |
+| `list_mcps` | List MCP servers | Safe |
+| `list_agents` | List available agents | Safe |
+| `load_skill` | Load skill instructions | Safe |
+| `delegate_to_agent` | Delegate task to subagent | Safe |
+| `respond` | Send response to user | Safe |
 
-### Tauri Config (`src-tauri/tauri.conf.json`)
+## Design Decisions
 
-Application metadata, window config, security settings.
+### Why No Desktop Wrapper?
+- Browsers are more capable than custom webviews
+- Easier deployment (no native installers)
+- Better developer experience (standard web tools)
+- Cross-platform without platform-specific builds
 
-## Related Documentation
+### Why Single Daemon?
+- Simpler deployment and debugging
+- Shared state without IPC complexity
+- Single port configuration
+- Memory efficiency
 
-| File | Description |
-|------|-------------|
-| `memory-bank/product.md` | Product definition |
-| `memory-bank/known_issues.md` | Known issues tracking |
-| `memory-bank/learnings.md` | Architecture learnings |
-| `crates/*/AGENTS.md` | Framework crate documentation |
-| `application/*/AGENTS.md` | Application crate documentation |
-| `LOGGING.md` | Logging guidelines |
+### Why SQLite?
+- Zero configuration
+- Portable (single file)
+- ACID transactions
+- Fast for local workloads
+
+### Why Rust?
+- Memory safety without GC
+- Excellent async story (tokio)
+- Great tooling (cargo, clippy)
+- Single binary distribution
+
+### Why Instructions in AGENTS.md?
+- Human-readable and editable
+- Version control friendly
+- Markdown rendering in UI
+- Separates behavior from configuration

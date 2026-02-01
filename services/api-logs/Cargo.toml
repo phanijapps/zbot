@@ -1,0 +1,34 @@
+# ============================================================================
+# API LOGS
+# Self-contained execution logs API for agent tracing
+# ============================================================================
+
+[package]
+name = "api-logs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Execution logs API for AgentZero agent tracing"
+
+[dependencies]
+# Workspace deps
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[lib]
+name = "api_logs"
+path = "src/lib.rs"

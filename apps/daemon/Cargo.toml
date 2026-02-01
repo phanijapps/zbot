@@ -1,0 +1,44 @@
+# ============================================================================
+# DAEMON BINARY
+# Standalone server running the gateway
+# ============================================================================
+
+[package]
+name = "daemon"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "AgentZero daemon - standalone agent runtime server"
+repository = "https://github.com/yourusername/agentzero"
+keywords = ["ai", "agent", "daemon", "server"]
+categories = ["command-line-utilities"]
+
+[dependencies]
+# Internal crates
+gateway = { path = "../../gateway" }
+zero-app = { path = "../../framework/zero-app" }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Utilities
+dirs = "5"
+
+[[bin]]
+name = "zerod"
+path = "src/main.rs"

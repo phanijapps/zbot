@@ -1,0 +1,97 @@
+//! # Execution State
+//!
+//! Session state tracking, execution management, and checkpointing.
+//!
+//! This crate provides:
+//! - Session lifecycle management (running, paused, completed, crashed)
+//! - Agent execution tracking (root and delegated subagents)
+//! - Token consumption tracking
+//! - Checkpointing for crash recovery
+//! - HTTP handlers for REST API
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! use execution_state::{StateService, StateDbProvider, routes};
+//!
+//! impl StateDbProvider for DatabaseManager { ... }
+//!
+//! let state_service = Arc::new(StateService::new(db.clone()));
+//! router.nest("/api/state", routes(state_service.clone()));
+//!
+//! // During execution
+//! let (session, execution) = state_service.create_session(agent_id)?;
+//! state_service.start_execution(&execution.id)?;
+//! state_service.update_execution_tokens(&execution.id, tokens_in, tokens_out)?;
+//! state_service.complete_execution(&execution.id)?;
+//! state_service.complete_session(&session.id)?;
+//! ```
+
+pub mod handlers;
+mod repository;
+mod service;
+mod types;
+
+// Re-export public types
+pub use repository::StateDbProvider;
+pub use service::StateService;
+pub use types::*;
+
+use axum::{routing::delete, routing::get, routing::post, Router};
+use std::sync::Arc;
+
+/// Create the session state API router.
+///
+/// # Endpoints
+///
+/// ## Sessions
+/// - `GET /sessions` - List sessions (basic)
+/// - `GET /sessions/full` - List sessions with executions (dashboard)
+/// - `GET /sessions/:id` - Get session detail
+/// - `GET /sessions/:id/full` - Get session with all executions
+/// - `DELETE /sessions/:id` - Delete a session
+///
+/// ## Executions
+/// - `GET /executions` - List executions with filtering
+/// - `GET /executions/:id` - Get execution detail
+/// - `GET /executions/:id/children` - Get child executions
+/// - `GET /executions/:id/messages` - Get messages for execution
+///
+/// ## Control
+/// - `POST /sessions/:id/pause` - Pause a running session
+/// - `POST /sessions/:id/resume` - Resume a paused session
+/// - `POST /sessions/:id/cancel` - Cancel a session
+///
+/// ## Stats
+/// - `GET /stats` - Get dashboard stats (pre-computed)
+pub fn routes<D>(service: Arc<StateService<D>>) -> Router
+where
+    D: StateDbProvider + 'static,
+{
+    Router::new()
+        // Sessions (legacy format for UI compatibility)
+        .route("/sessions", get(handlers::list_legacy_sessions::<D>))
+        // Sessions v2 (new format)
+        .route("/v2/sessions", get(handlers::list_sessions::<D>))
+        .route("/v2/sessions/full", get(handlers::list_sessions_full::<D>))
+        .route(
+            "/v2/sessions/{id}",
+            get(handlers::get_session::<D>).delete(handlers::delete_session::<D>),
+        )
+        .route("/v2/sessions/{id}/full", get(handlers::get_session_full::<D>))
+        // Session control (works with both old and new IDs)
+        .route("/sessions/{id}/pause", post(handlers::pause_session::<D>))
+        .route("/sessions/{id}/resume", post(handlers::resume_session::<D>))
+        .route("/sessions/{id}/cancel", post(handlers::cancel_session::<D>))
+        // Executions
+        .route("/executions", get(handlers::list_executions::<D>))
+        .route("/executions/{id}", get(handlers::get_execution::<D>))
+        .route("/executions/{id}/children", get(handlers::get_child_executions::<D>))
+        .route("/executions/{id}/messages", get(handlers::get_execution_messages::<D>))
+        // Stats
+        .route("/stats", get(handlers::get_dashboard_stats::<D>))
+        .route("/stats/counts", get(handlers::get_stats_counts::<D>))
+        // Cleanup
+        .route("/cleanup", delete(handlers::cleanup_old_sessions::<D>))
+        .with_state(service)
+}

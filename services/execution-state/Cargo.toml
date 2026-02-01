@@ -1,0 +1,34 @@
+# ============================================================================
+# EXECUTION STATE
+# Session state tracking, token metrics, and checkpointing
+# ============================================================================
+
+[package]
+name = "execution-state"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Execution state tracking for AgentZero sessions"
+
+[dependencies]
+# Workspace deps
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+
+# Web framework
+axum = { version = "0.7", features = ["macros"] }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+[dev-dependencies]
+tokio-test = "0.4"
+
+[lib]
+name = "execution_state"
+path = "src/lib.rs"
