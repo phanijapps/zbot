@@ -530,10 +530,10 @@ export function WebOpsDashboard() {
           />
         </div>
 
-        {/* Two-column layout for sessions */}
-        <div className="grid grid-cols-2 gap-6">
+        {/* Two-column layout for sessions - equal width columns */}
+        <div className="grid gap-6" style={{ gridTemplateColumns: "1fr 1fr" }}>
           {/* Active Sessions */}
-          <div className="card" style={{ minHeight: "400px", display: "flex", flexDirection: "column" }}>
+          <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column" }}>
             <div
               className="flex items-center justify-between border-b border-border"
               style={{ padding: "16px 20px" }}
@@ -596,7 +596,7 @@ export function WebOpsDashboard() {
           </div>
 
           {/* Session History */}
-          <div className="card" style={{ minHeight: "400px", display: "flex", flexDirection: "column" }}>
+          <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column" }}>
             <div
               className="flex items-center justify-between border-b border-border"
               style={{ padding: "16px 20px" }}
