@@ -28,6 +28,8 @@ import {
   Plus,
 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { ChatSlider } from "../../components/ChatSlider";
+import { SessionChatViewer } from "../../components/SessionChatViewer";
 
 // ============================================================================
 // Status Badge Component
@@ -528,6 +530,13 @@ export function WebOpsDashboard() {
   const [historyFilter, setHistoryFilter] = useState<ExecutionStatus | "all">("all");
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  // Chat slider state
+  const [selectedSession, setSelectedSession] = useState<{
+    conversationId: string;
+    agentId: string;
+    isSubagent: boolean;
+  } | null>(null);
+
   // Derived data
   const activeSessions = allSessions.filter((s) => ACTIVE_STATUSES.includes(s.status));
   const closedSessions = allSessions.filter((s) => CLOSED_STATUSES.includes(s.status));
@@ -659,10 +668,16 @@ export function WebOpsDashboard() {
   };
 
   const handleOpenChat = useCallback((session: ExecutionSession) => {
-    // TODO: Open chat slider with this session's conversation
-    // isSubagent = has a parent_session_id (will be read-only)
     const isSubagent = !!session.parent_session_id;
-    console.log("Open chat for session:", session.conversation_id, "readOnly:", isSubagent);
+    setSelectedSession({
+      conversationId: session.conversation_id,
+      agentId: session.agent_id,
+      isSubagent,
+    });
+  }, []);
+
+  const handleCloseChat = useCallback(() => {
+    setSelectedSession(null);
   }, []);
 
   if (isLoading) {
@@ -895,6 +910,17 @@ export function WebOpsDashboard() {
           </div>
         </div>
       </div>
+
+      {/* Chat Slider */}
+      <ChatSlider isOpen={selectedSession !== null} onClose={handleCloseChat}>
+        {selectedSession && (
+          <SessionChatViewer
+            conversationId={selectedSession.conversationId}
+            agentId={selectedSession.agentId}
+            readOnly={selectedSession.isSubagent}
+          />
+        )}
+      </ChatSlider>
     </div>
   );
 }
