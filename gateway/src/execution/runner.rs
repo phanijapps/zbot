@@ -236,10 +236,14 @@ impl ExecutionRunner {
             &config.agent_id,
         );
 
-        // Load message history for this execution (empty for new executions)
+        // Load message history for this session
+        // For root executions, we load from ALL root executions in the session
+        // This ensures the agent sees the full conversation including:
+        // - Previous user messages and responses
+        // - Callback messages from completed subagents
         let history: Vec<ChatMessage> = self
             .conversation_repo
-            .get_recent_messages(&execution_id, 50)
+            .get_session_root_messages(&session_id, 50)
             .map(|messages| self.conversation_repo.messages_to_chat_format(&messages))
             .unwrap_or_default();
 

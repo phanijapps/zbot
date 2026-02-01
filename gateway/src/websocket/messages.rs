@@ -167,6 +167,25 @@ pub enum ServerMessage {
 
     /// Session cancelled.
     SessionCancelled { session_id: String },
+
+    /// Delegation started - agent delegated work to a subagent.
+    DelegationStarted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        task: String,
+    },
+
+    /// Delegation completed - subagent finished and returned result.
+    DelegationCompleted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+    },
 }
 
 impl ServerMessage {
