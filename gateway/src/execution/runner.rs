@@ -695,12 +695,16 @@ impl ExecutionRunner {
                         }
                     }
 
-                    // Update execution and session status to COMPLETED
+                    // Update execution status to COMPLETED
                     if let Err(e) = state_service.complete_execution(&execution_id_clone) {
                         tracing::warn!("Failed to complete execution: {}", e);
                     }
-                    if let Err(e) = state_service.complete_session(&session_id_clone) {
-                        tracing::warn!("Failed to complete session: {}", e);
+                    // Only complete session if no other executions are still running
+                    // (e.g., subagents that were delegated to)
+                    match state_service.try_complete_session(&session_id_clone) {
+                        Ok(true) => tracing::debug!("Session completed"),
+                        Ok(false) => tracing::debug!("Session still has running executions"),
+                        Err(e) => tracing::warn!("Failed to check/complete session: {}", e),
                     }
 
                     // Log session end
@@ -1516,6 +1520,13 @@ async fn spawn_delegated_agent(
                     tracing::warn!("Failed to complete delegated execution: {}", e);
                 }
 
+                // Try to complete the session if all executions are done
+                match state_service_clone.try_complete_session(&session_id_clone) {
+                    Ok(true) => tracing::debug!("Session completed after subagent finished"),
+                    Ok(false) => tracing::debug!("Session still has running executions"),
+                    Err(e) => tracing::warn!("Failed to check/complete session: {}", e),
+                }
+
                 // Log execution end
                 let _ = log_service_clone.log_session_end(
                     &execution_id,
@@ -1535,7 +1546,8 @@ async fn spawn_delegated_agent(
                     .await;
 
                 // Get delegation context before removing (for callback check)
-                let delegation_ctx = delegation_registry.get(&conv_id);
+                // NOTE: Use execution_id, not conv_id - that's the key used in register()
+                let delegation_ctx = delegation_registry.get(&execution_id);
 
                 // Emit delegation completed
                 event_bus
@@ -1619,8 +1631,8 @@ async fn spawn_delegated_agent(
                     }
                 }
 
-                // Remove from delegation registry
-                delegation_registry.remove(&conv_id);
+                // Remove from delegation registry (use execution_id - same as register)
+                delegation_registry.remove(&execution_id);
             }
             Err(e) => {
                 // Update execution status to CRASHED
@@ -1696,7 +1708,7 @@ async fn spawn_delegated_agent(
                     );
                 }
 
-                delegation_registry.remove(&conv_id);
+                delegation_registry.remove(&execution_id);
             }
         }
     });

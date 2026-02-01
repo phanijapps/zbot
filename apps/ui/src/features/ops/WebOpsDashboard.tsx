@@ -632,7 +632,8 @@ export function WebOpsDashboard() {
   const handleOpenChat = useCallback((session: ExecutionSession) => {
     const isSubagent = !!session.parent_session_id;
     setSelectedSession({
-      conversationId: session.conversation_id,
+      // Use session.id (execution_id) to fetch messages, not conversation_id (session_id)
+      conversationId: session.id,
       agentId: session.agent_id,
       isSubagent,
     });

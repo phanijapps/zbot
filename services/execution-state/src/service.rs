@@ -182,6 +182,27 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.get_child_executions(parent_execution_id)
     }
 
+    /// Check if a session has any running executions.
+    pub fn has_running_executions(&self, session_id: &str) -> Result<bool, String> {
+        let executions = self.repo.list_executions(&ExecutionFilter {
+            session_id: Some(session_id.to_string()),
+            status: Some(ExecutionStatus::Running),
+            ..Default::default()
+        })?;
+        Ok(!executions.is_empty())
+    }
+
+    /// Try to complete a session, but only if all executions are done.
+    /// Returns true if session was completed, false if there are still running executions.
+    pub fn try_complete_session(&self, session_id: &str) -> Result<bool, String> {
+        if self.has_running_executions(session_id)? {
+            Ok(false)
+        } else {
+            self.complete_session(session_id)?;
+            Ok(true)
+        }
+    }
+
     /// Start an execution.
     pub fn start_execution(&self, execution_id: &str) -> Result<(), String> {
         self.repo.update_execution_status(execution_id, ExecutionStatus::Running)

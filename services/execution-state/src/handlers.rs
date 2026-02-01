@@ -160,7 +160,8 @@ impl From<AgentExecution> for LegacyExecutionSession {
 
 /// List execution sessions in legacy format.
 ///
-/// GET /sessions (legacy - returns only ROOT executions as sessions for UI)
+/// GET /sessions (legacy format for UI compatibility)
+/// Returns ALL executions (root and subagents) - UI handles grouping
 pub async fn list_legacy_sessions<D: StateDbProvider + 'static>(
     State(service): State<Arc<StateService<D>>>,
     Query(filter): Query<ExecutionFilter>,
@@ -169,10 +170,9 @@ pub async fn list_legacy_sessions<D: StateDbProvider + 'static>(
         .list_executions(&filter)
         .map_err(ApiError::Database)?;
 
-    // Only return root executions (one per session) - filter out subagents
+    // Return all executions - UI groups by conversation_id
     let legacy: Vec<LegacyExecutionSession> = executions
         .into_iter()
-        .filter(|e| e.delegation_type == DelegationType::Root)
         .map(|e| e.into())
         .collect();
     Ok(Json(legacy))
