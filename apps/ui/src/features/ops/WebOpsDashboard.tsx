@@ -1,6 +1,6 @@
 // ============================================================================
-// OPS DASHBOARD
-// Real-time execution monitoring and control panel
+// DASHBOARD
+// Real-time execution monitoring and session history
 // ============================================================================
 
 import { useEffect, useState, useCallback } from "react";
@@ -23,6 +23,9 @@ import {
   ChevronDown,
   ChevronRight,
   Bot,
+  History,
+  XCircle,
+  MessageSquare,
 } from "lucide-react";
 
 // ============================================================================
@@ -36,7 +39,7 @@ function StatusBadge({ status }: { status: ExecutionStatus }) {
   > = {
     queued: {
       label: "Queued",
-      color: "var(--muted)",
+      color: "var(--muted-foreground)",
       icon: <Clock size={12} />,
     },
     running: {
@@ -56,8 +59,8 @@ function StatusBadge({ status }: { status: ExecutionStatus }) {
     },
     cancelled: {
       label: "Cancelled",
-      color: "var(--muted)",
-      icon: <Square size={12} />,
+      color: "var(--muted-foreground)",
+      icon: <XCircle size={12} />,
     },
     completed: {
       label: "Completed",
@@ -115,10 +118,12 @@ interface SessionRowProps {
   session: ExecutionSession;
   isExpanded: boolean;
   onToggle: () => void;
-  onPause: () => void;
-  onResume: () => void;
-  onCancel: () => void;
-  isProcessing: boolean;
+  onPause?: () => void;
+  onResume?: () => void;
+  onCancel?: () => void;
+  onOpenChat?: () => void;
+  isProcessing?: boolean;
+  showControls?: boolean;
 }
 
 function SessionRow({
@@ -128,7 +133,9 @@ function SessionRow({
   onPause,
   onResume,
   onCancel,
-  isProcessing,
+  onOpenChat,
+  isProcessing = false,
+  showControls = true,
 }: SessionRowProps) {
   const canPause = session.status === "running";
   const canResume = session.status === "paused";
@@ -141,6 +148,13 @@ function SessionRow({
           1000
       )
     : 0;
+
+  const formatDuration = (seconds: number) => {
+    if (seconds < 60) return `${seconds}s`;
+    const mins = Math.floor(seconds / 60);
+    const secs = seconds % 60;
+    return `${mins}m ${secs}s`;
+  };
 
   return (
     <div className="border-b border-border last:border-b-0">
@@ -160,7 +174,7 @@ function SessionRow({
             <StatusBadge status={session.status} />
           </div>
           <div className="text-xs text-muted-foreground truncate">
-            {session.id}
+            {session.conversation_id}
           </div>
         </div>
 
@@ -168,12 +182,12 @@ function SessionRow({
 
         {duration > 0 && (
           <span className="text-sm text-muted-foreground">
-            {duration}s
+            {formatDuration(duration)}
           </span>
         )}
 
         <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-          {canPause && (
+          {showControls && canPause && onPause && (
             <button
               className="btn btn--secondary btn--sm"
               onClick={onPause}
@@ -183,7 +197,7 @@ function SessionRow({
               <Pause size={14} />
             </button>
           )}
-          {canResume && (
+          {showControls && canResume && onResume && (
             <button
               className="btn btn--primary btn--sm"
               onClick={onResume}
@@ -193,7 +207,7 @@ function SessionRow({
               <Play size={14} />
             </button>
           )}
-          {canCancel && (
+          {showControls && canCancel && onCancel && (
             <button
               className="btn btn--destructive btn--sm"
               onClick={onCancel}
@@ -203,6 +217,15 @@ function SessionRow({
               <Square size={14} />
             </button>
           )}
+          {onOpenChat && (
+            <button
+              className="btn btn--secondary btn--sm"
+              onClick={onOpenChat}
+              title="Open chat"
+            >
+              <MessageSquare size={14} />
+            </button>
+          )}
         </div>
       </div>
 
@@ -210,8 +233,8 @@ function SessionRow({
         <div className="px-10 py-3 bg-muted/30 text-sm">
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <span className="text-muted-foreground">Conversation:</span>{" "}
-              <span className="font-mono text-xs">{session.conversation_id}</span>
+              <span className="text-muted-foreground">Session ID:</span>{" "}
+              <span className="font-mono text-xs">{session.id}</span>
             </div>
             <div>
               <span className="text-muted-foreground">Created:</span>{" "}
@@ -288,18 +311,34 @@ function StatsCard({
 // Main Dashboard Component
 // ============================================================================
 
-// Active statuses that appear on Dashboard (live monitoring)
+// Active statuses (live monitoring)
 const ACTIVE_STATUSES: ExecutionStatus[] = ["running", "paused", "queued"];
+// Closed statuses (session history)
+const CLOSED_STATUSES: ExecutionStatus[] = ["completed", "cancelled", "crashed"];
 
 export function WebOpsDashboard() {
-  const [sessions, setSessions] = useState<ExecutionSession[]>([]);
+  const [allSessions, setAllSessions] = useState<ExecutionSession[]>([]);
   const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
   const [processingSession, setProcessingSession] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<ExecutionStatus | "all">("all");
+  const [activeFilter, setActiveFilter] = useState<ExecutionStatus | "all">("all");
+  const [historyFilter, setHistoryFilter] = useState<ExecutionStatus | "all">("all");
   const [autoRefresh, setAutoRefresh] = useState(true);
+
+  // Derived data
+  const activeSessions = allSessions.filter((s) => ACTIVE_STATUSES.includes(s.status));
+  const closedSessions = allSessions.filter((s) => CLOSED_STATUSES.includes(s.status));
+
+  // Filtered views
+  const filteredActiveSessions = activeFilter === "all"
+    ? activeSessions
+    : activeSessions.filter((s) => s.status === activeFilter);
+
+  const filteredClosedSessions = historyFilter === "all"
+    ? closedSessions
+    : closedSessions.filter((s) => s.status === historyFilter);
 
   // Load sessions and stats
   const loadData = useCallback(async () => {
@@ -312,14 +351,11 @@ export function WebOpsDashboard() {
       ]);
 
       if (sessionsResult.success && sessionsResult.data) {
-        // Filter to only active sessions, then apply user filter
-        let filtered = sessionsResult.data.filter((s) =>
-          ACTIVE_STATUSES.includes(s.status)
+        // Sort by created_at descending (newest first)
+        const sorted = [...sessionsResult.data].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
-        if (statusFilter !== "all") {
-          filtered = filtered.filter((s) => s.status === statusFilter);
-        }
-        setSessions(filtered);
+        setAllSessions(sorted);
       } else if (!sessionsResult.success) {
         console.error("Failed to load sessions:", sessionsResult.error);
       }
@@ -334,7 +370,7 @@ export function WebOpsDashboard() {
     } finally {
       setIsLoading(false);
     }
-  }, [statusFilter]);
+  }, []);
 
   // Initial load and auto-refresh
   useEffect(() => {
@@ -345,62 +381,6 @@ export function WebOpsDashboard() {
       return () => clearInterval(interval);
     }
   }, [loadData, autoRefresh]);
-
-  // Subscribe to real-time events
-  useEffect(() => {
-    let unsubscribes: (() => void)[] = [];
-
-    const setupSubscriptions = async () => {
-      const transport = await getTransport();
-
-      // Subscribe to global events for session updates
-      sessions
-        .filter((s) => s.status === "running")
-        .forEach((session) => {
-          const unsub = transport.subscribe(session.conversation_id, (event) => {
-            if (event.type === "token_usage") {
-              // Update token counts for the session
-              setSessions((prev) =>
-                prev.map((s) =>
-                  s.id === session.id
-                    ? {
-                        ...s,
-                        tokens_in: (event as { tokens_in?: number }).tokens_in || s.tokens_in,
-                        tokens_out: (event as { tokens_out?: number }).tokens_out || s.tokens_out,
-                      }
-                    : s
-                )
-              );
-            } else if (event.type === "session_paused") {
-              setSessions((prev) =>
-                prev.map((s) =>
-                  s.id === session.id ? { ...s, status: "paused" } : s
-                )
-              );
-            } else if (event.type === "session_resumed") {
-              setSessions((prev) =>
-                prev.map((s) =>
-                  s.id === session.id ? { ...s, status: "running" } : s
-                )
-              );
-            } else if (event.type === "session_cancelled") {
-              setSessions((prev) =>
-                prev.map((s) =>
-                  s.id === session.id ? { ...s, status: "cancelled" } : s
-                )
-              );
-            }
-          });
-          unsubscribes.push(unsub);
-        });
-    };
-
-    setupSubscriptions();
-
-    return () => {
-      unsubscribes.forEach((unsub) => unsub());
-    };
-  }, [sessions]);
 
   // Control handlers
   const handlePause = async (sessionId: string) => {
@@ -445,6 +425,11 @@ export function WebOpsDashboard() {
     }
   };
 
+  const handleOpenChat = (session: ExecutionSession) => {
+    // TODO: Open chat slider with this session's conversation
+    console.log("Open chat for session:", session.conversation_id);
+  };
+
   if (isLoading) {
     return (
       <div className="page">
@@ -458,6 +443,7 @@ export function WebOpsDashboard() {
   const runningCount = statusCounts.running || 0;
   const pausedCount = statusCounts.paused || 0;
   const queuedCount = statusCounts.queued || 0;
+  const completedCount = statusCounts.completed || 0;
   const activeCount = runningCount + pausedCount + queuedCount;
 
   return (
@@ -468,7 +454,7 @@ export function WebOpsDashboard() {
           <div>
             <h1 className="text-2xl font-bold">Dashboard</h1>
             <p className="text-muted-foreground">
-              Live monitoring and control of active agent executions
+              Monitor active sessions and view execution history
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -502,7 +488,7 @@ export function WebOpsDashboard() {
         )}
 
         {/* Stats Grid */}
-        <div className="grid grid-cols-4 gap-4 mb-6">
+        <div className="grid grid-cols-5 gap-4 mb-6">
           <StatsCard
             label="Active"
             value={activeCount}
@@ -524,59 +510,123 @@ export function WebOpsDashboard() {
             label="Queued"
             value={queuedCount}
             icon={<Clock size={20} />}
-            color="var(--muted)"
+            color="var(--muted-foreground)"
+          />
+          <StatsCard
+            label="Completed"
+            value={completedCount}
+            icon={<CheckCircle size={20} />}
+            color="var(--success)"
           />
         </div>
 
-        {/* Filter Bar */}
-        <div className="flex items-center gap-4 mb-4">
-          <span className="text-sm text-muted-foreground">Filter:</span>
-          <div className="flex gap-2">
-            {(["all", ...ACTIVE_STATUSES] as const).map(
-              (status) => (
+        {/* Two-column layout for sessions */}
+        <div className="grid grid-cols-2 gap-6">
+          {/* Active Sessions */}
+          <div className="card">
+            <div className="card__header flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity size={18} className="text-primary" />
+                <h2 className="font-semibold">Active Sessions</h2>
+                <span className="badge">{activeSessions.length}</span>
+              </div>
+            </div>
+
+            {/* Active Filter */}
+            <div className="px-4 py-2 border-b border-border flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Filter:</span>
+              {(["all", ...ACTIVE_STATUSES] as const).map((status) => (
                 <button
                   key={status}
-                  className={`btn btn--sm ${
-                    statusFilter === status ? "btn--primary" : "btn--secondary"
+                  className={`btn btn--xs ${
+                    activeFilter === status ? "btn--primary" : "btn--ghost"
                   }`}
-                  onClick={() => setStatusFilter(status)}
+                  onClick={() => setActiveFilter(status)}
                 >
-                  {status === "all" ? "All Active" : status.charAt(0).toUpperCase() + status.slice(1)}
+                  {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
                 </button>
-              )
-            )}
-          </div>
-        </div>
-
-        {/* Sessions List */}
-        <div className="card">
-          <div className="card__header">
-            <h2 className="font-semibold">Active Sessions</h2>
-          </div>
-          {sessions.length === 0 ? (
-            <div className="p-8 text-center text-muted-foreground">
-              <CheckCircle size={48} className="mx-auto mb-4 opacity-50" />
-              <p>No active sessions</p>
-              <p className="text-sm mt-2">Sessions will appear here when agents are running</p>
-            </div>
-          ) : (
-            <div>
-              {sessions.map((session) => (
-                <SessionRow
-                  key={session.id}
-                  session={session}
-                  isExpanded={expandedSession === session.id}
-                  onToggle={() =>
-                    setExpandedSession(expandedSession === session.id ? null : session.id)
-                  }
-                  onPause={() => handlePause(session.id)}
-                  onResume={() => handleResume(session.id)}
-                  onCancel={() => handleCancel(session.id)}
-                  isProcessing={processingSession === session.id}
-                />
               ))}
             </div>
-          )}
+
+            {filteredActiveSessions.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">
+                <Activity size={40} className="mx-auto mb-3 opacity-30" />
+                <p className="text-sm">No active sessions</p>
+              </div>
+            ) : (
+              <div className="max-h-96 overflow-y-auto">
+                {filteredActiveSessions.map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    isExpanded={expandedSession === session.id}
+                    onToggle={() =>
+                      setExpandedSession(expandedSession === session.id ? null : session.id)
+                    }
+                    onPause={() => handlePause(session.id)}
+                    onResume={() => handleResume(session.id)}
+                    onCancel={() => handleCancel(session.id)}
+                    isProcessing={processingSession === session.id}
+                    showControls={true}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* Session History */}
+          <div className="card">
+            <div className="card__header flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <History size={18} className="text-muted-foreground" />
+                <h2 className="font-semibold">Session History</h2>
+                <span className="badge">{closedSessions.length}</span>
+              </div>
+            </div>
+
+            {/* History Filter */}
+            <div className="px-4 py-2 border-b border-border flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Filter:</span>
+              {(["all", ...CLOSED_STATUSES] as const).map((status) => (
+                <button
+                  key={status}
+                  className={`btn btn--xs ${
+                    historyFilter === status ? "btn--primary" : "btn--ghost"
+                  }`}
+                  onClick={() => setHistoryFilter(status)}
+                >
+                  {status === "all" ? "All" : status.charAt(0).toUpperCase() + status.slice(1)}
+                </button>
+              ))}
+            </div>
+
+            {filteredClosedSessions.length === 0 ? (
+              <div className="p-8 text-center text-muted-foreground">
+                <History size={40} className="mx-auto mb-3 opacity-30" />
+                <p className="text-sm">No session history</p>
+              </div>
+            ) : (
+              <div className="max-h-96 overflow-y-auto">
+                {filteredClosedSessions.slice(0, 50).map((session) => (
+                  <SessionRow
+                    key={session.id}
+                    session={session}
+                    isExpanded={expandedSession === session.id}
+                    onToggle={() =>
+                      setExpandedSession(expandedSession === session.id ? null : session.id)
+                    }
+                    onOpenChat={() => handleOpenChat(session)}
+                    showControls={false}
+                  />
+                ))}
+                {filteredClosedSessions.length > 50 && (
+                  <div className="p-3 text-center text-sm text-muted-foreground border-t border-border">
+                    Showing 50 of {filteredClosedSessions.length} sessions
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

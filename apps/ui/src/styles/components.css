@@ -107,6 +107,25 @@
   padding: var(--spacing-3);
 }
 
+/* Sidebar Groups */
+.sidebar__group {
+  margin-bottom: var(--spacing-2);
+}
+
+.sidebar__group:first-child {
+  margin-bottom: var(--spacing-4);
+}
+
+.sidebar__group-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--sidebar-muted);
+  padding: var(--spacing-3) var(--spacing-3) var(--spacing-1);
+  opacity: 0.7;
+}
+
 /* Sidebar Navigation Link */
 .nav-link {
   display: flex;
@@ -746,3 +765,76 @@
 .overflow-hidden { overflow: hidden; }
 .opacity-0 { opacity: 0; }
 .group:hover .group-hover\:opacity-100 { opacity: 1; }
+
+/* ============================================================================
+   CHAT SLIDER
+   Slide-in panel for chat that overlays the main content
+   ============================================================================ */
+
+.chat-slider__backdrop {
+  position: fixed;
+  inset: 0;
+  background-color: rgba(0, 0, 0, 0.3);
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.3s ease, visibility 0.3s ease;
+  z-index: 40;
+}
+
+.chat-slider__backdrop--visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.chat-slider {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: calc(100% - var(--sidebar-width) - 80px);
+  max-width: 1200px;
+  min-width: 400px;
+  background-color: var(--background);
+  box-shadow: var(--shadow-xl);
+  transform: translateX(100%);
+  transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+  z-index: 50;
+  display: flex;
+}
+
+.chat-slider--open {
+  transform: translateX(0);
+}
+
+.chat-slider__handle {
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translate(-100%, -50%);
+  width: 28px;
+  height: 56px;
+  background-color: var(--background);
+  border: 1px solid var(--border);
+  border-right: none;
+  border-radius: var(--radius-lg) 0 0 var(--radius-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--muted-foreground);
+  transition: background-color 0.15s ease, color 0.15s ease;
+  box-shadow: -4px 0 12px rgba(0, 0, 0, 0.1);
+}
+
+.chat-slider__handle:hover {
+  background-color: var(--muted);
+  color: var(--foreground);
+}
+
+.chat-slider__content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
+}

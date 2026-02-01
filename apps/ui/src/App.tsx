@@ -4,14 +4,14 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
   MessageSquare,
   Bot,
   Zap,
-  Calendar,
-  Plug,
+  Webhook,
+  Cable,
   Server,
   Settings,
   Loader2,
@@ -26,7 +26,7 @@ import {
   Brain,
   Users,
   Eye,
-  Activity,
+  LayoutDashboard,
 } from "lucide-react";
 import { initializeTransport, getTransport, type ToolSettings } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
@@ -37,6 +37,7 @@ import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPan
 import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
+import { ChatSlider } from "./components/ChatSlider";
 
 // ============================================================================
 // Types
@@ -177,14 +178,15 @@ function App() {
       />
       <WebAppShell connectionStatus={connectionStatus}>
         <Routes>
-          <Route path="/" element={<WebChatPanel />} />
-          <Route path="/dashboard" element={<WebOpsDashboard />} />
+          {/* Dashboard is home, Chat is handled by slider */}
+          <Route path="/" element={<WebOpsDashboard />} />
+          <Route path="/chat" element={<WebOpsDashboard />} />
+          <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/agents" element={<WebAgentsPanel />} />
           <Route path="/skills" element={<WebSkillsPanel />} />
-          <Route path="/cron" element={<WebCronPanel />} />
-          <Route path="/integrations" element={<WebIntegrationsPanel />} />
+          <Route path="/hooks" element={<WebCronPanel />} />
+          <Route path="/providers" element={<WebIntegrationsPanel />} />
           <Route path="/mcps" element={<WebMcpsPanel />} />
-          <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
         </Routes>
       </WebAppShell>
@@ -201,19 +203,60 @@ interface WebAppShellProps {
   connectionStatus: ConnectionStatus;
 }
 
-const navItems = [
-  { to: "/dashboard", label: "Dashboard", icon: Activity },
-  { to: "/", label: "Chat", icon: MessageSquare },
-  { to: "/agents", label: "Agents", icon: Bot },
-  { to: "/skills", label: "Skills", icon: Zap },
-  { to: "/cron", label: "Schedules", icon: Calendar },
-  { to: "/integrations", label: "Integrations", icon: Plug },
-  { to: "/mcps", label: "MCP Servers", icon: Server },
-  { to: "/logs", label: "Logs", icon: Eye },
-  { to: "/settings", label: "Settings", icon: Settings },
+// Navigation structure with groups
+interface NavItem {
+  to: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string; style?: React.CSSProperties }>;
+}
+
+interface NavGroup {
+  label?: string;
+  items: NavItem[];
+}
+
+const navGroups: NavGroup[] = [
+  {
+    // Main group - no label
+    items: [
+      { to: "/", label: "Dashboard", icon: LayoutDashboard },
+      { to: "/chat", label: "Chat", icon: MessageSquare },
+      { to: "/logs", label: "Logs", icon: Eye },
+    ],
+  },
+  {
+    label: "Configure",
+    items: [
+      { to: "/agents", label: "Agents", icon: Bot },
+      { to: "/skills", label: "Skills", icon: Zap },
+    ],
+  },
+  {
+    label: "Connect",
+    items: [
+      { to: "/hooks", label: "Hooks", icon: Webhook },
+      { to: "/providers", label: "Providers", icon: Cable },
+      { to: "/mcps", label: "MCPs", icon: Server },
+    ],
+  },
+  {
+    label: "System",
+    items: [
+      { to: "/settings", label: "Settings", icon: Settings },
+    ],
+  },
 ];
 
 function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+  const isChatOpen = location.pathname === "/chat";
+
+  const handleCloseChat = () => {
+    // Navigate back to dashboard when closing chat
+    navigate("/");
+  };
+
   return (
     <div className="app-shell">
       <nav className="sidebar">
@@ -227,8 +270,15 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
         </div>
 
         <div className="sidebar__nav">
-          {navItems.map((item) => (
-            <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} />
+          {navGroups.map((group, groupIndex) => (
+            <div key={groupIndex} className="sidebar__group">
+              {group.label && (
+                <div className="sidebar__group-label">{group.label}</div>
+              )}
+              {group.items.map((item) => (
+                <NavLink key={item.to} to={item.to} label={item.label} icon={item.icon} />
+              ))}
+            </div>
           ))}
         </div>
 
@@ -247,6 +297,11 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
       </nav>
 
       <main className="flex-1 overflow-hidden">{children}</main>
+
+      {/* Chat Slider - overlays content when open */}
+      <ChatSlider isOpen={isChatOpen} onClose={handleCloseChat}>
+        <WebChatPanel />
+      </ChatSlider>
     </div>
   );
 }
