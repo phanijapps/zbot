@@ -659,8 +659,9 @@ export function WebOpsDashboard() {
   const queuedCount = statusCounts.queued || 0;
   const activeCount = runningCount + pausedCount + queuedCount;
 
-  // Completed count = number of completed conversations (not sessions)
-  const completedCount = conversationGroups.filter(g => g.overallStatus === 'completed').length;
+  // Completed count = number of completed conversations (from ALL closed sessions, not filtered)
+  const allConversationGroups = buildConversationGroups(closedSessions);
+  const completedCount = allConversationGroups.filter(g => g.overallStatus === 'completed').length;
 
   return (
     <div className="page">
