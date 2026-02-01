@@ -31,6 +31,11 @@ import type {
   LogSession,
   SessionDetail,
   LogFilter,
+  // V2 types
+  SessionWithExecutions,
+  SessionFilter,
+  DashboardStats,
+  // Legacy types
   ExecutionSession,
   ExecutionSessionFilter,
   ExecutionStats,
@@ -149,7 +154,7 @@ export class TauriTransport implements Transport {
     return { success: false, error: NOT_SUPPORTED };
   }
 
-  async getMessages(_conversationId: string): Promise<TransportResult<MessageResponse[]>> {
+  async getMessages(_id: string): Promise<TransportResult<MessageResponse[]>> {
     return { success: false, error: NOT_SUPPORTED };
   }
 
@@ -177,6 +182,20 @@ export class TauriTransport implements Transport {
     return { success: false, error: NOT_SUPPORTED };
   }
 
+  // V2 API methods
+  async listSessionsFull(_filter?: SessionFilter): Promise<TransportResult<SessionWithExecutions[]>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getSessionFull(_sessionId: string): Promise<TransportResult<SessionWithExecutions>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  async getDashboardStats(): Promise<TransportResult<DashboardStats>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
+  // Legacy methods (deprecated)
   async listExecutionSessions(_filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>> {
     return { success: false, error: NOT_SUPPORTED };
   }

@@ -32,6 +32,11 @@ import type {
   LogSession,
   SessionDetail,
   LogFilter,
+  // V2 types
+  SessionWithExecutions,
+  SessionFilter,
+  DashboardStats,
+  // Legacy types (for backwards compatibility)
   ExecutionSession,
   ExecutionSessionFilter,
   ExecutionStats,
@@ -184,8 +189,14 @@ export class HttpTransport implements Transport {
   // Conversation Operations
   // =========================================================================
 
-  async getMessages(conversationId: string): Promise<TransportResult<MessageResponse[]>> {
-    return this.get<MessageResponse[]>(`/api/conversations/${encodeURIComponent(conversationId)}/messages`);
+  async getMessages(id: string): Promise<TransportResult<MessageResponse[]>> {
+    // Route based on ID format:
+    // - exec-{uuid} → execution messages (from dashboard/session history)
+    // - other (web-xxx, etc.) → conversation messages (from active chat)
+    if (id.startsWith('exec-')) {
+      return this.get<MessageResponse[]>(`/api/executions/${encodeURIComponent(id)}/messages`);
+    }
+    return this.get<MessageResponse[]>(`/api/conversations/${encodeURIComponent(id)}/messages`);
   }
 
   // =========================================================================
@@ -262,25 +273,78 @@ export class HttpTransport implements Transport {
   }
 
   // =========================================================================
-  // Execution Session Operations
+  // Session Operations (V2 API)
   // =========================================================================
 
-  async listExecutionSessions(filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>> {
+  /** List sessions with their executions (V2 API - use this for dashboard) */
+  async listSessionsFull(filter?: SessionFilter): Promise<TransportResult<SessionWithExecutions[]>> {
     const params = new URLSearchParams();
-    if (filter?.agent_id) params.set("agent_id", filter.agent_id);
     if (filter?.status) params.set("status", filter.status);
+    if (filter?.root_agent_id) params.set("root_agent_id", filter.root_agent_id);
     if (filter?.limit) params.set("limit", String(filter.limit));
     if (filter?.offset) params.set("offset", String(filter.offset));
 
     const query = params.toString();
-    const url = query ? `/api/executions/sessions?${query}` : "/api/executions/sessions";
-    return this.get<ExecutionSession[]>(url);
+    const url = query ? `/api/executions/v2/sessions/full?${query}` : "/api/executions/v2/sessions/full";
+    return this.get<SessionWithExecutions[]>(url);
   }
 
+  /** Get a single session with executions (V2 API) */
+  async getSessionFull(sessionId: string): Promise<TransportResult<SessionWithExecutions>> {
+    return this.get<SessionWithExecutions>(`/api/executions/v2/sessions/${encodeURIComponent(sessionId)}/full`);
+  }
+
+  /** Get dashboard stats (V2 API - session + execution counts) */
+  async getDashboardStats(): Promise<TransportResult<DashboardStats>> {
+    return this.get<DashboardStats>("/api/executions/stats");
+  }
+
+  // =========================================================================
+  // Legacy Execution Session Operations (deprecated)
+  // =========================================================================
+
+  /** @deprecated Use listSessionsFull() instead */
+  async listExecutionSessions(filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>> {
+    // Redirect to V2 API and convert response format
+    const result = await this.listSessionsFull({
+      status: filter?.status as SessionFilter["status"],
+      limit: filter?.limit,
+      offset: filter?.offset,
+    });
+
+    if (!result.success || !result.data) {
+      return { success: false, error: result.error || "Failed to fetch sessions" };
+    }
+
+    // Convert V2 format to legacy format for backwards compatibility
+    const legacySessions: ExecutionSession[] = [];
+    for (const session of result.data) {
+      for (const exec of session.executions) {
+        legacySessions.push({
+          id: exec.id,
+          conversation_id: session.id, // session_id becomes conversation_id
+          agent_id: exec.agent_id,
+          parent_session_id: exec.parent_execution_id,
+          status: exec.status,
+          created_at: exec.started_at || session.created_at,
+          started_at: exec.started_at,
+          completed_at: exec.completed_at,
+          tokens_in: exec.tokens_in,
+          tokens_out: exec.tokens_out,
+          error: exec.error,
+        });
+      }
+    }
+
+    return { success: true, data: legacySessions };
+  }
+
+  /** @deprecated Use getSessionFull() instead */
   async getExecutionSession(sessionId: string): Promise<TransportResult<ExecutionSession>> {
-    return this.get<ExecutionSession>(`/api/executions/sessions/${encodeURIComponent(sessionId)}`);
+    return this.get<ExecutionSession>(`/api/executions/v2/sessions/${encodeURIComponent(sessionId)}`);
   }
 
+  /** @deprecated Use getDashboardStats() instead */
   async getExecutionStats(): Promise<TransportResult<ExecutionStats>> {
     return this.get<ExecutionStats>("/api/executions/stats/counts");
   }
@@ -393,6 +457,13 @@ export class HttpTransport implements Transport {
     if (sessionId) {
       command.session_id = sessionId;
     }
+
+    console.log("[SESSION_DEBUG] WebSocket sending invoke command:", {
+      type: command.type,
+      agent_id: command.agent_id,
+      conversation_id: command.conversation_id,
+      session_id: command.session_id || "(none - new session)",
+    });
 
     try {
       this.ws.send(JSON.stringify(command));
@@ -509,6 +580,16 @@ export class HttpTransport implements Transport {
   // =========================================================================
 
   private handleEvent(event: StreamEvent): void {
+    // Log agent_started events for session debugging
+    if (event.type === "agent_started") {
+      console.log("[SESSION_DEBUG] Received agent_started event from server:", {
+        type: event.type,
+        session_id: event.session_id,
+        conversation_id: event.conversation_id,
+        agent_id: event.agent_id,
+      });
+    }
+
     // Extract conversation_id from event if present
     const conversationId = event.conversation_id as string | undefined;
 

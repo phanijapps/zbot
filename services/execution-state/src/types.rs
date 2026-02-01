@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum SessionStatus {
+    /// Session created but not yet started
+    Queued,
     /// At least one execution is running
     Running,
     /// User paused the session
@@ -25,6 +27,7 @@ pub enum SessionStatus {
 impl SessionStatus {
     pub fn as_str(&self) -> &'static str {
         match self {
+            Self::Queued => "queued",
             Self::Running => "running",
             Self::Paused => "paused",
             Self::Completed => "completed",
@@ -48,11 +51,66 @@ impl std::str::FromStr for SessionStatus {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
+            "queued" => Ok(Self::Queued),
             "running" => Ok(Self::Running),
             "paused" => Ok(Self::Paused),
             "completed" => Ok(Self::Completed),
             "crashed" => Ok(Self::Crashed),
             _ => Err(format!("Invalid session status: {}", s)),
+        }
+    }
+}
+
+// ============================================================================
+// TRIGGER SOURCE
+// ============================================================================
+
+/// Source that triggered the session creation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TriggerSource {
+    /// Triggered from web UI
+    #[default]
+    Web,
+    /// Triggered from CLI
+    Cli,
+    /// Triggered by cron/scheduler
+    Cron,
+    /// Triggered via HTTP API
+    Api,
+    /// Triggered by a plugin (Rust or foreign)
+    Plugin,
+}
+
+impl TriggerSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Web => "web",
+            Self::Cli => "cli",
+            Self::Cron => "cron",
+            Self::Api => "api",
+            Self::Plugin => "plugin",
+        }
+    }
+}
+
+impl std::fmt::Display for TriggerSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for TriggerSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "web" => Ok(Self::Web),
+            "cli" => Ok(Self::Cli),
+            "cron" => Ok(Self::Cron),
+            "api" => Ok(Self::Api),
+            "plugin" => Ok(Self::Plugin),
+            _ => Err(format!("Invalid trigger source: {}", s)),
         }
     }
 }
@@ -180,6 +238,9 @@ pub struct Session {
     /// Current status
     pub status: SessionStatus,
 
+    /// Trigger source (web, cli, cron, api, plugin)
+    pub source: TriggerSource,
+
     /// The root agent for this session
     pub root_agent_id: String,
 
@@ -210,11 +271,34 @@ pub struct Session {
 }
 
 impl Session {
-    /// Create a new session in RUNNING state.
+    /// Create a new session in RUNNING state with Web source (default).
     pub fn new(root_agent_id: impl Into<String>) -> Self {
+        Self::new_with_source(root_agent_id, TriggerSource::Web)
+    }
+
+    /// Create a new session in RUNNING state with specified source.
+    pub fn new_with_source(root_agent_id: impl Into<String>, source: TriggerSource) -> Self {
         Self {
             id: format!("sess-{}", uuid::Uuid::new_v4()),
             status: SessionStatus::Running,
+            source,
+            root_agent_id: root_agent_id.into(),
+            title: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            started_at: None,
+            completed_at: None,
+            total_tokens_in: 0,
+            total_tokens_out: 0,
+            metadata: None,
+        }
+    }
+
+    /// Create a new session in QUEUED state (not yet started).
+    pub fn new_queued(root_agent_id: impl Into<String>, source: TriggerSource) -> Self {
+        Self {
+            id: format!("sess-{}", uuid::Uuid::new_v4()),
+            status: SessionStatus::Queued,
+            source,
             root_agent_id: root_agent_id.into(),
             title: None,
             created_at: chrono::Utc::now().to_rfc3339(),
@@ -429,23 +513,60 @@ pub struct PendingToolCall {
 /// Dashboard stats - pre-computed, ready for display.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardStats {
+    // =========================================================================
+    // SESSION COUNTS
+    // =========================================================================
+
+    /// Number of queued sessions (waiting to start)
+    pub sessions_queued: u64,
+
     /// Number of running sessions
-    pub running: u64,
+    pub sessions_running: u64,
 
     /// Number of paused sessions
-    pub paused: u64,
+    pub sessions_paused: u64,
 
     /// Number of completed sessions
-    pub completed: u64,
+    pub sessions_completed: u64,
 
     /// Number of crashed sessions
-    pub crashed: u64,
+    pub sessions_crashed: u64,
+
+    // =========================================================================
+    // EXECUTION COUNTS
+    // =========================================================================
+
+    /// Number of queued executions (waiting to start)
+    pub executions_queued: u64,
+
+    /// Number of running executions
+    pub executions_running: u64,
+
+    /// Number of completed executions
+    pub executions_completed: u64,
+
+    /// Number of crashed executions
+    pub executions_crashed: u64,
+
+    /// Number of cancelled executions
+    pub executions_cancelled: u64,
+
+    // =========================================================================
+    // DAILY STATS
+    // =========================================================================
 
     /// Total sessions today
-    pub today_count: u64,
+    pub today_sessions: u64,
 
     /// Total tokens today
     pub today_tokens: u64,
+
+    // =========================================================================
+    // BREAKDOWN BY SOURCE
+    // =========================================================================
+
+    /// Sessions count by trigger source (web, cli, cron, api, plugin)
+    pub sessions_by_source: std::collections::HashMap<String, u64>,
 }
 
 // ============================================================================
@@ -538,3 +659,404 @@ impl axum::response::IntoResponse for ApiError {
 
 /// Alias for backwards compatibility during migration.
 pub type ExecutionSession = AgentExecution;
+
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // SessionStatus Tests
+    // ========================================================================
+
+    #[test]
+    fn session_status_as_str() {
+        assert_eq!(SessionStatus::Queued.as_str(), "queued");
+        assert_eq!(SessionStatus::Running.as_str(), "running");
+        assert_eq!(SessionStatus::Paused.as_str(), "paused");
+        assert_eq!(SessionStatus::Completed.as_str(), "completed");
+        assert_eq!(SessionStatus::Crashed.as_str(), "crashed");
+    }
+
+    #[test]
+    fn session_status_display() {
+        assert_eq!(format!("{}", SessionStatus::Queued), "queued");
+        assert_eq!(format!("{}", SessionStatus::Running), "running");
+        assert_eq!(format!("{}", SessionStatus::Completed), "completed");
+    }
+
+    #[test]
+    fn session_status_from_str() {
+        assert_eq!("queued".parse::<SessionStatus>().unwrap(), SessionStatus::Queued);
+        assert_eq!("running".parse::<SessionStatus>().unwrap(), SessionStatus::Running);
+        assert_eq!("PAUSED".parse::<SessionStatus>().unwrap(), SessionStatus::Paused);
+        assert_eq!("Completed".parse::<SessionStatus>().unwrap(), SessionStatus::Completed);
+        assert_eq!("crashed".parse::<SessionStatus>().unwrap(), SessionStatus::Crashed);
+    }
+
+    #[test]
+    fn session_status_from_str_invalid() {
+        assert!("invalid".parse::<SessionStatus>().is_err());
+        assert!("".parse::<SessionStatus>().is_err());
+    }
+
+    #[test]
+    fn session_status_is_terminal() {
+        assert!(!SessionStatus::Queued.is_terminal());
+        assert!(!SessionStatus::Running.is_terminal());
+        assert!(!SessionStatus::Paused.is_terminal());
+        assert!(SessionStatus::Completed.is_terminal());
+        assert!(SessionStatus::Crashed.is_terminal());
+    }
+
+    #[test]
+    fn session_status_serialization() {
+        let statuses = [
+            (SessionStatus::Queued, "\"queued\""),
+            (SessionStatus::Running, "\"running\""),
+            (SessionStatus::Paused, "\"paused\""),
+            (SessionStatus::Completed, "\"completed\""),
+            (SessionStatus::Crashed, "\"crashed\""),
+        ];
+
+        for (status, expected) in statuses {
+            let json = serde_json::to_string(&status).unwrap();
+            assert_eq!(json, expected, "Serialization failed for {:?}", status);
+
+            let parsed: SessionStatus = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, status, "Deserialization failed for {}", expected);
+        }
+    }
+
+    // ========================================================================
+    // TriggerSource Tests
+    // ========================================================================
+
+    #[test]
+    fn trigger_source_as_str() {
+        assert_eq!(TriggerSource::Web.as_str(), "web");
+        assert_eq!(TriggerSource::Cli.as_str(), "cli");
+        assert_eq!(TriggerSource::Cron.as_str(), "cron");
+        assert_eq!(TriggerSource::Api.as_str(), "api");
+        assert_eq!(TriggerSource::Plugin.as_str(), "plugin");
+    }
+
+    #[test]
+    fn trigger_source_default() {
+        assert_eq!(TriggerSource::default(), TriggerSource::Web);
+    }
+
+    #[test]
+    fn trigger_source_display() {
+        assert_eq!(format!("{}", TriggerSource::Web), "web");
+        assert_eq!(format!("{}", TriggerSource::Plugin), "plugin");
+    }
+
+    #[test]
+    fn trigger_source_from_str() {
+        assert_eq!("web".parse::<TriggerSource>().unwrap(), TriggerSource::Web);
+        assert_eq!("CLI".parse::<TriggerSource>().unwrap(), TriggerSource::Cli);
+        assert_eq!("Cron".parse::<TriggerSource>().unwrap(), TriggerSource::Cron);
+        assert_eq!("api".parse::<TriggerSource>().unwrap(), TriggerSource::Api);
+        assert_eq!("plugin".parse::<TriggerSource>().unwrap(), TriggerSource::Plugin);
+    }
+
+    #[test]
+    fn trigger_source_serialization() {
+        let sources = [
+            (TriggerSource::Web, "\"web\""),
+            (TriggerSource::Cli, "\"cli\""),
+            (TriggerSource::Cron, "\"cron\""),
+            (TriggerSource::Api, "\"api\""),
+            (TriggerSource::Plugin, "\"plugin\""),
+        ];
+
+        for (source, expected) in sources {
+            let json = serde_json::to_string(&source).unwrap();
+            assert_eq!(json, expected);
+
+            let parsed: TriggerSource = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed, source);
+        }
+    }
+
+    // ========================================================================
+    // ExecutionStatus Tests
+    // ========================================================================
+
+    #[test]
+    fn execution_status_as_str() {
+        assert_eq!(ExecutionStatus::Queued.as_str(), "queued");
+        assert_eq!(ExecutionStatus::Running.as_str(), "running");
+        assert_eq!(ExecutionStatus::Paused.as_str(), "paused");
+        assert_eq!(ExecutionStatus::Crashed.as_str(), "crashed");
+        assert_eq!(ExecutionStatus::Cancelled.as_str(), "cancelled");
+        assert_eq!(ExecutionStatus::Completed.as_str(), "completed");
+    }
+
+    #[test]
+    fn execution_status_is_terminal() {
+        assert!(!ExecutionStatus::Queued.is_terminal());
+        assert!(!ExecutionStatus::Running.is_terminal());
+        assert!(!ExecutionStatus::Paused.is_terminal());
+        assert!(ExecutionStatus::Crashed.is_terminal());
+        assert!(ExecutionStatus::Cancelled.is_terminal());
+        assert!(ExecutionStatus::Completed.is_terminal());
+    }
+
+    #[test]
+    fn execution_status_is_resumable() {
+        assert!(!ExecutionStatus::Queued.is_resumable());
+        assert!(!ExecutionStatus::Running.is_resumable());
+        assert!(ExecutionStatus::Paused.is_resumable());
+        assert!(ExecutionStatus::Crashed.is_resumable());
+        assert!(!ExecutionStatus::Cancelled.is_resumable());
+        assert!(!ExecutionStatus::Completed.is_resumable());
+    }
+
+    #[test]
+    fn execution_status_from_str() {
+        assert_eq!("queued".parse::<ExecutionStatus>().unwrap(), ExecutionStatus::Queued);
+        assert_eq!("RUNNING".parse::<ExecutionStatus>().unwrap(), ExecutionStatus::Running);
+        assert_eq!("completed".parse::<ExecutionStatus>().unwrap(), ExecutionStatus::Completed);
+    }
+
+    // ========================================================================
+    // DelegationType Tests
+    // ========================================================================
+
+    #[test]
+    fn delegation_type_as_str() {
+        assert_eq!(DelegationType::Root.as_str(), "root");
+        assert_eq!(DelegationType::Sequential.as_str(), "sequential");
+        assert_eq!(DelegationType::Parallel.as_str(), "parallel");
+    }
+
+    #[test]
+    fn delegation_type_from_str() {
+        assert_eq!("root".parse::<DelegationType>().unwrap(), DelegationType::Root);
+        assert_eq!("SEQUENTIAL".parse::<DelegationType>().unwrap(), DelegationType::Sequential);
+        assert_eq!("Parallel".parse::<DelegationType>().unwrap(), DelegationType::Parallel);
+    }
+
+    // ========================================================================
+    // Session Tests
+    // ========================================================================
+
+    #[test]
+    fn session_new_creates_running_session() {
+        let session = Session::new("root-agent");
+
+        assert!(session.id.starts_with("sess-"));
+        assert_eq!(session.status, SessionStatus::Running);
+        assert_eq!(session.source, TriggerSource::Web);
+        assert_eq!(session.root_agent_id, "root-agent");
+        assert!(session.title.is_none());
+        assert!(session.started_at.is_none());
+        assert!(session.completed_at.is_none());
+        assert_eq!(session.total_tokens_in, 0);
+        assert_eq!(session.total_tokens_out, 0);
+    }
+
+    #[test]
+    fn session_new_with_source() {
+        let session = Session::new_with_source("agent", TriggerSource::Cron);
+
+        assert_eq!(session.status, SessionStatus::Running);
+        assert_eq!(session.source, TriggerSource::Cron);
+    }
+
+    #[test]
+    fn session_new_queued() {
+        let session = Session::new_queued("agent", TriggerSource::Api);
+
+        assert_eq!(session.status, SessionStatus::Queued);
+        assert_eq!(session.source, TriggerSource::Api);
+        assert!(session.started_at.is_none());
+    }
+
+    #[test]
+    fn session_total_tokens() {
+        let mut session = Session::new("agent");
+        session.total_tokens_in = 1000;
+        session.total_tokens_out = 500;
+
+        assert_eq!(session.total_tokens(), 1500);
+    }
+
+    #[test]
+    fn session_id_is_unique() {
+        let session1 = Session::new("agent");
+        let session2 = Session::new("agent");
+
+        assert_ne!(session1.id, session2.id);
+    }
+
+    // ========================================================================
+    // AgentExecution Tests
+    // ========================================================================
+
+    #[test]
+    fn agent_execution_new_root() {
+        let exec = AgentExecution::new_root("sess-123", "root-agent");
+
+        assert!(exec.id.starts_with("exec-"));
+        assert_eq!(exec.session_id, "sess-123");
+        assert_eq!(exec.agent_id, "root-agent");
+        assert!(exec.parent_execution_id.is_none());
+        assert_eq!(exec.delegation_type, DelegationType::Root);
+        assert!(exec.task.is_none());
+        assert_eq!(exec.status, ExecutionStatus::Queued);
+        assert!(exec.started_at.is_none());
+        assert_eq!(exec.tokens_in, 0);
+        assert_eq!(exec.tokens_out, 0);
+    }
+
+    #[test]
+    fn agent_execution_new_delegated() {
+        let exec = AgentExecution::new_delegated(
+            "sess-123",
+            "researcher",
+            "exec-parent",
+            DelegationType::Sequential,
+            "Research AI topics",
+        );
+
+        assert!(exec.id.starts_with("exec-"));
+        assert_eq!(exec.session_id, "sess-123");
+        assert_eq!(exec.agent_id, "researcher");
+        assert_eq!(exec.parent_execution_id, Some("exec-parent".to_string()));
+        assert_eq!(exec.delegation_type, DelegationType::Sequential);
+        assert_eq!(exec.task, Some("Research AI topics".to_string()));
+        assert_eq!(exec.status, ExecutionStatus::Queued);
+    }
+
+    #[test]
+    fn agent_execution_is_root() {
+        let root = AgentExecution::new_root("sess", "agent");
+        let delegated = AgentExecution::new_delegated(
+            "sess", "sub", "parent", DelegationType::Sequential, "task"
+        );
+
+        assert!(root.is_root());
+        assert!(!delegated.is_root());
+    }
+
+    #[test]
+    fn agent_execution_total_tokens() {
+        let mut exec = AgentExecution::new_root("sess", "agent");
+        exec.tokens_in = 500;
+        exec.tokens_out = 250;
+
+        assert_eq!(exec.total_tokens(), 750);
+    }
+
+    #[test]
+    fn agent_execution_id_is_unique() {
+        let exec1 = AgentExecution::new_root("sess", "agent");
+        let exec2 = AgentExecution::new_root("sess", "agent");
+
+        assert_ne!(exec1.id, exec2.id);
+    }
+
+    // ========================================================================
+    // Checkpoint Tests
+    // ========================================================================
+
+    #[test]
+    fn checkpoint_new() {
+        let checkpoint = Checkpoint::new(5, "msg-123");
+
+        assert_eq!(checkpoint.llm_turn, 5);
+        assert_eq!(checkpoint.last_message_id, "msg-123");
+        assert!(checkpoint.pending_tool_calls.is_empty());
+        assert!(checkpoint.child_executions.is_empty());
+    }
+
+    // ========================================================================
+    // SessionFilter Tests
+    // ========================================================================
+
+    #[test]
+    fn session_filter_default() {
+        let filter = SessionFilter::default();
+
+        assert!(filter.status.is_none());
+        assert!(filter.root_agent_id.is_none());
+        assert!(filter.limit.is_none());
+        assert!(filter.offset.is_none());
+    }
+
+    // ========================================================================
+    // ExecutionFilter Tests
+    // ========================================================================
+
+    #[test]
+    fn execution_filter_default() {
+        let filter = ExecutionFilter::default();
+
+        assert!(filter.session_id.is_none());
+        assert!(filter.agent_id.is_none());
+        assert!(filter.status.is_none());
+        assert!(filter.limit.is_none());
+    }
+
+    // ========================================================================
+    // ApiError Tests
+    // ========================================================================
+
+    #[test]
+    fn api_error_display() {
+        let not_found = ApiError::NotFound("Session not found".to_string());
+        let db_error = ApiError::Database("Connection failed".to_string());
+        let bad_request = ApiError::BadRequest("Invalid input".to_string());
+        let invalid_transition = ApiError::InvalidTransition("Cannot pause completed session".to_string());
+
+        assert!(not_found.to_string().contains("Session not found"));
+        assert!(db_error.to_string().contains("Connection failed"));
+        assert!(bad_request.to_string().contains("Invalid input"));
+        assert!(invalid_transition.to_string().contains("Cannot pause"));
+    }
+
+    // ========================================================================
+    // Serialization Round-Trip Tests
+    // ========================================================================
+
+    #[test]
+    fn session_serialization_roundtrip() {
+        let session = Session::new_with_source("agent", TriggerSource::Plugin);
+        
+        let json = serde_json::to_string(&session).unwrap();
+        let parsed: Session = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, session.id);
+        assert_eq!(parsed.status, session.status);
+        assert_eq!(parsed.source, session.source);
+        assert_eq!(parsed.root_agent_id, session.root_agent_id);
+    }
+
+    #[test]
+    fn agent_execution_serialization_roundtrip() {
+        let exec = AgentExecution::new_delegated(
+            "sess-123",
+            "researcher",
+            "exec-parent",
+            DelegationType::Parallel,
+            "Research task",
+        );
+
+        let json = serde_json::to_string(&exec).unwrap();
+        let parsed: AgentExecution = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.id, exec.id);
+        assert_eq!(parsed.session_id, exec.session_id);
+        assert_eq!(parsed.agent_id, exec.agent_id);
+        assert_eq!(parsed.parent_execution_id, exec.parent_execution_id);
+        assert_eq!(parsed.delegation_type, exec.delegation_type);
+        assert_eq!(parsed.task, exec.task);
+    }
+}

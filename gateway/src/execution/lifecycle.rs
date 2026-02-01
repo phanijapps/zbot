@@ -1,0 +1,335 @@
+//! # Lifecycle Module
+//!
+//! Manages session and execution lifecycle transitions.
+//!
+//! This module centralizes all state transitions for sessions and executions,
+//! including creation, completion, error handling, and cancellation.
+
+use crate::database::{ConversationRepository, DatabaseManager};
+use crate::events::{EventBus, GatewayEvent};
+use api_logs::{LogService, SessionStatus};
+use execution_state::{AgentExecution, Session, StateService};
+use std::sync::Arc;
+
+// ============================================================================
+// SESSION CREATION
+// ============================================================================
+
+/// Result of session/execution setup.
+pub struct SessionSetup {
+    /// Session ID
+    pub session_id: String,
+    /// Execution ID
+    pub execution_id: String,
+}
+
+/// Get or create a session and execution for an agent invocation.
+///
+/// If `existing_session_id` is provided and the session exists, creates a new
+/// execution within that session. Otherwise, creates a new session and execution.
+pub fn get_or_create_session(
+    state_service: &StateService<DatabaseManager>,
+    agent_id: &str,
+    existing_session_id: Option<&str>,
+) -> SessionSetup {
+    if let Some(session_id) = existing_session_id {
+        // Try to continue existing session
+        match state_service.get_session(session_id) {
+            Ok(Some(_session)) => {
+                // Session exists, create a new execution for this message
+                let execution = AgentExecution::new_root(session_id, agent_id);
+                if let Err(e) = state_service.create_execution(&execution) {
+                    tracing::warn!("Failed to create execution in existing session: {}", e);
+                }
+                return SessionSetup {
+                    session_id: session_id.to_string(),
+                    execution_id: execution.id,
+                };
+            }
+            Ok(None) => {
+                tracing::warn!("Session {} not found, creating new session", session_id);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get session: {}", e);
+            }
+        }
+    }
+
+    // Create new session
+    let (session, execution) = state_service
+        .create_session(agent_id)
+        .unwrap_or_else(|e| {
+            tracing::warn!("Failed to create session: {}", e);
+            let s = Session::new(agent_id);
+            let e = AgentExecution::new_root(&s.id, agent_id);
+            (s, e)
+        });
+
+    SessionSetup {
+        session_id: session.id,
+        execution_id: execution.id,
+    }
+}
+
+/// Start an execution and log the start event.
+pub fn start_execution(
+    state_service: &StateService<DatabaseManager>,
+    log_service: &LogService<DatabaseManager>,
+    execution_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    parent_execution_id: Option<&str>,
+) {
+    // Transition execution state: QUEUED -> RUNNING
+    if let Err(e) = state_service.start_execution(execution_id) {
+        tracing::warn!("Failed to start execution: {}", e);
+    }
+
+    // Log the execution start
+    if let Err(e) = log_service.log_session_start(
+        execution_id,
+        session_id,
+        agent_id,
+        parent_execution_id,
+    ) {
+        tracing::warn!("Failed to log execution start: {}", e);
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        execution_id = %execution_id,
+        agent_id = %agent_id,
+        "Execution started"
+    );
+}
+
+// ============================================================================
+// MESSAGE PERSISTENCE
+// ============================================================================
+
+/// Save conversation messages (user input and assistant response).
+pub fn save_messages(
+    conversation_repo: &ConversationRepository,
+    execution_id: &str,
+    user_message: &str,
+    assistant_response: &str,
+) {
+    // Save user message
+    if let Err(e) = conversation_repo.add_message(execution_id, "user", user_message, None, None) {
+        tracing::error!("Failed to save user message: {}", e);
+    }
+
+    // Save assistant response if not empty
+    if !assistant_response.is_empty() {
+        if let Err(e) =
+            conversation_repo.add_message(execution_id, "assistant", assistant_response, None, None)
+        {
+            tracing::error!("Failed to save assistant message: {}", e);
+        }
+    }
+}
+
+// ============================================================================
+// COMPLETION HANDLING
+// ============================================================================
+
+/// Handle successful execution completion.
+///
+/// Updates state, logs the completion, and emits events.
+pub async fn complete_execution(
+    state_service: &StateService<DatabaseManager>,
+    log_service: &LogService<DatabaseManager>,
+    event_bus: &EventBus,
+    execution_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    conversation_id: &str,
+    response: Option<String>,
+) {
+    // Update execution status to COMPLETED
+    if let Err(e) = state_service.complete_execution(execution_id) {
+        tracing::warn!("Failed to complete execution: {}", e);
+    }
+
+    // Try to complete session if no other executions are running
+    match state_service.try_complete_session(session_id) {
+        Ok(true) => tracing::debug!("Session completed"),
+        Ok(false) => tracing::debug!("Session still has running executions"),
+        Err(e) => tracing::warn!("Failed to check/complete session: {}", e),
+    }
+
+    // Log session end
+    let _ = log_service.log_session_end(
+        execution_id,
+        session_id,
+        agent_id,
+        SessionStatus::Completed,
+        Some("Execution completed successfully"),
+    );
+
+    // Emit completion event
+    event_bus
+        .publish(GatewayEvent::AgentCompleted {
+            agent_id: agent_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            result: response,
+        })
+        .await;
+}
+
+/// Handle execution error/crash.
+///
+/// Updates state, logs the error, and emits events.
+pub async fn crash_execution(
+    state_service: &StateService<DatabaseManager>,
+    log_service: &LogService<DatabaseManager>,
+    event_bus: &EventBus,
+    execution_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    conversation_id: &str,
+    error: &str,
+    crash_session: bool,
+) {
+    // Update execution status to CRASHED
+    if let Err(e) = state_service.crash_execution(execution_id, error) {
+        tracing::warn!("Failed to crash execution: {}", e);
+    }
+
+    // Optionally crash the session too (for root executions)
+    if crash_session {
+        if let Err(e) = state_service.crash_session(session_id) {
+            tracing::warn!("Failed to crash session: {}", e);
+        }
+    }
+
+    // Log session error
+    let _ = log_service.log_session_end(
+        execution_id,
+        session_id,
+        agent_id,
+        SessionStatus::Error,
+        Some(error),
+    );
+
+    // Emit error event
+    event_bus
+        .publish(GatewayEvent::Error {
+            agent_id: Some(agent_id.to_string()),
+            conversation_id: Some(conversation_id.to_string()),
+            message: error.to_string(),
+        })
+        .await;
+}
+
+/// Handle user-initiated stop.
+///
+/// Updates state, logs the stop, and emits events.
+pub async fn stop_execution(
+    state_service: &StateService<DatabaseManager>,
+    log_service: &LogService<DatabaseManager>,
+    event_bus: &EventBus,
+    execution_id: &str,
+    session_id: &str,
+    agent_id: &str,
+    conversation_id: &str,
+    iteration: u32,
+) {
+    // Update session status to CANCELLED
+    if let Err(e) = state_service.cancel_session(session_id) {
+        tracing::warn!("Failed to cancel session: {}", e);
+    }
+
+    // Log session stopped
+    let _ = log_service.log_session_end(
+        execution_id,
+        session_id,
+        agent_id,
+        SessionStatus::Stopped,
+        Some("Stopped by user"),
+    );
+
+    // Emit stopped event
+    event_bus
+        .publish(GatewayEvent::AgentStopped {
+            agent_id: agent_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            iteration,
+        })
+        .await;
+}
+
+// ============================================================================
+// EVENT EMISSION HELPERS
+// ============================================================================
+
+/// Emit agent started event.
+pub async fn emit_agent_started(
+    event_bus: &EventBus,
+    agent_id: &str,
+    conversation_id: &str,
+    session_id: &str,
+) {
+    event_bus
+        .publish(GatewayEvent::AgentStarted {
+            agent_id: agent_id.to_string(),
+            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+        })
+        .await;
+}
+
+/// Emit delegation started event.
+pub async fn emit_delegation_started(
+    event_bus: &EventBus,
+    parent_agent_id: &str,
+    parent_conversation_id: &str,
+    child_agent_id: &str,
+    child_conversation_id: &str,
+    task: &str,
+) {
+    event_bus
+        .publish(GatewayEvent::DelegationStarted {
+            parent_agent_id: parent_agent_id.to_string(),
+            parent_conversation_id: parent_conversation_id.to_string(),
+            child_agent_id: child_agent_id.to_string(),
+            child_conversation_id: child_conversation_id.to_string(),
+            task: task.to_string(),
+        })
+        .await;
+}
+
+/// Emit delegation completed event.
+pub async fn emit_delegation_completed(
+    event_bus: &EventBus,
+    parent_agent_id: &str,
+    parent_conversation_id: &str,
+    child_agent_id: &str,
+    child_conversation_id: &str,
+    result: Option<String>,
+) {
+    event_bus
+        .publish(GatewayEvent::DelegationCompleted {
+            parent_agent_id: parent_agent_id.to_string(),
+            parent_conversation_id: parent_conversation_id.to_string(),
+            child_agent_id: child_agent_id.to_string(),
+            child_conversation_id: child_conversation_id.to_string(),
+            result,
+        })
+        .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_session_setup_struct() {
+        let setup = SessionSetup {
+            session_id: "session-123".to_string(),
+            execution_id: "exec-456".to_string(),
+        };
+        assert_eq!(setup.session_id, "session-123");
+        assert_eq!(setup.execution_id, "exec-456");
+    }
+}

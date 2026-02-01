@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 4;
+const SCHEMA_VERSION: i32 = 5;
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
@@ -21,6 +21,7 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
             status TEXT NOT NULL DEFAULT 'running',
+            source TEXT NOT NULL DEFAULT 'web',
             root_agent_id TEXT NOT NULL,
             title TEXT,
             created_at TEXT NOT NULL,
@@ -45,6 +46,11 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_sessions_root_agent ON sessions(root_agent_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source)",
         [],
     )?;
 

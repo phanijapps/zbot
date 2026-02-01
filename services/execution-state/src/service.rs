@@ -43,6 +43,47 @@ impl<D: StateDbProvider> StateService<D> {
         Ok((session, execution))
     }
 
+    /// Create a new session with source and a root execution.
+    pub fn create_session_with_source(&self, agent_id: &str, source: TriggerSource) -> Result<(Session, AgentExecution), String> {
+        let session = Session::new_with_source(agent_id, source);
+        let execution = AgentExecution::new_root(&session.id, agent_id);
+
+        self.repo.create_session(&session)?;
+        self.repo.create_execution(&execution)?;
+
+        Ok((session, execution))
+    }
+
+    /// Create a new session in QUEUED state (does not create root execution yet).
+    pub fn create_session_queued(&self, agent_id: &str, source: TriggerSource) -> Result<Session, String> {
+        let session = Session::new_queued(agent_id, source);
+        self.repo.create_session(&session)?;
+        Ok(session)
+    }
+
+    /// Start a queued session (transition Queued → Running and create root execution).
+    pub fn start_session(&self, session_id: &str) -> Result<(Session, AgentExecution), String> {
+        let session = self.repo.get_session(session_id)?
+            .ok_or_else(|| format!("Session not found: {}", session_id))?;
+
+        if session.status != SessionStatus::Queued {
+            return Err(format!("Cannot start session in {} state (must be queued)", session.status.as_str()));
+        }
+
+        // Transition to Running
+        self.repo.update_session_status(session_id, SessionStatus::Running)?;
+
+        // Create root execution
+        let execution = AgentExecution::new_root(session_id, &session.root_agent_id);
+        self.repo.create_execution(&execution)?;
+
+        // Fetch updated session
+        let updated_session = self.repo.get_session(session_id)?
+            .ok_or_else(|| "Session disappeared after update".to_string())?;
+
+        Ok((updated_session, execution))
+    }
+
     /// Get a session by ID.
     pub fn get_session(&self, session_id: &str) -> Result<Option<Session>, String> {
         self.repo.get_session(session_id)
@@ -182,14 +223,32 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.get_child_executions(parent_execution_id)
     }
 
-    /// Check if a session has any running executions.
+    /// Check if a session has any pending executions (running or queued).
+    ///
+    /// This checks for both RUNNING and QUEUED executions. QUEUED executions
+    /// are important to include because delegated subagent executions are
+    /// created in QUEUED status synchronously when delegation is requested,
+    /// before the actual spawn happens asynchronously.
     pub fn has_running_executions(&self, session_id: &str) -> Result<bool, String> {
-        let executions = self.repo.list_executions(&ExecutionFilter {
+        // Check for RUNNING executions
+        let running = self.repo.list_executions(&ExecutionFilter {
             session_id: Some(session_id.to_string()),
             status: Some(ExecutionStatus::Running),
             ..Default::default()
         })?;
-        Ok(!executions.is_empty())
+
+        if !running.is_empty() {
+            return Ok(true);
+        }
+
+        // Check for QUEUED executions (pending subagents)
+        let queued = self.repo.list_executions(&ExecutionFilter {
+            session_id: Some(session_id.to_string()),
+            status: Some(ExecutionStatus::Queued),
+            ..Default::default()
+        })?;
+
+        Ok(!queued.is_empty())
     }
 
     /// Try to complete a session, but only if all executions are done.

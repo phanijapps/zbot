@@ -40,13 +40,14 @@ impl<D: StateDbProvider> StateRepository<D> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "INSERT INTO sessions (
-                    id, status, root_agent_id, title,
+                    id, status, source, root_agent_id, title,
                     created_at, started_at, completed_at,
                     total_tokens_in, total_tokens_out, metadata
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     session.id,
                     session.status.as_str(),
+                    session.source.as_str(),
                     session.root_agent_id,
                     session.title,
                     session.created_at,
@@ -69,7 +70,7 @@ impl<D: StateDbProvider> StateRepository<D> {
     pub fn get_session(&self, id: &str) -> Result<Option<Session>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, status, root_agent_id, title,
+                "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata
                  FROM sessions WHERE id = ?",
@@ -87,7 +88,7 @@ impl<D: StateDbProvider> StateRepository<D> {
     pub fn list_sessions(&self, filter: &SessionFilter) -> Result<Vec<Session>, String> {
         self.db.with_connection(|conn| {
             let mut sql = String::from(
-                "SELECT id, status, root_agent_id, title,
+                "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata
                  FROM sessions WHERE 1=1",
@@ -488,15 +489,18 @@ impl<D: StateDbProvider> StateRepository<D> {
     /// Get dashboard stats (pre-computed, ready to display).
     pub fn get_dashboard_stats(&self) -> Result<DashboardStats, String> {
         self.db.with_connection(|conn| {
-            // Session counts by status
+            // =====================================================================
+            // SESSION COUNTS BY STATUS
+            // =====================================================================
             let mut stmt = conn.prepare(
                 "SELECT status, COUNT(*) FROM sessions GROUP BY status",
             )?;
 
-            let mut running = 0u64;
-            let mut paused = 0u64;
-            let mut completed = 0u64;
-            let mut crashed = 0u64;
+            let mut sessions_queued = 0u64;
+            let mut sessions_running = 0u64;
+            let mut sessions_paused = 0u64;
+            let mut sessions_completed = 0u64;
+            let mut sessions_crashed = 0u64;
 
             let rows = stmt.query_map([], |row| {
                 Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
@@ -505,32 +509,88 @@ impl<D: StateDbProvider> StateRepository<D> {
             for row in rows {
                 let (status, count) = row?;
                 match status.as_str() {
-                    "running" => running = count,
-                    "paused" => paused = count,
-                    "completed" => completed = count,
-                    "crashed" => crashed = count,
+                    "queued" => sessions_queued = count,
+                    "running" => sessions_running = count,
+                    "paused" => sessions_paused = count,
+                    "completed" => sessions_completed = count,
+                    "crashed" => sessions_crashed = count,
                     _ => {}
                 }
             }
 
-            // Today's stats
+            // =====================================================================
+            // EXECUTION COUNTS BY STATUS
+            // =====================================================================
+            let mut stmt = conn.prepare(
+                "SELECT status, COUNT(*) FROM agent_executions GROUP BY status",
+            )?;
+
+            let mut executions_queued = 0u64;
+            let mut executions_running = 0u64;
+            let mut executions_completed = 0u64;
+            let mut executions_crashed = 0u64;
+            let mut executions_cancelled = 0u64;
+
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?;
+
+            for row in rows {
+                let (status, count) = row?;
+                match status.as_str() {
+                    "queued" => executions_queued = count,
+                    "running" => executions_running = count,
+                    "completed" => executions_completed = count,
+                    "crashed" => executions_crashed = count,
+                    "cancelled" => executions_cancelled = count,
+                    _ => {}
+                }
+            }
+
+            // =====================================================================
+            // TODAY'S STATS
+            // =====================================================================
             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
             let mut stmt = conn.prepare(
                 "SELECT COUNT(*), COALESCE(SUM(total_tokens_in + total_tokens_out), 0)
                  FROM sessions WHERE DATE(created_at) = ?",
             )?;
 
-            let (today_count, today_tokens) = stmt.query_row(params![today], |row| {
+            let (today_sessions, today_tokens) = stmt.query_row(params![today], |row| {
                 Ok((row.get::<_, i64>(0)? as u64, row.get::<_, i64>(1)? as u64))
             })?;
 
+            // =====================================================================
+            // SESSIONS BY SOURCE
+            // =====================================================================
+            let mut stmt = conn.prepare(
+                "SELECT source, COUNT(*) FROM sessions GROUP BY source",
+            )?;
+
+            let mut sessions_by_source = std::collections::HashMap::new();
+            let rows = stmt.query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? as u64))
+            })?;
+
+            for row in rows {
+                let (source, count) = row?;
+                sessions_by_source.insert(source, count);
+            }
+
             Ok(DashboardStats {
-                running,
-                paused,
-                completed,
-                crashed,
-                today_count,
+                sessions_queued,
+                sessions_running,
+                sessions_paused,
+                sessions_completed,
+                sessions_crashed,
+                executions_queued,
+                executions_running,
+                executions_completed,
+                executions_crashed,
+                executions_cancelled,
+                today_sessions,
                 today_tokens,
+                sessions_by_source,
             })
         })
     }
@@ -541,18 +601,20 @@ impl<D: StateDbProvider> StateRepository<D> {
 
     fn row_to_session(row: &rusqlite::Row) -> Result<Session, rusqlite::Error> {
         let status_str: String = row.get(1)?;
-        let metadata_json: Option<String> = row.get(9)?;
+        let source_str: String = row.get(2)?;
+        let metadata_json: Option<String> = row.get(10)?;
 
         Ok(Session {
             id: row.get(0)?,
             status: status_str.parse().unwrap_or(SessionStatus::Running),
-            root_agent_id: row.get(2)?,
-            title: row.get(3)?,
-            created_at: row.get(4)?,
-            started_at: row.get(5)?,
-            completed_at: row.get(6)?,
-            total_tokens_in: row.get::<_, i64>(7)? as u64,
-            total_tokens_out: row.get::<_, i64>(8)? as u64,
+            source: source_str.parse().unwrap_or(TriggerSource::Web),
+            root_agent_id: row.get(3)?,
+            title: row.get(4)?,
+            created_at: row.get(5)?,
+            started_at: row.get(6)?,
+            completed_at: row.get(7)?,
+            total_tokens_in: row.get::<_, i64>(8)? as u64,
+            total_tokens_out: row.get::<_, i64>(9)? as u64,
             metadata: metadata_json.and_then(|s| serde_json::from_str(&s).ok()),
         })
     }
@@ -578,5 +640,515 @@ impl<D: StateDbProvider> StateRepository<D> {
             error: row.get(12)?,
             log_path: row.get(13)?,
         })
+    }
+}
+
+// ============================================================================
+// TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+    use rusqlite::Connection;
+
+    /// Test database provider using in-memory SQLite.
+    struct TestDbProvider {
+        conn: Mutex<Connection>,
+    }
+
+    impl TestDbProvider {
+        fn new() -> Self {
+            let conn = Connection::open_in_memory().expect("Failed to create in-memory database");
+            
+            // Create tables matching the actual schema
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    source TEXT NOT NULL DEFAULT 'web',
+                    root_agent_id TEXT NOT NULL,
+                    title TEXT,
+                    created_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    total_tokens_in INTEGER NOT NULL DEFAULT 0,
+                    total_tokens_out INTEGER NOT NULL DEFAULT 0,
+                    metadata TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_executions (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    parent_execution_id TEXT,
+                    delegation_type TEXT NOT NULL DEFAULT 'root',
+                    task TEXT,
+                    status TEXT NOT NULL DEFAULT 'queued',
+                    started_at TEXT,
+                    completed_at TEXT,
+                    tokens_in INTEGER NOT NULL DEFAULT 0,
+                    tokens_out INTEGER NOT NULL DEFAULT 0,
+                    checkpoint TEXT,
+                    error TEXT,
+                    log_path TEXT,
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_agent_executions_session ON agent_executions(session_id);
+                CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+                "#,
+            )
+            .expect("Failed to create tables");
+
+            Self {
+                conn: Mutex::new(conn),
+            }
+        }
+    }
+
+    impl StateDbProvider for TestDbProvider {
+        fn with_connection<F, R>(&self, f: F) -> Result<R, String>
+        where
+            F: FnOnce(&Connection) -> Result<R, rusqlite::Error>,
+        {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            f(&conn).map_err(|e| e.to_string())
+        }
+    }
+
+    fn setup_repo() -> StateRepository<TestDbProvider> {
+        let db = Arc::new(TestDbProvider::new());
+        StateRepository::new(db)
+    }
+
+    // ========================================================================
+    // Session Tests
+    // ========================================================================
+
+    #[test]
+    fn create_session_success() {
+        let repo = setup_repo();
+        let session = Session::new("root-agent");
+
+        let result = repo.create_session(&session);
+        assert!(result.is_ok(), "Failed to create session: {:?}", result.err());
+    }
+
+    #[test]
+    fn get_session_success() {
+        let repo = setup_repo();
+        let session = Session::new_with_source("test-agent", TriggerSource::Cli);
+        
+        repo.create_session(&session).unwrap();
+        
+        let retrieved = repo.get_session(&session.id).unwrap();
+        assert!(retrieved.is_some());
+        
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.id, session.id);
+        assert_eq!(retrieved.status, SessionStatus::Running);
+        assert_eq!(retrieved.source, TriggerSource::Cli);
+        assert_eq!(retrieved.root_agent_id, "test-agent");
+    }
+
+    #[test]
+    fn get_session_not_found() {
+        let repo = setup_repo();
+        
+        let result = repo.get_session("nonexistent-session");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn list_sessions_empty() {
+        let repo = setup_repo();
+        let filter = SessionFilter::default();
+        
+        let sessions = repo.list_sessions(&filter).unwrap();
+        assert!(sessions.is_empty());
+    }
+
+    #[test]
+    fn list_sessions_with_data() {
+        let repo = setup_repo();
+        
+        let s1 = Session::new("agent1");
+        let s2 = Session::new("agent2");
+        let s3 = Session::new_with_source("agent3", TriggerSource::Cron);
+        
+        repo.create_session(&s1).unwrap();
+        repo.create_session(&s2).unwrap();
+        repo.create_session(&s3).unwrap();
+        
+        let filter = SessionFilter::default();
+        let sessions = repo.list_sessions(&filter).unwrap();
+        assert_eq!(sessions.len(), 3);
+    }
+
+    #[test]
+    fn list_sessions_with_limit() {
+        let repo = setup_repo();
+        
+        for i in 0..5 {
+            let session = Session::new(format!("agent{}", i));
+            repo.create_session(&session).unwrap();
+        }
+        
+        let filter = SessionFilter {
+            limit: Some(2),
+            ..Default::default()
+        };
+        let sessions = repo.list_sessions(&filter).unwrap();
+        assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn update_session_status() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        
+        repo.create_session(&session).unwrap();
+        repo.update_session_status(&session.id, SessionStatus::Completed).unwrap();
+        
+        let updated = repo.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(updated.status, SessionStatus::Completed);
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[test]
+    fn update_session_tokens() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        // Create an execution with tokens
+        let mut exec = AgentExecution::new_root(&session.id, "agent");
+        exec.tokens_in = 100;
+        exec.tokens_out = 50;
+        repo.create_execution(&exec).unwrap();
+        
+        // Update session tokens from execution totals
+        repo.update_session_tokens(&session.id).unwrap();
+        
+        let updated = repo.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(updated.total_tokens_in, 100);
+        assert_eq!(updated.total_tokens_out, 50);
+    }
+
+    #[test]
+    fn delete_session() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        
+        repo.create_session(&session).unwrap();
+        assert!(repo.get_session(&session.id).unwrap().is_some());
+        
+        repo.delete_session(&session.id).unwrap();
+        assert!(repo.get_session(&session.id).unwrap().is_none());
+    }
+
+    // ========================================================================
+    // Execution Tests
+    // ========================================================================
+
+    #[test]
+    fn create_execution_success() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec = AgentExecution::new_root(&session.id, "root-agent");
+        let result = repo.create_execution(&exec);
+        
+        assert!(result.is_ok(), "Failed to create execution: {:?}", result.err());
+    }
+
+    #[test]
+    fn get_execution_success() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec = AgentExecution::new_root(&session.id, "root-agent");
+        repo.create_execution(&exec).unwrap();
+        
+        let retrieved = repo.get_execution(&exec.id).unwrap();
+        assert!(retrieved.is_some());
+        
+        let retrieved = retrieved.unwrap();
+        assert_eq!(retrieved.id, exec.id);
+        assert_eq!(retrieved.session_id, session.id);
+        assert_eq!(retrieved.agent_id, "root-agent");
+        assert_eq!(retrieved.delegation_type, DelegationType::Root);
+    }
+
+    #[test]
+    fn get_execution_not_found() {
+        let repo = setup_repo();
+        
+        let result = repo.get_execution("nonexistent");
+        assert!(result.is_ok());
+        assert!(result.unwrap().is_none());
+    }
+
+    #[test]
+    fn create_delegated_execution() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let root_exec = AgentExecution::new_root(&session.id, "root");
+        repo.create_execution(&root_exec).unwrap();
+        
+        let sub_exec = AgentExecution::new_delegated(
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research AI topics",
+        );
+        repo.create_execution(&sub_exec).unwrap();
+        
+        let retrieved = repo.get_execution(&sub_exec.id).unwrap().unwrap();
+        assert_eq!(retrieved.parent_execution_id, Some(root_exec.id.clone()));
+        assert_eq!(retrieved.delegation_type, DelegationType::Sequential);
+        assert_eq!(retrieved.task, Some("Research AI topics".to_string()));
+    }
+
+    #[test]
+    fn list_executions_by_session() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec1 = AgentExecution::new_root(&session.id, "agent1");
+        let exec2 = AgentExecution::new_delegated(
+            &session.id, "agent2", &exec1.id, DelegationType::Sequential, "task"
+        );
+        
+        repo.create_execution(&exec1).unwrap();
+        repo.create_execution(&exec2).unwrap();
+        
+        let filter = ExecutionFilter {
+            session_id: Some(session.id.clone()),
+            ..Default::default()
+        };
+        
+        let executions = repo.list_executions(&filter).unwrap();
+        assert_eq!(executions.len(), 2);
+    }
+
+    #[test]
+    fn get_child_executions() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let root = AgentExecution::new_root(&session.id, "root");
+        repo.create_execution(&root).unwrap();
+        
+        let child1 = AgentExecution::new_delegated(
+            &session.id, "child1", &root.id, DelegationType::Sequential, "task1"
+        );
+        let child2 = AgentExecution::new_delegated(
+            &session.id, "child2", &root.id, DelegationType::Parallel, "task2"
+        );
+        
+        repo.create_execution(&child1).unwrap();
+        repo.create_execution(&child2).unwrap();
+        
+        let children = repo.get_child_executions(&root.id).unwrap();
+        assert_eq!(children.len(), 2);
+    }
+
+    #[test]
+    fn update_execution_status() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec = AgentExecution::new_root(&session.id, "agent");
+        repo.create_execution(&exec).unwrap();
+        
+        repo.update_execution_status(&exec.id, ExecutionStatus::Running).unwrap();
+        let updated = repo.get_execution(&exec.id).unwrap().unwrap();
+        assert_eq!(updated.status, ExecutionStatus::Running);
+        assert!(updated.started_at.is_some());
+        
+        repo.update_execution_status(&exec.id, ExecutionStatus::Completed).unwrap();
+        let updated = repo.get_execution(&exec.id).unwrap().unwrap();
+        assert_eq!(updated.status, ExecutionStatus::Completed);
+        assert!(updated.completed_at.is_some());
+    }
+
+    #[test]
+    fn update_execution_tokens() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec = AgentExecution::new_root(&session.id, "agent");
+        repo.create_execution(&exec).unwrap();
+        
+        repo.update_execution_tokens(&exec.id, 200, 100).unwrap();
+        
+        let updated = repo.get_execution(&exec.id).unwrap().unwrap();
+        assert_eq!(updated.tokens_in, 200);
+        assert_eq!(updated.tokens_out, 100);
+    }
+
+    #[test]
+    fn set_execution_error() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec = AgentExecution::new_root(&session.id, "agent");
+        repo.create_execution(&exec).unwrap();
+        
+        repo.set_execution_error(&exec.id, "Something went wrong").unwrap();
+        
+        let updated = repo.get_execution(&exec.id).unwrap().unwrap();
+        assert_eq!(updated.error, Some("Something went wrong".to_string()));
+        // Note: set_execution_error only sets the error message, not the status
+        // Status should be updated separately via update_execution_status
+    }
+
+    // ========================================================================
+    // Session with Executions Tests
+    // ========================================================================
+
+    #[test]
+    fn get_session_with_executions() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let root = AgentExecution::new_root(&session.id, "root");
+        let sub = AgentExecution::new_delegated(
+            &session.id, "sub", &root.id, DelegationType::Sequential, "task"
+        );
+        
+        repo.create_execution(&root).unwrap();
+        repo.create_execution(&sub).unwrap();
+        
+        let result = repo.get_session_with_executions(&session.id).unwrap();
+        assert!(result.is_some());
+        
+        let swe = result.unwrap();
+        assert_eq!(swe.session.id, session.id);
+        assert_eq!(swe.executions.len(), 2);
+        assert_eq!(swe.subagent_count, 1); // One subagent
+    }
+
+    #[test]
+    fn list_sessions_with_executions() {
+        let repo = setup_repo();
+        
+        let s1 = Session::new("agent1");
+        let s2 = Session::new("agent2");
+        
+        repo.create_session(&s1).unwrap();
+        repo.create_session(&s2).unwrap();
+        
+        let e1 = AgentExecution::new_root(&s1.id, "agent1");
+        let e2 = AgentExecution::new_root(&s2.id, "agent2");
+        
+        repo.create_execution(&e1).unwrap();
+        repo.create_execution(&e2).unwrap();
+        
+        let filter = SessionFilter::default();
+        let sessions = repo.list_sessions_with_executions(&filter).unwrap();
+        assert_eq!(sessions.len(), 2);
+        
+        for swe in sessions {
+            assert!(!swe.executions.is_empty());
+        }
+    }
+
+    // ========================================================================
+    // Dashboard Stats Tests
+    // ========================================================================
+
+    #[test]
+    fn get_dashboard_stats_empty() {
+        let repo = setup_repo();
+        
+        let stats = repo.get_dashboard_stats().unwrap();
+        
+        assert_eq!(stats.sessions_running, 0);
+        assert_eq!(stats.sessions_queued, 0);
+        assert_eq!(stats.sessions_completed, 0);
+        assert_eq!(stats.executions_running, 0);
+    }
+
+    #[test]
+    fn get_dashboard_stats_with_data() {
+        let repo = setup_repo();
+        
+        // Create sessions with different statuses and sources
+        let s1 = Session::new_with_source("agent1", TriggerSource::Web);
+        let s2 = Session::new_with_source("agent2", TriggerSource::Web);
+        let s3 = Session::new_with_source("agent3", TriggerSource::Cli);
+        let s4 = Session::new_queued("agent4", TriggerSource::Cron);
+        
+        repo.create_session(&s1).unwrap();
+        repo.create_session(&s2).unwrap();
+        repo.create_session(&s3).unwrap();
+        repo.create_session(&s4).unwrap();
+        
+        // Complete one session
+        repo.update_session_status(&s2.id, SessionStatus::Completed).unwrap();
+        
+        // Create executions
+        let e1 = AgentExecution::new_root(&s1.id, "agent1");
+        let e3 = AgentExecution::new_root(&s3.id, "agent3");
+        
+        repo.create_execution(&e1).unwrap();
+        repo.create_execution(&e3).unwrap();
+        
+        // Start one execution
+        repo.update_execution_status(&e1.id, ExecutionStatus::Running).unwrap();
+        
+        let stats = repo.get_dashboard_stats().unwrap();
+        
+        assert_eq!(stats.sessions_running, 2); // s1, s3 (s2 completed, s4 queued)
+        assert_eq!(stats.sessions_queued, 1); // s4
+        assert_eq!(stats.sessions_completed, 1); // s2
+        assert_eq!(stats.executions_running, 1); // e1
+        assert_eq!(stats.executions_queued, 1); // e3 (not started yet)
+        
+        // Check by source
+        assert_eq!(*stats.sessions_by_source.get("web").unwrap_or(&0), 2);
+        assert_eq!(*stats.sessions_by_source.get("cli").unwrap_or(&0), 1);
+        assert_eq!(*stats.sessions_by_source.get("cron").unwrap_or(&0), 1);
+    }
+
+    // ========================================================================
+    // Checkpoint Tests
+    // ========================================================================
+
+    #[test]
+    fn save_execution_checkpoint() {
+        let repo = setup_repo();
+        let session = Session::new("agent");
+        repo.create_session(&session).unwrap();
+        
+        let exec = AgentExecution::new_root(&session.id, "agent");
+        repo.create_execution(&exec).unwrap();
+        
+        let checkpoint = Checkpoint::new(5, "msg-last");
+        repo.save_execution_checkpoint(&exec.id, &checkpoint).unwrap();
+        
+        let updated = repo.get_execution(&exec.id).unwrap().unwrap();
+        assert!(updated.checkpoint.is_some());
+        
+        let saved_checkpoint = updated.checkpoint.unwrap();
+        assert_eq!(saved_checkpoint.llm_turn, 5);
+        assert_eq!(saved_checkpoint.last_message_id, "msg-last");
     }
 }

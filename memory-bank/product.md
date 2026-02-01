@@ -98,7 +98,35 @@ memory search preferences
 
 Stored in `agents_data/{agent_id}/memory.json`.
 
-### 7. Scheduled Tasks (Planned)
+### 7. Operations Dashboard
+Real-time monitoring and management of agent sessions:
+
+**Statistics Panel:**
+- Active sessions count (running, queued)
+- Completed/crashed session counts
+- Sessions by trigger source (web, cli, api, cron, plugin)
+
+**Session List:**
+- All sessions with status indicators
+- Execution hierarchy (root agent + subagents)
+- Turn counts and timing information
+- Filter by source and status
+- Auto-refresh every 5 seconds
+
+**Session Management:**
+- View session details and execution tree
+- Cancel running sessions
+- Track subagent delegation in real-time
+
+### 8. Multi-Turn Session Management
+Conversations persist across multiple turns within a session:
+
+- **Session Continuity**: Multiple messages share the same session until `/new`
+- **Context Preservation**: Full conversation history maintained per session
+- **Session Reset**: `/new` command starts fresh session
+- **Source Tracking**: Sessions tagged with origin (web, cli, api, etc.)
+
+### 9. Scheduled Tasks (Planned)
 Cron-based scheduling for automated agent invocations. Define recurring tasks that run agents on a schedule.
 
 ## Technology Stack
@@ -145,6 +173,12 @@ File-based configuration:
 
 1. **v0.1** — Core chat, providers, skills ✓
 2. **v0.2** — Persistent memory, SQLite conversations ✓
-3. **v0.3** — MCP integration, CLI improvements
-4. **v0.4** — Scheduled tasks, multi-agent workflows
-5. **v1.0** — Stable API, documentation, packaging
+3. **v0.3** — MCP integration, CLI improvements ✓
+4. **v0.4** — Operations Dashboard, Session Management ✓
+   - Real-time session monitoring
+   - Multi-turn conversation support
+   - Trigger source tracking
+   - Subagent delegation visibility
+   - Comprehensive test suite (290+ tests)
+5. **v0.5** — Scheduled tasks, multi-agent workflows
+6. **v1.0** — Stable API, documentation, packaging

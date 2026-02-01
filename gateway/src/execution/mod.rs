@@ -14,19 +14,29 @@
 //! - `handle` - Execution control handle (stop, pause, resume, cancel)
 //! - `events` - Event conversion from runtime to gateway events
 //! - `delegation` - Agent-to-agent delegation with callbacks
+//! - `invoke` - Setup and executor building utilities
+//! - `lifecycle` - Session and execution state management
 //! - `runner` - Main execution runner
 
 mod config;
 mod delegation;
 mod events;
 mod handle;
+mod invoke;
+mod lifecycle;
 mod runner;
 
 // Re-export public types
 pub use config::{ExecutionConfig, GatewayFileSystem};
 pub use delegation::{
-    handle_subagent_completion, DelegationContext, DelegationRegistry, DelegationRequest,
+    handle_delegation_failure, handle_delegation_success, handle_subagent_completion,
+    spawn_delegated_agent, DelegationContext, DelegationRegistry, DelegationRequest,
 };
 pub use events::convert_stream_event;
 pub use handle::ExecutionHandle;
+pub use lifecycle::{
+    complete_execution, crash_execution, emit_agent_started, emit_delegation_completed,
+    emit_delegation_started, get_or_create_session, save_messages, start_execution,
+    stop_execution, SessionSetup,
+};
 pub use runner::ExecutionRunner;

@@ -340,10 +340,13 @@ export interface LogFilter {
 }
 
 // ============================================================================
-// Execution State Types
+// Execution State Types (V2 API)
 // ============================================================================
 
-/** Execution session status */
+/** Session state status (top-level container) - different from LogSession status */
+export type SessionStateStatus = "queued" | "running" | "paused" | "completed" | "crashed";
+
+/** Execution status (agent participation) */
 export type ExecutionStatus =
   | "queued"
   | "running"
@@ -352,7 +355,104 @@ export type ExecutionStatus =
   | "cancelled"
   | "completed";
 
-/** Execution session (snake_case from API) */
+/** Delegation type */
+export type DelegationType = "root" | "sequential" | "parallel";
+
+/** Session - top-level work container (V2 API) */
+/** Trigger source for a session */
+export type TriggerSource = "web" | "cli" | "cron" | "api" | "plugin";
+
+export interface Session {
+  id: string;
+  status: SessionStateStatus;
+  /** Trigger source (web, cli, cron, api, plugin) */
+  source: TriggerSource;
+  root_agent_id: string;
+  title?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  metadata?: Record<string, unknown>;
+}
+
+/** Agent Execution - agent's participation in a session (V2 API) */
+export interface AgentExecution {
+  id: string;
+  session_id: string;
+  agent_id: string;
+  parent_execution_id?: string;
+  delegation_type: DelegationType;
+  task?: string;
+  status: ExecutionStatus;
+  started_at?: string;
+  completed_at?: string;
+  tokens_in: number;
+  tokens_out: number;
+  error?: string;
+}
+
+/** Session with all its executions (V2 API response) */
+export interface SessionWithExecutions {
+  id: string;
+  status: SessionStateStatus;
+  /** Trigger source (web, cli, cron, api, plugin) */
+  source: TriggerSource;
+  root_agent_id: string;
+  title?: string;
+  created_at: string;
+  started_at?: string;
+  completed_at?: string;
+  total_tokens_in: number;
+  total_tokens_out: number;
+  metadata?: Record<string, unknown>;
+  executions: AgentExecution[];
+  subagent_count: number;
+}
+
+/** Filter for querying sessions */
+export interface SessionFilter {
+  status?: SessionStateStatus;
+  root_agent_id?: string;
+  from_time?: string;
+  to_time?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Filter for querying executions */
+export interface ExecutionFilter {
+  session_id?: string;
+  agent_id?: string;
+  status?: ExecutionStatus;
+  limit?: number;
+  offset?: number;
+}
+
+/** Dashboard stats (V2 - session + execution counts) */
+export interface DashboardStats {
+  sessions_queued: number;
+  sessions_running: number;
+  sessions_paused: number;
+  sessions_completed: number;
+  sessions_crashed: number;
+  executions_queued: number;
+  executions_running: number;
+  executions_completed: number;
+  executions_crashed: number;
+  executions_cancelled: number;
+  today_sessions: number;
+  today_tokens: number;
+  /** Sessions count by trigger source (e.g., { web: 5, cron: 2 }) */
+  sessions_by_source: Record<TriggerSource, number>;
+}
+
+// ============================================================================
+// Legacy Types (for backwards compatibility during migration)
+// ============================================================================
+
+/** @deprecated Use SessionWithExecutions instead */
 export interface ExecutionSession {
   id: string;
   conversation_id: string;
@@ -368,7 +468,7 @@ export interface ExecutionSession {
   error?: string;
 }
 
-/** Filter for querying execution sessions */
+/** @deprecated Use SessionFilter instead */
 export interface ExecutionSessionFilter {
   agent_id?: string;
   status?: ExecutionStatus;
@@ -376,5 +476,5 @@ export interface ExecutionSessionFilter {
   offset?: number;
 }
 
-/** Stats for execution sessions - status counts map */
+/** @deprecated Use DashboardStats instead */
 export type ExecutionStats = Record<string, number>;

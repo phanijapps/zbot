@@ -1,13 +1,18 @@
 // ============================================================================
 // DASHBOARD
 // Real-time execution monitoring and session history
+// Uses V2 API: Sessions contain Executions (root + subagents)
 // ============================================================================
 
 import { useEffect, useState, useCallback } from "react";
 import { getTransport } from "../../services/transport";
 import type {
-  ExecutionSession,
+  SessionWithExecutions,
+  AgentExecution,
+  SessionStateStatus,
   ExecutionStatus,
+  DashboardStats,
+  TriggerSource,
 } from "../../services/transport/types";
 import {
   Play,
@@ -30,12 +35,58 @@ import {
 import { useNavigate } from "react-router-dom";
 import { ChatSlider } from "../../components/ChatSlider";
 import { SessionChatViewer } from "../../components/SessionChatViewer";
+import { SourceBadge, SOURCE_CONFIG } from "./components/SourceBadge";
 
 // ============================================================================
-// Status Badge Component
+// Status Badge Components
 // ============================================================================
 
-function StatusBadge({ status }: { status: ExecutionStatus }) {
+function SessionStatusBadge({ status }: { status: SessionStateStatus }) {
+  const config: Record<
+    SessionStateStatus,
+    { label: string; color: string; icon: React.ReactNode }
+  > = {
+    queued: {
+      label: "Queued",
+      color: "var(--muted-foreground)",
+      icon: <Clock size={12} />,
+    },
+    running: {
+      label: "Running",
+      color: "var(--primary)",
+      icon: <Loader2 size={12} className="animate-spin" />,
+    },
+    paused: {
+      label: "Paused",
+      color: "var(--warning)",
+      icon: <Pause size={12} />,
+    },
+    crashed: {
+      label: "Crashed",
+      color: "var(--destructive)",
+      icon: <AlertCircle size={12} />,
+    },
+    completed: {
+      label: "Completed",
+      color: "var(--success)",
+      icon: <CheckCircle size={12} />,
+    },
+  };
+
+  const { label, color, icon } = config[status] || config.queued;
+
+  return (
+    <span
+      className="badge flex items-center gap-1"
+      style={{ backgroundColor: `color-mix(in srgb, ${color} 20%, transparent)`, color }}
+    >
+      {icon}
+      {label}
+    </span>
+  );
+}
+
+function ExecutionStatusBadge({ status }: { status: ExecutionStatus }) {
   const config: Record<
     ExecutionStatus,
     { label: string; color: string; icon: React.ReactNode }
@@ -86,106 +137,22 @@ function StatusBadge({ status }: { status: ExecutionStatus }) {
 }
 
 // ============================================================================
-// Conversation Group Types and Helpers
+// Session Card Component (V2 - shows session with its executions)
 // ============================================================================
 
-/**
- * Represents a conversation with all its sessions grouped together.
- * A conversation is the top-level grouping (starts with /new or hook).
- */
-interface ConversationGroup {
-  conversationId: string;
-  /** The primary/root agent session for opening chat */
-  primarySession: ExecutionSession;
-  /** All sessions in this conversation, sorted chronologically */
-  sessions: ExecutionSession[];
-  /** Total token usage across all sessions */
-  totalTokens: { in: number; out: number };
-  /** Overall status (crashed > cancelled > completed) */
-  overallStatus: ExecutionStatus;
-  /** Earliest created_at */
-  createdAt: string;
-}
-
-/**
- * Build conversation groups from flat sessions list.
- * Groups sessions by their root conversation (strips -sub-* suffix).
- */
-function buildConversationGroups(sessions: ExecutionSession[]): ConversationGroup[] {
-  // Helper to get root conversation ID (strip -sub-* suffix)
-  const getRootConversationId = (convId: string): string => {
-    const subIndex = convId.indexOf('-sub-');
-    return subIndex > 0 ? convId.substring(0, subIndex) : convId;
-  };
-
-  // Group sessions by root conversation
-  const conversationMap = new Map<string, ExecutionSession[]>();
-  for (const session of sessions) {
-    const rootConvId = getRootConversationId(session.conversation_id);
-    const group = conversationMap.get(rootConvId) || [];
-    group.push(session);
-    conversationMap.set(rootConvId, group);
-  }
-
-  // Build groups
-  const groups: ConversationGroup[] = [];
-
-  for (const [convId, convSessions] of conversationMap) {
-    // Sort by created_at
-    convSessions.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
-
-    // Calculate aggregates
-    let totalIn = 0, totalOut = 0;
-    let overallStatus: ExecutionStatus = 'completed';
-
-    for (const session of convSessions) {
-      totalIn += session.tokens_in;
-      totalOut += session.tokens_out;
-      // Priority: crashed > cancelled > completed
-      if (session.status === 'crashed') overallStatus = 'crashed';
-      else if (session.status === 'cancelled' && overallStatus !== 'crashed') overallStatus = 'cancelled';
-    }
-
-    // Find primary session (first "root" agent session)
-    const primarySession = convSessions.find(s => s.agent_id === 'root') || convSessions[0];
-
-    if (primarySession) {
-      groups.push({
-        conversationId: convId,
-        primarySession,
-        sessions: convSessions,
-        totalTokens: { in: totalIn, out: totalOut },
-        overallStatus,
-        createdAt: convSessions[0]?.created_at || '',
-      });
-    }
-  }
-
-  // Sort groups by created_at descending (newest first)
-  groups.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-
-  return groups;
-}
-
-// ============================================================================
-// Session Row Component
-// ============================================================================
-
-interface SessionRowProps {
-  session: ExecutionSession;
+interface SessionCardProps {
+  session: SessionWithExecutions;
   isExpanded: boolean;
   onToggle: () => void;
   onPause?: () => void;
   onResume?: () => void;
   onCancel?: () => void;
-  onOpenChat?: () => void;
+  onOpenChat?: (execution: AgentExecution) => void;
   isProcessing?: boolean;
   showControls?: boolean;
-  depth?: number;
-  isSubagent?: boolean;
 }
 
-function SessionRow({
+function SessionCard({
   session,
   isExpanded,
   onToggle,
@@ -195,9 +162,7 @@ function SessionRow({
   onOpenChat,
   isProcessing = false,
   showControls = true,
-  depth = 0,
-  isSubagent = false,
-}: SessionRowProps) {
+}: SessionCardProps) {
   const canPause = session.status === "running";
   const canResume = session.status === "paused";
   const canCancel = session.status === "running" || session.status === "paused";
@@ -217,37 +182,41 @@ function SessionRow({
     return `${mins}m ${secs}s`;
   };
 
-  const totalTokens = session.tokens_in + session.tokens_out;
-  const indentPx = depth * 24; // 24px per level
+  const totalTokens = session.total_tokens_in + session.total_tokens_out;
+
+  // Find root execution (delegation_type === 'root')
+  const rootExecution = session.executions.find(e => e.delegation_type === 'root');
+  const subagentExecutions = session.executions.filter(e => e.delegation_type !== 'root');
 
   return (
-    <div className={depth === 0 ? "border-b border-border last:border-b-0" : ""}>
+    <div className="border-b border-border last:border-b-0">
+      {/* Session header */}
       <div
         className="flex items-center gap-2 p-3 hover:bg-muted/50 cursor-pointer"
-        style={{ paddingLeft: `${12 + indentPx}px` }}
         onClick={onToggle}
       >
-        {/* Subagent connector line */}
-        {isSubagent && (
-          <span className="text-muted-foreground/50 flex-shrink-0" style={{ marginLeft: -8 }}>↳</span>
-        )}
-
         <button className="p-1 hover:bg-muted rounded flex-shrink-0">
           {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
         </button>
 
         <div className="flex-1 min-w-0 overflow-hidden">
           <div className="flex items-center gap-2">
-            <Bot size={14} className={isSubagent ? "text-primary/60 flex-shrink-0" : "text-muted-foreground flex-shrink-0"} />
-            <span className="font-medium truncate text-sm" style={{ minWidth: 0 }}>{session.agent_id}</span>
-            <span className="flex-shrink-0"><StatusBadge status={session.status} /></span>
+            <Bot size={14} className="text-muted-foreground flex-shrink-0" />
+            <span className="font-medium truncate text-sm">{rootExecution?.agent_id || session.root_agent_id}</span>
+            {session.subagent_count > 0 && (
+              <span className="text-xs text-primary">
+                +{session.subagent_count} subagent{session.subagent_count > 1 ? 's' : ''}
+              </span>
+            )}
+            <span className="flex-shrink-0"><SessionStatusBadge status={session.status} /></span>
+            <span className="flex-shrink-0"><SourceBadge source={session.source} /></span>
           </div>
         </div>
 
         {/* Compact info */}
         <div className="flex items-center gap-3 text-xs text-muted-foreground flex-shrink-0">
           {totalTokens > 0 && (
-            <span title={`In: ${session.tokens_in} / Out: ${session.tokens_out}`}>
+            <span title={`In: ${session.total_tokens_in} / Out: ${session.total_tokens_out}`}>
               {totalTokens.toLocaleString()} tok
             </span>
           )}
@@ -262,7 +231,7 @@ function SessionRow({
               className="btn btn--secondary btn--sm"
               onClick={onPause}
               disabled={isProcessing}
-              title="Pause execution"
+              title="Pause session"
             >
               <Pause size={14} />
             </button>
@@ -272,7 +241,7 @@ function SessionRow({
               className="btn btn--primary btn--sm"
               onClick={onResume}
               disabled={isProcessing}
-              title="Resume execution"
+              title="Resume session"
             >
               <Play size={14} />
             </button>
@@ -282,15 +251,15 @@ function SessionRow({
               className="btn btn--destructive btn--sm"
               onClick={onCancel}
               disabled={isProcessing}
-              title="Cancel execution"
+              title="Cancel session"
             >
               <Square size={14} />
             </button>
           )}
-          {onOpenChat && (
+          {rootExecution && onOpenChat && (
             <button
               className="btn btn--secondary btn--sm"
-              onClick={onOpenChat}
+              onClick={() => onOpenChat(rootExecution)}
               title="Open chat"
             >
               <MessageSquare size={14} />
@@ -299,151 +268,103 @@ function SessionRow({
         </div>
       </div>
 
+      {/* Expanded: show executions hierarchy */}
       {isExpanded && (
-        <div className="px-8 py-3 bg-muted/30 text-xs">
-          <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-            <div>
-              <span className="text-muted-foreground">Conversation:</span>{" "}
-              <span className="font-mono">{session.conversation_id}</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Tokens:</span>{" "}
-              <span>{session.tokens_in.toLocaleString()} in / {session.tokens_out.toLocaleString()} out</span>
-            </div>
-            <div>
-              <span className="text-muted-foreground">Created:</span>{" "}
-              {new Date(session.created_at).toLocaleString()}
-            </div>
-            {session.started_at && (
-              <div>
-                <span className="text-muted-foreground">Started:</span>{" "}
-                {new Date(session.started_at).toLocaleString()}
-              </div>
-            )}
-            {session.completed_at && (
-              <div>
-                <span className="text-muted-foreground">Completed:</span>{" "}
-                {new Date(session.completed_at).toLocaleString()}
-              </div>
-            )}
-            {session.parent_session_id && (
-              <div>
-                <span className="text-muted-foreground">Parent:</span>{" "}
-                <span className="font-mono">{session.parent_session_id}</span>
-              </div>
-            )}
-            {session.error && (
-              <div className="col-span-2">
-                <span className="text-destructive">Error:</span>{" "}
-                <span className="text-destructive">{session.error}</span>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ============================================================================
-// Conversation Group Component (for Session History)
-// ============================================================================
-
-interface ConversationGroupProps {
-  group: ConversationGroup;
-  isExpanded: boolean;
-  onToggleGroup: () => void;
-  onOpenChat: (session: ExecutionSession) => void;
-}
-
-function ConversationGroupComponent({
-  group,
-  isExpanded,
-  onToggleGroup,
-  onOpenChat,
-}: ConversationGroupProps) {
-  const totalTokens = group.totalTokens.in + group.totalTokens.out;
-
-  // Count subagents (sessions with parent_session_id)
-  const subagentCount = group.sessions.filter(s => s.parent_session_id).length;
-
-  return (
-    <div className="border-b border-border">
-      {/* Group header */}
-      <div
-        className="flex items-center gap-2 p-3 hover:bg-muted/50 cursor-pointer"
-        onClick={onToggleGroup}
-      >
-        <button className="p-1 hover:bg-muted rounded flex-shrink-0">
-          {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-        </button>
-
-        <div className="flex-1 min-w-0 overflow-hidden">
-          <div className="flex items-center gap-2">
-            <Bot size={14} className="text-muted-foreground flex-shrink-0" />
-            <span className="font-medium text-sm">root</span>
-            {subagentCount > 0 && (
-              <span className="text-xs text-primary">
-                +{subagentCount} subagent{subagentCount > 1 ? 's' : ''}
-              </span>
-            )}
-            <span className="flex-shrink-0"><StatusBadge status={group.overallStatus} /></span>
-          </div>
-        </div>
-
-        {/* Aggregated info */}
-        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-shrink-0">
-          {totalTokens > 0 && (
-            <span title={`In: ${group.totalTokens.in} / Out: ${group.totalTokens.out}`}>
-              {totalTokens.toLocaleString()} tok
-            </span>
-          )}
-          <span>{new Date(group.createdAt).toLocaleDateString()}</span>
-        </div>
-
-        {/* Open primary chat */}
-        <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
-          <button
-            className="btn btn--secondary btn--sm"
-            onClick={() => onOpenChat(group.primarySession)}
-            title="Open chat"
-          >
-            <MessageSquare size={14} />
-          </button>
-        </div>
-      </div>
-
-      {/* Expanded: show subagents only */}
-      {isExpanded && subagentCount > 0 && (
-        <div className="border-t border-border/50 bg-muted/10">
-          {group.sessions
-            .filter(s => s.parent_session_id)
-            .map((session) => (
-              <div
-                key={session.id}
-                className="flex items-center gap-2 py-2 px-4 hover:bg-muted/30"
-                style={{ paddingLeft: 40 }}
-              >
-                <span className="text-muted-foreground/50">↳</span>
-                <Bot size={12} className="text-primary/60" />
-                <span className="text-sm">{session.agent_id}</span>
-                <StatusBadge status={session.status} />
-
-                {(session.tokens_in + session.tokens_out) > 0 && (
-                  <span className="text-xs text-muted-foreground ml-auto">
-                    {(session.tokens_in + session.tokens_out).toLocaleString()} tok
-                  </span>
+        <div className="bg-muted/30 border-t border-border/50">
+          {/* Root execution details */}
+          {rootExecution && (
+            <div className="px-4 py-3 border-b border-border/30">
+              <div className="text-xs text-muted-foreground mb-2">Root Execution</div>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs">
+                <div>
+                  <span className="text-muted-foreground">Agent:</span>{" "}
+                  <span className="font-medium">{rootExecution.agent_id}</span>
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Status:</span>{" "}
+                  <ExecutionStatusBadge status={rootExecution.status} />
+                </div>
+                <div>
+                  <span className="text-muted-foreground">Tokens:</span>{" "}
+                  <span>{rootExecution.tokens_in.toLocaleString()} in / {rootExecution.tokens_out.toLocaleString()} out</span>
+                </div>
+                {rootExecution.started_at && (
+                  <div>
+                    <span className="text-muted-foreground">Started:</span>{" "}
+                    {new Date(rootExecution.started_at).toLocaleString()}
+                  </div>
                 )}
-
-                <button
-                  className="btn btn--ghost btn--sm p-1"
-                  onClick={() => onOpenChat(session)}
-                  title="View subagent chat (read-only)"
-                >
-                  <MessageSquare size={12} />
-                </button>
+                {rootExecution.error && (
+                  <div className="col-span-2">
+                    <span className="text-destructive">Error:</span>{" "}
+                    <span className="text-destructive">{rootExecution.error}</span>
+                  </div>
+                )}
               </div>
-            ))}
+            </div>
+          )}
+
+          {/* Subagent executions */}
+          {subagentExecutions.length > 0 && (
+            <div className="px-4 py-3">
+              <div className="text-xs text-muted-foreground mb-2">Subagent Executions</div>
+              {subagentExecutions.map((exec) => (
+                <div
+                  key={exec.id}
+                  className="flex items-center gap-2 py-2 hover:bg-muted/30 rounded"
+                  style={{ paddingLeft: 16 }}
+                >
+                  <span className="text-muted-foreground/50">↳</span>
+                  <Bot size={12} className="text-primary/60" />
+                  <span className="text-sm font-medium">{exec.agent_id}</span>
+                  <ExecutionStatusBadge status={exec.status} />
+                  {exec.task && (
+                    <span className="text-xs text-muted-foreground truncate max-w-[200px]" title={exec.task}>
+                      {exec.task}
+                    </span>
+                  )}
+                  {(exec.tokens_in + exec.tokens_out) > 0 && (
+                    <span className="text-xs text-muted-foreground ml-auto">
+                      {(exec.tokens_in + exec.tokens_out).toLocaleString()} tok
+                    </span>
+                  )}
+                  {onOpenChat && (
+                    <button
+                      className="btn btn--ghost btn--sm p-1"
+                      onClick={() => onOpenChat(exec)}
+                      title="View subagent chat (read-only)"
+                    >
+                      <MessageSquare size={12} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Session metadata */}
+          <div className="px-4 py-3 border-t border-border/30 text-xs">
+            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+              <div>
+                <span className="text-muted-foreground">Session ID:</span>{" "}
+                <span className="font-mono">{session.id}</span>
+              </div>
+              <div>
+                <span className="text-muted-foreground">Created:</span>{" "}
+                {new Date(session.created_at).toLocaleString()}
+              </div>
+              <div>
+                <span className="text-muted-foreground">Source:</span>{" "}
+                <SourceBadge source={session.source} />
+              </div>
+              {session.title && (
+                <div>
+                  <span className="text-muted-foreground">Title:</span>{" "}
+                  <span>{session.title}</span>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       )}
     </div>
@@ -487,71 +408,118 @@ function StatsCard({
 }
 
 // ============================================================================
+// Source Stats Component
+// ============================================================================
+
+function SourceStatsBar({ sessionsBySource }: { sessionsBySource: Record<TriggerSource, number> }) {
+  const sources = Object.entries(sessionsBySource).filter(([, count]) => count > 0) as [TriggerSource, number][];
+  const total = sources.reduce((sum, [, count]) => sum + count, 0);
+
+  if (total === 0) return null;
+
+  return (
+    <div className="card p-4 mb-6">
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-sm font-medium">Sessions by Source</span>
+        <span className="text-xs text-muted-foreground">{total} total</span>
+      </div>
+      <div className="flex gap-1 h-2 rounded-full overflow-hidden bg-muted">
+        {sources.map(([source, count]) => {
+          const config = SOURCE_CONFIG[source];
+          const percentage = (count / total) * 100;
+          return (
+            <div
+              key={source}
+              style={{
+                width: `${percentage}%`,
+                backgroundColor: config.color,
+              }}
+              title={`${config.label}: ${count} (${percentage.toFixed(1)}%)`}
+            />
+          );
+        })}
+      </div>
+      <div className="flex flex-wrap gap-3 mt-3">
+        {sources.map(([source, count]) => {
+          const config = SOURCE_CONFIG[source];
+          return (
+            <div key={source} className="flex items-center gap-1.5 text-xs">
+              <div
+                className="w-2 h-2 rounded-full"
+                style={{ backgroundColor: config.color }}
+              />
+              <span className="text-muted-foreground">{config.label}:</span>
+              <span className="font-medium">{count}</span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
 // Main Dashboard Component
 // ============================================================================
 
-// Active statuses (live monitoring)
-const ACTIVE_STATUSES: ExecutionStatus[] = ["running", "paused", "queued"];
-// Closed statuses (session history)
-const CLOSED_STATUSES: ExecutionStatus[] = ["completed", "cancelled", "crashed"];
+// Session statuses for filtering
+const ACTIVE_SESSION_STATUSES: SessionStateStatus[] = ["running", "paused", "queued"];
+const CLOSED_SESSION_STATUSES: SessionStateStatus[] = ["completed", "crashed"];
+
+// All trigger sources for filtering
+const ALL_SOURCES: TriggerSource[] = ["web", "cli", "cron", "api", "plugin"];
 
 export function WebOpsDashboard() {
   const navigate = useNavigate();
-  const [allSessions, setAllSessions] = useState<ExecutionSession[]>([]);
-  const [statusCounts, setStatusCounts] = useState<Record<string, number>>({});
+  const [sessions, setSessions] = useState<SessionWithExecutions[]>([]);
+  const [stats, setStats] = useState<DashboardStats | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedSession, setExpandedSession] = useState<string | null>(null);
-  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [processingSession, setProcessingSession] = useState<string | null>(null);
-  const [activeFilter, setActiveFilter] = useState<ExecutionStatus | "all">("all");
-  const [historyFilter, setHistoryFilter] = useState<ExecutionStatus | "all">("all");
+  const [activeFilter, setActiveFilter] = useState<SessionStateStatus | "all">("all");
+  const [historyFilter, setHistoryFilter] = useState<SessionStateStatus | "all">("all");
+  const [sourceFilter, setSourceFilter] = useState<TriggerSource | "all">("all");
   const [autoRefresh, setAutoRefresh] = useState(true);
 
   // Chat slider state
-  const [selectedSession, setSelectedSession] = useState<{
-    conversationId: string;
+  const [selectedExecution, setSelectedExecution] = useState<{
+    executionId: string;
     agentId: string;
     isSubagent: boolean;
   } | null>(null);
 
-  // Derived data
-  const activeSessions = allSessions.filter((s) => ACTIVE_STATUSES.includes(s.status));
-  const closedSessions = allSessions.filter((s) => CLOSED_STATUSES.includes(s.status));
+  // Derived data - split sessions into active and closed
+  const activeSessions = sessions.filter((s) => ACTIVE_SESSION_STATUSES.includes(s.status));
+  const closedSessions = sessions.filter((s) => CLOSED_SESSION_STATUSES.includes(s.status));
+
+  // Apply source filter first, then status filter
+  const applySourceFilter = (sessionList: SessionWithExecutions[]) => {
+    if (sourceFilter === "all") return sessionList;
+    return sessionList.filter((s) => s.source === sourceFilter);
+  };
 
   // Filtered views
-  const filteredActiveSessions = activeFilter === "all"
-    ? activeSessions
-    : activeSessions.filter((s) => s.status === activeFilter);
+  const filteredActiveSessions = applySourceFilter(
+    activeFilter === "all"
+      ? activeSessions
+      : activeSessions.filter((s) => s.status === activeFilter)
+  );
 
-  const filteredClosedSessions = historyFilter === "all"
-    ? closedSessions
-    : closedSessions.filter((s) => s.status === historyFilter);
+  const filteredClosedSessions = applySourceFilter(
+    historyFilter === "all"
+      ? closedSessions
+      : closedSessions.filter((s) => s.status === historyFilter)
+  );
 
-  // Build conversation groups for history (grouped by conversation)
-  const conversationGroups = buildConversationGroups(filteredClosedSessions);
-
-  // Toggle handler for expanding conversation groups
-  const handleToggleGroup = useCallback((conversationId: string) => {
-    setExpandedGroups((prev) => {
-      const next = new Set(prev);
-      if (next.has(conversationId)) {
-        next.delete(conversationId);
-      } else {
-        next.add(conversationId);
-      }
-      return next;
-    });
-  }, []);
-
-  // Load sessions and stats
+  // Load sessions and stats using V2 API
   const loadData = useCallback(async () => {
     try {
       const transport = await getTransport();
 
       const [sessionsResult, statsResult] = await Promise.all([
-        transport.listExecutionSessions(),
-        transport.getExecutionStats(),
+        transport.listSessionsFull(),
+        transport.getDashboardStats(),
       ]);
 
       if (sessionsResult.success && sessionsResult.data) {
@@ -559,13 +527,13 @@ export function WebOpsDashboard() {
         const sorted = [...sessionsResult.data].sort(
           (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
         );
-        setAllSessions(sorted);
+        setSessions(sorted);
       } else if (!sessionsResult.success) {
         console.error("Failed to load sessions:", sessionsResult.error);
       }
 
       if (statsResult.success && statsResult.data) {
-        setStatusCounts(statsResult.data);
+        setStats(statsResult.data);
       }
 
       setError(null);
@@ -629,18 +597,18 @@ export function WebOpsDashboard() {
     }
   };
 
-  const handleOpenChat = useCallback((session: ExecutionSession) => {
-    const isSubagent = !!session.parent_session_id;
-    setSelectedSession({
-      // Use session.id (execution_id) to fetch messages, not conversation_id (session_id)
-      conversationId: session.id,
-      agentId: session.agent_id,
+  const handleOpenChat = useCallback((execution: AgentExecution) => {
+    const isSubagent = execution.delegation_type !== 'root';
+    setSelectedExecution({
+      // Use execution.id to fetch messages
+      executionId: execution.id,
+      agentId: execution.agent_id,
       isSubagent,
     });
   }, []);
 
   const handleCloseChat = useCallback(() => {
-    setSelectedSession(null);
+    setSelectedExecution(null);
   }, []);
 
   if (isLoading) {
@@ -653,12 +621,12 @@ export function WebOpsDashboard() {
     );
   }
 
-  // Stats come from backend - already counted by conversation, not individual sessions
-  const runningCount = statusCounts.running || 0;
-  const pausedCount = statusCounts.paused || 0;
-  const queuedCount = statusCounts.queued || 0;
-  const activeCount = runningCount + pausedCount + queuedCount;
-  const completedCount = statusCounts.completed || 0;
+  // Stats from V2 API
+  const sessionsRunning = stats?.sessions_running || 0;
+  const sessionsPaused = stats?.sessions_paused || 0;
+  const sessionsCompleted = stats?.sessions_completed || 0;
+  const executionsRunning = stats?.executions_running || 0;
+  const activeCount = sessionsRunning + sessionsPaused + (stats?.sessions_queued || 0);
 
   return (
     <div className="page">
@@ -672,6 +640,20 @@ export function WebOpsDashboard() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            {/* Source Filter Dropdown */}
+            <select
+              value={sourceFilter}
+              onChange={(e) => setSourceFilter(e.target.value as TriggerSource | "all")}
+              className="btn btn--secondary text-sm"
+              style={{ padding: "6px 12px" }}
+            >
+              <option value="all">All Sources</option>
+              {ALL_SOURCES.map((source) => (
+                <option key={source} value={source}>
+                  {SOURCE_CONFIG[source].label}
+                </option>
+              ))}
+            </select>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -708,7 +690,7 @@ export function WebOpsDashboard() {
           </div>
         )}
 
-        {/* Stats Grid */}
+        {/* Stats Grid - V2 with both session and execution counts */}
         <div className="grid grid-cols-5 gap-4 mb-6">
           <StatsCard
             label="Active"
@@ -716,32 +698,37 @@ export function WebOpsDashboard() {
             icon={<Activity size={20} />}
           />
           <StatsCard
-            label="Running"
-            value={runningCount}
-            icon={<Loader2 size={20} className={runningCount > 0 ? "animate-spin" : ""} />}
+            label="Sessions Running"
+            value={sessionsRunning}
+            icon={<Loader2 size={20} className={sessionsRunning > 0 ? "animate-spin" : ""} />}
+            color="var(--primary)"
+          />
+          <StatsCard
+            label="Executions Running"
+            value={executionsRunning}
+            icon={<Bot size={20} />}
             color="var(--primary)"
           />
           <StatsCard
             label="Paused"
-            value={pausedCount}
+            value={sessionsPaused}
             icon={<Pause size={20} />}
             color="var(--warning)"
           />
           <StatsCard
-            label="Queued"
-            value={queuedCount}
-            icon={<Clock size={20} />}
-            color="var(--muted-foreground)"
-          />
-          <StatsCard
             label="Completed"
-            value={completedCount}
+            value={sessionsCompleted}
             icon={<CheckCircle size={20} />}
             color="var(--success)"
           />
         </div>
 
-        {/* Two-column layout for sessions - equal width columns */}
+        {/* Source breakdown bar */}
+        {stats?.sessions_by_source && (
+          <SourceStatsBar sessionsBySource={stats.sessions_by_source} />
+        )}
+
+        {/* Two-column layout for sessions */}
         <div className="grid gap-6" style={{ gridTemplateColumns: "1fr 1fr" }}>
           {/* Active Sessions */}
           <div className="card" style={{ minHeight: "400px", minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
@@ -752,7 +739,10 @@ export function WebOpsDashboard() {
               <div className="flex items-center gap-3">
                 <Activity size={18} className="text-primary" />
                 <h2 className="font-semibold">Active Sessions</h2>
-                <span className="badge">{activeSessions.length}</span>
+                <span className="badge">{filteredActiveSessions.length}</span>
+                {sourceFilter !== "all" && (
+                  <SourceBadge source={sourceFilter} />
+                )}
               </div>
             </div>
 
@@ -761,9 +751,9 @@ export function WebOpsDashboard() {
               className="border-b border-border flex items-center gap-3"
               style={{ padding: "12px 16px" }}
             >
-              <span className="text-xs text-muted-foreground">Filter:</span>
+              <span className="text-xs text-muted-foreground">Status:</span>
               <div className="flex gap-1">
-                {(["all", ...ACTIVE_STATUSES] as const).map((status) => (
+                {(["all", ...ACTIVE_SESSION_STATUSES] as const).map((status) => (
                   <button
                     key={status}
                     className={`btn ${
@@ -787,7 +777,7 @@ export function WebOpsDashboard() {
               ) : (
                 <>
                   {filteredActiveSessions.map((session) => (
-                    <SessionRow
+                    <SessionCard
                       key={session.id}
                       session={session}
                       isExpanded={expandedSession === session.id}
@@ -797,6 +787,7 @@ export function WebOpsDashboard() {
                       onPause={() => handlePause(session.id)}
                       onResume={() => handleResume(session.id)}
                       onCancel={() => handleCancel(session.id)}
+                      onOpenChat={handleOpenChat}
                       isProcessing={processingSession === session.id}
                       showControls={true}
                     />
@@ -815,9 +806,10 @@ export function WebOpsDashboard() {
               <div className="flex items-center gap-3">
                 <History size={18} className="text-muted-foreground" />
                 <h2 className="font-semibold">Session History</h2>
-                <span className="badge" title={`${conversationGroups.length} conversations, ${filteredClosedSessions.length} total sessions`}>
-                  {conversationGroups.length}
-                </span>
+                <span className="badge">{filteredClosedSessions.length}</span>
+                {sourceFilter !== "all" && (
+                  <SourceBadge source={sourceFilter} />
+                )}
               </div>
             </div>
 
@@ -826,9 +818,9 @@ export function WebOpsDashboard() {
               className="border-b border-border flex items-center gap-3"
               style={{ padding: "12px 16px" }}
             >
-              <span className="text-xs text-muted-foreground">Filter:</span>
+              <span className="text-xs text-muted-foreground">Status:</span>
               <div className="flex gap-1">
-                {(["all", ...CLOSED_STATUSES] as const).map((status) => (
+                {(["all", ...CLOSED_SESSION_STATUSES] as const).map((status) => (
                   <button
                     key={status}
                     className={`btn ${
@@ -844,25 +836,28 @@ export function WebOpsDashboard() {
             </div>
 
             <div style={{ flex: 1, overflow: "auto" }}>
-              {conversationGroups.length === 0 ? (
+              {filteredClosedSessions.length === 0 ? (
                 <div className="p-8 text-center text-muted-foreground" style={{ height: "100%", display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center" }}>
                   <History size={40} className="mx-auto mb-3 opacity-30" />
                   <p className="text-sm">No session history</p>
                 </div>
               ) : (
                 <>
-                  {conversationGroups.slice(0, 50).map((group) => (
-                    <ConversationGroupComponent
-                      key={group.conversationId}
-                      group={group}
-                      isExpanded={expandedGroups.has(group.conversationId)}
-                      onToggleGroup={() => handleToggleGroup(group.conversationId)}
+                  {filteredClosedSessions.slice(0, 50).map((session) => (
+                    <SessionCard
+                      key={session.id}
+                      session={session}
+                      isExpanded={expandedSession === session.id}
+                      onToggle={() =>
+                        setExpandedSession(expandedSession === session.id ? null : session.id)
+                      }
                       onOpenChat={handleOpenChat}
+                      showControls={false}
                     />
                   ))}
-                  {conversationGroups.length > 50 && (
+                  {filteredClosedSessions.length > 50 && (
                     <div className="p-3 text-center text-sm text-muted-foreground border-t border-border">
-                      Showing 50 of {conversationGroups.length} conversations
+                      Showing 50 of {filteredClosedSessions.length} sessions
                     </div>
                   )}
                 </>
@@ -873,12 +868,12 @@ export function WebOpsDashboard() {
       </div>
 
       {/* Chat Slider */}
-      <ChatSlider isOpen={selectedSession !== null} onClose={handleCloseChat}>
-        {selectedSession && (
+      <ChatSlider isOpen={selectedExecution !== null} onClose={handleCloseChat}>
+        {selectedExecution && (
           <SessionChatViewer
-            conversationId={selectedSession.conversationId}
-            agentId={selectedSession.agentId}
-            readOnly={selectedSession.isSubagent}
+            conversationId={selectedExecution.executionId}
+            agentId={selectedExecution.agentId}
+            readOnly={selectedExecution.isSubagent}
           />
         )}
       </ChatSlider>

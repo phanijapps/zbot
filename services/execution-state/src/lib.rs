@@ -32,6 +32,9 @@ mod repository;
 mod service;
 mod types;
 
+#[cfg(test)]
+pub mod test_utils;
+
 // Re-export public types
 pub use repository::StateDbProvider;
 pub use service::StateService;
@@ -44,12 +47,12 @@ use std::sync::Arc;
 ///
 /// # Endpoints
 ///
-/// ## Sessions
-/// - `GET /sessions` - List sessions (basic)
-/// - `GET /sessions/full` - List sessions with executions (dashboard)
-/// - `GET /sessions/:id` - Get session detail
-/// - `GET /sessions/:id/full` - Get session with all executions
-/// - `DELETE /sessions/:id` - Delete a session
+/// ## Sessions (V2 API)
+/// - `GET /v2/sessions` - List sessions (basic)
+/// - `GET /v2/sessions/full` - List sessions with executions (dashboard)
+/// - `GET /v2/sessions/:id` - Get session detail
+/// - `GET /v2/sessions/:id/full` - Get session with all executions
+/// - `DELETE /v2/sessions/:id` - Delete a session
 ///
 /// ## Executions
 /// - `GET /executions` - List executions with filtering
@@ -63,15 +66,14 @@ use std::sync::Arc;
 /// - `POST /sessions/:id/cancel` - Cancel a session
 ///
 /// ## Stats
-/// - `GET /stats` - Get dashboard stats (pre-computed)
+/// - `GET /stats` - Get dashboard stats (session + execution counts)
+/// - `GET /stats/counts` - Get stats as key-value map
 pub fn routes<D>(service: Arc<StateService<D>>) -> Router
 where
     D: StateDbProvider + 'static,
 {
     Router::new()
-        // Sessions (legacy format for UI compatibility)
-        .route("/sessions", get(handlers::list_legacy_sessions::<D>))
-        // Sessions v2 (new format)
+        // Sessions (V2 API - use /v2/sessions/full for dashboard)
         .route("/v2/sessions", get(handlers::list_sessions::<D>))
         .route("/v2/sessions/full", get(handlers::list_sessions_full::<D>))
         .route(

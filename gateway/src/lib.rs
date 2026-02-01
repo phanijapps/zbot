@@ -28,6 +28,7 @@
 //! - **HTTP API** - RESTful endpoints for agents, conversations, tools
 //! - **Event Bus** - Broadcast events to all connected clients
 
+pub mod bus;
 pub mod config;
 pub mod database;
 pub mod error;
@@ -41,6 +42,10 @@ pub mod state;
 pub mod templates;
 pub mod websocket;
 
+#[cfg(test)]
+pub mod test_utils;
+
+pub use bus::{BusError, GatewayBus, HttpGatewayBus, SessionHandle, SessionRequest};
 pub use config::GatewayConfig;
 pub use error::{GatewayError, Result};
 pub use execution::{DelegationContext, DelegationRegistry, ExecutionRunner, ExecutionConfig, ExecutionHandle};

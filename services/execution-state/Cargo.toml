@@ -28,6 +28,8 @@ rusqlite = { version = "0.32", features = ["bundled"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
+tempfile = "3"
+assert_matches = "1.5"
 
 [lib]
 name = "execution_state"
