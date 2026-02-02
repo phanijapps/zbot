@@ -229,6 +229,10 @@ export class TauriTransport implements Transport {
     return { success: false, error: NOT_SUPPORTED };
   }
 
+  async endSession(_sessionId: string): Promise<TransportResult<void>> {
+    return { success: false, error: NOT_SUPPORTED };
+  }
+
   async cleanupExecutionSessions(_olderThan?: string): Promise<TransportResult<{ deleted: number }>> {
     return { success: false, error: NOT_SUPPORTED };
   }

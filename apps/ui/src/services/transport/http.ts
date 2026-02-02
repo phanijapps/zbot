@@ -429,6 +429,26 @@ export class HttpTransport implements Transport {
     }
   }
 
+  async endSession(sessionId: string): Promise<TransportResult<void>> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return { success: false, error: "WebSocket not connected" };
+    }
+
+    const command = {
+      type: "end_session",
+      session_id: sessionId,
+    };
+
+    console.log("[SESSION_DEBUG] Sending end_session command:", sessionId);
+
+    try {
+      this.ws.send(JSON.stringify(command));
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: String(error) };
+    }
+  }
+
   async cleanupExecutionSessions(olderThan?: string): Promise<TransportResult<{ deleted: number }>> {
     if (!this.config) {
       return { success: false, error: "Transport not initialized" };

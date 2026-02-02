@@ -547,6 +547,26 @@ impl ExecutionRunner {
         Ok(())
     }
 
+    /// End a session (mark as completed).
+    ///
+    /// Called when user explicitly ends a session via /end, /new, or +new button.
+    /// This marks the session as completed regardless of running executions.
+    pub async fn end_session(&self, session_id: &str) -> Result<(), String> {
+        tracing::info!(session_id = %session_id, "User requested session end");
+
+        // Stop any running executions gracefully
+        let handles = self.handles.read().await;
+        for handle in handles.values() {
+            handle.stop();
+        }
+
+        // Mark session as completed
+        self.state_service.complete_session(session_id)?;
+
+        tracing::info!(session_id = %session_id, "Session ended by user request");
+        Ok(())
+    }
+
     /// Get execution handle for a conversation.
     pub async fn get_handle(&self, conversation_id: &str) -> Option<ExecutionHandle> {
         let handles = self.handles.read().await;

@@ -363,6 +363,33 @@ async fn handle_client_message(
                 }
             }
         }
+        ClientMessage::EndSession { session_id: exec_session_id } => {
+            debug!(
+                "Session {} ending execution session {}",
+                session_id, exec_session_id
+            );
+
+            match runtime.end_session(&exec_session_id).await {
+                Ok(()) => {
+                    info!("Execution session {} ended (completed)", exec_session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::SessionEnded {
+                            session_id: exec_session_id.clone(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to end session {}: {}", exec_session_id, e);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::error(
+                            None,
+                            "end_session_failed",
+                            &e,
+                        ));
+                    }
+                }
+            }
+        }
     }
 
     Ok(())

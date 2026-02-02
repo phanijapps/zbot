@@ -112,12 +112,17 @@ CREATE TABLE sessions (
 
 ## Remaining Issues
 
-### 1. Session Lifecycle (HIGH PRIORITY)
-- `/end` and `/new` commands don't properly complete sessions
-- `+new` button doesn't mark session as completed
-- Sessions stay "running" indefinitely
+### 1. Session Lifecycle (RESOLVED)
+- `/end` command now properly marks sessions as completed
+- `/new` command ends current session AND starts fresh
+- Frontend sends `end_session` WebSocket message to backend
+- Backend calls `StateService::complete_session()` to mark as completed
 
-**Root Cause**: Need to implement explicit session completion trigger from frontend.
+**Implementation:**
+- WebSocket: `ClientMessage::EndSession`, `ServerMessage::SessionEnded`
+- Handler: `gateway/src/websocket/handler.rs` (EndSession handler)
+- Runtime: `RuntimeService::end_session()` → `ExecutionRunner::end_session()`
+- Frontend: `handleEndSession()` in `WebChatPanel.tsx`
 
 ### 2. UI Event Visibility (MEDIUM PRIORITY)
 - Delegation events sent but not visible in real-time

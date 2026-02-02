@@ -45,6 +45,10 @@ pub enum ClientMessage {
     /// Cancel a session.
     Cancel { session_id: String },
 
+    /// End a session (mark as completed).
+    /// Used when user types /end, /new, or clicks +new button.
+    EndSession { session_id: String },
+
     /// Ping for keepalive.
     Ping,
 }
@@ -167,6 +171,9 @@ pub enum ServerMessage {
 
     /// Session cancelled.
     SessionCancelled { session_id: String },
+
+    /// Session ended (completed by user request).
+    SessionEnded { session_id: String },
 
     /// Delegation started - agent delegated work to a subagent.
     DelegationStarted {

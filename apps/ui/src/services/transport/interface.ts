@@ -240,6 +240,9 @@ export interface Transport {
   /** Cancel an execution session */
   cancelSession(sessionId: string): Promise<TransportResult<void>>;
 
+  /** End a session (mark as completed) */
+  endSession(sessionId: string): Promise<TransportResult<void>>;
+
   /** Cleanup old execution sessions */
   cleanupExecutionSessions(olderThan?: string): Promise<TransportResult<{ deleted: number }>>;
 

@@ -392,6 +392,31 @@ export function WebChatPanel() {
           return prev;
         });
         break;
+
+      case "session_ended":
+        console.log("[SESSION_DEBUG] Session ended confirmation received");
+        break;
+    }
+  };
+
+  // End the current session and optionally start a new one
+  const handleEndSession = async (startNew: boolean) => {
+    const currentSessionId = getSessionId();
+    if (currentSessionId) {
+      try {
+        const transport = await getTransport();
+        console.log("[SESSION_DEBUG] Ending session:", currentSessionId);
+        await transport.endSession(currentSessionId);
+      } catch (error) {
+        console.error("Failed to end session:", error);
+      }
+    }
+
+    if (startNew) {
+      const newConvId = createNewConversationId();
+      setConversationId(newConvId);
+      setMessages([]);
+      setSubagentActivities(new Map());
     }
   };
 
@@ -400,12 +425,26 @@ export function WebChatPanel() {
 
     const trimmedInput = input.trim();
 
+    // Handle /end command to end the current session
+    if (trimmedInput === "/end") {
+      await handleEndSession(false);
+      setInput("");
+      // Add a system message to indicate session ended
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "system",
+          content: "Session ended. Send a message to start a new session.",
+          timestamp: new Date(),
+        },
+      ]);
+      return;
+    }
+
     // Handle /new command to start a new conversation
     if (trimmedInput === "/new") {
-      const newConvId = createNewConversationId();
-      setConversationId(newConvId);
-      setMessages([]);
-      setSubagentActivities(new Map());
+      await handleEndSession(true);
       setInput("");
       return;
     }

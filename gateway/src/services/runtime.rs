@@ -259,6 +259,17 @@ impl RuntimeService {
         }
     }
 
+    /// End a session (mark as completed).
+    ///
+    /// Called when user explicitly ends a session via /end, /new, or +new button.
+    pub async fn end_session(&self, session_id: &str) -> Result<(), String> {
+        if let Some(runner) = &self.runner {
+            runner.end_session(session_id).await
+        } else {
+            Err("Runtime not initialized with executor".to_string())
+        }
+    }
+
     /// Get execution handle for a conversation.
     pub async fn get_handle(&self, conversation_id: &str) -> Option<ExecutionHandle> {
         if let Some(runner) = &self.runner {
