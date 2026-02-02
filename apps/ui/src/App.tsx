@@ -262,7 +262,7 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
       <nav className="sidebar">
         <div className="sidebar__header">
           <div className="sidebar__logo">
-            <img src="/logo.svg" alt="AgentZero" className="sidebar__logo-img" />
+            <img src="/logo-dark.svg" alt="AgentZero" className="sidebar__logo-img" />
           </div>
         </div>
 

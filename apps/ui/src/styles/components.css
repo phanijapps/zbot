@@ -75,10 +75,11 @@
 .sidebar__logo {
   display: flex;
   align-items: center;
+  justify-content: center;
 }
 
 .sidebar__logo-img {
-  height: 28px;
+  height: 36px;
   width: auto;
 }
 
