@@ -1,18 +1,16 @@
 // ============================================================================
 // TRANSPORT LAYER
-// Abstraction layer for Tauri IPC and HTTP/WebSocket communication
+// HTTP/WebSocket communication with the gateway
 // ============================================================================
 
 import type { Transport } from "./interface";
-import type { TransportConfig, TransportMode } from "./types";
+import type { TransportConfig } from "./types";
 import { HttpTransport } from "./http";
-import { TauriTransport } from "./tauri";
 
 // Re-export types
 export type { Transport } from "./interface";
 export type {
   TransportConfig,
-  TransportMode,
   TransportResult,
   AgentResponse,
   CreateAgentRequest,
@@ -48,21 +46,6 @@ export type {
   SessionDetail,
   LogFilter,
 } from "./types";
-
-// ============================================================================
-// Transport Detection
-// ============================================================================
-
-/**
- * Detect whether we're running in Tauri or as a web app.
- */
-export function detectTransportMode(): TransportMode {
-  // Check if Tauri APIs are available
-  if (typeof window !== "undefined" && "__TAURI__" in window) {
-    return "tauri";
-  }
-  return "web";
-}
 
 // ============================================================================
 // Default Configuration
@@ -107,15 +90,9 @@ function getConfig(): TransportConfig {
 // ============================================================================
 
 /**
- * Create a transport instance based on the current environment.
+ * Create a transport instance.
  */
-export function createTransport(mode?: TransportMode): Transport {
-  const actualMode = mode || detectTransportMode();
-
-  if (actualMode === "tauri") {
-    return new TauriTransport();
-  }
-
+export function createTransport(): Transport {
   return new HttpTransport();
 }
 
@@ -148,8 +125,7 @@ export async function getTransport(): Promise<Transport> {
  * Should be called early in app startup.
  */
 export async function initializeTransport(config?: Partial<TransportConfig>): Promise<Transport> {
-  const mode = detectTransportMode();
-  globalTransport = createTransport(mode);
+  globalTransport = createTransport();
 
   const finalConfig = {
     ...DEFAULT_CONFIG,
@@ -159,18 +135,11 @@ export async function initializeTransport(config?: Partial<TransportConfig>): Pr
   await globalTransport.initialize(finalConfig);
   initialized = true;
 
-  console.log(`[Transport] Initialized in ${mode} mode`);
+  console.log(`[Transport] Initialized`);
   console.log(`[Transport] HTTP: ${finalConfig.httpUrl}`);
   console.log(`[Transport] WebSocket: ${finalConfig.wsUrl}`);
 
   return globalTransport;
-}
-
-/**
- * Get the current transport mode.
- */
-export function getTransportMode(): TransportMode {
-  return globalTransport?.mode || detectTransportMode();
 }
 
 /**

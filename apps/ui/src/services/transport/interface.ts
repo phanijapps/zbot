@@ -46,8 +46,8 @@ import type {
 // ============================================================================
 
 export interface Transport {
-  /** Get the transport mode (tauri or web) */
-  readonly mode: "tauri" | "web";
+  /** Get the transport mode */
+  readonly mode: "web";
 
   /** Initialize the transport with configuration */
   initialize(config: TransportConfig): Promise<void>;
