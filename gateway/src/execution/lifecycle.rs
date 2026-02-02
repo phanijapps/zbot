@@ -205,8 +205,10 @@ pub async fn complete_execution(
     event_bus
         .publish(GatewayEvent::AgentCompleted {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             result: response,
+            conversation_id: Some(conversation_id.to_string()),
         })
         .await;
 }
@@ -250,8 +252,10 @@ pub async fn crash_execution(
     event_bus
         .publish(GatewayEvent::Error {
             agent_id: Some(agent_id.to_string()),
-            conversation_id: Some(conversation_id.to_string()),
+            session_id: Some(session_id.to_string()),
+            execution_id: Some(execution_id.to_string()),
             message: error.to_string(),
+            conversation_id: Some(conversation_id.to_string()),
         })
         .await;
 }
@@ -287,8 +291,10 @@ pub async fn stop_execution(
     event_bus
         .publish(GatewayEvent::AgentStopped {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             iteration,
+            conversation_id: Some(conversation_id.to_string()),
         })
         .await;
 }
@@ -303,32 +309,40 @@ pub async fn emit_agent_started(
     agent_id: &str,
     conversation_id: &str,
     session_id: &str,
+    execution_id: &str,
 ) {
     event_bus
         .publish(GatewayEvent::AgentStarted {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
             session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            conversation_id: Some(conversation_id.to_string()),
         })
         .await;
 }
 
 /// Emit delegation started event.
+///
+/// Includes child_conversation_id for frontend tracking (used as key for subagent activities).
 pub async fn emit_delegation_started(
     event_bus: &EventBus,
     parent_agent_id: &str,
-    parent_conversation_id: &str,
+    session_id: &str,
     child_agent_id: &str,
+    child_execution_id: &str,
     child_conversation_id: &str,
     task: &str,
 ) {
     event_bus
         .publish(GatewayEvent::DelegationStarted {
+            session_id: session_id.to_string(),
+            parent_execution_id: session_id.to_string(), // Will be updated by caller
+            child_execution_id: child_execution_id.to_string(),
             parent_agent_id: parent_agent_id.to_string(),
-            parent_conversation_id: parent_conversation_id.to_string(),
             child_agent_id: child_agent_id.to_string(),
-            child_conversation_id: child_conversation_id.to_string(),
             task: task.to_string(),
+            parent_conversation_id: None,
+            child_conversation_id: Some(child_conversation_id.to_string()),
         })
         .await;
 }
@@ -337,18 +351,23 @@ pub async fn emit_delegation_started(
 pub async fn emit_delegation_completed(
     event_bus: &EventBus,
     parent_agent_id: &str,
-    parent_conversation_id: &str,
+    session_id: &str,
     child_agent_id: &str,
-    child_conversation_id: &str,
+    child_execution_id: &str,
+    parent_conversation_id: Option<&str>,
+    child_conversation_id: Option<&str>,
     result: Option<String>,
 ) {
     event_bus
         .publish(GatewayEvent::DelegationCompleted {
+            session_id: session_id.to_string(),
+            parent_execution_id: session_id.to_string(), // Will be updated by caller
+            child_execution_id: child_execution_id.to_string(),
             parent_agent_id: parent_agent_id.to_string(),
-            parent_conversation_id: parent_conversation_id.to_string(),
             child_agent_id: child_agent_id.to_string(),
-            child_conversation_id: child_conversation_id.to_string(),
             result,
+            parent_conversation_id: parent_conversation_id.map(|s| s.to_string()),
+            child_conversation_id: child_conversation_id.map(|s| s.to_string()),
         })
         .await;
 }

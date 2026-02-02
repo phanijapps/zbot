@@ -176,11 +176,13 @@ impl RuntimeService {
     ) -> Result<(), String> {
         // Emit start event
         let placeholder_session_id = format!("placeholder-{}", uuid::Uuid::new_v4());
+        let placeholder_execution_id = format!("exec-placeholder-{}", uuid::Uuid::new_v4());
         self.event_bus
             .publish(GatewayEvent::AgentStarted {
                 agent_id: agent_id.to_string(),
-                conversation_id: conversation_id.to_string(),
-                session_id: placeholder_session_id,
+                session_id: placeholder_session_id.clone(),
+                execution_id: placeholder_execution_id.clone(),
+                conversation_id: Some(conversation_id.to_string()),
             })
             .await;
 
@@ -198,11 +200,13 @@ impl RuntimeService {
             event_bus
                 .publish(GatewayEvent::AgentCompleted {
                     agent_id: agent_id.clone(),
-                    conversation_id: conversation_id.clone(),
+                    session_id: placeholder_session_id.clone(),
+                    execution_id: placeholder_execution_id.clone(),
                     result: Some(format!(
                         "Gateway placeholder response. Set OPENAI_API_KEY for real execution. Message: {}",
                         message.chars().take(50).collect::<String>()
                     )),
+                    conversation_id: Some(conversation_id.clone()),
                 })
                 .await;
         });
@@ -254,6 +258,17 @@ impl RuntimeService {
     pub async fn cancel(&self, session_id: &str) -> Result<(), String> {
         if let Some(runner) = &self.runner {
             runner.cancel(session_id).await
+        } else {
+            Err("Runtime not initialized with executor".to_string())
+        }
+    }
+
+    /// End a session (mark as completed).
+    ///
+    /// Called when user explicitly ends a session via /end, /new, or +new button.
+    pub async fn end_session(&self, session_id: &str) -> Result<(), String> {
+        if let Some(runner) = &self.runner {
+            runner.end_session(session_id).await
         } else {
             Err("Runtime not initialized with executor".to_string())
         }

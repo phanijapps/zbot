@@ -4,7 +4,7 @@
 // Used in the chat slider for viewing session history
 // ============================================================================
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   MessageSquare,
   Send,
@@ -19,7 +19,8 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getTransport, type MessageResponse, type SessionMessage, type MessageScope } from "@/services/transport";
+import { getTransport, type MessageResponse, type SessionMessage, type MessageScope, type StreamEvent, type SubscriptionScope } from "@/services/transport";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 // ============================================================================
 // Types
@@ -72,6 +73,165 @@ export function SessionChatViewer({
 
   // Determine the message scope based on props
   const scope: MessageScope = executionId ? 'execution' : 'root';
+
+  // The ID to subscribe to for events - use sessionId (which is what execute sends events to)
+  const subscriptionId = sessionId || conversationId || null;
+
+  // Handle streaming events
+  const handleStreamEvent = useCallback((event: StreamEvent) => {
+    switch (event.type) {
+      case "agent_started":
+        setIsProcessing(true);
+        break;
+
+      case "token":
+        setMessages((prev) => {
+          const last = prev[prev.length - 1];
+          if (last && last.role === "assistant" && !last.id.startsWith("msg-")) {
+            // Append to existing streaming message
+            return [
+              ...prev.slice(0, -1),
+              { ...last, content: last.content + (event.delta as string) },
+            ];
+          }
+          // Start new streaming message
+          return [
+            ...prev,
+            {
+              id: `streaming-${Date.now()}`,
+              role: "assistant" as const,
+              content: event.delta as string,
+              timestamp: new Date(),
+            },
+          ];
+        });
+        break;
+
+      case "tool_call":
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `tool-${Date.now()}`,
+            role: "tool" as const,
+            content: `Calling ${event.tool}...`,
+            timestamp: new Date(),
+            toolName: event.tool as string,
+          },
+        ]);
+        break;
+
+      case "tool_result":
+        setMessages((prev) => {
+          const toolCallIndex = prev.findIndex(
+            (m) => m.role === "tool" && m.content.includes("...")
+          );
+          if (toolCallIndex >= 0) {
+            const updated = [...prev];
+            const result = event.result as string;
+            updated[toolCallIndex] = {
+              ...updated[toolCallIndex],
+              content: `${updated[toolCallIndex].toolName}: ${result.substring(0, 200)}${result.length > 200 ? "..." : ""}`,
+            };
+            return updated;
+          }
+          return prev;
+        });
+        break;
+
+      case "delegation_started": {
+        const childAgentId = event.child_agent_id as string;
+        const task = event.task as string;
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: `delegation-${Date.now()}`,
+            role: "delegation" as const,
+            content: `Delegating to ${childAgentId}: "${task.substring(0, 100)}${task.length > 100 ? "..." : ""}"`,
+            timestamp: new Date(),
+            delegationStatus: "started",
+            childAgentId,
+          },
+        ]);
+        break;
+      }
+
+      case "delegation_completed": {
+        const childAgentId = event.child_agent_id as string;
+        const result = event.result as string | undefined;
+        setMessages((prev) => {
+          const startedIndex = prev.findIndex(
+            (m) => m.role === "delegation" && m.childAgentId === childAgentId && m.delegationStatus === "started"
+          );
+          if (startedIndex >= 0) {
+            // Update existing delegation message
+            const updated = [...prev];
+            updated[startedIndex] = {
+              ...updated[startedIndex],
+              delegationStatus: "completed",
+              content: `${childAgentId} completed: ${result?.substring(0, 150) || "(no result)"}${(result?.length || 0) > 150 ? "..." : ""}`,
+            };
+            return updated;
+          }
+          // No matching started message (subscribed late) - add completion message
+          return [
+            ...prev,
+            {
+              id: `delegation-completed-${Date.now()}`,
+              role: "delegation" as const,
+              content: `${childAgentId} completed: ${result?.substring(0, 150) || "(no result)"}${(result?.length || 0) > 150 ? "..." : ""}`,
+              timestamp: new Date(),
+              delegationStatus: "completed",
+              childAgentId,
+            },
+          ];
+        });
+        break;
+      }
+
+      case "agent_completed":
+      case "turn_complete":
+      case "error":
+        setIsProcessing(false);
+        break;
+    }
+  }, []);
+
+  // Determine event subscription scope:
+  // - execution:{id} for specific execution view (shows ALL events for that execution)
+  // - session for root-only view (filters out subagent internal events)
+  const eventScope: SubscriptionScope = executionId ? `execution:${executionId}` : "session";
+
+  // Subscribe to events for this session with appropriate scope
+  useEffect(() => {
+    if (!subscriptionId || readOnly) return;
+
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;
+
+    const setupSubscription = async () => {
+      const transport = await getTransport();
+      if (cancelled) return;
+
+      console.log(`[SessionChatViewer] Subscribing to ${subscriptionId} with scope: ${eventScope}`);
+      unsubscribe = transport.subscribeConversation(subscriptionId, {
+        onEvent: handleStreamEvent,
+        scope: eventScope,
+        onConfirmed: (seq, rootIds) => {
+          console.log(`[SessionChatViewer] Subscription confirmed at seq ${seq}${rootIds ? `, roots: ${rootIds.length}` : ''}`);
+        },
+      });
+    };
+
+    setupSubscription();
+
+    return () => {
+      cancelled = true;
+      if (unsubscribe) {
+        console.log(`[SessionChatViewer] Unsubscribing from ${subscriptionId}`);
+        unsubscribe();
+      }
+    };
+  }, [subscriptionId, readOnly, handleStreamEvent, eventScope]);
 
   // Load conversation history
   useEffect(() => {
@@ -151,14 +311,13 @@ export function SessionChatViewer({
 
     try {
       const transport = await getTransport();
-      // Use sessionId if available, otherwise fall back to conversationId
-      const convId = conversationId || sessionId || "";
-      const sessId = sessionId || conversationId;
-      await transport.executeAgent(agentId, convId, userMessage.content, sessId);
+      // Use sessionId as both conversation_id and session_id for existing sessions
+      const targetId = sessionId || conversationId || "";
+      await transport.executeAgent(agentId, targetId, userMessage.content, targetId);
+      // Don't set isProcessing to false here - wait for agent_completed event
     } catch (err) {
       console.error("Failed to send message:", err);
-    } finally {
-      setIsProcessing(false);
+      setIsProcessing(false); // Only set to false on error
     }
   };
 
@@ -191,6 +350,13 @@ export function SessionChatViewer({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          <ConnectionStatus />
+          {isProcessing && (
+            <div className="flex items-center gap-2 text-primary text-sm font-medium bg-primary/10 px-3 py-1.5 rounded-lg">
+              <Loader2 className="w-4 h-4 animate-spin" />
+              Processing...
+            </div>
+          )}
           {executionId && (
             <div className="flex items-center gap-1 text-xs text-violet-600 bg-violet-100 px-2 py-1 rounded-md">
               <GitBranch className="w-3 h-3" />

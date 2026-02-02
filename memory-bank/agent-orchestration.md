@@ -112,19 +112,30 @@ CREATE TABLE sessions (
 
 ## Remaining Issues
 
-### 1. Session Lifecycle (HIGH PRIORITY)
-- `/end` and `/new` commands don't properly complete sessions
-- `+new` button doesn't mark session as completed
-- Sessions stay "running" indefinitely
+### 1. Session Lifecycle (RESOLVED)
+- `/end` command now properly marks sessions as completed
+- `/new` command ends current session AND starts fresh
+- Frontend sends `end_session` WebSocket message to backend
+- Backend calls `StateService::complete_session()` to mark as completed
 
-**Root Cause**: Need to implement explicit session completion trigger from frontend.
+**Implementation:**
+- WebSocket: `ClientMessage::EndSession`, `ServerMessage::SessionEnded`
+- Handler: `gateway/src/websocket/handler.rs` (EndSession handler)
+- Runtime: `RuntimeService::end_session()` → `ExecutionRunner::end_session()`
+- Frontend: `handleEndSession()` in `WebChatPanel.tsx`
 
-### 2. UI Event Visibility (MEDIUM PRIORITY)
-- Delegation events sent but not visible in real-time
-- User has to slide chat panel in/out to see updates
-- WebSocket events are delivered but UI doesn't react
+### 2. UI Event Visibility (RESOLVED)
+- Delegation events now update UI in real-time
+- No need to slide panel to see updates
 
-**Root Cause**: React state updates may not be triggering re-renders.
+**Root Cause**: Stale closure - `handleStreamEvent` was captured once when subscription
+was set up, causing delegation events to use old state references.
+
+**Fix**: Use `useCallback` with empty deps:
+- `handleStreamEvent` defined with `useCallback(fn, [])` - stable reference
+- State setters (setMessages, setIsProcessing, etc.) are inherently stable
+- Subscription effect depends on `[conversationId, handleStreamEvent]`
+- No ref pattern needed - simpler and avoids double-event issues
 
 ### 3. Future: Control Tools
 - `delegation_status` - Query pending/completed delegations

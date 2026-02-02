@@ -15,12 +15,6 @@ export interface TransportConfig {
 }
 
 // ============================================================================
-// Transport Mode
-// ============================================================================
-
-export type TransportMode = "tauri" | "web";
-
-// ============================================================================
 // Transport Result
 // ============================================================================
 
@@ -508,3 +502,99 @@ export interface ExecutionSessionFilter {
 
 /** @deprecated Use DashboardStats instead */
 export type ExecutionStats = Record<string, number>;
+
+// ============================================================================
+// Connection State Types (for subscription-based event routing)
+// ============================================================================
+
+/**
+ * Connection state for WebSocket transport.
+ * Used to track connection lifecycle and show appropriate UI.
+ */
+export type ConnectionState =
+  | { status: "disconnected"; reason?: "user" | "server" | "network" }
+  | { status: "connecting" }
+  | { status: "connected" }
+  | { status: "reconnecting"; attempt: number; maxAttempts: number }
+  | { status: "failed"; error: string };
+
+/**
+ * Subscription error codes from the server.
+ */
+export type SubscriptionErrorCode =
+  | "NOT_FOUND"
+  | "LIMIT_EXCEEDED"
+  | "SERVER_ERROR";
+
+/**
+ * Subscription error message from server.
+ */
+export interface SubscriptionErrorMessage {
+  type: "subscription_error";
+  conversation_id: string;
+  code: SubscriptionErrorCode;
+  message: string;
+}
+
+/**
+ * Conversation event with session/execution identifiers for routing and filtering.
+ *
+ * - `session_id`: Top-level session ID (primary routing key)
+ * - `execution_id`: Specific execution ID (for filtering root vs subagent)
+ * - `conversation_id`: Legacy field for backward compatibility
+ */
+export interface ConversationEvent extends StreamEvent {
+  /** Session ID for subscription routing */
+  session_id: string;
+  /** Execution ID for filtering (root vs subagent) */
+  execution_id: string;
+  /** Legacy conversation ID for backward compatibility */
+  conversation_id?: string;
+  /** Sequence number for ordering events */
+  seq?: number;
+}
+
+/**
+ * Global event (stats updates, notifications).
+ */
+export interface GlobalEvent extends StreamEvent {
+  type: "stats_update" | "session_notification";
+}
+
+/**
+ * Callback for conversation-specific events.
+ */
+export type ConversationCallback = (event: ConversationEvent) => void;
+
+/**
+ * Callback for global events.
+ */
+export type GlobalCallback = (event: GlobalEvent) => void;
+
+/**
+ * Callback for connection state changes.
+ */
+export type ConnectionStateCallback = (state: ConnectionState) => void;
+
+/**
+ * Subscription scope for event filtering.
+ *
+ * - `all`: All events (backward compatible, includes subagent events)
+ * - `session`: Root execution events + delegation lifecycle markers only
+ * - `execution:{id}`: All events for a specific execution
+ */
+export type SubscriptionScope = "all" | "session" | `execution:${string}`;
+
+/**
+ * Options for subscribing to conversation events.
+ */
+export interface SubscriptionOptions {
+  /** Called when an event is received for this conversation */
+  onEvent: ConversationCallback;
+  /** Called when a subscription error occurs */
+  onError?: (error: SubscriptionErrorMessage) => void;
+  /** Called when subscription is confirmed with current sequence */
+  onConfirmed?: (seq: number, rootExecutionIds?: string[]) => void;
+  /** Subscription scope - defaults to "all" for backward compatibility */
+  scope?: SubscriptionScope;
+}

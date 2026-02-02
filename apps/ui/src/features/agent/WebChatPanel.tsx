@@ -3,8 +3,8 @@
 // Chat interface for the web dashboard (uses transport layer instead of Tauri)
 // ============================================================================
 
-import { useState, useEffect, useRef } from "react";
-import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info } from "lucide-react";
+import { useState, useEffect, useRef, useCallback } from "react";
+import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info, RotateCcw, StopCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getTransport, type StreamEvent, type MessageResponse } from "@/services/transport";
@@ -12,6 +12,7 @@ import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
 import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 import { SubagentActivityPanel, type SubagentActivity } from "./SubagentActivityPanel";
 import { TruncatedContent } from "./TruncatedContent";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 // ============================================================================
 // Types
@@ -53,21 +54,17 @@ function createNewConversationId(): string {
   const convId = `web-${crypto.randomUUID()}`;
   localStorage.setItem(WEB_CONV_ID_KEY, convId);
   // Clear session_id when starting a new conversation
-  console.log("[SESSION_DEBUG] /new command - clearing session_id, new conversation_id:", convId);
   localStorage.removeItem(WEB_SESSION_ID_KEY);
   return convId;
 }
 
 // Get the current session ID (if any)
 function getSessionId(): string | null {
-  const sessionId = localStorage.getItem(WEB_SESSION_ID_KEY);
-  console.log("[SESSION_DEBUG] getSessionId() =>", sessionId);
-  return sessionId;
+  return localStorage.getItem(WEB_SESSION_ID_KEY);
 }
 
 // Store the session ID from backend
 function setSessionId(sessionId: string): void {
-  console.log("[SESSION_DEBUG] setSessionId() storing:", sessionId);
   localStorage.setItem(WEB_SESSION_ID_KEY, sessionId);
 }
 
@@ -79,6 +76,9 @@ export function WebChatPanel() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Session ID - used for subscription routing (prefer sess-xxx over web-xxx)
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
 
   // Generative Canvas state
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -118,45 +118,16 @@ export function WebChatPanel() {
     loadHistory();
   }, [conversationId]);
 
-  // Subscribe to events when conversation changes
-  useEffect(() => {
-    if (!conversationId) return;
-
-    let unsubscribe: (() => void) | null = null;
-
-    const subscribe = async () => {
-      const transport = await getTransport();
-      unsubscribe = transport.subscribe(conversationId, handleStreamEvent);
-    };
-
-    subscribe();
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [conversationId]);
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  const handleStreamEvent = (event: StreamEvent) => {
+  // Event handler for stream events - defined before subscription so it's in scope
+  const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case "agent_started":
-        console.log("[SESSION_DEBUG] agent_started event received:", {
-          session_id: event.session_id,
-          agent_id: event.agent_id,
-          conversation_id: event.conversation_id,
-        });
         setIsProcessing(true);
-        // Capture session_id from the backend for session continuity
+        // Capture session_id from the backend for session continuity AND subscription
         if (event.session_id && typeof event.session_id === "string") {
           setSessionId(event.session_id);
-        } else {
-          console.warn("[SESSION_DEBUG] agent_started event missing session_id!", event);
+          // Also update state to trigger session-based subscription for subagent events
+          setActiveSessionId(event.session_id);
         }
         break;
 
@@ -235,8 +206,11 @@ export function WebChatPanel() {
 
       case "delegation_started": {
         const childAgentId = event.child_agent_id as string;
-        const childConvId = event.child_conversation_id as string;
+        // Use child_conversation_id if available, otherwise fall back to child_execution_id
+        const childConvId = (event.child_conversation_id ?? event.child_execution_id) as string;
         const task = event.task as string;
+
+        if (!childConvId) break; // Skip if no identifier available
 
         // Track the active delegation with full activity data
         setSubagentActivities((prev) => {
@@ -269,9 +243,11 @@ export function WebChatPanel() {
       }
 
       case "delegation_completed": {
-        const childConvId = event.child_conversation_id as string;
+        const childConvId = (event.child_conversation_id ?? event.child_execution_id) as string;
         const childAgentId = event.child_agent_id as string;
         const result = event.result as string | undefined;
+
+        if (!childConvId) break;
 
         // Update subagent activity to completed status
         setSubagentActivities((prev) => {
@@ -392,28 +368,89 @@ export function WebChatPanel() {
           return prev;
         });
         break;
+
+      case "session_ended":
+        break;
+    }
+  }, []); // State setters are stable, no deps needed
+
+  // Subscribe to events via server-side routing
+  // Uses "session" scope for main chat view - filters subagent internal events server-side
+  // while still showing delegation lifecycle markers (DelegationStarted/DelegationCompleted)
+  //
+  // SUBSCRIPTION STRATEGY:
+  // - If we have an activeSessionId (sess-xxx), subscribe ONLY by session_id
+  // - Otherwise, subscribe by conversationId (web-xxx) until session is established
+  // This avoids duplicate events from dual-path routing (session_id + conversation_id)
+  useEffect(() => {
+    // Prefer session_id subscription when available
+    const subscriptionKey = activeSessionId || conversationId;
+    if (!subscriptionKey) return;
+
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;
+
+    const setupSubscription = async () => {
+      const transport = await getTransport();
+
+      if (cancelled) return;
+
+      // Use "session" scope to filter subagent internal events server-side
+      // Server will only send: root execution events + delegation lifecycle markers
+      unsubscribe = transport.subscribeConversation(subscriptionKey, {
+        onEvent: handleStreamEvent,
+        scope: "session",
+        onConfirmed: (seq, rootExecutionIds) => {
+          console.log(`[WebChatPanel] Subscription confirmed for ${subscriptionKey} at seq ${seq}, roots: ${rootExecutionIds?.length ?? 0}`);
+        },
+      });
+    };
+
+    setupSubscription();
+
+    return () => {
+      cancelled = true;
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [activeSessionId, conversationId, handleStreamEvent]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  // End the current session and optionally start a new one
+  const handleEndSession = async (startNew: boolean) => {
+    const currentSessionId = getSessionId();
+    if (currentSessionId) {
+      try {
+        const transport = await getTransport();
+        await transport.endSession(currentSessionId);
+      } catch (error) {
+        console.error("Failed to end session:", error);
+      }
+      // Always clear the session_id after ending
+      localStorage.removeItem(WEB_SESSION_ID_KEY);
+      setActiveSessionId(null); // Clear session subscription
+    }
+
+    if (startNew) {
+      const newConvId = createNewConversationId();
+      setConversationId(newConvId);
+      setMessages([]);
+      setSubagentActivities(new Map());
     }
   };
 
   const handleSend = async () => {
     if (!input.trim() || isProcessing) return;
 
-    const trimmedInput = input.trim();
-
-    // Handle /new command to start a new conversation
-    if (trimmedInput === "/new") {
-      const newConvId = createNewConversationId();
-      setConversationId(newConvId);
-      setMessages([]);
-      setSubagentActivities(new Map());
-      setInput("");
-      return;
-    }
-
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: trimmedInput,
+      content: input.trim(),
       timestamp: new Date(),
     };
 
@@ -425,7 +462,6 @@ export function WebChatPanel() {
       const transport = await getTransport();
       // Pass session_id to continue the same session (or undefined for new session)
       const currentSessionId = getSessionId() ?? undefined;
-      console.log("[SESSION_DEBUG] Sending message with session_id:", currentSessionId, "conversation_id:", conversationId);
       await transport.executeAgent(ROOT_AGENT_ID, conversationId, userMessage.content, currentSessionId);
     } catch (error) {
       console.error("Failed to send message:", error);
@@ -495,11 +531,33 @@ export function WebChatPanel() {
               </div>
             );
           })()}
+          <ConnectionStatus />
           {isProcessing && (
             <div className="flex items-center gap-2 text-[var(--primary)] text-sm font-medium bg-[var(--accent)] px-3 py-1.5 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin" />
               Processing...
             </div>
+          )}
+          {/* Session controls */}
+          {messages.length > 0 && !isProcessing && (
+            <>
+              <button
+                onClick={() => handleEndSession(false)}
+                className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-red-600 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                title="End current session"
+              >
+                <StopCircle className="w-4 h-4" />
+                End
+              </button>
+              <button
+                onClick={() => handleEndSession(true)}
+                className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--primary)] px-2 py-1.5 rounded-lg hover:bg-[var(--accent)] transition-colors"
+                title="Start new conversation"
+              >
+                <RotateCcw className="w-4 h-4" />
+                New
+              </button>
+            </>
           )}
         </div>
       </div>

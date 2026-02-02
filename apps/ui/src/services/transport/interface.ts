@@ -39,6 +39,11 @@ import type {
   ExecutionSession,
   ExecutionSessionFilter,
   ExecutionStats,
+  // Subscription types
+  ConnectionState,
+  ConnectionStateCallback,
+  GlobalCallback,
+  SubscriptionOptions,
 } from "./types";
 
 // ============================================================================
@@ -46,8 +51,8 @@ import type {
 // ============================================================================
 
 export interface Transport {
-  /** Get the transport mode (tauri or web) */
-  readonly mode: "tauri" | "web";
+  /** Get the transport mode */
+  readonly mode: "web";
 
   /** Initialize the transport with configuration */
   initialize(config: TransportConfig): Promise<void>;
@@ -240,14 +245,20 @@ export interface Transport {
   /** Cancel an execution session */
   cancelSession(sessionId: string): Promise<TransportResult<void>>;
 
+  /** End a session (mark as completed) */
+  endSession(sessionId: string): Promise<TransportResult<void>>;
+
   /** Cleanup old execution sessions */
   cleanupExecutionSessions(olderThan?: string): Promise<TransportResult<{ deleted: number }>>;
 
   // =========================================================================
-  // Event Streaming
+  // Event Streaming (Legacy)
   // =========================================================================
 
-  /** Subscribe to events for a conversation */
+  /**
+   * Subscribe to events for a conversation (legacy - client-side filtering).
+   * @deprecated Use subscribeConversation() instead for server-side routing
+   */
   subscribe(conversationId: string, callback: EventCallback): UnsubscribeFn;
 
   /** Connect to the event stream */
@@ -258,4 +269,26 @@ export interface Transport {
 
   /** Check if connected to event stream */
   isConnected(): boolean;
+
+  // =========================================================================
+  // Subscription API (Server-Side Routing)
+  // =========================================================================
+
+  /** Get the current connection state */
+  getConnectionState(): ConnectionState;
+
+  /** Subscribe to connection state changes */
+  onConnectionStateChange(callback: ConnectionStateCallback): UnsubscribeFn;
+
+  /** Subscribe to conversation events with server-side routing */
+  subscribeConversation(
+    conversationId: string,
+    options: SubscriptionOptions
+  ): UnsubscribeFn;
+
+  /** Subscribe to global events (stats updates, notifications) */
+  onGlobalEvent(callback: GlobalCallback): UnsubscribeFn;
+
+  /** Manual reconnect - resets attempt counter and tries again */
+  reconnect(): Promise<void>;
 }

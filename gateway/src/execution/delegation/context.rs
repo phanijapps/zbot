@@ -49,10 +49,16 @@ pub struct DelegationRequest {
 /// the relationship and enables callbacks on completion.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DelegationContext {
+    /// Session ID (shared across the entire conversation tree).
+    pub session_id: String,
+
+    /// Execution ID of the parent agent.
+    pub parent_execution_id: String,
+
     /// ID of the parent agent that initiated delegation.
     pub parent_agent_id: String,
 
-    /// Conversation ID of the parent agent.
+    /// Conversation ID of the parent agent (legacy, for backward compatibility).
     pub parent_conversation_id: String,
 
     /// Task-scoped context passed from parent.
@@ -70,8 +76,15 @@ fn default_callback() -> bool {
 
 impl DelegationContext {
     /// Create a new delegation context.
-    pub fn new(parent_agent_id: impl Into<String>, parent_conversation_id: impl Into<String>) -> Self {
+    pub fn new(
+        session_id: impl Into<String>,
+        parent_execution_id: impl Into<String>,
+        parent_agent_id: impl Into<String>,
+        parent_conversation_id: impl Into<String>,
+    ) -> Self {
         Self {
+            session_id: session_id.into(),
+            parent_execution_id: parent_execution_id.into(),
             parent_agent_id: parent_agent_id.into(),
             parent_conversation_id: parent_conversation_id.into(),
             task_context: None,
@@ -98,9 +111,11 @@ mod tests {
 
     #[test]
     fn test_delegation_context() {
-        let ctx = DelegationContext::new("parent-agent", "parent-conv")
+        let ctx = DelegationContext::new("sess-123", "exec-456", "parent-agent", "parent-conv")
             .with_context(serde_json::json!({"key": "value"}));
 
+        assert_eq!(ctx.session_id, "sess-123");
+        assert_eq!(ctx.parent_execution_id, "exec-456");
         assert_eq!(ctx.parent_agent_id, "parent-agent");
         assert_eq!(ctx.parent_conversation_id, "parent-conv");
         assert!(ctx.callback_on_complete);

@@ -140,26 +140,32 @@ pub async fn all_events_stream(
 fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
     let (event_type, data) = match event {
         GatewayEvent::Respond {
-            conversation_id,
-            message,
             session_id,
+            execution_id,
+            message,
+            conversation_id,
         } => (
             "respond",
             serde_json::json!({
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
-                "message": message,
-                "session_id": session_id
+                "message": message
             }),
         ),
 
         GatewayEvent::AgentCompleted {
             agent_id,
-            conversation_id,
+            session_id,
+            execution_id,
             result,
+            conversation_id,
         } => (
             "agent_completed",
             serde_json::json!({
                 "agent_id": agent_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
                 "result": result
             }),
@@ -167,12 +173,16 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
 
         GatewayEvent::Token {
             agent_id,
-            conversation_id,
+            session_id,
+            execution_id,
             delta,
+            conversation_id,
         } => (
             "token",
             serde_json::json!({
                 "agent_id": agent_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
                 "delta": delta
             }),
@@ -180,14 +190,18 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
 
         GatewayEvent::ToolCall {
             agent_id,
-            conversation_id,
+            session_id,
+            execution_id,
             tool_id,
             tool_name,
             args,
+            conversation_id,
         } => (
             "tool_call",
             serde_json::json!({
                 "agent_id": agent_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
                 "tool_id": tool_id,
                 "tool_name": tool_name,
@@ -197,14 +211,18 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
 
         GatewayEvent::ToolResult {
             agent_id,
-            conversation_id,
+            session_id,
+            execution_id,
             tool_id,
             result,
             error,
+            conversation_id,
         } => (
             "tool_result",
             serde_json::json!({
                 "agent_id": agent_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
                 "tool_id": tool_id,
                 "result": result,
@@ -214,46 +232,62 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
 
         GatewayEvent::TurnComplete {
             agent_id,
-            conversation_id,
+            session_id,
+            execution_id,
             message,
+            conversation_id,
         } => (
             "turn_complete",
             serde_json::json!({
                 "agent_id": agent_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
                 "message": message
             }),
         ),
 
         GatewayEvent::DelegationStarted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             task,
+            parent_conversation_id,
+            child_conversation_id,
         } => (
             "delegation_started",
             serde_json::json!({
+                "session_id": session_id,
+                "parent_execution_id": parent_execution_id,
+                "child_execution_id": child_execution_id,
                 "parent_agent_id": parent_agent_id,
-                "parent_conversation_id": parent_conversation_id,
                 "child_agent_id": child_agent_id,
+                "parent_conversation_id": parent_conversation_id,
                 "child_conversation_id": child_conversation_id,
                 "task": task
             }),
         ),
 
         GatewayEvent::DelegationCompleted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             result,
+            parent_conversation_id,
+            child_conversation_id,
         } => (
             "delegation_completed",
             serde_json::json!({
+                "session_id": session_id,
+                "parent_execution_id": parent_execution_id,
+                "child_execution_id": child_execution_id,
                 "parent_agent_id": parent_agent_id,
-                "parent_conversation_id": parent_conversation_id,
                 "child_agent_id": child_agent_id,
+                "parent_conversation_id": parent_conversation_id,
                 "child_conversation_id": child_conversation_id,
                 "result": result
             }),
@@ -261,12 +295,16 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
 
         GatewayEvent::Error {
             agent_id,
-            conversation_id,
+            session_id,
+            execution_id,
             message,
+            conversation_id,
         } => (
             "error",
             serde_json::json!({
                 "agent_id": agent_id,
+                "session_id": session_id,
+                "execution_id": execution_id,
                 "conversation_id": conversation_id,
                 "message": message
             }),
@@ -291,9 +329,10 @@ mod tests {
     #[test]
     fn test_gateway_event_to_sse() {
         let event = GatewayEvent::Respond {
-            conversation_id: "conv-123".to_string(),
+            session_id: "session-456".to_string(),
+            execution_id: "exec-789".to_string(),
             message: "Hello!".to_string(),
-            session_id: Some("session-456".to_string()),
+            conversation_id: Some("conv-123".to_string()),
         };
 
         let sse_event = gateway_event_to_sse(&event);
@@ -304,8 +343,10 @@ mod tests {
     fn test_agent_completed_to_sse() {
         let event = GatewayEvent::AgentCompleted {
             agent_id: "agent-1".to_string(),
-            conversation_id: "conv-123".to_string(),
+            session_id: "session-456".to_string(),
+            execution_id: "exec-789".to_string(),
             result: Some("Done!".to_string()),
+            conversation_id: Some("conv-123".to_string()),
         };
 
         let sse_event = gateway_event_to_sse(&event);

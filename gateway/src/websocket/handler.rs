@@ -2,13 +2,16 @@
 //!
 //! Handles WebSocket connections and message routing.
 
-use super::messages::{ClientMessage, ServerMessage};
+use super::messages::{ClientMessage, ServerMessage, SubscriptionErrorCode, SubscriptionScope};
 use super::session::{SessionRegistry, WsSession};
+use super::subscriptions::{EventMetadata, SubscribeError, SubscribeResult, SessionScopeState, SubscriptionManager};
 use crate::error::{GatewayError, Result};
 use crate::events::{EventBus, GatewayEvent};
 use crate::hooks::HookContext;
 use crate::services::RuntimeService;
+use execution_state::{DelegationType, ExecutionFilter};
 use futures::{SinkExt, StreamExt};
+use std::collections::HashSet;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, mpsc};
@@ -20,6 +23,7 @@ pub struct WebSocketHandler {
     event_bus: Arc<EventBus>,
     sessions: Arc<SessionRegistry>,
     runtime: Arc<RuntimeService>,
+    subscriptions: Arc<SubscriptionManager>,
 }
 
 impl WebSocketHandler {
@@ -29,7 +33,13 @@ impl WebSocketHandler {
             event_bus,
             sessions: Arc::new(SessionRegistry::new()),
             runtime,
+            subscriptions: Arc::new(SubscriptionManager::new()),
         }
+    }
+
+    /// Get the subscription manager.
+    pub fn subscriptions(&self) -> Arc<SubscriptionManager> {
+        self.subscriptions.clone()
     }
 
     /// Get the session registry.
@@ -45,6 +55,189 @@ impl WebSocketHandler {
 
         info!("WebSocket server listening on {}", addr);
 
+        // Spawn background cleanup task for stale clients
+        let cleanup_subscriptions = self.subscriptions.clone();
+        let mut cleanup_shutdown = shutdown.resubscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let cleaned = cleanup_subscriptions
+                            .cleanup_stale_clients(std::time::Duration::from_secs(60))
+                            .await;
+                        if cleaned > 0 {
+                            info!("Cleaned up {} stale WebSocket clients", cleaned);
+                        }
+                    }
+                    _ = cleanup_shutdown.recv() => {
+                        debug!("Subscription cleanup task shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Spawn central event router - routes events to subscribed clients
+        let router_subscriptions = self.subscriptions.clone();
+        let router_runtime = self.runtime.clone();
+        let mut router_event_rx = self.event_bus.subscribe_all();
+        let mut router_shutdown = shutdown.resubscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = router_event_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                // Debug: log delegation events
+                                if matches!(&event, GatewayEvent::DelegationCompleted { .. } | GatewayEvent::DelegationStarted { .. }) {
+                                    info!("Event router received: {:?}", event);
+                                }
+
+                                // Check for new root executions on AgentStarted events
+                                // If a new root is detected, update the cache for session-scoped subscribers
+                                if let GatewayEvent::AgentStarted { session_id, execution_id, conversation_id, .. } = &event {
+                                    info!(
+                                        session_id = %session_id,
+                                        execution_id = %execution_id,
+                                        conversation_id = ?conversation_id,
+                                        "AgentStarted event received"
+                                    );
+                                    // Look up the execution to check if it's a root
+                                    if let Some(runner) = router_runtime.runner() {
+                                        let state_service = runner.state_service();
+                                        if let Ok(Some(execution)) = state_service.get_execution(execution_id) {
+                                            // Root executions have no parent_execution_id
+                                            if execution.parent_execution_id.is_none() {
+                                                info!(
+                                                    session_id = %session_id,
+                                                    execution_id = %execution_id,
+                                                    conversation_id = ?conversation_id,
+                                                    "New root execution detected, updating scope caches"
+                                                );
+                                                // Update cache for session_id subscribers
+                                                router_subscriptions
+                                                    .add_root_to_caches(session_id, execution_id)
+                                                    .await;
+                                                // ALSO update cache for conversation_id subscribers
+                                                // (frontend may subscribe by conversation_id, not session_id)
+                                                if let Some(conv_id) = conversation_id {
+                                                    if conv_id != session_id {
+                                                        info!(
+                                                            conv_id = %conv_id,
+                                                            execution_id = %execution_id,
+                                                            "Also updating cache for conversation_id subscribers"
+                                                        );
+                                                        router_subscriptions
+                                                            .add_root_to_caches(conv_id, execution_id)
+                                                            .await;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Extract metadata for scope-based filtering
+                                let metadata = gateway_event_to_metadata(&event);
+
+                                // DUAL-PATH ROUTING (for backward compatibility)
+                                //
+                                // Currently routes by BOTH session_id AND conversation_id:
+                                // - session_id: primary routing key for session-based subscriptions
+                                // - conversation_id: legacy support for older clients
+                                //
+                                // With scoped event emission (#26-#31), the server filters events
+                                // based on each subscriber's scope before sending. This means:
+                                // - Session scope: only root execution events + delegation lifecycle
+                                // - Execution scope: only events for a specific execution
+                                // - All scope: unfiltered (backward compatible)
+                                //
+                                // FUTURE OPTIMIZATION: Once all clients migrate to session_id
+                                // subscriptions, the conversation_id routing path can be removed.
+                                // This would simplify the routing logic and eliminate potential
+                                // duplicate delivery when clients subscribe by both IDs.
+                                //
+                                // Uses scoped routing to filter events based on subscription scope.
+                                let session_id = event.session_id().map(|s| s.to_string());
+                                let conversation_id = event.conversation_id().map(|s| s.to_string());
+
+                                if let Some(server_msg) = gateway_event_to_server_message(event) {
+                                    let mut total_sent = 0u64;
+
+                                    // Route by session_id (for session-based subscriptions)
+                                    // Uses scoped routing - filters based on subscriber's scope
+                                    if let Some(ref sid) = session_id {
+                                        let result = router_subscriptions
+                                            .route_event_scoped(sid, server_msg.clone(), &metadata)
+                                            .await;
+                                        total_sent += result.sent;
+
+                                        if result.sent > 0 {
+                                            debug!(
+                                                session_id = %sid,
+                                                sent = result.sent,
+                                                "Routed event by session_id (scoped)"
+                                            );
+                                        }
+                                    }
+
+                                    // ALSO route by conversation_id (for legacy frontend compatibility)
+                                    // This allows clients subscribed by conversation_id to receive events
+                                    if let Some(ref cid) = conversation_id {
+                                        // Avoid double-send if session_id == conversation_id
+                                        if session_id.as_ref() != Some(cid) {
+                                            let result = router_subscriptions
+                                                .route_event_scoped(cid, server_msg.clone(), &metadata)
+                                                .await;
+                                            total_sent += result.sent;
+
+                                            if result.sent > 0 {
+                                                debug!(
+                                                    conversation_id = %cid,
+                                                    sent = result.sent,
+                                                    "Routed event by conversation_id (scoped)"
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    // If no subscribers found by either key, log for debugging
+                                    if total_sent == 0 && (session_id.is_some() || conversation_id.is_some()) {
+                                        warn!(
+                                            session_id = ?session_id,
+                                            conversation_id = ?conversation_id,
+                                            "No subscribers found for event"
+                                        );
+                                    } else if total_sent > 0 {
+                                        info!(
+                                            session_id = ?session_id,
+                                            conversation_id = ?conversation_id,
+                                            total_sent = total_sent,
+                                            "Event routed successfully"
+                                        );
+                                    }
+
+                                    // Global events (like Pong) with no identifiers - broadcast to all
+                                    if session_id.is_none() && conversation_id.is_none() {
+                                        router_subscriptions.broadcast_global(server_msg).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Event router receive error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    _ = router_shutdown.recv() => {
+                        debug!("Event router shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
         loop {
             tokio::select! {
                 result = listener.accept() => {
@@ -52,11 +245,11 @@ impl WebSocketHandler {
                         Ok((stream, peer_addr)) => {
                             debug!("New WebSocket connection from {}", peer_addr);
                             let sessions = self.sessions.clone();
-                            let event_bus = self.event_bus.clone();
                             let runtime = self.runtime.clone();
+                            let subscriptions = self.subscriptions.clone();
 
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, sessions, event_bus, runtime).await {
+                                if let Err(e) = handle_connection(stream, sessions, runtime, subscriptions).await {
                                     warn!("Connection error: {}", e);
                                 }
                             });
@@ -86,8 +279,8 @@ impl WebSocketHandler {
 async fn handle_connection(
     stream: TcpStream,
     sessions: Arc<SessionRegistry>,
-    event_bus: Arc<EventBus>,
     runtime: Arc<RuntimeService>,
+    subscriptions: Arc<SubscriptionManager>,
 ) -> Result<()> {
     let ws_stream = accept_async(stream)
         .await
@@ -102,6 +295,9 @@ async fn handle_connection(
     let session = WsSession::new(tx.clone());
     let session_id = sessions.register(session).await;
 
+    // Register with subscription manager for subscription-based routing
+    subscriptions.connect(session_id.clone(), tx.clone()).await;
+
     // Send connected message
     let connected_msg = ServerMessage::Connected {
         session_id: session_id.clone(),
@@ -113,20 +309,9 @@ async fn handle_connection(
         .await
         .map_err(|e| GatewayError::WebSocket(e.to_string()))?;
 
-    // Subscribe to global event bus and forward events to this session
-    let mut event_rx = event_bus.subscribe_all();
-    let tx_for_events = tx.clone();
-    let session_id_for_events = session_id.clone();
-    tokio::spawn(async move {
-        while let Ok(event) = event_rx.recv().await {
-            if let Some(server_msg) = gateway_event_to_server_message(event) {
-                if tx_for_events.send(server_msg).is_err() {
-                    debug!("Event forwarder for {} stopped (channel closed)", session_id_for_events);
-                    break;
-                }
-            }
-        }
-    });
+    // NOTE: Event routing is now handled by the central event router
+    // which routes events through SubscriptionManager to subscribed clients only.
+    // Clients must explicitly subscribe to conversations to receive events.
 
     // Spawn task to forward messages from channel to WebSocket
     let session_id_clone = session_id.clone();
@@ -154,7 +339,7 @@ async fn handle_connection(
                     match serde_json::from_str::<ClientMessage>(&text) {
                         Ok(client_msg) => {
                             if let Err(e) =
-                                handle_client_message(&session_id, client_msg, &sessions, &runtime).await
+                                handle_client_message(&session_id, client_msg, &sessions, &runtime, &subscriptions).await
                             {
                                 warn!("Error handling message: {}", e);
                             }
@@ -175,6 +360,7 @@ async fn handle_connection(
     }
 
     // Cleanup
+    subscriptions.disconnect(&session_id).await;
     sessions.unregister(&session_id).await;
     info!("Session {} disconnected", session_id);
 
@@ -187,6 +373,7 @@ async fn handle_client_message(
     msg: ClientMessage,
     sessions: &SessionRegistry,
     runtime: &RuntimeService,
+    subscriptions: &SubscriptionManager,
 ) -> Result<()> {
     match msg {
         ClientMessage::Invoke {
@@ -278,6 +465,8 @@ async fn handle_client_message(
             }
         }
         ClientMessage::Ping => {
+            // Update last activity to prevent stale cleanup
+            subscriptions.touch_client(&session_id.to_string()).await;
             if let Some(session) = sessions.get(session_id).await {
                 let _ = session.send(ServerMessage::Pong);
             }
@@ -363,6 +552,165 @@ async fn handle_client_message(
                 }
             }
         }
+        ClientMessage::EndSession { session_id: exec_session_id } => {
+            debug!(
+                "Session {} ending execution session {}",
+                session_id, exec_session_id
+            );
+
+            match runtime.end_session(&exec_session_id).await {
+                Ok(()) => {
+                    info!("Execution session {} ended (completed)", exec_session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::SessionEnded {
+                            session_id: exec_session_id.clone(),
+                        });
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to end session {}: {}", exec_session_id, e);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::error(
+                            None,
+                            "end_session_failed",
+                            &e,
+                        ));
+                    }
+                }
+            }
+        }
+        ClientMessage::Subscribe { conversation_id, scope } => {
+            debug!(
+                "Session {} subscribing to conversation {} with scope {:?}",
+                session_id, conversation_id, scope
+            );
+
+            // Update last activity to prevent stale cleanup
+            subscriptions.touch_client(&session_id.to_string()).await;
+
+            // For Session scope, query root execution IDs from state service
+            let (scope_state, root_ids_for_response) = if matches!(scope, SubscriptionScope::Session) {
+                // conversation_id is actually the session_id in our data model
+                if let Some(runner) = runtime.runner() {
+                    let state_service = runner.state_service();
+
+                    // Query root executions for this session
+                    let filter = ExecutionFilter {
+                        session_id: Some(conversation_id.clone()),
+                        ..Default::default()
+                    };
+
+                    match state_service.list_executions(&filter) {
+                        Ok(executions) => {
+                            // Filter to root executions only (parent_execution_id is None and delegation_type is Root)
+                            let root_ids: HashSet<String> = executions
+                                .into_iter()
+                                .filter(|exec| exec.parent_execution_id.is_none() && exec.delegation_type == DelegationType::Root)
+                                .map(|exec| exec.id)
+                                .collect();
+
+                            debug!(
+                                "Found {} root executions for session {} scope subscription",
+                                root_ids.len(), conversation_id
+                            );
+
+                            let scope_state = SessionScopeState::new(root_ids.clone());
+                            (Some(scope_state), Some(root_ids))
+                        }
+                        Err(e) => {
+                            warn!("Failed to query root executions for session {}: {}", conversation_id, e);
+                            // Fall back to empty cache - events will still work, just without filtering
+                            (Some(SessionScopeState::default()), Some(HashSet::new()))
+                        }
+                    }
+                } else {
+                    warn!("Runtime not initialized - cannot query root executions");
+                    (Some(SessionScopeState::default()), Some(HashSet::new()))
+                }
+            } else {
+                // For All or Execution scopes, no session scope state needed
+                (None, None)
+            };
+
+            // Subscribe with scope and state
+            match subscriptions.subscribe_with_scope(
+                &session_id.to_string(),
+                conversation_id.clone(),
+                scope.clone(),
+                scope_state,
+            ).await {
+                Ok(SubscribeResult::Subscribed { current_sequence }) => {
+                    debug!(
+                        "Session {} subscribed to {} (seq: {}, scope: {:?})",
+                        session_id, conversation_id, current_sequence, scope
+                    );
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::Subscribed {
+                            conversation_id,
+                            current_sequence,
+                            root_execution_ids: root_ids_for_response,
+                        });
+                    }
+                }
+                Ok(SubscribeResult::AlreadySubscribed { current_sequence }) => {
+                    debug!(
+                        "Session {} already subscribed to {} (seq: {}, scope: {:?})",
+                        session_id, conversation_id, current_sequence, scope
+                    );
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::Subscribed {
+                            conversation_id,
+                            current_sequence,
+                            root_execution_ids: root_ids_for_response,
+                        });
+                    }
+                }
+                Err(SubscribeError::ClientNotFound) => {
+                    warn!("Subscribe failed: client {} not found", session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::subscription_error(
+                            &conversation_id,
+                            SubscriptionErrorCode::ServerError,
+                            "Client not registered",
+                        ));
+                    }
+                }
+                Err(SubscribeError::TooManySubscriptions { limit }) => {
+                    warn!("Subscribe failed: client {} exceeded limit of {}", session_id, limit);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::subscription_error(
+                            &conversation_id,
+                            SubscriptionErrorCode::LimitExceeded,
+                            &format!("Maximum {} subscriptions per client", limit),
+                        ));
+                    }
+                }
+                Err(SubscribeError::ConversationFull { limit }) => {
+                    warn!("Subscribe failed: conversation {} at limit of {}", conversation_id, limit);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::subscription_error(
+                            &conversation_id,
+                            SubscriptionErrorCode::LimitExceeded,
+                            &format!("Conversation has maximum {} subscribers", limit),
+                        ));
+                    }
+                }
+            }
+        }
+        ClientMessage::Unsubscribe { conversation_id } => {
+            debug!(
+                "Session {} unsubscribing from conversation {}",
+                session_id, conversation_id
+            );
+
+            // Update last activity to prevent stale cleanup
+            subscriptions.touch_client(&session_id.to_string()).await;
+            subscriptions.unsubscribe(&session_id.to_string(), &conversation_id).await;
+
+            if let Some(session) = sessions.get(session_id).await {
+                let _ = session.send(ServerMessage::Unsubscribed { conversation_id });
+            }
+        }
     }
 
     Ok(())
@@ -371,113 +719,212 @@ async fn handle_client_message(
 /// Convert a GatewayEvent to a ServerMessage.
 fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
     match event {
-        GatewayEvent::AgentStarted { agent_id, conversation_id, session_id } => {
-            Some(ServerMessage::AgentStarted { agent_id, conversation_id, session_id })
+        GatewayEvent::AgentStarted { agent_id, session_id, execution_id, conversation_id, .. } => {
+            Some(ServerMessage::AgentStarted {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                seq: None,
+            })
         }
-        GatewayEvent::AgentCompleted { agent_id, conversation_id, result } => {
-            Some(ServerMessage::AgentCompleted { agent_id, conversation_id, result })
+        GatewayEvent::AgentCompleted { agent_id, session_id, execution_id, result, conversation_id, .. } => {
+            Some(ServerMessage::AgentCompleted {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                result,
+                seq: None,
+            })
         }
-        GatewayEvent::AgentStopped { agent_id, conversation_id, iteration } => {
-            Some(ServerMessage::AgentStopped { agent_id, conversation_id, iteration })
+        GatewayEvent::AgentStopped { agent_id, session_id, execution_id, iteration, conversation_id, .. } => {
+            Some(ServerMessage::AgentStopped {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                iteration,
+                seq: None,
+            })
         }
-        GatewayEvent::Token { conversation_id, delta, .. } => {
-            Some(ServerMessage::Token { conversation_id, delta })
+        GatewayEvent::Token { session_id, execution_id, delta, conversation_id, .. } => {
+            Some(ServerMessage::Token {
+                session_id,
+                execution_id,
+                conversation_id,
+                delta,
+                seq: None,
+            })
         }
-        GatewayEvent::Thinking { conversation_id, content, .. } => {
-            Some(ServerMessage::Thinking { conversation_id, content })
+        GatewayEvent::Thinking { session_id, execution_id, content, conversation_id, .. } => {
+            Some(ServerMessage::Thinking {
+                session_id,
+                execution_id,
+                conversation_id,
+                content,
+                seq: None,
+            })
         }
-        GatewayEvent::ToolCall { conversation_id, tool_id, tool_name, args, .. } => {
+        GatewayEvent::ToolCall { session_id, execution_id, tool_id, tool_name, args, conversation_id, .. } => {
             Some(ServerMessage::ToolCall {
+                session_id,
+                execution_id,
                 conversation_id,
                 tool_call_id: tool_id,
                 tool: tool_name,
                 args,
+                seq: None,
             })
         }
-        GatewayEvent::ToolResult { conversation_id, tool_id, result, error, .. } => {
+        GatewayEvent::ToolResult { session_id, execution_id, tool_id, result, error, conversation_id, .. } => {
             Some(ServerMessage::ToolResult {
+                session_id,
+                execution_id,
                 conversation_id,
                 tool_call_id: tool_id,
                 result,
                 error,
+                seq: None,
             })
         }
-        GatewayEvent::TurnComplete { conversation_id, message, .. } => {
+        GatewayEvent::TurnComplete { session_id, execution_id, message, conversation_id, .. } => {
             Some(ServerMessage::TurnComplete {
+                session_id,
+                execution_id,
                 conversation_id,
                 final_message: Some(message),
+                seq: None,
             })
         }
-        GatewayEvent::Error { conversation_id, message, .. } => {
+        GatewayEvent::Error { session_id, execution_id, message, conversation_id, .. } => {
             Some(ServerMessage::Error {
+                session_id,
+                execution_id,
                 conversation_id,
                 code: "execution_error".to_string(),
                 message,
+                seq: None,
             })
         }
-        GatewayEvent::IterationUpdate { conversation_id, current, max, .. } => {
+        GatewayEvent::IterationUpdate { session_id, execution_id, current, max, conversation_id, .. } => {
             Some(ServerMessage::Iteration {
+                session_id,
+                execution_id,
                 conversation_id,
                 current,
                 max,
+                seq: None,
             })
         }
-        GatewayEvent::ContinuationPrompt { conversation_id, iteration, message, .. } => {
+        GatewayEvent::ContinuationPrompt { session_id, execution_id, iteration, message, conversation_id, .. } => {
             Some(ServerMessage::ContinuationPrompt {
+                session_id,
+                execution_id,
                 conversation_id,
                 iteration,
                 message,
+                seq: None,
             })
         }
 
         // Respond events are handled by the hook system, not WebSocket directly
-        GatewayEvent::Respond { conversation_id, message, .. } => {
+        GatewayEvent::Respond { session_id, execution_id, message, conversation_id, .. } => {
             Some(ServerMessage::TurnComplete {
+                session_id,
+                execution_id,
                 conversation_id,
                 final_message: Some(message),
+                seq: None,
             })
         }
 
         // Delegation events - sent to frontend for UI updates
         GatewayEvent::DelegationStarted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             task,
+            parent_conversation_id,
+            child_conversation_id,
         } => Some(ServerMessage::DelegationStarted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             task,
+            parent_conversation_id,
+            child_conversation_id,
+            seq: None,
         }),
 
         GatewayEvent::DelegationCompleted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             result,
+            parent_conversation_id,
+            child_conversation_id,
         } => Some(ServerMessage::DelegationCompleted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             result,
+            parent_conversation_id,
+            child_conversation_id,
+            seq: None,
         }),
 
         // Internal continuation events are handled by the system, not WebSocket
         GatewayEvent::SessionContinuationReady { .. } => None,
 
         // New message added - notify frontend to refresh
-        GatewayEvent::MessageAdded { conversation_id, role, content } => {
-            Some(ServerMessage::MessageAdded { conversation_id, role, content })
+        GatewayEvent::MessageAdded { session_id, execution_id, role, content, conversation_id, .. } => {
+            Some(ServerMessage::MessageAdded {
+                session_id,
+                execution_id,
+                conversation_id,
+                role,
+                content,
+                seq: None,
+            })
         }
 
         // Token usage update for real-time metrics
-        GatewayEvent::TokenUsage { conversation_id, session_id, tokens_in, tokens_out } => {
-            Some(ServerMessage::TokenUsage { conversation_id, session_id, tokens_in, tokens_out })
+        GatewayEvent::TokenUsage { session_id, execution_id, tokens_in, tokens_out, conversation_id, .. } => {
+            Some(ServerMessage::TokenUsage {
+                session_id,
+                execution_id,
+                conversation_id,
+                tokens_in,
+                tokens_out,
+                seq: None,
+            })
         }
+    }
+}
+
+/// Extract event metadata for scope-based filtering decisions.
+///
+/// Returns metadata indicating:
+/// - The execution_id (if applicable)
+/// - Whether this is a delegation lifecycle event (always shown in session scope)
+fn gateway_event_to_metadata(event: &GatewayEvent) -> EventMetadata {
+    // Check if this is a delegation lifecycle event
+    let is_delegation_event = matches!(
+        event,
+        GatewayEvent::DelegationStarted { .. } | GatewayEvent::DelegationCompleted { .. }
+    );
+
+    EventMetadata {
+        execution_id: event.execution_id().map(|s| s.to_string()),
+        is_delegation_event,
     }
 }

@@ -179,13 +179,15 @@ pub fn handle_token_update(ctx: &StreamContext, tokens_in: u64, tokens_out: u64)
     let event_bus = ctx.event_bus.clone();
     let sess_id = ctx.session_id.clone();
     let exec_id = ctx.execution_id.clone();
+    let conv_id = ctx.conversation_id.clone();
     tokio::spawn(async move {
         event_bus
             .publish(GatewayEvent::TokenUsage {
-                conversation_id: sess_id,
-                session_id: exec_id,
+                session_id: sess_id,
+                execution_id: exec_id,
                 tokens_in,
                 tokens_out,
+                conversation_id: Some(conv_id),
             })
             .await;
     });
@@ -316,6 +318,7 @@ pub fn process_stream_event(
         &ctx.agent_id,
         &ctx.conversation_id,
         &ctx.session_id,
+        &ctx.execution_id,
     );
 
     // Extract response content for accumulation

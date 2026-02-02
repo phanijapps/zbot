@@ -14,78 +14,93 @@ pub fn convert_stream_event(
     agent_id: &str,
     conversation_id: &str,
     session_id: &str,
+    execution_id: &str,
 ) -> GatewayEvent {
+
     match event {
         StreamEvent::Metadata { .. } => GatewayEvent::AgentStarted {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
             session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            conversation_id: Some(conversation_id.to_string()),
         },
         StreamEvent::Token { content, .. } => GatewayEvent::Token {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             delta: content,
+            conversation_id: Some(conversation_id.to_string()),
         },
         StreamEvent::Reasoning { content, .. } => GatewayEvent::Thinking {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             content,
+            conversation_id: Some(conversation_id.to_string()),
         },
         StreamEvent::ToolCallStart {
             tool_id, tool_name, args, ..
         } => GatewayEvent::ToolCall {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             tool_id,
             tool_name,
             args,
+            conversation_id: Some(conversation_id.to_string()),
         },
         StreamEvent::ToolResult {
             tool_id, result, error, ..
         } => GatewayEvent::ToolResult {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             tool_id,
             result,
             error,
+            conversation_id: Some(conversation_id.to_string()),
         },
         StreamEvent::Done { final_message, .. } => GatewayEvent::TurnComplete {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
             message: final_message,
+            conversation_id: Some(conversation_id.to_string()),
         },
         StreamEvent::Error { error, .. } => GatewayEvent::Error {
             agent_id: Some(agent_id.to_string()),
-            conversation_id: Some(conversation_id.to_string()),
+            session_id: Some(session_id.to_string()),
+            execution_id: Some(execution_id.to_string()),
             message: error,
+            conversation_id: Some(conversation_id.to_string()),
         },
         // Action events from tools
         StreamEvent::ActionRespond {
             message,
-            session_id,
+            session_id: respond_session_id,
             ..
         } => GatewayEvent::Respond {
-            conversation_id: conversation_id.to_string(),
+            session_id: respond_session_id.unwrap_or_else(|| session_id.to_string()),
+            execution_id: execution_id.to_string(),
             message,
-            session_id,
+            conversation_id: Some(conversation_id.to_string()),
         },
-        StreamEvent::ActionDelegate {
-            agent_id: child_agent_id,
-            task,
-            ..
-        } => GatewayEvent::DelegationStarted {
-            parent_agent_id: agent_id.to_string(),
-            parent_conversation_id: conversation_id.to_string(),
-            child_agent_id,
-            child_conversation_id: format!("{}-sub", conversation_id),
-            task,
+        // ActionDelegate is handled by the runner/delegation system directly,
+        // which emits DelegationStarted with proper IDs. Converting here would
+        // cause duplicate events. Return no-op to let the stream continue.
+        StreamEvent::ActionDelegate { .. } => GatewayEvent::AgentStarted {
+            agent_id: agent_id.to_string(),
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            conversation_id: Some(conversation_id.to_string()),
         },
         // Handle other event types (ToolCallEnd, ShowContent, RequestInput)
         // These don't have direct gateway equivalents, so emit a no-op event
         _ => GatewayEvent::AgentStarted {
             agent_id: agent_id.to_string(),
-            conversation_id: conversation_id.to_string(),
             session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            conversation_id: Some(conversation_id.to_string()),
         },
     }
 }
@@ -101,13 +116,15 @@ mod tests {
             content: "Hello".to_string(),
         };
 
-        let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1");
+        let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
 
         match gateway_event {
-            GatewayEvent::Token { agent_id, conversation_id, delta } => {
+            GatewayEvent::Token { agent_id, session_id, execution_id, delta, conversation_id, .. } => {
                 assert_eq!(agent_id, "agent-1");
-                assert_eq!(conversation_id, "conv-1");
+                assert_eq!(session_id, "session-1");
+                assert_eq!(execution_id, "exec-1");
                 assert_eq!(delta, "Hello");
+                assert_eq!(conversation_id, Some("conv-1".to_string()));
             }
             _ => panic!("Expected Token event"),
         }
@@ -121,13 +138,15 @@ mod tests {
             recoverable: false,
         };
 
-        let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1");
+        let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
 
         match gateway_event {
-            GatewayEvent::Error { agent_id, conversation_id, message } => {
+            GatewayEvent::Error { agent_id, session_id, execution_id, message, conversation_id, .. } => {
                 assert_eq!(agent_id, Some("agent-1".to_string()));
-                assert_eq!(conversation_id, Some("conv-1".to_string()));
+                assert_eq!(session_id, Some("session-1".to_string()));
+                assert_eq!(execution_id, Some("exec-1".to_string()));
                 assert_eq!(message, "Something went wrong");
+                assert_eq!(conversation_id, Some("conv-1".to_string()));
             }
             _ => panic!("Expected Error event"),
         }

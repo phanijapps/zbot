@@ -398,6 +398,31 @@ User Message
 
 // Continue after max iterations
 { type: "continue", conversation_id: string }
+
+// Subscribe to events with scope filtering
+{
+  type: "subscribe",
+  conversation_id: string,  // Session ID to subscribe to
+  scope: "all" | "session" | "execution:{exec_id}"
+}
+// Scopes:
+// - "all": All events (backward compatible, includes subagent internal events)
+// - "session": Root execution events + delegation lifecycle markers only
+// - "execution:{id}": All events for a specific execution (debug view)
+
+// Unsubscribe
+{ type: "unsubscribe", conversation_id: string }
+```
+
+**Subscription Response:**
+```typescript
+// Subscription confirmed
+{
+  type: "subscribed",
+  conversation_id: string,
+  current_sequence: number,
+  root_execution_ids?: string[]  // For session scope, list of root execution IDs
+}
 ```
 
 **Server Events:**
