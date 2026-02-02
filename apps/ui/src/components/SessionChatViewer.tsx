@@ -19,7 +19,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getTransport, type MessageResponse, type SessionMessage, type MessageScope, type StreamEvent } from "@/services/transport";
+import { getTransport, type MessageResponse, type SessionMessage, type MessageScope, type StreamEvent, type SubscriptionScope } from "@/services/transport";
 import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 // ============================================================================
@@ -196,7 +196,12 @@ export function SessionChatViewer({
     }
   }, []);
 
-  // Subscribe to events for this session
+  // Determine event subscription scope:
+  // - execution:{id} for specific execution view (shows ALL events for that execution)
+  // - session for root-only view (filters out subagent internal events)
+  const eventScope: SubscriptionScope = executionId ? `execution:${executionId}` : "session";
+
+  // Subscribe to events for this session with appropriate scope
   useEffect(() => {
     if (!subscriptionId || readOnly) return;
 
@@ -207,9 +212,13 @@ export function SessionChatViewer({
       const transport = await getTransport();
       if (cancelled) return;
 
-      console.log(`[SessionChatViewer] Subscribing to ${subscriptionId}`);
+      console.log(`[SessionChatViewer] Subscribing to ${subscriptionId} with scope: ${eventScope}`);
       unsubscribe = transport.subscribeConversation(subscriptionId, {
         onEvent: handleStreamEvent,
+        scope: eventScope,
+        onConfirmed: (seq, rootIds) => {
+          console.log(`[SessionChatViewer] Subscription confirmed at seq ${seq}${rootIds ? `, roots: ${rootIds.length}` : ''}`);
+        },
       });
     };
 
@@ -222,7 +231,7 @@ export function SessionChatViewer({
         unsubscribe();
       }
     };
-  }, [subscriptionId, readOnly, handleStreamEvent]);
+  }, [subscriptionId, readOnly, handleStreamEvent, eventScope]);
 
   // Load conversation history
   useEffect(() => {

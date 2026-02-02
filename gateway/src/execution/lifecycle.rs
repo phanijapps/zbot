@@ -323,16 +323,14 @@ pub async fn emit_agent_started(
 
 /// Emit delegation started event.
 ///
-/// Note: This emits with `child_conversation_id: None` because the conversation_id
-/// is not available at the spawn/lifecycle level. The primary DelegationStarted event
-/// with proper conversation_id is emitted via events.rs when converting StreamEvent::ActionDelegate.
-/// Frontend filters events without child_conversation_id to prevent duplicates.
+/// Includes child_conversation_id for frontend tracking (used as key for subagent activities).
 pub async fn emit_delegation_started(
     event_bus: &EventBus,
     parent_agent_id: &str,
     session_id: &str,
     child_agent_id: &str,
     child_execution_id: &str,
+    child_conversation_id: &str,
     task: &str,
 ) {
     event_bus
@@ -344,20 +342,20 @@ pub async fn emit_delegation_started(
             child_agent_id: child_agent_id.to_string(),
             task: task.to_string(),
             parent_conversation_id: None,
-            child_conversation_id: None,
+            child_conversation_id: Some(child_conversation_id.to_string()),
         })
         .await;
 }
 
 /// Emit delegation completed event.
-///
-/// Note: See `emit_delegation_started` for explanation of `child_conversation_id: None`.
 pub async fn emit_delegation_completed(
     event_bus: &EventBus,
     parent_agent_id: &str,
     session_id: &str,
     child_agent_id: &str,
     child_execution_id: &str,
+    parent_conversation_id: Option<&str>,
+    child_conversation_id: Option<&str>,
     result: Option<String>,
 ) {
     event_bus
@@ -368,8 +366,8 @@ pub async fn emit_delegation_completed(
             parent_agent_id: parent_agent_id.to_string(),
             child_agent_id: child_agent_id.to_string(),
             result,
-            parent_conversation_id: None,
-            child_conversation_id: None,
+            parent_conversation_id: parent_conversation_id.map(|s| s.to_string()),
+            child_conversation_id: child_conversation_id.map(|s| s.to_string()),
         })
         .await;
 }

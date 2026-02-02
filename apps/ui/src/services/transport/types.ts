@@ -577,6 +577,15 @@ export type GlobalCallback = (event: GlobalEvent) => void;
 export type ConnectionStateCallback = (state: ConnectionState) => void;
 
 /**
+ * Subscription scope for event filtering.
+ *
+ * - `all`: All events (backward compatible, includes subagent events)
+ * - `session`: Root execution events + delegation lifecycle markers only
+ * - `execution:{id}`: All events for a specific execution
+ */
+export type SubscriptionScope = "all" | "session" | `execution:${string}`;
+
+/**
  * Options for subscribing to conversation events.
  */
 export interface SubscriptionOptions {
@@ -585,5 +594,7 @@ export interface SubscriptionOptions {
   /** Called when a subscription error occurs */
   onError?: (error: SubscriptionErrorMessage) => void;
   /** Called when subscription is confirmed with current sequence */
-  onConfirmed?: (seq: number) => void;
+  onConfirmed?: (seq: number, rootExecutionIds?: string[]) => void;
+  /** Subscription scope - defaults to "all" for backward compatibility */
+  scope?: SubscriptionScope;
 }

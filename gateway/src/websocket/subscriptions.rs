@@ -11,6 +11,7 @@
 //! - Single `RwLock<SubscriptionState>` protects all state (race-condition free)
 //! - Sequence numbers assigned atomically with event routing
 //! - Dead clients cleaned up on send failure and via background task
+//! - Scoped event filtering: Session scope shows only root events + delegation lifecycle
 //! - Metrics for observability
 
 use std::collections::{HashMap, HashSet};
@@ -20,10 +21,128 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tracing::debug;
 
-use super::messages::ServerMessage;
+use super::messages::{ServerMessage, SubscriptionScope};
 
 /// Unique client identifier (WebSocket session ID)
 pub type ClientId = String;
+
+// =============================================================================
+// SCOPE STATE
+// =============================================================================
+
+/// State for session-scope filtering.
+///
+/// Cached root execution IDs for a session allow O(1) filtering without
+/// database lookups in the event routing hot path.
+#[derive(Debug, Clone, Default)]
+pub struct SessionScopeState {
+    /// Cached root execution IDs for this session.
+    /// A root execution has `parent_execution_id = NULL` and `delegation_type = 'root'`.
+    /// Multiple roots possible: one per user turn + continuations after delegations.
+    pub root_execution_ids: HashSet<String>,
+}
+
+impl SessionScopeState {
+    /// Create new scope state with initial root execution IDs.
+    pub fn new(root_execution_ids: HashSet<String>) -> Self {
+        Self { root_execution_ids }
+    }
+
+    /// Check if an execution ID is a known root.
+    pub fn is_root(&self, execution_id: &str) -> bool {
+        self.root_execution_ids.contains(execution_id)
+    }
+
+    /// Add a new root execution ID to the cache.
+    pub fn add_root(&mut self, execution_id: String) {
+        self.root_execution_ids.insert(execution_id);
+    }
+}
+
+// =============================================================================
+// EVENT FILTERING
+// =============================================================================
+
+/// Event metadata for scope filtering decisions.
+///
+/// This struct carries the minimal information needed to determine
+/// whether an event should be sent to a subscriber based on their scope.
+#[derive(Debug, Clone)]
+pub struct EventMetadata {
+    /// Execution ID of the event (if applicable)
+    pub execution_id: Option<String>,
+    /// Whether this is a delegation lifecycle event (DelegationStarted/Completed)
+    pub is_delegation_event: bool,
+}
+
+impl EventMetadata {
+    /// Create metadata from an execution ID.
+    pub fn with_execution(execution_id: impl Into<String>) -> Self {
+        Self {
+            execution_id: Some(execution_id.into()),
+            is_delegation_event: false,
+        }
+    }
+
+    /// Create metadata for a delegation lifecycle event.
+    pub fn delegation() -> Self {
+        Self {
+            execution_id: None,
+            is_delegation_event: true,
+        }
+    }
+
+    /// Create metadata for session-level events (no execution_id).
+    pub fn session_level() -> Self {
+        Self {
+            execution_id: None,
+            is_delegation_event: false,
+        }
+    }
+}
+
+/// Determine if an event should be sent to a subscriber based on their scope.
+///
+/// Filtering rules:
+/// - `All` scope: Send all events
+/// - `Session` scope: Send only events from root executions + delegation lifecycle
+/// - `Execution(id)` scope: Send only events for that specific execution
+pub fn should_send_to_scope(
+    metadata: &EventMetadata,
+    scope: &SubscriptionScope,
+    scope_state: Option<&SessionScopeState>,
+) -> bool {
+    match scope {
+        SubscriptionScope::All => true,
+        SubscriptionScope::Session => {
+            // Delegation lifecycle events always shown in session view
+            if metadata.is_delegation_event {
+                return true;
+            }
+
+            // Events without execution_id (session-level) always shown
+            let Some(ref exec_id) = metadata.execution_id else {
+                return true;
+            };
+
+            // Check if execution is a root using cached state
+            if let Some(state) = scope_state {
+                state.is_root(exec_id)
+            } else {
+                // No scope state = fallback to showing all (backward compatible)
+                true
+            }
+        }
+        SubscriptionScope::Execution(target_id) => {
+            // Only send events for the specific execution
+            metadata.execution_id.as_ref() == Some(target_id)
+        }
+    }
+}
+
+// =============================================================================
+// CLIENT STATE
+// =============================================================================
 
 /// Client connection state
 struct Client {
@@ -36,6 +155,17 @@ struct Client {
     channel_healthy: bool,
 }
 
+/// Per-subscription state including scope and cached identifiers.
+#[derive(Debug, Clone)]
+struct SubscriptionEntry {
+    /// Client ID
+    client_id: ClientId,
+    /// Event filtering scope
+    scope: SubscriptionScope,
+    /// Cached state for Session scope filtering (None for other scopes)
+    scope_state: Option<SessionScopeState>,
+}
+
 /// All subscription state protected by a SINGLE lock
 struct SubscriptionState {
     clients: HashMap<ClientId, Client>,
@@ -45,6 +175,8 @@ struct SubscriptionState {
     client_subscriptions: HashMap<ClientId, HashSet<String>>,
     /// Sequence numbers per conversation
     sequence_numbers: HashMap<String, u64>,
+    /// Subscription entries with scope state (conversation_id, client_id) -> entry
+    subscription_entries: HashMap<(String, ClientId), SubscriptionEntry>,
 }
 
 /// Subscription manager for routing events to subscribed clients.
@@ -100,6 +232,7 @@ impl SubscriptionManager {
                 subscriptions: HashMap::new(),
                 client_subscriptions: HashMap::new(),
                 sequence_numbers: HashMap::new(),
+                subscription_entries: HashMap::new(),
             }),
             max_subscriptions_per_client: Self::DEFAULT_MAX_SUBS_PER_CLIENT,
             max_subscribers_per_conversation: Self::DEFAULT_MAX_SUBS_PER_CONV,
@@ -136,6 +269,15 @@ impl SubscriptionManager {
         self.metrics.total_clients.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Update client's last activity timestamp to prevent stale cleanup.
+    /// Call this on any client interaction (subscribe, unsubscribe, ping, etc.)
+    pub async fn touch_client(&self, client_id: &ClientId) {
+        let mut state = self.state.write().await;
+        if let Some(client) = state.clients.get_mut(client_id) {
+            client.last_activity = Instant::now();
+        }
+    }
+
     /// Disconnect and cleanup - atomic, no race conditions.
     pub async fn disconnect(&self, client_id: &ClientId) {
         let mut state = self.state.write().await;
@@ -154,6 +296,9 @@ impl SubscriptionManager {
                         state.sequence_numbers.remove(conv_id);
                     }
                 }
+                // Clean up subscription entry
+                let entry_key = (conv_id.clone(), client_id.clone());
+                state.subscription_entries.remove(&entry_key);
             }
             self.metrics
                 .total_subscriptions
@@ -164,10 +309,31 @@ impl SubscriptionManager {
     }
 
     /// Subscribe to a conversation - atomic with limit checks.
+    ///
+    /// The `scope` parameter controls event filtering:
+    /// - `All`: All events for the conversation (default, backward compatible)
+    /// - `Session`: Root execution events + delegation lifecycle only
+    /// - `Execution(id)`: All events for a specific execution
+    ///
+    /// For `Session` scope, pass `scope_state` with cached root execution IDs.
     pub async fn subscribe(
         &self,
         client_id: &ClientId,
         conversation_id: String,
+    ) -> Result<SubscribeResult, SubscribeError> {
+        // Backward-compatible: default to All scope with no scope state
+        self.subscribe_with_scope(client_id, conversation_id, SubscriptionScope::All, None).await
+    }
+
+    /// Subscribe to a conversation with explicit scope and state.
+    ///
+    /// For `Session` scope, `scope_state` should contain cached root execution IDs.
+    pub async fn subscribe_with_scope(
+        &self,
+        client_id: &ClientId,
+        conversation_id: String,
+        scope: SubscriptionScope,
+        scope_state: Option<SessionScopeState>,
     ) -> Result<SubscribeResult, SubscribeError> {
         let mut state = self.state.write().await;
 
@@ -226,6 +392,17 @@ impl SubscriptionManager {
             client.subscription_count += 1;
         }
 
+        // Store subscription entry with scope and state
+        let entry_key = (conversation_id.clone(), client_id.clone());
+        state.subscription_entries.insert(
+            entry_key,
+            SubscriptionEntry {
+                client_id: client_id.clone(),
+                scope,
+                scope_state,
+            },
+        );
+
         let current_seq = *state.sequence_numbers.entry(conversation_id).or_insert(0);
 
         self.metrics
@@ -249,6 +426,10 @@ impl SubscriptionManager {
         if !was_subscribed {
             return;
         }
+
+        // Remove subscription entry
+        let entry_key = (conversation_id.to_string(), client_id.clone());
+        state.subscription_entries.remove(&entry_key);
 
         self.metrics
             .total_subscriptions
@@ -356,6 +537,125 @@ impl SubscriptionManager {
         }
     }
 
+    /// Route event to subscribed clients with scope-based filtering.
+    ///
+    /// This method applies the subscription scope filter before sending:
+    /// - `All` scope: Receives all events
+    /// - `Session` scope: Receives only root execution events + delegation lifecycle
+    /// - `Execution(id)` scope: Receives only events for that execution
+    ///
+    /// Returns routing result with counts and dead clients.
+    pub async fn route_event_scoped(
+        &self,
+        conversation_id: &str,
+        message: ServerMessage,
+        metadata: &EventMetadata,
+    ) -> RoutingResult {
+        let mut state = self.state.write().await;
+
+        // Assign sequence number atomically
+        let seq = state
+            .sequence_numbers
+            .entry(conversation_id.to_string())
+            .or_insert(0);
+        *seq += 1;
+        let current_seq = *seq;
+
+        // Add sequence to message
+        let message_with_seq = message.with_sequence(current_seq);
+
+        // Collect subscriber IDs first to avoid borrowing conflicts
+        let subscriber_ids: Vec<ClientId> = state
+            .subscriptions
+            .get(conversation_id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+
+        if subscriber_ids.is_empty() {
+            return RoutingResult {
+                sent: 0,
+                dropped: 0,
+                dead_clients: vec![],
+            };
+        }
+
+        let mut sent = 0u64;
+        let mut dropped = 0u64;
+        let mut filtered = 0u64;
+        let mut dead_clients = Vec::new();
+
+        for client_id in subscriber_ids {
+            // Get scope info for this subscription
+            let entry_key = (conversation_id.to_string(), client_id.clone());
+            let (scope, scope_state) = state
+                .subscription_entries
+                .get(&entry_key)
+                .map(|e| (e.scope.clone(), e.scope_state.clone()))
+                .unwrap_or((SubscriptionScope::All, None));
+
+            // Apply scope filter
+            if !should_send_to_scope(metadata, &scope, scope_state.as_ref()) {
+                filtered += 1;
+                tracing::warn!(
+                    client_id = %client_id,
+                    conversation_id = %conversation_id,
+                    scope = ?scope,
+                    execution_id = ?metadata.execution_id,
+                    scope_state_roots = ?scope_state.as_ref().map(|s| &s.root_execution_ids),
+                    "Filtered event due to scope"
+                );
+                continue;
+            }
+
+            // Send to client
+            if let Some(client) = state.clients.get_mut(&client_id) {
+                match client.sender.send(message_with_seq.clone()) {
+                    Ok(()) => {
+                        sent += 1;
+                        client.last_activity = Instant::now();
+                    }
+                    Err(_) => {
+                        dropped += 1;
+                        // Channel closed - mark for cleanup
+                        client.channel_healthy = false;
+                        dead_clients.push(client_id);
+                    }
+                }
+            }
+        }
+
+        // Clean up dead clients while we still hold the lock
+        for dead_id in &dead_clients {
+            self.disconnect_internal(&mut state, dead_id);
+            self.metrics
+                .dead_clients_cleaned
+                .fetch_add(1, Ordering::Relaxed);
+        }
+
+        // Log filtering stats if any were filtered
+        if filtered > 0 {
+            debug!(
+                conversation_id = %conversation_id,
+                sent = sent,
+                filtered = filtered,
+                "Scoped event routing complete"
+            );
+        }
+
+        self.metrics
+            .events_routed
+            .fetch_add(sent, Ordering::Relaxed);
+        self.metrics
+            .events_dropped
+            .fetch_add(dropped, Ordering::Relaxed);
+
+        RoutingResult {
+            sent,
+            dropped,
+            dead_clients,
+        }
+    }
+
     /// Broadcast global event to all clients (for stats, notifications).
     pub async fn broadcast_global(&self, message: ServerMessage) {
         let state = self.state.read().await;
@@ -427,6 +727,90 @@ impl SubscriptionManager {
             .get(conversation_id)
             .map(|s| s.contains(client_id))
             .unwrap_or(false)
+    }
+
+    // =========================================================================
+    // SCOPE MANAGEMENT
+    // =========================================================================
+
+    /// Add a root execution ID to caches of all session-scoped subscribers for a conversation.
+    ///
+    /// Called when a new root execution starts (AgentStarted with parent_execution_id = null).
+    /// This ensures the cache stays current for multi-turn sessions and continuations.
+    pub async fn add_root_to_caches(&self, conversation_id: &str, execution_id: &str) {
+        let mut state = self.state.write().await;
+
+        // Find all subscription entries for this conversation
+        let subscriber_ids: Vec<ClientId> = state
+            .subscriptions
+            .get(conversation_id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+
+        tracing::info!(
+            conversation_id = %conversation_id,
+            execution_id = %execution_id,
+            subscriber_count = subscriber_ids.len(),
+            "add_root_to_caches called"
+        );
+
+        // Update scope state for each session-scoped subscriber
+        for client_id in subscriber_ids {
+            let entry_key = (conversation_id.to_string(), client_id);
+            if let Some(entry) = state.subscription_entries.get_mut(&entry_key) {
+                if matches!(entry.scope, SubscriptionScope::Session) {
+                    if let Some(ref mut scope_state) = entry.scope_state {
+                        scope_state.add_root(execution_id.to_string());
+                        debug!(
+                            conversation_id = %conversation_id,
+                            execution_id = %execution_id,
+                            "Added root execution to session scope cache"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Get the subscription scope and state for a specific client subscription.
+    ///
+    /// Returns `None` if the client is not subscribed to the conversation.
+    pub async fn get_subscription_scope(
+        &self,
+        client_id: &ClientId,
+        conversation_id: &str,
+    ) -> Option<(SubscriptionScope, Option<SessionScopeState>)> {
+        let state = self.state.read().await;
+        let entry_key = (conversation_id.to_string(), client_id.clone());
+        state.subscription_entries.get(&entry_key).map(|entry| {
+            (entry.scope.clone(), entry.scope_state.clone())
+        })
+    }
+
+    /// Get all subscription entries for a conversation (for scoped routing).
+    ///
+    /// Returns a list of (client_id, scope, scope_state) tuples for all subscribers.
+    pub async fn get_subscription_entries(
+        &self,
+        conversation_id: &str,
+    ) -> Vec<(ClientId, SubscriptionScope, Option<SessionScopeState>)> {
+        let state = self.state.read().await;
+
+        let subscriber_ids: Vec<ClientId> = state
+            .subscriptions
+            .get(conversation_id)
+            .map(|s| s.iter().cloned().collect())
+            .unwrap_or_default();
+
+        subscriber_ids
+            .into_iter()
+            .filter_map(|client_id| {
+                let entry_key = (conversation_id.to_string(), client_id.clone());
+                state.subscription_entries.get(&entry_key).map(|entry| {
+                    (client_id, entry.scope.clone(), entry.scope_state.clone())
+                })
+            })
+            .collect()
     }
 }
 
@@ -685,5 +1069,277 @@ mod tests {
         // Only client-1 should receive
         assert!(rx1.try_recv().is_ok());
         assert!(rx2.try_recv().is_err());
+    }
+
+    // =========================================================================
+    // SCOPE FILTERING TESTS
+    // =========================================================================
+
+    #[test]
+    fn test_should_send_to_scope_all_always_returns_true() {
+        let metadata = EventMetadata {
+            execution_id: Some("exec-subagent".to_string()),
+            is_delegation_event: false,
+        };
+        let scope = SubscriptionScope::All;
+
+        assert!(should_send_to_scope(&metadata, &scope, None));
+    }
+
+    #[test]
+    fn test_should_send_to_scope_session_root_execution() {
+        let mut roots = HashSet::new();
+        roots.insert("exec-root".to_string());
+        let scope_state = SessionScopeState::new(roots);
+
+        let metadata = EventMetadata {
+            execution_id: Some("exec-root".to_string()),
+            is_delegation_event: false,
+        };
+        let scope = SubscriptionScope::Session;
+
+        assert!(should_send_to_scope(&metadata, &scope, Some(&scope_state)));
+    }
+
+    #[test]
+    fn test_should_send_to_scope_session_non_root_filtered() {
+        let mut roots = HashSet::new();
+        roots.insert("exec-root".to_string());
+        let scope_state = SessionScopeState::new(roots);
+
+        let metadata = EventMetadata {
+            execution_id: Some("exec-subagent".to_string()),
+            is_delegation_event: false,
+        };
+        let scope = SubscriptionScope::Session;
+
+        assert!(!should_send_to_scope(&metadata, &scope, Some(&scope_state)));
+    }
+
+    #[test]
+    fn test_should_send_to_scope_session_delegation_always_passes() {
+        let scope_state = SessionScopeState::new(HashSet::new()); // Empty roots
+
+        let metadata = EventMetadata {
+            execution_id: Some("exec-subagent".to_string()),
+            is_delegation_event: true, // Delegation event
+        };
+        let scope = SubscriptionScope::Session;
+
+        // Delegation events always pass through session scope
+        assert!(should_send_to_scope(&metadata, &scope, Some(&scope_state)));
+    }
+
+    #[test]
+    fn test_should_send_to_scope_session_no_execution_id_passes() {
+        let scope_state = SessionScopeState::new(HashSet::new());
+
+        let metadata = EventMetadata {
+            execution_id: None, // Session-level event
+            is_delegation_event: false,
+        };
+        let scope = SubscriptionScope::Session;
+
+        // Events without execution_id (session-level) always pass
+        assert!(should_send_to_scope(&metadata, &scope, Some(&scope_state)));
+    }
+
+    #[test]
+    fn test_should_send_to_scope_execution_matching() {
+        let metadata = EventMetadata {
+            execution_id: Some("exec-123".to_string()),
+            is_delegation_event: false,
+        };
+        let scope = SubscriptionScope::Execution("exec-123".to_string());
+
+        assert!(should_send_to_scope(&metadata, &scope, None));
+    }
+
+    #[test]
+    fn test_should_send_to_scope_execution_non_matching() {
+        let metadata = EventMetadata {
+            execution_id: Some("exec-456".to_string()),
+            is_delegation_event: false,
+        };
+        let scope = SubscriptionScope::Execution("exec-123".to_string());
+
+        assert!(!should_send_to_scope(&metadata, &scope, None));
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_with_session_scope() {
+        let manager = SubscriptionManager::new();
+        let (tx, _rx) = create_test_sender();
+
+        manager.connect("client-1".to_string(), tx).await;
+
+        let mut root_ids = HashSet::new();
+        root_ids.insert("exec-root-1".to_string());
+        root_ids.insert("exec-root-2".to_string());
+        let scope_state = SessionScopeState::new(root_ids);
+
+        let result = manager
+            .subscribe_with_scope(
+                &"client-1".to_string(),
+                "sess-1".to_string(),
+                SubscriptionScope::Session,
+                Some(scope_state),
+            )
+            .await;
+
+        assert!(matches!(result, Ok(SubscribeResult::Subscribed { .. })));
+
+        // Verify scope was stored
+        let (scope, state) = manager
+            .get_subscription_scope(&"client-1".to_string(), "sess-1")
+            .await
+            .unwrap();
+
+        assert!(matches!(scope, SubscriptionScope::Session));
+        assert!(state.is_some());
+        let state = state.unwrap();
+        assert!(state.is_root("exec-root-1"));
+        assert!(state.is_root("exec-root-2"));
+        assert!(!state.is_root("exec-subagent"));
+    }
+
+    #[tokio::test]
+    async fn test_route_event_scoped_filters_non_root() {
+        let manager = SubscriptionManager::new();
+        let (tx, mut rx) = create_test_sender();
+
+        manager.connect("client-1".to_string(), tx).await;
+
+        // Subscribe with session scope - only exec-root is root
+        let mut root_ids = HashSet::new();
+        root_ids.insert("exec-root".to_string());
+        let scope_state = SessionScopeState::new(root_ids);
+
+        manager
+            .subscribe_with_scope(
+                &"client-1".to_string(),
+                "sess-1".to_string(),
+                SubscriptionScope::Session,
+                Some(scope_state),
+            )
+            .await
+            .unwrap();
+
+        // Send event from subagent - should be filtered
+        let subagent_msg = ServerMessage::Token {
+            session_id: "sess-1".to_string(),
+            execution_id: "exec-subagent".to_string(),
+            conversation_id: None,
+            delta: "subagent output".to_string(),
+            seq: None,
+        };
+        let metadata = EventMetadata {
+            execution_id: Some("exec-subagent".to_string()),
+            is_delegation_event: false,
+        };
+        let result = manager.route_event_scoped("sess-1", subagent_msg, &metadata).await;
+
+        // Event was filtered, nothing sent
+        assert_eq!(result.sent, 0);
+        assert!(rx.try_recv().is_err());
+
+        // Send event from root - should pass
+        let root_msg = ServerMessage::Token {
+            session_id: "sess-1".to_string(),
+            execution_id: "exec-root".to_string(),
+            conversation_id: None,
+            delta: "root output".to_string(),
+            seq: None,
+        };
+        let root_metadata = EventMetadata {
+            execution_id: Some("exec-root".to_string()),
+            is_delegation_event: false,
+        };
+        let result = manager.route_event_scoped("sess-1", root_msg, &root_metadata).await;
+
+        assert_eq!(result.sent, 1);
+        let received = rx.recv().await.unwrap();
+        if let ServerMessage::Token { delta, .. } = received {
+            assert_eq!(delta, "root output");
+        } else {
+            panic!("Expected Token message");
+        }
+    }
+
+    #[tokio::test]
+    async fn test_add_root_to_caches() {
+        let manager = SubscriptionManager::new();
+        let (tx, _rx) = create_test_sender();
+
+        manager.connect("client-1".to_string(), tx).await;
+
+        // Subscribe with session scope - initially only exec-root-1
+        let mut root_ids = HashSet::new();
+        root_ids.insert("exec-root-1".to_string());
+        let scope_state = SessionScopeState::new(root_ids);
+
+        manager
+            .subscribe_with_scope(
+                &"client-1".to_string(),
+                "sess-1".to_string(),
+                SubscriptionScope::Session,
+                Some(scope_state),
+            )
+            .await
+            .unwrap();
+
+        // Add new root (continuation)
+        manager.add_root_to_caches("sess-1", "exec-root-2").await;
+
+        // Verify new root is in cache
+        let (_, state) = manager
+            .get_subscription_scope(&"client-1".to_string(), "sess-1")
+            .await
+            .unwrap();
+
+        let state = state.unwrap();
+        assert!(state.is_root("exec-root-1"));
+        assert!(state.is_root("exec-root-2"));
+    }
+
+    #[tokio::test]
+    async fn test_route_event_scoped_delegation_events_pass_through() {
+        let manager = SubscriptionManager::new();
+        let (tx, mut rx) = create_test_sender();
+
+        manager.connect("client-1".to_string(), tx).await;
+
+        // Subscribe with session scope with empty roots
+        manager
+            .subscribe_with_scope(
+                &"client-1".to_string(),
+                "sess-1".to_string(),
+                SubscriptionScope::Session,
+                Some(SessionScopeState::new(HashSet::new())),
+            )
+            .await
+            .unwrap();
+
+        // Send delegation event - should pass even though roots is empty
+        let msg = ServerMessage::DelegationStarted {
+            session_id: "sess-1".to_string(),
+            parent_execution_id: "exec-root".to_string(),
+            child_execution_id: "exec-child".to_string(),
+            parent_agent_id: "root-agent".to_string(),
+            child_agent_id: "child-agent".to_string(),
+            task: "Do something".to_string(),
+            parent_conversation_id: None,
+            child_conversation_id: None,
+            seq: None,
+        };
+        let metadata = EventMetadata {
+            execution_id: Some("exec-root".to_string()),
+            is_delegation_event: true, // Key: delegation events always pass
+        };
+        let result = manager.route_event_scoped("sess-1", msg, &metadata).await;
+
+        assert_eq!(result.sent, 1);
+        let received = rx.recv().await.unwrap();
+        assert!(matches!(received, ServerMessage::DelegationStarted { .. }));
     }
 }

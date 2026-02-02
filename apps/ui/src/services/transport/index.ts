@@ -45,6 +45,9 @@ export type {
   LogSession,
   SessionDetail,
   LogFilter,
+  // Subscription types
+  SubscriptionScope,
+  SubscriptionOptions,
 } from "./types";
 
 // ============================================================================

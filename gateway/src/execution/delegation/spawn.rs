@@ -107,6 +107,7 @@ pub async fn spawn_delegated_agent(
         &session_id,
         &request.child_agent_id,
         &execution_id,
+        &child_conversation_id,
         &request.task,
     )
     .await;
@@ -322,13 +323,18 @@ async fn handle_execution_success(
     // Get delegation context before removing (for callback check)
     let delegation_ctx = delegation_registry.get(execution_id);
 
-    // Emit delegation completed
+    // Emit delegation completed with proper conversation IDs for routing
+    let parent_conv_id = delegation_ctx
+        .as_ref()
+        .map(|ctx| ctx.parent_conversation_id.as_str());
     emit_delegation_completed(
         event_bus,
         parent_agent,
         session_id,
         agent_id,
-        conv_id,
+        execution_id,
+        parent_conv_id,
+        Some(conv_id),
         Some(response.to_string()),
     )
     .await;

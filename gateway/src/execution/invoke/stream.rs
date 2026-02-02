@@ -318,6 +318,7 @@ pub fn process_stream_event(
         &ctx.agent_id,
         &ctx.conversation_id,
         &ctx.session_id,
+        &ctx.execution_id,
     );
 
     // Extract response content for accumulation

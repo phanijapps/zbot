@@ -51,6 +51,7 @@ import type {
   GlobalEvent,
   SubscriptionErrorMessage,
   SubscriptionOptions,
+  SubscriptionScope,
 } from "./types";
 
 // ============================================================================
@@ -61,9 +62,11 @@ import type {
 interface SubscriptionState {
   callbacks: Set<ConversationCallback>;
   errorCallbacks: Map<ConversationCallback, (error: SubscriptionErrorMessage) => void>;
-  confirmedCallbacks: Map<ConversationCallback, (seq: number) => void>;
+  confirmedCallbacks: Map<ConversationCallback, (seq: number, rootExecutionIds?: string[]) => void>;
   confirmed: boolean;
   lastSeq: number;
+  scope: SubscriptionScope;
+  rootExecutionIds?: string[];
 }
 
 export class HttpTransport implements Transport {
@@ -96,9 +99,13 @@ export class HttpTransport implements Transport {
   private visibilityHandler: (() => void) | null = null;
   private onlineHandler: (() => void) | null = null;
 
-  // Simple deduplication for events delivered via multiple subscription paths
+  // Simple deduplication for events delivered via multiple subscription paths.
+  // With server-side scope filtering (#26-#31), this is now primarily a safety net for:
+  // 1. Dual subscriptions (conversation_id + session_id) receiving the same event
+  // 2. Reconnection race conditions
+  // TODO: Can be removed once backend dual-path routing is consolidated (see handler.rs lines 122-167)
   private recentEvents = new Set<string>();
-  private readonly MAX_RECENT = 500;
+  private readonly MAX_RECENT = 200; // Reduced from 500 - fewer duplicates with server-side filtering
 
   // =========================================================================
   // Initialization
@@ -695,11 +702,15 @@ export class HttpTransport implements Transport {
   /**
    * Subscribe to conversation events with server-side routing.
    * Only subscribed clients receive events for this conversation.
+   *
+   * @param conversationId - The conversation/session ID to subscribe to
+   * @param options - Subscription options including scope and callbacks
    */
   subscribeConversation(
     conversationId: string,
     options: SubscriptionOptions
   ): UnsubscribeFn {
+    const scope = options.scope ?? "all";
     let state = this.conversationSubscriptions.get(conversationId);
 
     if (!state) {
@@ -709,22 +720,34 @@ export class HttpTransport implements Transport {
         confirmedCallbacks: new Map(),
         confirmed: false,
         lastSeq: 0,
+        scope,
       };
       this.conversationSubscriptions.set(conversationId, state);
-      // Send subscribe message to server
-      this.sendSubscribe(conversationId);
+      // Send subscribe message to server with scope
+      this.sendSubscribe(conversationId, scope);
+    } else if (state.scope !== scope) {
+      // Scope changed - update and re-subscribe
+      console.log(`[Transport] Scope changed from ${state.scope} to ${scope}, re-subscribing`);
+      state.scope = scope;
+      state.confirmed = false;
+      this.sendSubscribe(conversationId, scope);
     }
 
     // Wrap callback to include sequence tracking
     const wrappedCallback: ConversationCallback = (event) => {
       const currentState = this.conversationSubscriptions.get(conversationId);
       if (currentState && event.seq !== undefined) {
-        // Check for sequence gap
+        // Check for sequence gap - only warn for "all" scope
+        // For "session" and "execution" scopes, gaps are expected due to server-side filtering
         if (event.seq > currentState.lastSeq + 1 && currentState.lastSeq > 0) {
-          console.warn(
-            `[Transport] Sequence gap: expected ${currentState.lastSeq + 1}, got ${event.seq}. ` +
-              `Recommend refreshing conversation state via API.`
-          );
+          if (currentState.scope === "all") {
+            // Only warn for unfiltered subscriptions where gaps indicate real issues
+            console.warn(
+              `[Transport] Sequence gap: expected ${currentState.lastSeq + 1}, got ${event.seq}. ` +
+                `Recommend refreshing conversation state via API.`
+            );
+          }
+          // For scoped subscriptions, gaps are normal (filtered events still increment sequence)
         }
         currentState.lastSeq = event.seq;
       }
@@ -864,13 +887,16 @@ export class HttpTransport implements Transport {
   // Subscription Protocol
   // ─────────────────────────────────────────────────────────────────────────
 
-  private sendSubscribe(conversationId: string): void {
+  private sendSubscribe(conversationId: string, scope?: SubscriptionScope): void {
+    const effectiveScope = scope ?? this.conversationSubscriptions.get(conversationId)?.scope ?? "all";
+
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log(`[Transport] Sending subscribe for ${conversationId}`);
+      console.log(`[Transport] Sending subscribe for ${conversationId} with scope: ${effectiveScope}`);
       this.ws.send(
         JSON.stringify({
           type: "subscribe",
           conversation_id: conversationId,
+          scope: effectiveScope,
         })
       );
       this.pendingSubscriptions.delete(conversationId);
@@ -893,17 +919,18 @@ export class HttpTransport implements Transport {
   }
 
   private resubscribeAll(): void {
-    // Re-subscribe existing subscriptions
+    // Re-subscribe existing subscriptions with their scopes
     for (const [conversationId, state] of this.conversationSubscriptions) {
       state.confirmed = false;
       // Don't reset lastSeq - we want to detect gaps after reconnect
-      this.sendSubscribe(conversationId);
+      this.sendSubscribe(conversationId, state.scope);
     }
 
     // Flush any pending subscriptions that were queued before WS connected
     for (const conversationId of this.pendingSubscriptions) {
-      if (this.conversationSubscriptions.has(conversationId)) {
-        this.sendSubscribe(conversationId);
+      const state = this.conversationSubscriptions.get(conversationId);
+      if (state) {
+        this.sendSubscribe(conversationId, state.scope);
       }
     }
     this.pendingSubscriptions.clear();
@@ -932,15 +959,17 @@ export class HttpTransport implements Transport {
       case "subscribed": {
         const convId = message.conversation_id as string;
         const currentSeq = message.current_sequence as number;
+        const rootExecutionIds = message.root_execution_ids as string[] | undefined;
         const state = this.conversationSubscriptions.get(convId);
         if (state) {
           state.confirmed = true;
           state.lastSeq = currentSeq;
-          console.log(`[Transport] Subscribed to ${convId} at seq ${currentSeq}`);
-          // Notify confirmed callbacks
+          state.rootExecutionIds = rootExecutionIds;
+          console.log(`[Transport] Subscribed to ${convId} at seq ${currentSeq}, scope: ${state.scope}, roots: ${rootExecutionIds?.length ?? 0}`);
+          // Notify confirmed callbacks with root execution IDs
           for (const confirmedCb of state.confirmedCallbacks.values()) {
             try {
-              confirmedCb(currentSeq);
+              confirmedCb(currentSeq, rootExecutionIds);
             } catch (e) {
               console.error(e);
             }
@@ -1007,25 +1036,18 @@ export class HttpTransport implements Transport {
     // Secondary routing key: session_id (for session-based subscriptions)
     const sessionId = message.session_id as string | undefined;
 
-    // Deduplicate events (same event may arrive via multiple paths)
+    // Deduplicate events that may arrive via multiple subscription paths
+    // With server-side scope filtering, this is a safety net for dual-subscription scenarios
+    const execId = message.execution_id as string | undefined;
     const seq = message.seq as number | undefined;
-    let eventKey: string;
 
-    if (message.type === "delegation_started" || message.type === "delegation_completed") {
-      // Delegation events: backend emits from multiple places with different IDs
-      // Use session + child_agent + task hash for deduplication
-      const childAgent = message.child_agent_id as string | undefined;
-      const task = message.task as string | undefined;
-      eventKey = `${message.type}:${sessionId}:${childAgent}:${task?.slice(0, 50)}`;
-    } else if (seq !== undefined && conversationId) {
-      eventKey = `${conversationId}:${seq}`;
-    } else {
-      const execId = message.execution_id as string | undefined;
-      eventKey = `${message.type}:${execId || sessionId || conversationId}`;
-    }
+    // Create a unique key: prefer seq if available, otherwise use type + execution_id
+    const eventKey = seq !== undefined
+      ? `${sessionId || conversationId}:${seq}`
+      : `${message.type}:${execId || sessionId || conversationId}:${message.timestamp || Date.now()}`;
 
     if (this.recentEvents.has(eventKey)) {
-      return true; // Already delivered
+      return true; // Already delivered - skip duplicate
     }
     this.recentEvents.add(eventKey);
     if (this.recentEvents.size > this.MAX_RECENT) {

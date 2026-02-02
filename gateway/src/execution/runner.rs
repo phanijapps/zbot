@@ -579,6 +579,11 @@ impl ExecutionRunner {
         self.delegation_registry.clone()
     }
 
+    /// Get the state service for execution state management.
+    pub fn state_service(&self) -> Arc<StateService<DatabaseManager>> {
+        self.state_service.clone()
+    }
+
     /// Spawn a delegated subagent.
     ///
     /// This is called when an agent uses the delegate_to_agent tool.

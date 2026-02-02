@@ -77,9 +77,8 @@ export function WebChatPanel() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // Session-based subscription for receiving subagent events
+  // Session ID - used for subscription routing (prefer sess-xxx over web-xxx)
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
-  const sessionUnsubscribeRef = useRef<(() => void) | null>(null);
 
   // Generative Canvas state
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -375,70 +374,44 @@ export function WebChatPanel() {
     }
   }, []); // State setters are stable, no deps needed
 
-  // Subscribe to conversation events via server-side routing
+  // Subscribe to events via server-side routing
+  // Uses "session" scope for main chat view - filters subagent internal events server-side
+  // while still showing delegation lifecycle markers (DelegationStarted/DelegationCompleted)
+  //
+  // SUBSCRIPTION STRATEGY:
+  // - If we have an activeSessionId (sess-xxx), subscribe ONLY by session_id
+  // - Otherwise, subscribe by conversationId (web-xxx) until session is established
+  // This avoids duplicate events from dual-path routing (session_id + conversation_id)
   useEffect(() => {
-    if (!conversationId) return;
+    // Prefer session_id subscription when available
+    const subscriptionKey = activeSessionId || conversationId;
+    if (!subscriptionKey) return;
 
     let unsubscribe: (() => void) | null = null;
-    let cancelled = false;  // Track if cleanup ran before subscribe completed
+    let cancelled = false;
 
     const setupSubscription = async () => {
       const transport = await getTransport();
 
-      // If cleanup already ran while we were awaiting, don't subscribe
       if (cancelled) return;
 
-      unsubscribe = transport.subscribeConversation(conversationId, {
+      // Use "session" scope to filter subagent internal events server-side
+      // Server will only send: root execution events + delegation lifecycle markers
+      unsubscribe = transport.subscribeConversation(subscriptionKey, {
         onEvent: handleStreamEvent,
+        scope: "session",
+        onConfirmed: (seq, rootExecutionIds) => {
+          console.log(`[WebChatPanel] Subscription confirmed for ${subscriptionKey} at seq ${seq}, roots: ${rootExecutionIds?.length ?? 0}`);
+        },
       });
     };
 
     setupSubscription();
 
     return () => {
-      cancelled = true;  // Prevent late subscription
+      cancelled = true;
       if (unsubscribe) {
         unsubscribe();
-      }
-    };
-  }, [conversationId, handleStreamEvent]);
-
-  // Subscribe by session_id to receive subagent events
-  // This is separate from conversation subscription because:
-  // - Conversation subscription gets initial events (before we know session_id)
-  // - Session subscription gets ALL events from the session including subagents
-  useEffect(() => {
-    if (!activeSessionId) return;
-
-    // Don't double-subscribe if session_id equals conversation_id
-    if (activeSessionId === conversationId) {
-      return;
-    }
-
-    let cancelled = false;
-
-    const setupSessionSubscription = async () => {
-      const transport = await getTransport();
-
-      if (cancelled) return;
-
-      // Clean up any existing session subscription
-      if (sessionUnsubscribeRef.current) {
-        sessionUnsubscribeRef.current();
-      }
-
-      sessionUnsubscribeRef.current = transport.subscribeConversation(activeSessionId, {
-        onEvent: handleStreamEvent,
-      });
-    };
-
-    setupSessionSubscription();
-
-    return () => {
-      cancelled = true;
-      if (sessionUnsubscribeRef.current) {
-        sessionUnsubscribeRef.current();
-        sessionUnsubscribeRef.current = null;
       }
     };
   }, [activeSessionId, conversationId, handleStreamEvent]);

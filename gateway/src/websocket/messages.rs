@@ -4,13 +4,48 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
+
+// =============================================================================
+// SUBSCRIPTION SCOPE
+// =============================================================================
+
+/// Subscription scope for event filtering.
+///
+/// Controls which events are delivered to the subscriber:
+/// - `All`: All events for the session (default, backward compatible)
+/// - `Session`: Root execution events + delegation lifecycle only (clean UI view)
+/// - `Execution`: All events for a specific execution (debug/detail view)
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscriptionScope {
+    /// All events for the session (default, backward compatible).
+    #[default]
+    All,
+    /// Root execution events + delegation lifecycle markers only.
+    /// Hides subagent internal events (tokens, tools, thinking).
+    Session,
+    /// All events for a specific execution ID.
+    /// Use for viewing subagent activity in detail view.
+    Execution(String),
+}
 
 /// Messages from client to server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
-    /// Subscribe to a conversation's events.
-    Subscribe { conversation_id: String },
+    /// Subscribe to a conversation/session's events.
+    ///
+    /// The `scope` parameter controls event filtering:
+    /// - `All` (default): All events for backward compatibility
+    /// - `Session`: Root events + delegation lifecycle only (clean chat view)
+    /// - `Execution(id)`: All events for specific execution (detail view)
+    Subscribe {
+        conversation_id: String,
+        /// Event filtering scope (defaults to All for backward compatibility)
+        #[serde(default)]
+        scope: SubscriptionScope,
+    },
 
     /// Unsubscribe from a conversation's events.
     Unsubscribe { conversation_id: String },
@@ -72,9 +107,16 @@ pub enum ServerMessage {
     // =========================================================================
 
     /// Subscription confirmed.
+    ///
+    /// Includes `root_execution_ids` for Session scope subscriptions to enable
+    /// client-side fallback filtering if needed.
     Subscribed {
         conversation_id: String,
         current_sequence: u64,
+        /// Root execution IDs for this session (for Session scope).
+        /// Allows client to do fallback filtering if needed.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        root_execution_ids: Option<HashSet<String>>,
     },
 
     /// Unsubscription confirmed.
@@ -490,5 +532,65 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         assert!(json.contains("token"));
         assert!(json.contains("sess-1"));
+    }
+
+    #[test]
+    fn test_subscription_scope_default() {
+        // Test that default scope is All (backward compatible)
+        let scope: SubscriptionScope = Default::default();
+        assert_eq!(scope, SubscriptionScope::All);
+    }
+
+    #[test]
+    fn test_subscription_scope_deserialize_all() {
+        let json = r#"{"type": "subscribe", "conversation_id": "sess-123", "scope": "all"}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ClientMessage::Subscribe { conversation_id, scope } => {
+                assert_eq!(conversation_id, "sess-123");
+                assert_eq!(scope, SubscriptionScope::All);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_subscription_scope_deserialize_session() {
+        let json = r#"{"type": "subscribe", "conversation_id": "sess-123", "scope": "session"}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ClientMessage::Subscribe { conversation_id, scope } => {
+                assert_eq!(conversation_id, "sess-123");
+                assert_eq!(scope, SubscriptionScope::Session);
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_subscription_scope_deserialize_execution() {
+        let json = r#"{"type": "subscribe", "conversation_id": "sess-123", "scope": {"execution": "exec-456"}}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ClientMessage::Subscribe { conversation_id, scope } => {
+                assert_eq!(conversation_id, "sess-123");
+                assert_eq!(scope, SubscriptionScope::Execution("exec-456".to_string()));
+            }
+            _ => panic!("Wrong message type"),
+        }
+    }
+
+    #[test]
+    fn test_subscription_scope_default_when_missing() {
+        // Test backward compatibility - scope defaults to All when not provided
+        let json = r#"{"type": "subscribe", "conversation_id": "sess-123"}"#;
+        let msg: ClientMessage = serde_json::from_str(json).unwrap();
+        match msg {
+            ClientMessage::Subscribe { conversation_id, scope } => {
+                assert_eq!(conversation_id, "sess-123");
+                assert_eq!(scope, SubscriptionScope::All); // Default
+            }
+            _ => panic!("Wrong message type"),
+        }
     }
 }
