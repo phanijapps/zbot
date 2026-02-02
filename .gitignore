@@ -49,6 +49,7 @@ coverage/
 *.lcov
 .nyc_output/
 playwright-report/
+test-results/
 
 # -----------------------------------------------------------------------------
 # Editor / IDE
