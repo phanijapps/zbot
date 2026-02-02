@@ -410,6 +410,8 @@ export function WebChatPanel() {
       } catch (error) {
         console.error("Failed to end session:", error);
       }
+      // Always clear the session_id after ending
+      localStorage.removeItem(WEB_SESSION_ID_KEY);
     }
 
     if (startNew) {
