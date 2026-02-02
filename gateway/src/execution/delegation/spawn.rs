@@ -82,7 +82,12 @@ pub async fn spawn_delegated_agent(
     );
 
     // Register the delegation
-    let delegation_context = DelegationContext::new(&request.parent_agent_id, &session_id);
+    let delegation_context = DelegationContext::new(
+        &session_id,
+        &request.parent_execution_id,
+        &request.parent_agent_id,
+        &child_conversation_id, // legacy conversation_id
+    );
     let delegation_context = if let Some(ctx) = request.context.clone() {
         delegation_context.with_context(ctx)
     } else {
@@ -356,6 +361,7 @@ async fn handle_execution_success(
         delegation_ctx.as_ref(),
         conversation_repo,
         event_bus,
+        session_id,
         parent_execution_id,
         agent_id,
         conv_id,
@@ -425,6 +431,7 @@ async fn handle_execution_failure(
     handle_delegation_failure(
         conversation_repo,
         event_bus,
+        session_id,
         parent_execution_id,
         agent_id,
         conv_id,

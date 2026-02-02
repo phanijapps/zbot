@@ -537,10 +537,20 @@ export interface SubscriptionErrorMessage {
 }
 
 /**
- * Conversation event with sequence number for ordering.
+ * Conversation event with session/execution identifiers for routing and filtering.
+ *
+ * - `session_id`: Top-level session ID (primary routing key)
+ * - `execution_id`: Specific execution ID (for filtering root vs subagent)
+ * - `conversation_id`: Legacy field for backward compatibility
  */
 export interface ConversationEvent extends StreamEvent {
-  conversation_id: string;
+  /** Session ID for subscription routing */
+  session_id: string;
+  /** Execution ID for filtering (root vs subagent) */
+  execution_id: string;
+  /** Legacy conversation ID for backward compatibility */
+  conversation_id?: string;
+  /** Sequence number for ordering events */
   seq?: number;
 }
 

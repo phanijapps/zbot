@@ -303,6 +303,7 @@ impl ExecutionRunner {
             &config.agent_id,
             &config.conversation_id,
             &session_id,
+            &execution_id,
         )
         .await;
 
@@ -597,8 +598,13 @@ impl ExecutionRunner {
             uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
         );
 
-        // Register the delegation
-        let delegation_context = super::delegation::DelegationContext::new(parent_agent_id, parent_conversation_id);
+        // Register the delegation (legacy function, using conversation_id as session for backward compat)
+        let delegation_context = super::delegation::DelegationContext::new(
+            parent_conversation_id, // session_id (using conv_id for legacy)
+            parent_conversation_id, // parent_execution_id (using conv_id for legacy)
+            parent_agent_id,
+            parent_conversation_id,
+        );
         let delegation_context = if let Some(ctx) = context {
             delegation_context.with_context(ctx)
         } else {
@@ -616,11 +622,14 @@ impl ExecutionRunner {
         // Emit delegation started event
         self.event_bus
             .publish(GatewayEvent::DelegationStarted {
+                session_id: parent_conversation_id.to_string(), // legacy: using conv_id as session
+                parent_execution_id: parent_conversation_id.to_string(),
+                child_execution_id: child_conversation_id.clone(),
                 parent_agent_id: parent_agent_id.to_string(),
-                parent_conversation_id: parent_conversation_id.to_string(),
                 child_agent_id: child_agent_id.to_string(),
-                child_conversation_id: child_conversation_id.clone(),
                 task: task.to_string(),
+                parent_conversation_id: Some(parent_conversation_id.to_string()),
+                child_conversation_id: Some(child_conversation_id.clone()),
             })
             .await;
 
@@ -685,8 +694,10 @@ impl ExecutionRunner {
         self.event_bus
             .publish(GatewayEvent::Error {
                 agent_id: Some(agent_id.to_string()),
-                conversation_id: Some(conversation_id.to_string()),
+                session_id: None,
+                execution_id: None,
                 message: message.to_string(),
+                conversation_id: Some(conversation_id.to_string()),
             })
             .await;
     }
@@ -757,7 +768,7 @@ async fn invoke_continuation(
     }
 
     // Emit agent started event
-    emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id).await;
+    emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
 
     // Load agent and provider
     let agent_loader = AgentLoader::new(&agent_service, &provider_service);

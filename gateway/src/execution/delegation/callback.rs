@@ -84,6 +84,7 @@ pub fn format_error_callback_message(
 pub async fn send_callback_to_parent(
     conversation_repo: &ConversationRepository,
     event_bus: &EventBus,
+    session_id: &str,
     parent_execution_id: &str,
     message: &str,
 ) -> bool {
@@ -92,9 +93,11 @@ pub async fn send_callback_to_parent(
             // Emit event so frontend can refresh
             event_bus
                 .publish(GatewayEvent::MessageAdded {
-                    conversation_id: parent_execution_id.to_string(),
+                    session_id: session_id.to_string(),
+                    execution_id: parent_execution_id.to_string(),
                     role: "system".to_string(),
                     content: message.to_string(),
+                    conversation_id: Some(parent_execution_id.to_string()),
                 })
                 .await;
             true
@@ -114,6 +117,7 @@ pub async fn handle_delegation_success(
     delegation_ctx: Option<&DelegationContext>,
     conversation_repo: &ConversationRepository,
     event_bus: &EventBus,
+    session_id: &str,
     parent_execution_id: &str,
     child_agent_id: &str,
     child_conversation_id: &str,
@@ -127,6 +131,7 @@ pub async fn handle_delegation_success(
             if send_callback_to_parent(
                 conversation_repo,
                 event_bus,
+                session_id,
                 parent_execution_id,
                 &callback_msg,
             )
@@ -146,6 +151,7 @@ pub async fn handle_delegation_success(
 pub async fn handle_delegation_failure(
     conversation_repo: &ConversationRepository,
     event_bus: &EventBus,
+    session_id: &str,
     parent_execution_id: &str,
     child_agent_id: &str,
     child_conversation_id: &str,
@@ -153,7 +159,7 @@ pub async fn handle_delegation_failure(
 ) {
     let error_msg = format_error_callback_message(child_agent_id, error, child_conversation_id);
 
-    if send_callback_to_parent(conversation_repo, event_bus, parent_execution_id, &error_msg).await
+    if send_callback_to_parent(conversation_repo, event_bus, session_id, parent_execution_id, &error_msg).await
     {
         tracing::warn!(
             parent_execution = %parent_execution_id,
@@ -172,6 +178,8 @@ pub async fn handle_delegation_failure(
 pub async fn handle_subagent_completion(
     event_bus: Arc<EventBus>,
     delegation: &DelegationContext,
+    session_id: &str,
+    child_execution_id: &str,
     child_agent_id: &str,
     child_conversation_id: &str,
     result: Option<String>,
@@ -179,11 +187,14 @@ pub async fn handle_subagent_completion(
     // Emit delegation completed event
     event_bus
         .publish(GatewayEvent::DelegationCompleted {
+            session_id: session_id.to_string(),
+            parent_execution_id: delegation.parent_execution_id.clone(),
+            child_execution_id: child_execution_id.to_string(),
             parent_agent_id: delegation.parent_agent_id.clone(),
-            parent_conversation_id: delegation.parent_conversation_id.clone(),
             child_agent_id: child_agent_id.to_string(),
-            child_conversation_id: child_conversation_id.to_string(),
             result,
+            parent_conversation_id: Some(delegation.parent_conversation_id.clone()),
+            child_conversation_id: Some(child_conversation_id.to_string()),
         })
         .await;
 }

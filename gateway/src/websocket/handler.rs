@@ -551,65 +551,88 @@ async fn handle_client_message(
 /// Convert a GatewayEvent to a ServerMessage.
 fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
     match event {
-        GatewayEvent::AgentStarted { agent_id, conversation_id, session_id } => {
-            Some(ServerMessage::AgentStarted { agent_id, conversation_id, session_id, seq: None })
+        GatewayEvent::AgentStarted { agent_id, session_id, conversation_id, .. } => {
+            Some(ServerMessage::AgentStarted {
+                agent_id,
+                conversation_id: conversation_id.unwrap_or_default(),
+                session_id,
+                seq: None,
+            })
         }
-        GatewayEvent::AgentCompleted { agent_id, conversation_id, result } => {
-            Some(ServerMessage::AgentCompleted { agent_id, conversation_id, result, seq: None })
+        GatewayEvent::AgentCompleted { agent_id, session_id, result, conversation_id, .. } => {
+            Some(ServerMessage::AgentCompleted {
+                agent_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
+                result,
+                seq: None,
+            })
         }
-        GatewayEvent::AgentStopped { agent_id, conversation_id, iteration } => {
-            Some(ServerMessage::AgentStopped { agent_id, conversation_id, iteration, seq: None })
+        GatewayEvent::AgentStopped { agent_id, session_id, iteration, conversation_id, .. } => {
+            Some(ServerMessage::AgentStopped {
+                agent_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
+                iteration,
+                seq: None,
+            })
         }
-        GatewayEvent::Token { conversation_id, delta, .. } => {
-            Some(ServerMessage::Token { conversation_id, delta, seq: None })
+        GatewayEvent::Token { session_id, delta, conversation_id, .. } => {
+            Some(ServerMessage::Token {
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
+                delta,
+                seq: None,
+            })
         }
-        GatewayEvent::Thinking { conversation_id, content, .. } => {
-            Some(ServerMessage::Thinking { conversation_id, content, seq: None })
+        GatewayEvent::Thinking { session_id, content, conversation_id, .. } => {
+            Some(ServerMessage::Thinking {
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
+                content,
+                seq: None,
+            })
         }
-        GatewayEvent::ToolCall { conversation_id, tool_id, tool_name, args, .. } => {
+        GatewayEvent::ToolCall { session_id, tool_id, tool_name, args, conversation_id, .. } => {
             Some(ServerMessage::ToolCall {
-                conversation_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
                 tool_call_id: tool_id,
                 tool: tool_name,
                 args,
                 seq: None,
             })
         }
-        GatewayEvent::ToolResult { conversation_id, tool_id, result, error, .. } => {
+        GatewayEvent::ToolResult { session_id, tool_id, result, error, conversation_id, .. } => {
             Some(ServerMessage::ToolResult {
-                conversation_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
                 tool_call_id: tool_id,
                 result,
                 error,
                 seq: None,
             })
         }
-        GatewayEvent::TurnComplete { conversation_id, message, .. } => {
+        GatewayEvent::TurnComplete { session_id, message, conversation_id, .. } => {
             Some(ServerMessage::TurnComplete {
-                conversation_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
                 final_message: Some(message),
                 seq: None,
             })
         }
-        GatewayEvent::Error { conversation_id, message, .. } => {
+        GatewayEvent::Error { session_id, message, conversation_id, .. } => {
             Some(ServerMessage::Error {
-                conversation_id,
+                conversation_id: conversation_id.or_else(|| session_id.clone()),
                 code: "execution_error".to_string(),
                 message,
                 seq: None,
             })
         }
-        GatewayEvent::IterationUpdate { conversation_id, current, max, .. } => {
+        GatewayEvent::IterationUpdate { session_id, current, max, conversation_id, .. } => {
             Some(ServerMessage::Iteration {
-                conversation_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
                 current,
                 max,
                 seq: None,
             })
         }
-        GatewayEvent::ContinuationPrompt { conversation_id, iteration, message, .. } => {
+        GatewayEvent::ContinuationPrompt { session_id, iteration, message, conversation_id, .. } => {
             Some(ServerMessage::ContinuationPrompt {
-                conversation_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
                 iteration,
                 message,
                 seq: None,
@@ -617,9 +640,9 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
         }
 
         // Respond events are handled by the hook system, not WebSocket directly
-        GatewayEvent::Respond { conversation_id, message, .. } => {
+        GatewayEvent::Respond { session_id, message, conversation_id, .. } => {
             Some(ServerMessage::TurnComplete {
-                conversation_id,
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
                 final_message: Some(message),
                 seq: None,
             })
@@ -627,31 +650,37 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
 
         // Delegation events - sent to frontend for UI updates
         GatewayEvent::DelegationStarted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             task,
+            parent_conversation_id,
+            child_conversation_id,
         } => Some(ServerMessage::DelegationStarted {
             parent_agent_id,
-            parent_conversation_id,
+            parent_conversation_id: parent_conversation_id.unwrap_or_else(|| parent_execution_id.clone()),
             child_agent_id,
-            child_conversation_id,
+            child_conversation_id: child_conversation_id.unwrap_or_else(|| child_execution_id.clone()),
             task,
             seq: None,
         }),
 
         GatewayEvent::DelegationCompleted {
+            session_id,
+            parent_execution_id,
+            child_execution_id,
             parent_agent_id,
-            parent_conversation_id,
             child_agent_id,
-            child_conversation_id,
             result,
+            parent_conversation_id,
+            child_conversation_id,
         } => Some(ServerMessage::DelegationCompleted {
             parent_agent_id,
-            parent_conversation_id,
+            parent_conversation_id: parent_conversation_id.unwrap_or_else(|| parent_execution_id.clone()),
             child_agent_id,
-            child_conversation_id,
+            child_conversation_id: child_conversation_id.unwrap_or_else(|| child_execution_id.clone()),
             result,
             seq: None,
         }),
@@ -660,13 +689,24 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
         GatewayEvent::SessionContinuationReady { .. } => None,
 
         // New message added - notify frontend to refresh
-        GatewayEvent::MessageAdded { conversation_id, role, content } => {
-            Some(ServerMessage::MessageAdded { conversation_id, role, content, seq: None })
+        GatewayEvent::MessageAdded { session_id, role, content, conversation_id, .. } => {
+            Some(ServerMessage::MessageAdded {
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
+                role,
+                content,
+                seq: None,
+            })
         }
 
         // Token usage update for real-time metrics
-        GatewayEvent::TokenUsage { conversation_id, session_id, tokens_in, tokens_out } => {
-            Some(ServerMessage::TokenUsage { conversation_id, session_id, tokens_in, tokens_out, seq: None })
+        GatewayEvent::TokenUsage { session_id, execution_id, tokens_in, tokens_out, conversation_id, .. } => {
+            Some(ServerMessage::TokenUsage {
+                conversation_id: conversation_id.unwrap_or_else(|| session_id.clone()),
+                session_id,
+                tokens_in,
+                tokens_out,
+                seq: None,
+            })
         }
     }
 }

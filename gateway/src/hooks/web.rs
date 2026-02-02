@@ -64,9 +64,10 @@ impl Hook for WebHook {
         // Emit a respond event that can be picked up by adapters
         self.event_bus
             .publish(GatewayEvent::Respond {
-                conversation_id: conversation_id.clone(),
+                session_id: session_id.clone(),
+                execution_id: session_id.clone(), // Use session_id as execution_id for hook context
                 message: message.to_string(),
-                session_id: Some(session_id.clone()),
+                conversation_id: Some(conversation_id.clone()),
             })
             .await;
 

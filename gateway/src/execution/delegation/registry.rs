@@ -65,7 +65,7 @@ mod tests {
     fn test_delegation_registry() {
         let registry = DelegationRegistry::new();
 
-        let ctx = DelegationContext::new("parent", "parent-conv");
+        let ctx = DelegationContext::new("session-123", "exec-456", "parent", "parent-conv");
         registry.register("child-conv", ctx);
 
         assert!(registry.is_delegated("child-conv"));

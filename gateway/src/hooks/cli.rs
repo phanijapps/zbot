@@ -54,9 +54,10 @@ impl Hook for CliHook {
         // Emit a respond event
         self.event_bus
             .publish(GatewayEvent::Respond {
-                conversation_id: conversation_id.clone(),
+                session_id: conversation_id.clone(), // Use conversation_id as session_id for CLI
+                execution_id: conversation_id.clone(), // Use conversation_id as execution_id for CLI
                 message: message.to_string(),
-                session_id: None,
+                conversation_id: Some(conversation_id.clone()),
             })
             .await;
 
