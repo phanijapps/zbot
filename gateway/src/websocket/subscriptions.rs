@@ -524,7 +524,9 @@ mod tests {
 
         // Route event
         let msg = ServerMessage::Token {
-            conversation_id: "conv-1".to_string(),
+            session_id: "sess-1".to_string(),
+            execution_id: "exec-1".to_string(),
+            conversation_id: Some("conv-1".to_string()),
             delta: "Hello".to_string(),
             seq: None,
         };
@@ -557,7 +559,9 @@ mod tests {
         // Route multiple events
         for _ in 0..3 {
             let msg = ServerMessage::Token {
-                conversation_id: "conv-1".to_string(),
+                session_id: "sess-1".to_string(),
+                execution_id: "exec-1".to_string(),
+                conversation_id: Some("conv-1".to_string()),
                 delta: "x".to_string(),
                 seq: None,
             };
@@ -589,7 +593,9 @@ mod tests {
 
         // Route event - should detect dead client
         let msg = ServerMessage::Token {
-            conversation_id: "conv-1".to_string(),
+            session_id: "sess-1".to_string(),
+            execution_id: "exec-1".to_string(),
+            conversation_id: Some("conv-1".to_string()),
             delta: "Hello".to_string(),
             seq: None,
         };
@@ -668,7 +674,9 @@ mod tests {
 
         // Route event to conv-1
         let msg = ServerMessage::Token {
-            conversation_id: "conv-1".to_string(),
+            session_id: "sess-1".to_string(),
+            execution_id: "exec-1".to_string(),
+            conversation_id: Some("conv-1".to_string()),
             delta: "Hello".to_string(),
             seq: None,
         };
