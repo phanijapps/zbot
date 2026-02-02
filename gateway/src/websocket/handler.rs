@@ -2,8 +2,9 @@
 //!
 //! Handles WebSocket connections and message routing.
 
-use super::messages::{ClientMessage, ServerMessage};
+use super::messages::{ClientMessage, ServerMessage, SubscriptionErrorCode};
 use super::session::{SessionRegistry, WsSession};
+use super::subscriptions::{SubscribeError, SubscribeResult, SubscriptionManager};
 use crate::error::{GatewayError, Result};
 use crate::events::{EventBus, GatewayEvent};
 use crate::hooks::HookContext;
@@ -20,6 +21,7 @@ pub struct WebSocketHandler {
     event_bus: Arc<EventBus>,
     sessions: Arc<SessionRegistry>,
     runtime: Arc<RuntimeService>,
+    subscriptions: Arc<SubscriptionManager>,
 }
 
 impl WebSocketHandler {
@@ -29,7 +31,13 @@ impl WebSocketHandler {
             event_bus,
             sessions: Arc::new(SessionRegistry::new()),
             runtime,
+            subscriptions: Arc::new(SubscriptionManager::new()),
         }
+    }
+
+    /// Get the subscription manager.
+    pub fn subscriptions(&self) -> Arc<SubscriptionManager> {
+        self.subscriptions.clone()
     }
 
     /// Get the session registry.
@@ -45,6 +53,82 @@ impl WebSocketHandler {
 
         info!("WebSocket server listening on {}", addr);
 
+        // Spawn background cleanup task for stale clients
+        let cleanup_subscriptions = self.subscriptions.clone();
+        let mut cleanup_shutdown = shutdown.resubscribe();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        let cleaned = cleanup_subscriptions
+                            .cleanup_stale_clients(std::time::Duration::from_secs(60))
+                            .await;
+                        if cleaned > 0 {
+                            info!("Cleaned up {} stale WebSocket clients", cleaned);
+                        }
+                    }
+                    _ = cleanup_shutdown.recv() => {
+                        debug!("Subscription cleanup task shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
+        // Spawn central event router - routes events to subscribed clients
+        let router_subscriptions = self.subscriptions.clone();
+        let mut router_event_rx = self.event_bus.subscribe_all();
+        let mut router_shutdown = shutdown.resubscribe();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    result = router_event_rx.recv() => {
+                        match result {
+                            Ok(event) => {
+                                // Debug: log delegation events
+                                if matches!(&event, GatewayEvent::DelegationCompleted { .. } | GatewayEvent::DelegationStarted { .. }) {
+                                    info!("Event router received: {:?}", event);
+                                }
+
+                                if let Some(server_msg) = gateway_event_to_server_message(event) {
+                                    // Route to subscribed clients only
+                                    // Clone conv_id to avoid borrow issues when passing server_msg
+                                    let conv_id = server_msg.conversation_id().map(|s| s.to_string());
+                                    if let Some(conv_id) = conv_id {
+                                        let result = router_subscriptions
+                                            .route_event(&conv_id, server_msg)
+                                            .await;
+
+                                        // Debug: always log delegation routing results
+                                        if result.sent > 0 || conv_id.starts_with("sess-") {
+                                            info!(
+                                                conv_id = %conv_id,
+                                                sent = result.sent,
+                                                dropped = result.dropped,
+                                                "Routed event"
+                                            );
+                                        }
+                                    } else {
+                                        // Global events (like Pong) - broadcast to all
+                                        router_subscriptions.broadcast_global(server_msg).await;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                error!("Event router receive error: {}", e);
+                                break;
+                            }
+                        }
+                    }
+                    _ = router_shutdown.recv() => {
+                        debug!("Event router shutting down");
+                        break;
+                    }
+                }
+            }
+        });
+
         loop {
             tokio::select! {
                 result = listener.accept() => {
@@ -52,11 +136,11 @@ impl WebSocketHandler {
                         Ok((stream, peer_addr)) => {
                             debug!("New WebSocket connection from {}", peer_addr);
                             let sessions = self.sessions.clone();
-                            let event_bus = self.event_bus.clone();
                             let runtime = self.runtime.clone();
+                            let subscriptions = self.subscriptions.clone();
 
                             tokio::spawn(async move {
-                                if let Err(e) = handle_connection(stream, sessions, event_bus, runtime).await {
+                                if let Err(e) = handle_connection(stream, sessions, runtime, subscriptions).await {
                                     warn!("Connection error: {}", e);
                                 }
                             });
@@ -86,8 +170,8 @@ impl WebSocketHandler {
 async fn handle_connection(
     stream: TcpStream,
     sessions: Arc<SessionRegistry>,
-    event_bus: Arc<EventBus>,
     runtime: Arc<RuntimeService>,
+    subscriptions: Arc<SubscriptionManager>,
 ) -> Result<()> {
     let ws_stream = accept_async(stream)
         .await
@@ -102,6 +186,9 @@ async fn handle_connection(
     let session = WsSession::new(tx.clone());
     let session_id = sessions.register(session).await;
 
+    // Register with subscription manager for subscription-based routing
+    subscriptions.connect(session_id.clone(), tx.clone()).await;
+
     // Send connected message
     let connected_msg = ServerMessage::Connected {
         session_id: session_id.clone(),
@@ -113,20 +200,9 @@ async fn handle_connection(
         .await
         .map_err(|e| GatewayError::WebSocket(e.to_string()))?;
 
-    // Subscribe to global event bus and forward events to this session
-    let mut event_rx = event_bus.subscribe_all();
-    let tx_for_events = tx.clone();
-    let session_id_for_events = session_id.clone();
-    tokio::spawn(async move {
-        while let Ok(event) = event_rx.recv().await {
-            if let Some(server_msg) = gateway_event_to_server_message(event) {
-                if tx_for_events.send(server_msg).is_err() {
-                    debug!("Event forwarder for {} stopped (channel closed)", session_id_for_events);
-                    break;
-                }
-            }
-        }
-    });
+    // NOTE: Event routing is now handled by the central event router
+    // which routes events through SubscriptionManager to subscribed clients only.
+    // Clients must explicitly subscribe to conversations to receive events.
 
     // Spawn task to forward messages from channel to WebSocket
     let session_id_clone = session_id.clone();
@@ -154,7 +230,7 @@ async fn handle_connection(
                     match serde_json::from_str::<ClientMessage>(&text) {
                         Ok(client_msg) => {
                             if let Err(e) =
-                                handle_client_message(&session_id, client_msg, &sessions, &runtime).await
+                                handle_client_message(&session_id, client_msg, &sessions, &runtime, &subscriptions).await
                             {
                                 warn!("Error handling message: {}", e);
                             }
@@ -175,6 +251,7 @@ async fn handle_connection(
     }
 
     // Cleanup
+    subscriptions.disconnect(&session_id).await;
     sessions.unregister(&session_id).await;
     info!("Session {} disconnected", session_id);
 
@@ -187,6 +264,7 @@ async fn handle_client_message(
     msg: ClientMessage,
     sessions: &SessionRegistry,
     runtime: &RuntimeService,
+    subscriptions: &SubscriptionManager,
 ) -> Result<()> {
     match msg {
         ClientMessage::Invoke {
@@ -390,6 +468,81 @@ async fn handle_client_message(
                 }
             }
         }
+        ClientMessage::Subscribe { conversation_id } => {
+            debug!(
+                "Session {} subscribing to conversation {}",
+                session_id, conversation_id
+            );
+
+            match subscriptions.subscribe(&session_id.to_string(), conversation_id.clone()).await {
+                Ok(SubscribeResult::Subscribed { current_sequence }) => {
+                    debug!(
+                        "Session {} subscribed to {} (seq: {})",
+                        session_id, conversation_id, current_sequence
+                    );
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::Subscribed {
+                            conversation_id,
+                            current_sequence,
+                        });
+                    }
+                }
+                Ok(SubscribeResult::AlreadySubscribed { current_sequence }) => {
+                    debug!(
+                        "Session {} already subscribed to {} (seq: {})",
+                        session_id, conversation_id, current_sequence
+                    );
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::Subscribed {
+                            conversation_id,
+                            current_sequence,
+                        });
+                    }
+                }
+                Err(SubscribeError::ClientNotFound) => {
+                    warn!("Subscribe failed: client {} not found", session_id);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::subscription_error(
+                            &conversation_id,
+                            SubscriptionErrorCode::ServerError,
+                            "Client not registered",
+                        ));
+                    }
+                }
+                Err(SubscribeError::TooManySubscriptions { limit }) => {
+                    warn!("Subscribe failed: client {} exceeded limit of {}", session_id, limit);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::subscription_error(
+                            &conversation_id,
+                            SubscriptionErrorCode::LimitExceeded,
+                            &format!("Maximum {} subscriptions per client", limit),
+                        ));
+                    }
+                }
+                Err(SubscribeError::ConversationFull { limit }) => {
+                    warn!("Subscribe failed: conversation {} at limit of {}", conversation_id, limit);
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::subscription_error(
+                            &conversation_id,
+                            SubscriptionErrorCode::LimitExceeded,
+                            &format!("Conversation has maximum {} subscribers", limit),
+                        ));
+                    }
+                }
+            }
+        }
+        ClientMessage::Unsubscribe { conversation_id } => {
+            debug!(
+                "Session {} unsubscribing from conversation {}",
+                session_id, conversation_id
+            );
+
+            subscriptions.unsubscribe(&session_id.to_string(), &conversation_id).await;
+
+            if let Some(session) = sessions.get(session_id).await {
+                let _ = session.send(ServerMessage::Unsubscribed { conversation_id });
+            }
+        }
     }
 
     Ok(())
@@ -399,19 +552,19 @@ async fn handle_client_message(
 fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
     match event {
         GatewayEvent::AgentStarted { agent_id, conversation_id, session_id } => {
-            Some(ServerMessage::AgentStarted { agent_id, conversation_id, session_id })
+            Some(ServerMessage::AgentStarted { agent_id, conversation_id, session_id, seq: None })
         }
         GatewayEvent::AgentCompleted { agent_id, conversation_id, result } => {
-            Some(ServerMessage::AgentCompleted { agent_id, conversation_id, result })
+            Some(ServerMessage::AgentCompleted { agent_id, conversation_id, result, seq: None })
         }
         GatewayEvent::AgentStopped { agent_id, conversation_id, iteration } => {
-            Some(ServerMessage::AgentStopped { agent_id, conversation_id, iteration })
+            Some(ServerMessage::AgentStopped { agent_id, conversation_id, iteration, seq: None })
         }
         GatewayEvent::Token { conversation_id, delta, .. } => {
-            Some(ServerMessage::Token { conversation_id, delta })
+            Some(ServerMessage::Token { conversation_id, delta, seq: None })
         }
         GatewayEvent::Thinking { conversation_id, content, .. } => {
-            Some(ServerMessage::Thinking { conversation_id, content })
+            Some(ServerMessage::Thinking { conversation_id, content, seq: None })
         }
         GatewayEvent::ToolCall { conversation_id, tool_id, tool_name, args, .. } => {
             Some(ServerMessage::ToolCall {
@@ -419,6 +572,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 tool_call_id: tool_id,
                 tool: tool_name,
                 args,
+                seq: None,
             })
         }
         GatewayEvent::ToolResult { conversation_id, tool_id, result, error, .. } => {
@@ -427,12 +581,14 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 tool_call_id: tool_id,
                 result,
                 error,
+                seq: None,
             })
         }
         GatewayEvent::TurnComplete { conversation_id, message, .. } => {
             Some(ServerMessage::TurnComplete {
                 conversation_id,
                 final_message: Some(message),
+                seq: None,
             })
         }
         GatewayEvent::Error { conversation_id, message, .. } => {
@@ -440,6 +596,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 conversation_id,
                 code: "execution_error".to_string(),
                 message,
+                seq: None,
             })
         }
         GatewayEvent::IterationUpdate { conversation_id, current, max, .. } => {
@@ -447,6 +604,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 conversation_id,
                 current,
                 max,
+                seq: None,
             })
         }
         GatewayEvent::ContinuationPrompt { conversation_id, iteration, message, .. } => {
@@ -454,6 +612,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 conversation_id,
                 iteration,
                 message,
+                seq: None,
             })
         }
 
@@ -462,6 +621,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             Some(ServerMessage::TurnComplete {
                 conversation_id,
                 final_message: Some(message),
+                seq: None,
             })
         }
 
@@ -478,6 +638,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             child_agent_id,
             child_conversation_id,
             task,
+            seq: None,
         }),
 
         GatewayEvent::DelegationCompleted {
@@ -492,6 +653,7 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             child_agent_id,
             child_conversation_id,
             result,
+            seq: None,
         }),
 
         // Internal continuation events are handled by the system, not WebSocket
@@ -499,12 +661,12 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
 
         // New message added - notify frontend to refresh
         GatewayEvent::MessageAdded { conversation_id, role, content } => {
-            Some(ServerMessage::MessageAdded { conversation_id, role, content })
+            Some(ServerMessage::MessageAdded { conversation_id, role, content, seq: None })
         }
 
         // Token usage update for real-time metrics
         GatewayEvent::TokenUsage { conversation_id, session_id, tokens_in, tokens_out } => {
-            Some(ServerMessage::TokenUsage { conversation_id, session_id, tokens_in, tokens_out })
+            Some(ServerMessage::TokenUsage { conversation_id, session_id, tokens_in, tokens_out, seq: None })
         }
     }
 }

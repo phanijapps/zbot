@@ -502,3 +502,78 @@ export interface ExecutionSessionFilter {
 
 /** @deprecated Use DashboardStats instead */
 export type ExecutionStats = Record<string, number>;
+
+// ============================================================================
+// Connection State Types (for subscription-based event routing)
+// ============================================================================
+
+/**
+ * Connection state for WebSocket transport.
+ * Used to track connection lifecycle and show appropriate UI.
+ */
+export type ConnectionState =
+  | { status: "disconnected"; reason?: "user" | "server" | "network" }
+  | { status: "connecting" }
+  | { status: "connected" }
+  | { status: "reconnecting"; attempt: number; maxAttempts: number }
+  | { status: "failed"; error: string };
+
+/**
+ * Subscription error codes from the server.
+ */
+export type SubscriptionErrorCode =
+  | "NOT_FOUND"
+  | "LIMIT_EXCEEDED"
+  | "SERVER_ERROR";
+
+/**
+ * Subscription error message from server.
+ */
+export interface SubscriptionErrorMessage {
+  type: "subscription_error";
+  conversation_id: string;
+  code: SubscriptionErrorCode;
+  message: string;
+}
+
+/**
+ * Conversation event with sequence number for ordering.
+ */
+export interface ConversationEvent extends StreamEvent {
+  conversation_id: string;
+  seq?: number;
+}
+
+/**
+ * Global event (stats updates, notifications).
+ */
+export interface GlobalEvent extends StreamEvent {
+  type: "stats_update" | "session_notification";
+}
+
+/**
+ * Callback for conversation-specific events.
+ */
+export type ConversationCallback = (event: ConversationEvent) => void;
+
+/**
+ * Callback for global events.
+ */
+export type GlobalCallback = (event: GlobalEvent) => void;
+
+/**
+ * Callback for connection state changes.
+ */
+export type ConnectionStateCallback = (state: ConnectionState) => void;
+
+/**
+ * Options for subscribing to conversation events.
+ */
+export interface SubscriptionOptions {
+  /** Called when an event is received for this conversation */
+  onEvent: ConversationCallback;
+  /** Called when a subscription error occurs */
+  onError?: (error: SubscriptionErrorMessage) => void;
+  /** Called when subscription is confirmed with current sequence */
+  onConfirmed?: (seq: number) => void;
+}

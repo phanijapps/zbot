@@ -12,6 +12,7 @@ import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
 import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 import { SubagentActivityPanel, type SubagentActivity } from "./SubagentActivityPanel";
 import { TruncatedContent } from "./TruncatedContent";
+import { ConnectionStatus } from "@/components/ConnectionStatus";
 
 // ============================================================================
 // Types
@@ -375,23 +376,25 @@ export function WebChatPanel() {
     }
   }, []); // State setters are stable, no deps needed
 
-  // Subscribe to events when conversation changes
+  // Subscribe to conversation events via server-side routing
   useEffect(() => {
     if (!conversationId) return;
 
     let unsubscribe: (() => void) | null = null;
     let cancelled = false;  // Track if cleanup ran before subscribe completed
 
-    const subscribe = async () => {
+    const setupSubscription = async () => {
       const transport = await getTransport();
 
       // If cleanup already ran while we were awaiting, don't subscribe
       if (cancelled) return;
 
-      unsubscribe = transport.subscribe(conversationId, handleStreamEvent);
+      unsubscribe = transport.subscribeConversation(conversationId, {
+        onEvent: handleStreamEvent,
+      });
     };
 
-    subscribe();
+    setupSubscription();
 
     return () => {
       cancelled = true;  // Prevent late subscription
@@ -516,6 +519,7 @@ export function WebChatPanel() {
               </div>
             );
           })()}
+          <ConnectionStatus />
           {isProcessing && (
             <div className="flex items-center gap-2 text-[var(--primary)] text-sm font-medium bg-[var(--accent)] px-3 py-1.5 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin" />

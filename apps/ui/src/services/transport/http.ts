@@ -42,11 +42,29 @@ import type {
   ExecutionSession,
   ExecutionSessionFilter,
   ExecutionStats,
+  // Subscription types
+  ConnectionState,
+  ConnectionStateCallback,
+  ConversationCallback,
+  ConversationEvent,
+  GlobalCallback,
+  GlobalEvent,
+  SubscriptionErrorMessage,
+  SubscriptionOptions,
 } from "./types";
 
 // ============================================================================
 // HTTP Transport Implementation
 // ============================================================================
+
+// Internal subscription state for a conversation
+interface SubscriptionState {
+  callbacks: Set<ConversationCallback>;
+  errorCallbacks: Map<ConversationCallback, (error: SubscriptionErrorMessage) => void>;
+  confirmedCallbacks: Map<ConversationCallback, (seq: number) => void>;
+  confirmed: boolean;
+  lastSeq: number;
+}
 
 export class HttpTransport implements Transport {
   readonly mode = "web" as const;
@@ -58,6 +76,25 @@ export class HttpTransport implements Transport {
   private reconnectAttempts = 0;
   private maxReconnectAttempts = 5;
   private reconnectDelay = 1000;
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Subscription state (server-side routing)
+  // ─────────────────────────────────────────────────────────────────────────
+  private conversationSubscriptions: Map<string, SubscriptionState> = new Map();
+  private pendingSubscriptions: Set<string> = new Set(); // Queued when WS not ready
+  private globalEventCallbacks: Set<GlobalCallback> = new Set();
+  private connectionStateCallbacks: Set<ConnectionStateCallback> = new Set();
+  private connectionState: ConnectionState = { status: "disconnected" };
+
+  // Heartbeat
+  private pingInterval: ReturnType<typeof setInterval> | null = null;
+  private lastPong: number = Date.now();
+  private readonly PING_INTERVAL = 15000;
+  private readonly PONG_TIMEOUT = 30000;
+
+  // Browser event handlers (stored for cleanup)
+  private visibilityHandler: (() => void) | null = null;
+  private onlineHandler: (() => void) | null = null;
 
   // =========================================================================
   // Initialization
@@ -538,9 +575,12 @@ export class HttpTransport implements Transport {
   }
 
   // =========================================================================
-  // Event Streaming
+  // Event Streaming (Legacy)
   // =========================================================================
 
+  /**
+   * @deprecated Use subscribeConversation() instead for server-side routing
+   */
   subscribe(conversationId: string, callback: EventCallback): UnsubscribeFn {
     if (!this.eventCallbacks.has(conversationId)) {
       this.eventCallbacks.set(conversationId, new Set());
@@ -574,6 +614,8 @@ export class HttpTransport implements Transport {
       this.ws = null;
     }
 
+    this.setConnectionState({ status: "connecting" });
+
     return new Promise((resolve) => {
       try {
         this.ws = new WebSocket(this.config!.wsUrl);
@@ -581,13 +623,17 @@ export class HttpTransport implements Transport {
         this.ws.onopen = () => {
           console.log("[HttpTransport] WebSocket connected");
           this.reconnectAttempts = 0;
+          this.setConnectionState({ status: "connected" });
+          this.startHeartbeat();
+          this.setupBrowserEventHandlers();
+          this.resubscribeAll();
           resolve({ success: true });
         };
 
         this.ws.onmessage = (event) => {
           try {
             const data = JSON.parse(event.data) as StreamEvent;
-            this.handleEvent(data);
+            this.handleWebSocketMessage(data);
           } catch (error) {
             console.error("[HttpTransport] Failed to parse WebSocket message:", error);
           }
@@ -595,26 +641,34 @@ export class HttpTransport implements Transport {
 
         this.ws.onclose = () => {
           console.log("[HttpTransport] WebSocket disconnected");
+          this.stopHeartbeat();
           this.attemptReconnect();
         };
 
         this.ws.onerror = (error) => {
           console.error("[HttpTransport] WebSocket error:", error);
+          this.setConnectionState({ status: "failed", error: "WebSocket connection failed" });
           resolve({ success: false, error: "WebSocket connection failed" });
         };
       } catch (error) {
+        this.setConnectionState({ status: "failed", error: String(error) });
         resolve({ success: false, error: String(error) });
       }
     });
   }
 
   async disconnect(): Promise<void> {
+    this.cleanupBrowserEventHandlers();
+    this.stopHeartbeat();
     if (this.ws) {
       this.ws.close();
       this.ws = null;
     }
     this.eventCallbacks.clear();
     this.globalCallbacks.clear();
+    this.conversationSubscriptions.clear();
+    this.globalEventCallbacks.clear();
+    this.setConnectionState({ status: "disconnected", reason: "user" });
   }
 
   isConnected(): boolean {
@@ -622,8 +676,361 @@ export class HttpTransport implements Transport {
   }
 
   // =========================================================================
+  // Subscription API (server-side routing)
+  // =========================================================================
+
+  /**
+   * Get the current connection state.
+   */
+  getConnectionState(): ConnectionState {
+    return this.connectionState;
+  }
+
+  /**
+   * Subscribe to connection state changes.
+   */
+  onConnectionStateChange(callback: ConnectionStateCallback): UnsubscribeFn {
+    this.connectionStateCallbacks.add(callback);
+    // Immediately notify of current state
+    callback(this.connectionState);
+    return () => this.connectionStateCallbacks.delete(callback);
+  }
+
+  /**
+   * Subscribe to conversation events with server-side routing.
+   * Only subscribed clients receive events for this conversation.
+   */
+  subscribeConversation(
+    conversationId: string,
+    options: SubscriptionOptions
+  ): UnsubscribeFn {
+    let state = this.conversationSubscriptions.get(conversationId);
+
+    if (!state) {
+      state = {
+        callbacks: new Set(),
+        errorCallbacks: new Map(),
+        confirmedCallbacks: new Map(),
+        confirmed: false,
+        lastSeq: 0,
+      };
+      this.conversationSubscriptions.set(conversationId, state);
+      // Send subscribe message to server
+      this.sendSubscribe(conversationId);
+    }
+
+    // Wrap callback to include sequence tracking
+    const wrappedCallback: ConversationCallback = (event) => {
+      const currentState = this.conversationSubscriptions.get(conversationId);
+      if (currentState && event.seq !== undefined) {
+        // Check for sequence gap
+        if (event.seq > currentState.lastSeq + 1 && currentState.lastSeq > 0) {
+          console.warn(
+            `[Transport] Sequence gap: expected ${currentState.lastSeq + 1}, got ${event.seq}. ` +
+              `Recommend refreshing conversation state via API.`
+          );
+        }
+        currentState.lastSeq = event.seq;
+      }
+      options.onEvent(event);
+    };
+
+    state.callbacks.add(wrappedCallback);
+
+    // Track error and confirmed callbacks per wrapped callback
+    if (options.onError) {
+      state.errorCallbacks.set(wrappedCallback, options.onError);
+    }
+    if (options.onConfirmed) {
+      state.confirmedCallbacks.set(wrappedCallback, options.onConfirmed);
+    }
+
+    return () => {
+      const state = this.conversationSubscriptions.get(conversationId);
+      if (!state) return;
+
+      state.callbacks.delete(wrappedCallback);
+      state.errorCallbacks.delete(wrappedCallback);
+      state.confirmedCallbacks.delete(wrappedCallback);
+
+      // If no more callbacks, unsubscribe from server
+      if (state.callbacks.size === 0) {
+        this.conversationSubscriptions.delete(conversationId);
+        this.sendUnsubscribe(conversationId);
+      }
+    };
+  }
+
+  /**
+   * Subscribe to global events (stats updates, notifications).
+   */
+  onGlobalEvent(callback: GlobalCallback): UnsubscribeFn {
+    this.globalEventCallbacks.add(callback);
+    return () => this.globalEventCallbacks.delete(callback);
+  }
+
+  /**
+   * Manual reconnect - resets attempt counter and tries again.
+   */
+  async reconnect(): Promise<void> {
+    this.reconnectAttempts = 0;
+    if (this.ws) {
+      this.ws.close();
+    }
+    await this.connect();
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Connection State Management
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private setConnectionState(state: ConnectionState): void {
+    this.connectionState = state;
+    // Use snapshot to avoid iterator invalidation if callback modifies set
+    const callbacks = [...this.connectionStateCallbacks];
+    for (const callback of callbacks) {
+      try {
+        callback(state);
+      } catch (e) {
+        console.error("[Transport] Connection state callback error:", e);
+      }
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Heartbeat
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.lastPong = Date.now();
+
+    this.pingInterval = setInterval(() => {
+      if (Date.now() - this.lastPong > this.PONG_TIMEOUT) {
+        console.warn("[Transport] Ping timeout, reconnecting");
+        this.ws?.close(4000, "Ping timeout");
+        return;
+      }
+
+      if (this.ws?.readyState === WebSocket.OPEN) {
+        this.ws.send(JSON.stringify({ type: "ping" }));
+      }
+    }, this.PING_INTERVAL);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.pingInterval) {
+      clearInterval(this.pingInterval);
+      this.pingInterval = null;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Browser Event Handlers
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private setupBrowserEventHandlers(): void {
+    this.cleanupBrowserEventHandlers();
+
+    // Handle tab visibility changes
+    this.visibilityHandler = () => {
+      if (document.visibilityState === "visible") {
+        if (this.ws?.readyState !== WebSocket.OPEN) {
+          this.reconnectAttempts = 0;
+          this.connect();
+        }
+      }
+    };
+    document.addEventListener("visibilitychange", this.visibilityHandler);
+
+    // Handle network online/offline
+    this.onlineHandler = () => {
+      if (this.connectionState.status !== "connected") {
+        this.reconnectAttempts = 0;
+        this.connect();
+      }
+    };
+    window.addEventListener("online", this.onlineHandler);
+  }
+
+  private cleanupBrowserEventHandlers(): void {
+    if (this.visibilityHandler) {
+      document.removeEventListener("visibilitychange", this.visibilityHandler);
+      this.visibilityHandler = null;
+    }
+    if (this.onlineHandler) {
+      window.removeEventListener("online", this.onlineHandler);
+      this.onlineHandler = null;
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Subscription Protocol
+  // ─────────────────────────────────────────────────────────────────────────
+
+  private sendSubscribe(conversationId: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      console.log(`[Transport] Sending subscribe for ${conversationId}`);
+      this.ws.send(
+        JSON.stringify({
+          type: "subscribe",
+          conversation_id: conversationId,
+        })
+      );
+      this.pendingSubscriptions.delete(conversationId);
+    } else {
+      // Queue for when WebSocket connects
+      console.log(`[Transport] Queueing subscribe for ${conversationId} (WS not ready)`);
+      this.pendingSubscriptions.add(conversationId);
+    }
+  }
+
+  private sendUnsubscribe(conversationId: string): void {
+    if (this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(
+        JSON.stringify({
+          type: "unsubscribe",
+          conversation_id: conversationId,
+        })
+      );
+    }
+  }
+
+  private resubscribeAll(): void {
+    // Re-subscribe existing subscriptions
+    for (const [conversationId, state] of this.conversationSubscriptions) {
+      state.confirmed = false;
+      // Don't reset lastSeq - we want to detect gaps after reconnect
+      this.sendSubscribe(conversationId);
+    }
+
+    // Flush any pending subscriptions that were queued before WS connected
+    for (const conversationId of this.pendingSubscriptions) {
+      if (this.conversationSubscriptions.has(conversationId)) {
+        this.sendSubscribe(conversationId);
+      }
+    }
+    this.pendingSubscriptions.clear();
+  }
+
+  // =========================================================================
   // Private Helpers
   // =========================================================================
+
+  /**
+   * Main WebSocket message handler - routes through both subscription
+   * and legacy event systems for backwards compatibility.
+   */
+  private handleWebSocketMessage(data: StreamEvent): void {
+    // Try new subscription system first
+    if (this.handleSubscriptionMessage(data)) return;
+    if (this.handleGlobalMessage(data)) return;
+    if (this.handleConversationMessage(data)) return;
+
+    // Fall back to legacy event handling for backwards compatibility
+    this.handleEvent(data);
+  }
+
+  private handleSubscriptionMessage(message: StreamEvent): boolean {
+    switch (message.type) {
+      case "subscribed": {
+        const convId = message.conversation_id as string;
+        const currentSeq = message.current_sequence as number;
+        const state = this.conversationSubscriptions.get(convId);
+        if (state) {
+          state.confirmed = true;
+          state.lastSeq = currentSeq;
+          console.log(`[Transport] Subscribed to ${convId} at seq ${currentSeq}`);
+          // Notify confirmed callbacks
+          for (const confirmedCb of state.confirmedCallbacks.values()) {
+            try {
+              confirmedCb(currentSeq);
+            } catch (e) {
+              console.error(e);
+            }
+          }
+        }
+        return true;
+      }
+
+      case "unsubscribed": {
+        console.log(`[Transport] Unsubscribed from ${message.conversation_id}`);
+        return true;
+      }
+
+      case "subscription_error": {
+        const errorMsg = message as unknown as SubscriptionErrorMessage;
+        console.error(
+          `[Transport] Subscription error: ${errorMsg.code} - ${errorMsg.message}`
+        );
+        const state = this.conversationSubscriptions.get(errorMsg.conversation_id);
+        if (state) {
+          // Notify all error callbacks
+          for (const errorCb of state.errorCallbacks.values()) {
+            try {
+              errorCb(errorMsg);
+            } catch (e) {
+              console.error(e);
+            }
+          }
+        }
+        this.conversationSubscriptions.delete(errorMsg.conversation_id);
+        return true;
+      }
+
+      case "pong": {
+        this.lastPong = Date.now();
+        return true;
+      }
+
+      default:
+        return false;
+    }
+  }
+
+  private handleGlobalMessage(message: StreamEvent): boolean {
+    if (message.type === "stats_update" || message.type === "session_notification") {
+      const callbacks = [...this.globalEventCallbacks];
+      for (const callback of callbacks) {
+        try {
+          callback(message as GlobalEvent);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      return true;
+    }
+    return false;
+  }
+
+  private handleConversationMessage(message: StreamEvent): boolean {
+    const conversationId = (message.conversation_id ??
+      message.parent_conversation_id) as string | undefined;
+
+    // Debug: log all conversation-related messages
+    if (conversationId) {
+      console.log(`[Transport] Received event type=${message.type} for conv=${conversationId.slice(0, 20)}...`);
+    }
+
+    if (!conversationId) return false;
+
+    const state = this.conversationSubscriptions.get(conversationId);
+    if (state) {
+      const callbacks = [...state.callbacks];
+      console.log(`[Transport] Routing ${message.type} to ${callbacks.length} subscriber(s)`);
+      for (const callback of callbacks) {
+        try {
+          callback(message as ConversationEvent);
+        } catch (e) {
+          console.error(e);
+        }
+      }
+      return true;
+    } else {
+      console.log(`[Transport] No subscription for ${conversationId.slice(0, 20)}... (subscribed to: ${[...this.conversationSubscriptions.keys()].join(", ")})`);
+    }
+    return false;
+  }
 
   private handleEvent(event: StreamEvent): void {
     // Log agent_started events for session debugging
@@ -657,12 +1064,22 @@ export class HttpTransport implements Transport {
   private attemptReconnect(): void {
     if (this.reconnectAttempts >= this.maxReconnectAttempts) {
       console.log("[HttpTransport] Max reconnect attempts reached");
+      this.setConnectionState({
+        status: "failed",
+        error: "Max reconnect attempts reached",
+      });
       return;
     }
 
     this.reconnectAttempts++;
     const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
     console.log(`[HttpTransport] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+
+    this.setConnectionState({
+      status: "reconnecting",
+      attempt: this.reconnectAttempts,
+      maxAttempts: this.maxReconnectAttempts,
+    });
 
     setTimeout(() => {
       this.connect();

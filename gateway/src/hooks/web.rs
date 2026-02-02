@@ -75,6 +75,7 @@ impl Hook for WebHook {
             let msg = ServerMessage::TurnComplete {
                 conversation_id,
                 final_message: Some(message.to_string()),
+                seq: None,
             };
 
             session

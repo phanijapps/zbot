@@ -9,6 +9,12 @@ use serde_json::Value;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ClientMessage {
+    /// Subscribe to a conversation's events.
+    Subscribe { conversation_id: String },
+
+    /// Unsubscribe from a conversation's events.
+    Unsubscribe { conversation_id: String },
+
     /// Start or continue a conversation.
     Invoke {
         /// Agent ID to invoke
@@ -61,12 +67,38 @@ fn default_additional_iterations() -> u32 {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerMessage {
+    // =========================================================================
+    // SUBSCRIPTION RESPONSES
+    // =========================================================================
+
+    /// Subscription confirmed.
+    Subscribed {
+        conversation_id: String,
+        current_sequence: u64,
+    },
+
+    /// Unsubscription confirmed.
+    Unsubscribed { conversation_id: String },
+
+    /// Subscription error.
+    SubscriptionError {
+        conversation_id: String,
+        code: SubscriptionErrorCode,
+        message: String,
+    },
+
+    // =========================================================================
+    // CONVERSATION EVENTS (with sequence numbers)
+    // =========================================================================
+
     /// Agent started executing.
     AgentStarted {
         agent_id: String,
         conversation_id: String,
         /// Session ID for this execution (for session continuity).
         session_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Agent completed execution.
@@ -75,6 +107,8 @@ pub enum ServerMessage {
         conversation_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         result: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Agent was stopped.
@@ -82,18 +116,24 @@ pub enum ServerMessage {
         agent_id: String,
         conversation_id: String,
         iteration: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Streaming text token.
     Token {
         conversation_id: String,
         delta: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Thinking/reasoning content.
     Thinking {
         conversation_id: String,
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Tool call started.
@@ -102,6 +142,8 @@ pub enum ServerMessage {
         tool_call_id: String,
         tool: String,
         args: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Tool call result.
@@ -111,6 +153,8 @@ pub enum ServerMessage {
         result: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         error: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Turn completed.
@@ -118,6 +162,8 @@ pub enum ServerMessage {
         conversation_id: String,
         #[serde(skip_serializing_if = "Option::is_none")]
         final_message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Error occurred.
@@ -125,6 +171,8 @@ pub enum ServerMessage {
         conversation_id: Option<String>,
         code: String,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Iteration update.
@@ -132,6 +180,8 @@ pub enum ServerMessage {
         conversation_id: String,
         current: u32,
         max: u32,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Continuation prompt (max iterations reached).
@@ -139,13 +189,9 @@ pub enum ServerMessage {
         conversation_id: String,
         iteration: u32,
         message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
-
-    /// Pong response.
-    Pong,
-
-    /// Connected successfully.
-    Connected { session_id: String },
 
     /// New message added to conversation (for delegation callbacks, system messages).
     /// Frontend should refresh conversation to show the new message.
@@ -153,6 +199,8 @@ pub enum ServerMessage {
         conversation_id: String,
         role: String,
         content: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
 
     /// Token usage update for real-time metrics.
@@ -161,7 +209,42 @@ pub enum ServerMessage {
         session_id: String,
         tokens_in: u64,
         tokens_out: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
     },
+
+    /// Delegation started - agent delegated work to a subagent.
+    DelegationStarted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        task: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+
+    /// Delegation completed - subagent finished and returned result.
+    DelegationCompleted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+
+    // =========================================================================
+    // GLOBAL/CONNECTION MESSAGES (no sequence numbers)
+    // =========================================================================
+
+    /// Pong response.
+    Pong,
+
+    /// Connected successfully.
+    Connected { session_id: String },
 
     /// Session paused.
     SessionPaused { session_id: String },
@@ -174,25 +257,15 @@ pub enum ServerMessage {
 
     /// Session ended (completed by user request).
     SessionEnded { session_id: String },
+}
 
-    /// Delegation started - agent delegated work to a subagent.
-    DelegationStarted {
-        parent_agent_id: String,
-        parent_conversation_id: String,
-        child_agent_id: String,
-        child_conversation_id: String,
-        task: String,
-    },
-
-    /// Delegation completed - subagent finished and returned result.
-    DelegationCompleted {
-        parent_agent_id: String,
-        parent_conversation_id: String,
-        child_agent_id: String,
-        child_conversation_id: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        result: Option<String>,
-    },
+/// Error codes for subscription errors.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SubscriptionErrorCode {
+    NotFound,
+    LimitExceeded,
+    ServerError,
 }
 
 impl ServerMessage {
@@ -202,6 +275,7 @@ impl ServerMessage {
             conversation_id,
             code: code.to_string(),
             message: message.to_string(),
+            seq: None,
         }
     }
 
@@ -210,6 +284,7 @@ impl ServerMessage {
         Self::Token {
             conversation_id: conversation_id.to_string(),
             delta: delta.to_string(),
+            seq: None,
         }
     }
 
@@ -218,6 +293,108 @@ impl ServerMessage {
         Self::TurnComplete {
             conversation_id: conversation_id.to_string(),
             final_message,
+            seq: None,
+        }
+    }
+
+    /// Create a subscription error message.
+    pub fn subscription_error(
+        conversation_id: &str,
+        code: SubscriptionErrorCode,
+        message: &str,
+    ) -> Self {
+        Self::SubscriptionError {
+            conversation_id: conversation_id.to_string(),
+            code,
+            message: message.to_string(),
+        }
+    }
+
+    /// Get the conversation_id for this message, if any.
+    pub fn conversation_id(&self) -> Option<&str> {
+        match self {
+            Self::AgentStarted { conversation_id, .. } => Some(conversation_id),
+            Self::AgentCompleted { conversation_id, .. } => Some(conversation_id),
+            Self::AgentStopped { conversation_id, .. } => Some(conversation_id),
+            Self::Token { conversation_id, .. } => Some(conversation_id),
+            Self::Thinking { conversation_id, .. } => Some(conversation_id),
+            Self::ToolCall { conversation_id, .. } => Some(conversation_id),
+            Self::ToolResult { conversation_id, .. } => Some(conversation_id),
+            Self::TurnComplete { conversation_id, .. } => Some(conversation_id),
+            Self::Error { conversation_id, .. } => conversation_id.as_deref(),
+            Self::Iteration { conversation_id, .. } => Some(conversation_id),
+            Self::ContinuationPrompt { conversation_id, .. } => Some(conversation_id),
+            Self::MessageAdded { conversation_id, .. } => Some(conversation_id),
+            Self::TokenUsage { conversation_id, .. } => Some(conversation_id),
+            Self::DelegationStarted { parent_conversation_id, .. } => Some(parent_conversation_id),
+            Self::DelegationCompleted { parent_conversation_id, .. } => Some(parent_conversation_id),
+            Self::Subscribed { conversation_id, .. } => Some(conversation_id),
+            Self::Unsubscribed { conversation_id, .. } => Some(conversation_id),
+            Self::SubscriptionError { conversation_id, .. } => Some(conversation_id),
+            Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
+            | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
+            | Self::SessionEnded { .. } => None,
+        }
+    }
+
+    /// Return a copy of this message with the sequence number set.
+    pub fn with_sequence(self, seq: u64) -> Self {
+        match self {
+            Self::AgentStarted { agent_id, conversation_id, session_id, .. } => {
+                Self::AgentStarted { agent_id, conversation_id, session_id, seq: Some(seq) }
+            }
+            Self::AgentCompleted { agent_id, conversation_id, result, .. } => {
+                Self::AgentCompleted { agent_id, conversation_id, result, seq: Some(seq) }
+            }
+            Self::AgentStopped { agent_id, conversation_id, iteration, .. } => {
+                Self::AgentStopped { agent_id, conversation_id, iteration, seq: Some(seq) }
+            }
+            Self::Token { conversation_id, delta, .. } => {
+                Self::Token { conversation_id, delta, seq: Some(seq) }
+            }
+            Self::Thinking { conversation_id, content, .. } => {
+                Self::Thinking { conversation_id, content, seq: Some(seq) }
+            }
+            Self::ToolCall { conversation_id, tool_call_id, tool, args, .. } => {
+                Self::ToolCall { conversation_id, tool_call_id, tool, args, seq: Some(seq) }
+            }
+            Self::ToolResult { conversation_id, tool_call_id, result, error, .. } => {
+                Self::ToolResult { conversation_id, tool_call_id, result, error, seq: Some(seq) }
+            }
+            Self::TurnComplete { conversation_id, final_message, .. } => {
+                Self::TurnComplete { conversation_id, final_message, seq: Some(seq) }
+            }
+            Self::Error { conversation_id, code, message, .. } => {
+                Self::Error { conversation_id, code, message, seq: Some(seq) }
+            }
+            Self::Iteration { conversation_id, current, max, .. } => {
+                Self::Iteration { conversation_id, current, max, seq: Some(seq) }
+            }
+            Self::ContinuationPrompt { conversation_id, iteration, message, .. } => {
+                Self::ContinuationPrompt { conversation_id, iteration, message, seq: Some(seq) }
+            }
+            Self::MessageAdded { conversation_id, role, content, .. } => {
+                Self::MessageAdded { conversation_id, role, content, seq: Some(seq) }
+            }
+            Self::TokenUsage { conversation_id, session_id, tokens_in, tokens_out, .. } => {
+                Self::TokenUsage { conversation_id, session_id, tokens_in, tokens_out, seq: Some(seq) }
+            }
+            Self::DelegationStarted {
+                parent_agent_id, parent_conversation_id, child_agent_id,
+                child_conversation_id, task, ..
+            } => Self::DelegationStarted {
+                parent_agent_id, parent_conversation_id, child_agent_id,
+                child_conversation_id, task, seq: Some(seq),
+            },
+            Self::DelegationCompleted {
+                parent_agent_id, parent_conversation_id, child_agent_id,
+                child_conversation_id, result, ..
+            } => Self::DelegationCompleted {
+                parent_agent_id, parent_conversation_id, child_agent_id,
+                child_conversation_id, result, seq: Some(seq),
+            },
+            // Messages without sequence numbers pass through unchanged
+            other => other,
         }
     }
 }
