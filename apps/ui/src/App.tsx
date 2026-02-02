@@ -220,7 +220,6 @@ const navGroups: NavGroup[] = [
     // Main group - no label
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
-      { to: "/chat", label: "Chat", icon: MessageSquare },
       { to: "/logs", label: "Logs", icon: Eye },
     ],
   },
