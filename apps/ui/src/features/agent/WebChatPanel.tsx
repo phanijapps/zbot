@@ -53,17 +53,21 @@ function createNewConversationId(): string {
   const convId = `web-${crypto.randomUUID()}`;
   localStorage.setItem(WEB_CONV_ID_KEY, convId);
   // Clear session_id when starting a new conversation
+  console.log("[SESSION_DEBUG] /new command - clearing session_id, new conversation_id:", convId);
   localStorage.removeItem(WEB_SESSION_ID_KEY);
   return convId;
 }
 
 // Get the current session ID (if any)
 function getSessionId(): string | null {
-  return localStorage.getItem(WEB_SESSION_ID_KEY);
+  const sessionId = localStorage.getItem(WEB_SESSION_ID_KEY);
+  console.log("[SESSION_DEBUG] getSessionId() =>", sessionId);
+  return sessionId;
 }
 
 // Store the session ID from backend
 function setSessionId(sessionId: string): void {
+  console.log("[SESSION_DEBUG] setSessionId() storing:", sessionId);
   localStorage.setItem(WEB_SESSION_ID_KEY, sessionId);
 }
 
@@ -142,10 +146,17 @@ export function WebChatPanel() {
   const handleStreamEvent = (event: StreamEvent) => {
     switch (event.type) {
       case "agent_started":
+        console.log("[SESSION_DEBUG] agent_started event received:", {
+          session_id: event.session_id,
+          agent_id: event.agent_id,
+          conversation_id: event.conversation_id,
+        });
         setIsProcessing(true);
         // Capture session_id from the backend for session continuity
         if (event.session_id && typeof event.session_id === "string") {
           setSessionId(event.session_id);
+        } else {
+          console.warn("[SESSION_DEBUG] agent_started event missing session_id!", event);
         }
         break;
 
@@ -414,6 +425,7 @@ export function WebChatPanel() {
       const transport = await getTransport();
       // Pass session_id to continue the same session (or undefined for new session)
       const currentSessionId = getSessionId() ?? undefined;
+      console.log("[SESSION_DEBUG] Sending message with session_id:", currentSessionId, "conversation_id:", conversationId);
       await transport.executeAgent(ROOT_AGENT_ID, conversationId, userMessage.content, currentSessionId);
     } catch (error) {
       console.error("Failed to send message:", error);

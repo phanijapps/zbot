@@ -5,6 +5,7 @@
 mod agents;
 mod conversations;
 mod events;
+mod gateway_bus;
 mod health;
 mod mcps;
 mod providers;
@@ -103,6 +104,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)
         .nest_service("/api/executions", execution_state::routes(state.state_service.clone()))
+        // Gateway Bus endpoints (for foreign plugins: Python, JS, Go, etc.)
+        .nest("/api/gateway", gateway_bus::routes())
         // State
         .with_state(state);
 

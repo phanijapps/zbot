@@ -25,10 +25,17 @@ import type {
   CreateMcpRequest,
   McpTestResult,
   MessageResponse,
+  SessionMessage,
+  SessionMessagesQuery,
   ToolSettings,
   LogSession,
   SessionDetail,
   LogFilter,
+  // V2 types
+  SessionWithExecutions,
+  SessionFilter,
+  DashboardStats,
+  // Legacy types
   ExecutionSession,
   ExecutionSessionFilter,
   ExecutionStats,
@@ -140,8 +147,22 @@ export interface Transport {
   // Conversation Operations
   // =========================================================================
 
-  /** Get messages for a conversation */
-  getMessages(conversationId: string): Promise<TransportResult<MessageResponse[]>>;
+  /** Get messages for an execution (exec-xxx) or conversation (web-xxx) */
+  getMessages(id: string): Promise<TransportResult<MessageResponse[]>>;
+
+  /**
+   * Get messages for a session with scope filtering.
+   *
+   * Scopes:
+   * - `all`: All messages from all executions
+   * - `root`: Only messages from root executions (main chat view)
+   * - `execution`: Messages from a specific execution (requires execution_id)
+   * - `delegates`: Only messages from delegated executions
+   */
+  getSessionMessages(
+    sessionId: string,
+    query?: SessionMessagesQuery
+  ): Promise<TransportResult<SessionMessage[]>>;
 
   // =========================================================================
   // Agent Execution
@@ -185,16 +206,29 @@ export interface Transport {
   cleanupOldLogs(olderThanDays: number): Promise<TransportResult<{ deletedCount: number }>>;
 
   // =========================================================================
-  // Execution Session Operations
+  // Session Operations (V2 API)
   // =========================================================================
 
-  /** List execution sessions */
+  /** List sessions with their executions (V2 API - for dashboard) */
+  listSessionsFull(filter?: SessionFilter): Promise<TransportResult<SessionWithExecutions[]>>;
+
+  /** Get a single session with executions (V2 API) */
+  getSessionFull(sessionId: string): Promise<TransportResult<SessionWithExecutions>>;
+
+  /** Get dashboard stats (V2 API - session + execution counts) */
+  getDashboardStats(): Promise<TransportResult<DashboardStats>>;
+
+  // =========================================================================
+  // Legacy Execution Session Operations (deprecated)
+  // =========================================================================
+
+  /** @deprecated Use listSessionsFull() instead */
   listExecutionSessions(filter?: ExecutionSessionFilter): Promise<TransportResult<ExecutionSession[]>>;
 
-  /** Get an execution session by ID */
+  /** @deprecated Use getSessionFull() instead */
   getExecutionSession(sessionId: string): Promise<TransportResult<ExecutionSession>>;
 
-  /** Get execution session stats */
+  /** @deprecated Use getDashboardStats() instead */
   getExecutionStats(): Promise<TransportResult<ExecutionStats>>;
 
   /** Pause an execution session */

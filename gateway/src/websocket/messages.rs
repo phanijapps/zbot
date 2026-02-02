@@ -167,6 +167,25 @@ pub enum ServerMessage {
 
     /// Session cancelled.
     SessionCancelled { session_id: String },
+
+    /// Delegation started - agent delegated work to a subagent.
+    DelegationStarted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        task: String,
+    },
+
+    /// Delegation completed - subagent finished and returned result.
+    DelegationCompleted {
+        parent_agent_id: String,
+        parent_conversation_id: String,
+        child_agent_id: String,
+        child_conversation_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        result: Option<String>,
+    },
 }
 
 impl ServerMessage {
@@ -202,14 +221,16 @@ mod tests {
 
     #[test]
     fn test_client_message_deserialize() {
-        let json = r#"{"type": "invoke", "conversation_id": "123", "message": "Hello"}"#;
+        let json = r#"{"type": "invoke", "agent_id": "root", "conversation_id": "123", "message": "Hello"}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
             ClientMessage::Invoke {
+                agent_id,
                 conversation_id,
                 message,
                 ..
             } => {
+                assert_eq!(agent_id, "root");
                 assert_eq!(conversation_id, "123");
                 assert_eq!(message, "Hello");
             }

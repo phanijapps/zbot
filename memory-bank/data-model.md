@@ -12,12 +12,14 @@ erDiagram
 
     sessions {
         text id PK "sess-{uuid}"
-        text status "running|paused|completed|crashed"
+        text status "queued|running|completed|crashed|cancelled"
+        text source "web|cli|api|cron|plugin"
         text root_agent_id
         text title "optional, user-provided"
         text created_at
         text started_at
         text completed_at
+        text error_message "null unless crashed"
         integer total_tokens_in
         integer total_tokens_out
         text metadata "JSON"
@@ -55,17 +57,21 @@ erDiagram
 ## Tables
 
 ### sessions
-Top-level container for a user's work session. Starts with `/new` or hook message.
+Top-level container for a user's work session. A new session is created when:
+- First message sent without `session_id`
+- User sends `/new` command (clears frontend session_id)
 
 | Column | Type | Description |
 |--------|------|-------------|
 | id | TEXT PK | `sess-{uuid}` |
-| status | TEXT | `running`, `paused`, `completed`, `crashed` |
-| root_agent_id | TEXT | The primary agent for this session |
+| status | TEXT | `queued`, `running`, `completed`, `crashed`, `cancelled` |
+| source | TEXT | `web`, `cli`, `api`, `cron`, `plugin` - trigger origin |
+| root_agent_id | TEXT | The primary agent for this session (default: `root`) |
 | title | TEXT | Optional user-provided title |
 | created_at | TEXT | ISO8601 timestamp |
 | started_at | TEXT | When first execution began |
 | completed_at | TEXT | When session finished |
+| error_message | TEXT | Error details if status is `crashed` |
 | total_tokens_in | INTEGER | Sum of all agent execution tokens |
 | total_tokens_out | INTEGER | Sum of all agent execution tokens |
 | metadata | TEXT | JSON metadata |
@@ -149,10 +155,11 @@ To clean up: delete `data/logs/{session_id}/` directory when session is deleted.
 ## Status Semantics
 
 ### Session Status
+- `queued` - Session created but not yet started
 - `running` - At least one agent execution is running
-- `paused` - User paused; all executions should pause
 - `completed` - All executions completed successfully
 - `crashed` - Root execution crashed (subagent crash may not crash session)
+- `cancelled` - User cancelled the session
 
 ### Execution Status
 - `queued` - Waiting to start
@@ -195,6 +202,65 @@ Root processes results, delegates again
 Root completes → Session completes
 ```
 
+## Dashboard API Types
+
+### DashboardStats
+Response from `GET /api/executions/stats/counts`:
+
+```typescript
+interface DashboardStats {
+  sessions_running: number;
+  sessions_queued: number;
+  sessions_completed: number;
+  sessions_crashed: number;
+  sessions_cancelled: number;
+  executions_running: number;
+  executions_queued: number;
+  executions_completed: number;
+  executions_crashed: number;
+  sessions_by_source: Record<TriggerSource, number>;
+}
+
+type TriggerSource = 'web' | 'cli' | 'api' | 'cron' | 'plugin';
+```
+
+### SessionWithExecutions
+Response from `GET /api/executions/v2/sessions/full`:
+
+```typescript
+interface SessionWithExecutions {
+  session: Session;
+  executions: AgentExecution[];
+  subagent_count: number;  // Count of non-root executions
+}
+
+interface Session {
+  id: string;              // "sess-{uuid}"
+  status: SessionStatus;
+  source: TriggerSource;
+  created_at: string;      // ISO8601
+  updated_at: string;      // ISO8601
+  completed_at?: string;
+  error_message?: string;
+}
+
+interface AgentExecution {
+  id: string;              // "exec-{uuid}"
+  session_id: string;
+  agent_id: string;
+  parent_execution_id?: string;  // null for root agent
+  conversation_id: string;
+  status: ExecutionStatus;
+  turn_count: number;
+  started_at: string;
+  completed_at?: string;
+  error_message?: string;
+}
+
+type SessionStatus = 'queued' | 'running' | 'completed' | 'crashed' | 'cancelled';
+type ExecutionStatus = 'queued' | 'running' | 'completed' | 'crashed';
+```
+
 ## Stats Queries
 
 **Active sessions:**
@@ -207,6 +273,13 @@ SELECT COUNT(*) FROM sessions WHERE status = 'running';
 SELECT COUNT(*) FROM sessions WHERE status = 'completed';
 ```
 
+**Sessions by source:**
+```sql
+SELECT source, COUNT(*) as count
+FROM sessions
+GROUP BY source;
+```
+
 **Session with all its executions:**
 ```sql
 SELECT s.*, e.*
@@ -214,4 +287,10 @@ FROM sessions s
 LEFT JOIN agent_executions e ON e.session_id = s.id
 WHERE s.id = ?
 ORDER BY e.started_at;
+```
+
+**Subagent count for a session:**
+```sql
+SELECT COUNT(*) FROM agent_executions
+WHERE session_id = ? AND parent_execution_id IS NOT NULL;
 ```

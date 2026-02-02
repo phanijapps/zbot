@@ -32,6 +32,9 @@ mod repository;
 mod service;
 mod types;
 
+#[cfg(test)]
+pub mod test_utils;
+
 // Re-export public types
 pub use repository::StateDbProvider;
 pub use service::StateService;
@@ -44,18 +47,19 @@ use std::sync::Arc;
 ///
 /// # Endpoints
 ///
-/// ## Sessions
-/// - `GET /sessions` - List sessions (basic)
-/// - `GET /sessions/full` - List sessions with executions (dashboard)
-/// - `GET /sessions/:id` - Get session detail
-/// - `GET /sessions/:id/full` - Get session with all executions
-/// - `DELETE /sessions/:id` - Delete a session
+/// ## Sessions (V2 API)
+/// - `GET /v2/sessions` - List sessions (basic)
+/// - `GET /v2/sessions/full` - List sessions with executions (dashboard)
+/// - `GET /v2/sessions/:id` - Get session detail
+/// - `GET /v2/sessions/:id/full` - Get session with all executions
+/// - `GET /v2/sessions/:id/messages` - Get session messages with scope filtering
+/// - `DELETE /v2/sessions/:id` - Delete a session
 ///
-/// ## Executions
-/// - `GET /executions` - List executions with filtering
-/// - `GET /executions/:id` - Get execution detail
-/// - `GET /executions/:id/children` - Get child executions
-/// - `GET /executions/:id/messages` - Get messages for execution
+/// ## Executions (root paths - nested under /api/executions in gateway)
+/// - `GET /` - List executions with filtering
+/// - `GET /:id` - Get execution detail
+/// - `GET /:id/children` - Get child executions
+/// - `GET /:id/messages` - Get messages for execution
 ///
 /// ## Control
 /// - `POST /sessions/:id/pause` - Pause a running session
@@ -63,31 +67,31 @@ use std::sync::Arc;
 /// - `POST /sessions/:id/cancel` - Cancel a session
 ///
 /// ## Stats
-/// - `GET /stats` - Get dashboard stats (pre-computed)
+/// - `GET /stats` - Get dashboard stats (session + execution counts)
+/// - `GET /stats/counts` - Get stats as key-value map
 pub fn routes<D>(service: Arc<StateService<D>>) -> Router
 where
     D: StateDbProvider + 'static,
 {
     Router::new()
-        // Sessions (legacy format for UI compatibility)
-        .route("/sessions", get(handlers::list_legacy_sessions::<D>))
-        // Sessions v2 (new format)
+        // Sessions (V2 API - use /v2/sessions/full for dashboard)
         .route("/v2/sessions", get(handlers::list_sessions::<D>))
         .route("/v2/sessions/full", get(handlers::list_sessions_full::<D>))
         .route(
-            "/v2/sessions/{id}",
+            "/v2/sessions/:id",
             get(handlers::get_session::<D>).delete(handlers::delete_session::<D>),
         )
-        .route("/v2/sessions/{id}/full", get(handlers::get_session_full::<D>))
+        .route("/v2/sessions/:id/full", get(handlers::get_session_full::<D>))
+        .route("/v2/sessions/:id/messages", get(handlers::get_session_messages::<D>))
         // Session control (works with both old and new IDs)
-        .route("/sessions/{id}/pause", post(handlers::pause_session::<D>))
-        .route("/sessions/{id}/resume", post(handlers::resume_session::<D>))
-        .route("/sessions/{id}/cancel", post(handlers::cancel_session::<D>))
-        // Executions
-        .route("/executions", get(handlers::list_executions::<D>))
-        .route("/executions/{id}", get(handlers::get_execution::<D>))
-        .route("/executions/{id}/children", get(handlers::get_child_executions::<D>))
-        .route("/executions/{id}/messages", get(handlers::get_execution_messages::<D>))
+        .route("/sessions/:id/pause", post(handlers::pause_session::<D>))
+        .route("/sessions/:id/resume", post(handlers::resume_session::<D>))
+        .route("/sessions/:id/cancel", post(handlers::cancel_session::<D>))
+        // Executions (no /executions prefix since already nested under /api/executions)
+        .route("/", get(handlers::list_executions::<D>))
+        .route("/:id", get(handlers::get_execution::<D>))
+        .route("/:id/children", get(handlers::get_child_executions::<D>))
+        .route("/:id/messages", get(handlers::get_execution_messages::<D>))
         // Stats
         .route("/stats", get(handlers::get_dashboard_stats::<D>))
         .route("/stats/counts", get(handlers::get_stats_counts::<D>))

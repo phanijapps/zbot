@@ -438,8 +438,37 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             })
         }
 
-        // Delegation events are internal and don't need WebSocket messages for now
-        GatewayEvent::DelegationStarted { .. } | GatewayEvent::DelegationCompleted { .. } => None,
+        // Delegation events - sent to frontend for UI updates
+        GatewayEvent::DelegationStarted {
+            parent_agent_id,
+            parent_conversation_id,
+            child_agent_id,
+            child_conversation_id,
+            task,
+        } => Some(ServerMessage::DelegationStarted {
+            parent_agent_id,
+            parent_conversation_id,
+            child_agent_id,
+            child_conversation_id,
+            task,
+        }),
+
+        GatewayEvent::DelegationCompleted {
+            parent_agent_id,
+            parent_conversation_id,
+            child_agent_id,
+            child_conversation_id,
+            result,
+        } => Some(ServerMessage::DelegationCompleted {
+            parent_agent_id,
+            parent_conversation_id,
+            child_agent_id,
+            child_conversation_id,
+            result,
+        }),
+
+        // Internal continuation events are handled by the system, not WebSocket
+        GatewayEvent::SessionContinuationReady { .. } => None,
 
         // New message added - notify frontend to refresh
         GatewayEvent::MessageAdded { conversation_id, role, content } => {

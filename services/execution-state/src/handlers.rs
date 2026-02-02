@@ -119,64 +119,8 @@ pub async fn list_executions<D: StateDbProvider + 'static>(
 }
 
 // ============================================================================
-// LEGACY COMPATIBILITY HANDLERS
+// EXECUTION HANDLERS
 // ============================================================================
-
-/// Legacy execution session format for UI compatibility.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct LegacyExecutionSession {
-    pub id: String,
-    pub conversation_id: String,
-    pub agent_id: String,
-    pub parent_session_id: Option<String>,
-    pub status: String,
-    pub created_at: String,
-    pub started_at: Option<String>,
-    pub completed_at: Option<String>,
-    pub tokens_in: u64,
-    pub tokens_out: u64,
-    pub checkpoint: Option<String>,
-    pub error: Option<String>,
-}
-
-impl From<AgentExecution> for LegacyExecutionSession {
-    fn from(exec: AgentExecution) -> Self {
-        Self {
-            id: exec.id.clone(),
-            conversation_id: exec.session_id.clone(), // Map session_id to conversation_id
-            agent_id: exec.agent_id,
-            parent_session_id: exec.parent_execution_id,
-            status: exec.status.as_str().to_string(),
-            created_at: exec.started_at.clone().unwrap_or_default(),
-            started_at: exec.started_at,
-            completed_at: exec.completed_at,
-            tokens_in: exec.tokens_in,
-            tokens_out: exec.tokens_out,
-            checkpoint: exec.checkpoint.and_then(|c| serde_json::to_string(&c).ok()),
-            error: exec.error,
-        }
-    }
-}
-
-/// List execution sessions in legacy format.
-///
-/// GET /sessions (legacy format for UI compatibility)
-/// Returns ALL executions (root and subagents) - UI handles grouping
-pub async fn list_legacy_sessions<D: StateDbProvider + 'static>(
-    State(service): State<Arc<StateService<D>>>,
-    Query(filter): Query<ExecutionFilter>,
-) -> Result<Json<Vec<LegacyExecutionSession>>, ApiError> {
-    let executions = service
-        .list_executions(&filter)
-        .map_err(ApiError::Database)?;
-
-    // Return all executions - UI groups by conversation_id
-    let legacy: Vec<LegacyExecutionSession> = executions
-        .into_iter()
-        .map(|e| e.into())
-        .collect();
-    Ok(Json(legacy))
-}
 
 /// Get a single execution by ID.
 ///
@@ -284,7 +228,7 @@ pub async fn get_dashboard_stats<D: StateDbProvider + 'static>(
     Ok(Json(stats))
 }
 
-/// Get stats as counts map (legacy format for UI compatibility).
+/// Get stats as counts map.
 ///
 /// GET /stats/counts
 pub async fn get_stats_counts<D: StateDbProvider + 'static>(
@@ -295,11 +239,22 @@ pub async fn get_stats_counts<D: StateDbProvider + 'static>(
         .map_err(ApiError::Database)?;
 
     let mut counts = std::collections::HashMap::new();
-    counts.insert("running".to_string(), stats.running);
-    counts.insert("paused".to_string(), stats.paused);
-    counts.insert("completed".to_string(), stats.completed);
-    counts.insert("crashed".to_string(), stats.crashed);
-    counts.insert("today_count".to_string(), stats.today_count);
+
+    // Session counts
+    counts.insert("sessions_running".to_string(), stats.sessions_running);
+    counts.insert("sessions_paused".to_string(), stats.sessions_paused);
+    counts.insert("sessions_completed".to_string(), stats.sessions_completed);
+    counts.insert("sessions_crashed".to_string(), stats.sessions_crashed);
+
+    // Execution counts
+    counts.insert("executions_queued".to_string(), stats.executions_queued);
+    counts.insert("executions_running".to_string(), stats.executions_running);
+    counts.insert("executions_completed".to_string(), stats.executions_completed);
+    counts.insert("executions_crashed".to_string(), stats.executions_crashed);
+    counts.insert("executions_cancelled".to_string(), stats.executions_cancelled);
+
+    // Daily stats
+    counts.insert("today_sessions".to_string(), stats.today_sessions);
     counts.insert("today_tokens".to_string(), stats.today_tokens);
 
     Ok(Json(counts))
@@ -318,6 +273,34 @@ pub async fn get_execution_messages<D: StateDbProvider + 'static>(
 ) -> Result<Json<Vec<Message>>, ApiError> {
     let messages = service
         .get_messages(&execution_id)
+        .map_err(ApiError::Database)?;
+
+    Ok(Json(messages))
+}
+
+/// Get messages for a session with scope filtering.
+///
+/// GET /v2/sessions/:id/messages?scope=all|root|execution|delegates&execution_id=...&agent_id=...
+///
+/// Scopes:
+/// - `all` (default): All messages from all executions
+/// - `root`: Only messages from root executions (main chat view)
+/// - `execution`: Messages from a specific execution (requires execution_id)
+/// - `delegates`: Only messages from delegated executions
+pub async fn get_session_messages<D: StateDbProvider + 'static>(
+    State(service): State<Arc<StateService<D>>>,
+    Path(session_id): Path<String>,
+    Query(query): Query<SessionMessagesQuery>,
+) -> Result<Json<Vec<SessionMessage>>, ApiError> {
+    // Validate: execution scope requires execution_id
+    if matches!(query.scope, MessageScope::Execution) && query.execution_id.is_none() {
+        return Err(ApiError::BadRequest(
+            "execution_id is required when scope=execution".to_string(),
+        ));
+    }
+
+    let messages = service
+        .get_session_messages(&session_id, &query)
         .map_err(ApiError::Database)?;
 
     Ok(Json(messages))
@@ -387,4 +370,60 @@ pub struct Message {
     pub tool_calls: Option<serde_json::Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_results: Option<serde_json::Value>,
+}
+
+/// Extended message type for session-scoped queries.
+///
+/// Includes execution metadata (agent_id, delegation_type) for context.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SessionMessage {
+    pub id: String,
+    pub execution_id: String,
+    pub agent_id: String,
+    pub delegation_type: String,
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_results: Option<serde_json::Value>,
+}
+
+/// Scope for session messages query.
+#[derive(Debug, Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MessageScope {
+    /// All messages from all executions in the session
+    #[default]
+    All,
+    /// Only messages from root executions
+    Root,
+    /// Messages from a specific execution (requires execution_id)
+    Execution,
+    /// Only messages from delegated (non-root) executions
+    Delegates,
+}
+
+impl MessageScope {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Root => "root",
+            Self::Execution => "execution",
+            Self::Delegates => "delegates",
+        }
+    }
+}
+
+/// Query parameters for session messages endpoint.
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct SessionMessagesQuery {
+    /// Scope of messages to return
+    #[serde(default)]
+    pub scope: MessageScope,
+    /// Execution ID (required when scope=execution)
+    pub execution_id: Option<String>,
+    /// Filter by agent ID
+    pub agent_id: Option<String>,
 }

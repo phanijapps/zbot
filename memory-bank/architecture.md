@@ -205,6 +205,97 @@ pub trait LlmClient: Send + Sync {
 }
 ```
 
+## Session Management Architecture
+
+Sessions are the top-level container for user interactions. A session groups multiple agent executions (turns) together, enabling multi-turn conversations with context preservation.
+
+### Session Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         SESSION LIFECYCLE                                │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│   User sends first message (no session_id)                              │
+│        │                                                                │
+│        ▼                                                                │
+│   ┌─────────────────┐                                                   │
+│   │ Create Session  │ ──► sess-{uuid} created in DB                     │
+│   │ (status=running)│     source = web|cli|api|cron|plugin              │
+│   └────────┬────────┘                                                   │
+│            │                                                            │
+│            ▼                                                            │
+│   ┌─────────────────┐                                                   │
+│   │ Create Root     │ ──► exec-{uuid} created, parent=null              │
+│   │ Execution       │                                                   │
+│   └────────┬────────┘                                                   │
+│            │                                                            │
+│            ▼                                                            │
+│   ┌─────────────────┐                                                   │
+│   │ agent_started   │ ──► Frontend receives session_id                  │
+│   │ event emitted   │     Frontend stores in localStorage               │
+│   └────────┬────────┘                                                   │
+│            │                                                            │
+│            ▼                                                            │
+│   User sends follow-up message (WITH session_id)                        │
+│        │                                                                │
+│        ▼                                                                │
+│   ┌─────────────────┐                                                   │
+│   │ Lookup existing │ ──► Same session reused                           │
+│   │ Session         │     New execution created under same session      │
+│   └────────┬────────┘                                                   │
+│            │                                                            │
+│            ▼                                                            │
+│   User sends /new command                                               │
+│        │                                                                │
+│        ▼                                                                │
+│   ┌─────────────────┐                                                   │
+│   │ Clear session_id│ ──► localStorage cleared                          │
+│   │ from frontend   │     Next message creates new session              │
+│   └─────────────────┘                                                   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Session vs Execution vs Conversation
+
+| Concept | Scope | Purpose |
+|---------|-------|---------|
+| **Session** | User work session | Groups all activity until `/new` command |
+| **Execution** | Single agent turn | One agent processing one request |
+| **Conversation** | Message thread | Persists chat history for context |
+
+### Frontend Session Persistence
+
+The frontend stores session state in localStorage:
+
+```typescript
+// Keys used for session persistence
+const WEB_SESSION_ID_KEY = 'agentzero_web_session_id';
+const WEB_CONV_ID_KEY = 'agentzero_web_conv_id';
+
+// On agent_started event, store session_id
+localStorage.setItem(WEB_SESSION_ID_KEY, event.session_id);
+
+// On subsequent messages, include session_id
+{ type: "invoke", session_id: storedSessionId, ... }
+
+// On /new command, clear session
+localStorage.removeItem(WEB_SESSION_ID_KEY);
+```
+
+### Trigger Sources
+
+Sessions track their origin for analytics and filtering:
+
+| Source | Description |
+|--------|-------------|
+| `web` | Web dashboard (default) |
+| `cli` | Command-line interface |
+| `api` | External API call |
+| `cron` | Scheduled task |
+| `plugin` | Plugin/extension initiated |
+
 ## Execution Flow
 
 ```
@@ -212,8 +303,20 @@ User Message
      │
      ▼
 ┌─────────────────┐
-│   WebSocket     │ ◄── { type: "invoke", message: "..." }
+│   WebSocket     │ ◄── { type: "invoke", session_id?, message: "..." }
 │   Handler       │
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Session       │
+│   Resolution    │
+├─────────────────┤
+│ if session_id { │
+│   lookup(id)    │ ──► Reuse existing session
+│ } else {        │
+│   create_new()  │ ──► New session + execution
+│ }               │
 └────────┬────────┘
          │
          ▼
@@ -222,7 +325,7 @@ User Message
 │   Runner        │
 ├─────────────────┤
 │ 1. Load agent   │
-│ 2. Load history │ ◄── SQLite
+│ 2. Load history │ ◄── SQLite (by conversation_id)
 │ 3. Create LLM   │
 │ 4. Build tools  │
 └────────┬────────┘
@@ -243,6 +346,7 @@ User Message
          ▼
 ┌─────────────────┐
 │  Save Messages  │ ──► SQLite
+│  Update Session │ ──► Status, timestamps
 └─────────────────┘
 ```
 
@@ -268,13 +372,26 @@ User Message
 | GET | `/api/logs/sessions` | List execution sessions |
 | GET | `/api/logs/sessions/:id` | Get session with logs |
 | DELETE | `/api/logs/sessions/:id` | Delete session |
+| **Operations Dashboard** | | |
+| GET | `/api/executions/stats/counts` | Dashboard statistics |
+| GET | `/api/executions/v2/sessions/full` | Sessions with executions |
+| GET | `/api/executions/v2/sessions/:id` | Single session details |
+| POST | `/api/gateway/submit` | Submit new agent request |
+| GET | `/api/gateway/status/:session_id` | Get session status |
+| POST | `/api/gateway/cancel/:session_id` | Cancel running session |
 
 ### WebSocket Protocol (port 18790)
 
 **Client Commands:**
 ```typescript
-// Invoke agent
-{ type: "invoke", agent_id: string, conversation_id: string, message: string }
+// Invoke agent (session_id optional - if omitted, new session created)
+{
+  type: "invoke",
+  agent_id: string,
+  conversation_id: string,
+  message: string,
+  session_id?: string  // Include to continue existing session
+}
 
 // Stop execution
 { type: "stop", conversation_id: string }
@@ -285,8 +402,14 @@ User Message
 
 **Server Events:**
 ```typescript
-// Agent started processing
-{ type: "agent_started", agent_id: string, conversation_id: string }
+// Agent started processing (IMPORTANT: contains session_id for client to store)
+{
+  type: "agent_started",
+  agent_id: string,
+  conversation_id: string,
+  session_id: string,      // Client should store this for subsequent messages
+  execution_id: string     // Unique execution within session
+}
 
 // Streaming token
 { type: "token", agent_id: string, conversation_id: string, delta: string }

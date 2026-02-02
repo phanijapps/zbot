@@ -15,6 +15,9 @@ pub struct EventBus {
     /// Per-agent event channels.
     agent_channels: RwLock<HashMap<String, broadcast::Sender<GatewayEvent>>>,
 
+    /// Session-specific channels for continuation events.
+    session_channels: RwLock<HashMap<String, broadcast::Sender<GatewayEvent>>>,
+
     /// Channel capacity.
     capacity: usize,
 }
@@ -31,6 +34,7 @@ impl EventBus {
         Self {
             global_tx,
             agent_channels: RwLock::new(HashMap::new()),
+            session_channels: RwLock::new(HashMap::new()),
             capacity,
         }
     }
@@ -88,6 +92,45 @@ impl EventBus {
     pub async fn agent_channel_count(&self) -> usize {
         self.agent_channels.read().await.len()
     }
+
+    /// Subscribe to events for a specific session.
+    pub async fn subscribe_session(&self, session_id: &str) -> broadcast::Receiver<GatewayEvent> {
+        let mut channels = self.session_channels.write().await;
+
+        if let Some(tx) = channels.get(session_id) {
+            return tx.subscribe();
+        }
+
+        // Create new channel for this session
+        let (tx, rx) = broadcast::channel(self.capacity);
+        channels.insert(session_id.to_string(), tx);
+        rx
+    }
+
+    /// Publish event to session-specific channel.
+    pub async fn publish_session(&self, session_id: &str, event: GatewayEvent) {
+        // Also publish to global channel
+        let _ = self.global_tx.send(event.clone());
+
+        // Send to session-specific channel if exists
+        let channels = self.session_channels.read().await;
+        if let Some(tx) = channels.get(session_id) {
+            let _ = tx.send(event);
+        }
+    }
+
+    /// Clean up session channel when session completes.
+    pub async fn remove_session_channel(&self, session_id: &str) {
+        let mut channels = self.session_channels.write().await;
+        if channels.remove(session_id).is_some() {
+            debug!("Cleaned up event channel for session {}", session_id);
+        }
+    }
+
+    /// Get count of active session channels.
+    pub async fn session_channel_count(&self) -> usize {
+        self.session_channels.read().await.len()
+    }
 }
 
 impl Default for EventBus {
@@ -132,5 +175,64 @@ mod tests {
 
         let received = rx.recv().await.unwrap();
         assert_eq!(received.conversation_id(), Some("conv-1"));
+    }
+
+    #[tokio::test]
+    async fn test_session_subscription() {
+        let bus = EventBus::new();
+        let mut rx = bus.subscribe_session("sess-123").await;
+
+        bus.publish_session(
+            "sess-123",
+            GatewayEvent::SessionContinuationReady {
+                session_id: "sess-123".to_string(),
+                root_agent_id: "root".to_string(),
+                root_execution_id: "exec-1".to_string(),
+            },
+        )
+        .await;
+
+        let event = rx.recv().await.unwrap();
+        match event {
+            GatewayEvent::SessionContinuationReady { session_id, .. } => {
+                assert_eq!(session_id, "sess-123");
+            }
+            _ => panic!("Wrong event type"),
+        }
+    }
+
+    #[tokio::test]
+    async fn test_session_channel_isolation() {
+        let bus = EventBus::new();
+        let mut rx1 = bus.subscribe_session("sess-1").await;
+        let mut rx2 = bus.subscribe_session("sess-2").await;
+
+        bus.publish_session(
+            "sess-1",
+            GatewayEvent::SessionContinuationReady {
+                session_id: "sess-1".to_string(),
+                root_agent_id: "root".to_string(),
+                root_execution_id: "exec-1".to_string(),
+            },
+        )
+        .await;
+
+        // sess-1 should receive
+        assert!(rx1.try_recv().is_ok());
+        // sess-2 should not receive
+        assert!(rx2.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn test_session_channel_cleanup() {
+        let bus = EventBus::new();
+
+        // Subscribe to create channel
+        let _rx = bus.subscribe_session("sess-cleanup").await;
+        assert_eq!(bus.session_channel_count().await, 1);
+
+        // Remove channel
+        bus.remove_session_channel("sess-cleanup").await;
+        assert_eq!(bus.session_channel_count().await, 0);
     }
 }

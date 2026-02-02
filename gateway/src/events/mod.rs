@@ -150,6 +150,17 @@ pub enum GatewayEvent {
         tokens_in: u64,
         tokens_out: u64,
     },
+
+    /// All delegations for a session have completed, continuation can proceed.
+    ///
+    /// Emitted when the last pending delegation completes and the session
+    /// has requested continuation.
+    SessionContinuationReady {
+        session_id: String,
+        root_agent_id: String,
+        /// The execution ID that should be continued
+        root_execution_id: String,
+    },
 }
 
 impl GatewayEvent {
@@ -176,6 +187,7 @@ impl GatewayEvent {
             } => Some(parent_agent_id),
             Self::MessageAdded { .. } => None,
             Self::TokenUsage { .. } => None,
+            Self::SessionContinuationReady { root_agent_id, .. } => Some(root_agent_id),
         }
     }
 
@@ -204,6 +216,7 @@ impl GatewayEvent {
             } => Some(parent_conversation_id),
             Self::MessageAdded { conversation_id, .. } => Some(conversation_id),
             Self::TokenUsage { conversation_id, .. } => Some(conversation_id),
+            Self::SessionContinuationReady { session_id, .. } => Some(session_id),
         }
     }
 }
