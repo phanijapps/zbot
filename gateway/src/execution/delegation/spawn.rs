@@ -10,7 +10,7 @@ use crate::events::{EventBus, GatewayEvent};
 use crate::services::{AgentService, McpService, ProviderService, SkillService};
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
-use execution_state::{AgentExecution, DelegationType, StateService};
+use execution_state::StateService;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,6 +89,11 @@ pub async fn spawn_delegated_agent(
         delegation_context
     };
     delegation_registry.register(&execution_id, delegation_context);
+
+    // Track delegation for continuation
+    if let Err(e) = state_service.register_delegation(&session_id) {
+        tracing::warn!("Failed to register delegation: {}", e);
+    }
 
     // Emit delegation started event
     emit_delegation_started(
@@ -323,6 +328,29 @@ async fn handle_execution_success(
     )
     .await;
 
+    // Check if this was the last delegation and continuation is needed
+    match state_service.complete_delegation(session_id) {
+        Ok(true) => {
+            // Get root execution for continuation
+            if let Ok(Some(root_exec)) = state_service.get_root_execution(session_id) {
+                event_bus
+                    .publish(GatewayEvent::SessionContinuationReady {
+                        session_id: session_id.to_string(),
+                        root_agent_id: root_exec.agent_id.clone(),
+                        root_execution_id: root_exec.id.clone(),
+                    })
+                    .await;
+                tracing::info!(
+                    session_id = %session_id,
+                    root_execution_id = %root_exec.id,
+                    "All delegations complete, continuation ready"
+                );
+            }
+        }
+        Ok(false) => {} // More delegations pending
+        Err(e) => tracing::warn!("Failed to complete delegation tracking: {}", e),
+    }
+
     // Send callback message to parent if enabled
     handle_delegation_success(
         delegation_ctx.as_ref(),
@@ -403,6 +431,28 @@ async fn handle_execution_failure(
         error,
     )
     .await;
+
+    // Check if this was the last delegation and continuation is needed
+    // (even failures count as completed delegations)
+    match state_service.complete_delegation(session_id) {
+        Ok(true) => {
+            if let Ok(Some(root_exec)) = state_service.get_root_execution(session_id) {
+                event_bus
+                    .publish(GatewayEvent::SessionContinuationReady {
+                        session_id: session_id.to_string(),
+                        root_agent_id: root_exec.agent_id.clone(),
+                        root_execution_id: root_exec.id.clone(),
+                    })
+                    .await;
+                tracing::info!(
+                    session_id = %session_id,
+                    "All delegations complete (including failed), continuation ready"
+                );
+            }
+        }
+        Ok(false) => {}
+        Err(e) => tracing::warn!("Failed to complete delegation tracking: {}", e),
+    }
 
     delegation_registry.remove(execution_id);
 }

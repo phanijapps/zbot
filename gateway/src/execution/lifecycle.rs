@@ -9,7 +9,6 @@ use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use api_logs::{LogService, SessionStatus};
 use execution_state::{AgentExecution, Session, StateService};
-use std::sync::Arc;
 
 // ============================================================================
 // SESSION CREATION
@@ -27,6 +26,9 @@ pub struct SessionSetup {
 ///
 /// If `existing_session_id` is provided and the session exists, creates a new
 /// execution within that session. Otherwise, creates a new session and execution.
+///
+/// If the existing session was in a terminal state (completed/crashed), it will
+/// be reactivated to running status.
 pub fn get_or_create_session(
     state_service: &StateService<DatabaseManager>,
     agent_id: &str,
@@ -41,6 +43,13 @@ pub fn get_or_create_session(
                 if let Err(e) = state_service.create_execution(&execution) {
                     tracing::warn!("Failed to create execution in existing session: {}", e);
                 }
+
+                // Reactivate session if it was in a terminal state (completed/crashed)
+                // This handles the case where user sends a new message to a completed session
+                if let Err(e) = state_service.reactivate_session(session_id) {
+                    tracing::warn!("Failed to reactivate session: {}", e);
+                }
+
                 return SessionSetup {
                     session_id: session_id.to_string(),
                     execution_id: execution.id,
@@ -136,6 +145,9 @@ pub fn save_messages(
 /// Handle successful execution completion.
 ///
 /// Updates state, logs the completion, and emits events.
+///
+/// For root executions with pending delegations, this will request a continuation
+/// turn to be spawned after all delegations complete.
 pub async fn complete_execution(
     state_service: &StateService<DatabaseManager>,
     log_service: &LogService<DatabaseManager>,
@@ -149,6 +161,28 @@ pub async fn complete_execution(
     // Update execution status to COMPLETED
     if let Err(e) = state_service.complete_execution(execution_id) {
         tracing::warn!("Failed to complete execution: {}", e);
+    }
+
+    // Check if this is a root execution and has pending delegations
+    // If so, request continuation after delegations complete
+    if let Ok(Some(execution)) = state_service.get_execution(execution_id) {
+        if execution.is_root() {
+            if let Ok(Some(session)) = state_service.get_session(session_id) {
+                if session.has_pending_delegations() {
+                    // Root execution completed while delegations are pending
+                    // Request continuation to process results when they arrive
+                    if let Err(e) = state_service.request_continuation(session_id) {
+                        tracing::warn!("Failed to request continuation: {}", e);
+                    } else {
+                        tracing::info!(
+                            session_id = %session_id,
+                            pending = session.pending_delegations,
+                            "Root execution complete, continuation requested for pending delegations"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     // Try to complete session if no other executions are running

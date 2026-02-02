@@ -29,7 +29,9 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             completed_at TEXT,
             total_tokens_in INTEGER DEFAULT 0,
             total_tokens_out INTEGER DEFAULT 0,
-            metadata TEXT
+            metadata TEXT,
+            pending_delegations INTEGER DEFAULT 0,
+            continuation_needed INTEGER DEFAULT 0
         )",
         [],
     )?;

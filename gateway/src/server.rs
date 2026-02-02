@@ -167,17 +167,21 @@ impl GatewayServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
-    #[test]
-    fn test_server_creation() {
-        let server = GatewayServer::with_defaults();
+    #[tokio::test]
+    async fn test_server_creation() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
+        let server = GatewayServer::new(GatewayConfig::default(), config_dir);
         assert!(server.shutdown_tx.is_none());
     }
 
-    #[test]
-    fn test_custom_config() {
+    #[tokio::test]
+    async fn test_custom_config() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_dir = temp_dir.path().to_path_buf();
         let config = GatewayConfig::with_ports(19000, 19001);
-        let config_dir = PathBuf::from("/tmp/test");
         let server = GatewayServer::new(config, config_dir);
         assert_eq!(server.config.websocket_port, 19000);
         assert_eq!(server.config.http_port, 19001);

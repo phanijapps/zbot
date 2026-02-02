@@ -18,7 +18,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock};
 
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
@@ -111,6 +111,9 @@ impl ExecutionRunner {
         // Spawn delegation handler task
         runner.spawn_delegation_handler(delegation_rx);
 
+        // Spawn continuation handler task
+        runner.spawn_continuation_handler();
+
         runner
     }
 
@@ -161,6 +164,89 @@ impl ExecutionRunner {
                         error = %e,
                         "Failed to spawn delegated agent"
                     );
+                }
+            }
+        });
+    }
+
+    /// Spawn a background task that handles continuation after delegations complete.
+    ///
+    /// When all delegations for a session complete, this handler invokes the root
+    /// agent to continue processing with the accumulated context (including callbacks).
+    fn spawn_continuation_handler(&self) {
+        let event_bus = self.event_bus.clone();
+        let agent_service = self.agent_service.clone();
+        let provider_service = self.provider_service.clone();
+        let mcp_service = self.mcp_service.clone();
+        let skill_service = self.skill_service.clone();
+        let config_dir = self.config_dir.clone();
+        let conversation_repo = self.conversation_repo.clone();
+        let handles = self.handles.clone();
+        let delegation_registry = self.delegation_registry.clone();
+        let delegation_tx = self.delegation_tx.clone();
+        let log_service = self.log_service.clone();
+        let state_service = self.state_service.clone();
+
+        // Subscribe to all events to catch SessionContinuationReady
+        let mut event_rx = event_bus.subscribe_all();
+
+        tokio::spawn(async move {
+            loop {
+                match event_rx.recv().await {
+                    Ok(GatewayEvent::SessionContinuationReady {
+                        session_id,
+                        root_agent_id,
+                        root_execution_id,
+                    }) => {
+                        tracing::info!(
+                            session_id = %session_id,
+                            root_agent_id = %root_agent_id,
+                            root_execution_id = %root_execution_id,
+                            "Continuation triggered - invoking root agent"
+                        );
+
+                        // Clear continuation flag to prevent double-trigger
+                        if let Err(e) = state_service.clear_continuation(&session_id) {
+                            tracing::warn!("Failed to clear continuation flag: {}", e);
+                        }
+
+                        // Invoke the root agent to continue
+                        // The agent will see full session context including callbacks
+                        if let Err(e) = invoke_continuation(
+                            &session_id,
+                            &root_agent_id,
+                            event_bus.clone(),
+                            agent_service.clone(),
+                            provider_service.clone(),
+                            mcp_service.clone(),
+                            skill_service.clone(),
+                            config_dir.clone(),
+                            conversation_repo.clone(),
+                            handles.clone(),
+                            delegation_registry.clone(),
+                            delegation_tx.clone(),
+                            log_service.clone(),
+                            state_service.clone(),
+                        )
+                        .await
+                        {
+                            tracing::error!(
+                                session_id = %session_id,
+                                error = %e,
+                                "Failed to invoke continuation"
+                            );
+                        }
+                    }
+                    Ok(_) => {
+                        // Ignore other events
+                    }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("Continuation handler lagged by {} events", n);
+                    }
+                    Err(broadcast::error::RecvError::Closed) => {
+                        tracing::info!("Event bus closed, stopping continuation handler");
+                        break;
+                    }
                 }
             }
         });
@@ -584,4 +670,209 @@ impl ExecutionRunner {
             })
             .await;
     }
+}
+
+// ============================================================================
+// CONTINUATION HANDLER
+// ============================================================================
+
+/// Invoke the root agent to continue after all delegations have completed.
+///
+/// This is called when all subagents have finished and the root agent needs
+/// to process their results and decide what to do next:
+/// - Respond to the user with synthesized results
+/// - Delegate to more subagents if needed
+/// - Continue its orchestration loop
+///
+/// The agent sees the full session context including:
+/// - Original user message
+/// - Previous assistant responses
+/// - Callback messages from completed subagents (as system messages)
+#[allow(clippy::too_many_arguments)]
+async fn invoke_continuation(
+    session_id: &str,
+    root_agent_id: &str,
+    event_bus: Arc<EventBus>,
+    agent_service: Arc<AgentService>,
+    provider_service: Arc<ProviderService>,
+    mcp_service: Arc<McpService>,
+    skill_service: Arc<crate::services::SkillService>,
+    config_dir: PathBuf,
+    conversation_repo: Arc<ConversationRepository>,
+    handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
+    delegation_registry: Arc<DelegationRegistry>,
+    delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    log_service: Arc<LogService<DatabaseManager>>,
+    state_service: Arc<StateService<DatabaseManager>>,
+) -> Result<(), String> {
+    // Generate a new conversation ID for this continuation turn
+    let conversation_id = format!(
+        "{}-cont-{}",
+        session_id,
+        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+    );
+
+    // Create a new root execution in the existing session
+    let execution = execution_state::AgentExecution::new_root(session_id, root_agent_id);
+    let execution_id = execution.id.clone();
+    state_service.create_execution(&execution)?;
+
+    // Reactivate session if it was in a terminal state
+    state_service.reactivate_session(session_id)?;
+
+    // Start execution tracking
+    state_service.start_execution(&execution_id)?;
+    let _ = log_service.log_session_start(
+        &execution_id,
+        &conversation_id,
+        root_agent_id,
+        None,
+    );
+
+    // Create execution handle
+    let handle = ExecutionHandle::new(50); // Default max iterations for continuation
+    {
+        let mut handles_guard = handles.write().await;
+        handles_guard.insert(conversation_id.clone(), handle.clone());
+    }
+
+    // Emit agent started event
+    emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id).await;
+
+    // Load agent and provider
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service);
+    let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
+
+    // Load full session history (includes callback messages from subagents)
+    let history: Vec<ChatMessage> = conversation_repo
+        .get_session_root_messages(session_id, 50)
+        .map(|messages| conversation_repo.messages_to_chat_format(&messages))
+        .unwrap_or_default();
+
+    tracing::info!(
+        session_id = %session_id,
+        execution_id = %execution_id,
+        history_count = %history.len(),
+        "Loading session history for continuation"
+    );
+
+    // Get tool settings
+    let settings_service = crate::services::SettingsService::new(config_dir.clone());
+    let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
+
+    // Collect available agents and skills
+    let available_agents = collect_agents_summary(&agent_service).await;
+    let available_skills = collect_skills_summary(&skill_service).await;
+
+    // Build executor
+    let builder = ExecutorBuilder::new(config_dir, tool_settings);
+    let executor = builder
+        .build(
+            &agent,
+            &provider,
+            &conversation_id,
+            available_agents,
+            available_skills,
+            None, // No hook context for continuation
+            &mcp_service,
+        )
+        .await?;
+
+    // The continuation message prompts the agent to process subagent results
+    let continuation_message =
+        "[All delegated tasks have completed. Review the results above and continue your orchestration. \
+         You may respond to the user, delegate to more agents, or take other actions as needed.]";
+
+    // Spawn execution task
+    let session_id_clone = session_id.to_string();
+    let agent_id_clone = root_agent_id.to_string();
+
+    tokio::spawn(async move {
+        let stream_ctx = StreamContext::new(
+            agent_id_clone.clone(),
+            conversation_id.clone(),
+            session_id_clone.clone(),
+            execution_id.clone(),
+            event_bus.clone(),
+            log_service.clone(),
+            state_service.clone(),
+            delegation_tx,
+        );
+
+        let mut response_acc = ResponseAccumulator::new();
+
+        let result = executor
+            .execute_stream(continuation_message, &history, |event| {
+                if handle.is_stop_requested() {
+                    return;
+                }
+
+                handle.increment();
+
+                let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
+
+                if let Some(delta) = response_delta {
+                    response_acc.append(&delta);
+                }
+
+                broadcast_event(stream_ctx.event_bus.clone(), gateway_event);
+            })
+            .await;
+
+        let accumulated_response = response_acc.into_response();
+
+        match result {
+            Ok(()) => {
+                // Save the continuation message and response
+                save_messages(
+                    &conversation_repo,
+                    &execution_id,
+                    continuation_message,
+                    &accumulated_response,
+                );
+
+                complete_execution(
+                    &state_service,
+                    &log_service,
+                    &event_bus,
+                    &execution_id,
+                    &session_id_clone,
+                    &agent_id_clone,
+                    &conversation_id,
+                    Some(accumulated_response),
+                )
+                .await;
+            }
+            Err(e) => {
+                crash_execution(
+                    &state_service,
+                    &log_service,
+                    &event_bus,
+                    &execution_id,
+                    &session_id_clone,
+                    &agent_id_clone,
+                    &conversation_id,
+                    &e.to_string(),
+                    true,
+                )
+                .await;
+            }
+        }
+
+        if handle.is_stop_requested() {
+            stop_execution(
+                &state_service,
+                &log_service,
+                &event_bus,
+                &execution_id,
+                &session_id_clone,
+                &agent_id_clone,
+                &conversation_id,
+                handle.current_iteration(),
+            )
+            .await;
+        }
+    });
+
+    Ok(())
 }

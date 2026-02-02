@@ -221,14 +221,16 @@ mod tests {
 
     #[test]
     fn test_client_message_deserialize() {
-        let json = r#"{"type": "invoke", "conversation_id": "123", "message": "Hello"}"#;
+        let json = r#"{"type": "invoke", "agent_id": "root", "conversation_id": "123", "message": "Hello"}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
             ClientMessage::Invoke {
+                agent_id,
                 conversation_id,
                 message,
                 ..
             } => {
+                assert_eq!(agent_id, "root");
                 assert_eq!(conversation_id, "123");
                 assert_eq!(message, "Hello");
             }
