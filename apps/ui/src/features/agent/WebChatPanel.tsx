@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info } from "lucide-react";
+import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info, RotateCcw, StopCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { getTransport, type StreamEvent, type MessageResponse } from "@/services/transport";
@@ -432,36 +432,10 @@ export function WebChatPanel() {
   const handleSend = async () => {
     if (!input.trim() || isProcessing) return;
 
-    const trimmedInput = input.trim();
-
-    // Handle /end command to end the current session
-    if (trimmedInput === "/end") {
-      await handleEndSession(false);
-      setInput("");
-      // Add a system message to indicate session ended
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: "system",
-          content: "Session ended. Send a message to start a new session.",
-          timestamp: new Date(),
-        },
-      ]);
-      return;
-    }
-
-    // Handle /new command to start a new conversation
-    if (trimmedInput === "/new") {
-      await handleEndSession(true);
-      setInput("");
-      return;
-    }
-
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
-      content: trimmedInput,
+      content: input.trim(),
       timestamp: new Date(),
     };
 
@@ -473,7 +447,6 @@ export function WebChatPanel() {
       const transport = await getTransport();
       // Pass session_id to continue the same session (or undefined for new session)
       const currentSessionId = getSessionId() ?? undefined;
-      console.log("[SESSION_DEBUG] Sending message with session_id:", currentSessionId, "conversation_id:", conversationId);
       await transport.executeAgent(ROOT_AGENT_ID, conversationId, userMessage.content, currentSessionId);
     } catch (error) {
       console.error("Failed to send message:", error);
@@ -548,6 +521,27 @@ export function WebChatPanel() {
               <Loader2 className="w-4 h-4 animate-spin" />
               Processing...
             </div>
+          )}
+          {/* Session controls */}
+          {messages.length > 0 && !isProcessing && (
+            <>
+              <button
+                onClick={() => handleEndSession(false)}
+                className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-red-600 px-2 py-1.5 rounded-lg hover:bg-red-50 transition-colors"
+                title="End current session"
+              >
+                <StopCircle className="w-4 h-4" />
+                End
+              </button>
+              <button
+                onClick={() => handleEndSession(true)}
+                className="flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--primary)] px-2 py-1.5 rounded-lg hover:bg-[var(--accent)] transition-colors"
+                title="Start new conversation"
+              >
+                <RotateCcw className="w-4 h-4" />
+                New
+              </button>
+            </>
           )}
         </div>
       </div>
