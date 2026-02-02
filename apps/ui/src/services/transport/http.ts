@@ -636,8 +636,10 @@ export class HttpTransport implements Transport {
       });
     }
 
-    // Extract conversation_id from event if present
-    const conversationId = event.conversation_id as string | undefined;
+    // Extract conversation_id from event
+    // For most events: conversation_id
+    // For delegation events: parent_conversation_id (so parent UI gets notified)
+    const conversationId = (event.conversation_id ?? event.parent_conversation_id) as string | undefined;
 
     // Notify conversation-specific callbacks
     if (conversationId && this.eventCallbacks.has(conversationId)) {
