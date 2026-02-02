@@ -124,12 +124,17 @@ CREATE TABLE sessions (
 - Runtime: `RuntimeService::end_session()` → `ExecutionRunner::end_session()`
 - Frontend: `handleEndSession()` in `WebChatPanel.tsx`
 
-### 2. UI Event Visibility (MEDIUM PRIORITY)
-- Delegation events sent but not visible in real-time
-- User has to slide chat panel in/out to see updates
-- WebSocket events are delivered but UI doesn't react
+### 2. UI Event Visibility (RESOLVED)
+- Delegation events now update UI in real-time
+- No need to slide panel to see updates
 
-**Root Cause**: React state updates may not be triggering re-renders.
+**Root Cause**: Stale closure - `handleStreamEvent` was captured once when subscription
+was set up, causing delegation events to use old state references.
+
+**Fix**: Use `useCallback` + ref pattern:
+- `handleStreamEventRef` always points to latest handler
+- Subscription calls through the ref, not the stale closure
+- Handler updates on every render via `useEffect`
 
 ### 3. Future: Control Tools
 - `delegation_status` - Query pending/completed delegations
