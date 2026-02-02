@@ -488,6 +488,7 @@ export function WebOpsDashboard() {
     executionId?: string;  // Only set for subagent views
     agentId: string;
     isSubagent: boolean;
+    fromActiveSession: boolean;  // True if opened from active sessions, false if from history
   } | null>(null);
 
   // Derived data - split sessions into active and closed
@@ -598,7 +599,7 @@ export function WebOpsDashboard() {
     }
   };
 
-  const handleOpenChat = useCallback((execution: AgentExecution) => {
+  const handleOpenChat = useCallback((execution: AgentExecution, fromActiveSession: boolean) => {
     const isSubagent = execution.delegation_type !== 'root';
     setSelectedExecution({
       sessionId: execution.session_id,
@@ -606,6 +607,7 @@ export function WebOpsDashboard() {
       executionId: isSubagent ? execution.id : undefined,
       agentId: execution.agent_id,
       isSubagent,
+      fromActiveSession,
     });
   }, []);
 
@@ -789,7 +791,7 @@ export function WebOpsDashboard() {
                       onPause={() => handlePause(session.id)}
                       onResume={() => handleResume(session.id)}
                       onCancel={() => handleCancel(session.id)}
-                      onOpenChat={handleOpenChat}
+                      onOpenChat={(exec) => handleOpenChat(exec, true)}
                       isProcessing={processingSession === session.id}
                       showControls={true}
                     />
@@ -853,7 +855,7 @@ export function WebOpsDashboard() {
                       onToggle={() =>
                         setExpandedSession(expandedSession === session.id ? null : session.id)
                       }
-                      onOpenChat={handleOpenChat}
+                      onOpenChat={(exec) => handleOpenChat(exec, false)}
                       showControls={false}
                     />
                   ))}
@@ -877,6 +879,20 @@ export function WebOpsDashboard() {
             executionId={selectedExecution.executionId}
             agentId={selectedExecution.agentId}
             readOnly={selectedExecution.isSubagent}
+            // Only show New Chat button for active sessions, not session history
+            onNewChat={selectedExecution.fromActiveSession ? async () => {
+              // End the current session and navigate to new chat
+              if (selectedExecution.sessionId) {
+                try {
+                  const transport = await getTransport();
+                  await transport.endSession(selectedExecution.sessionId);
+                } catch (err) {
+                  console.error("Failed to end session:", err);
+                }
+              }
+              handleCloseChat();
+              navigate("/chat?new=1");
+            } : undefined}
           />
         )}
       </ChatSlider>

@@ -16,6 +16,7 @@ import {
   CheckCircle2,
   Info,
   Eye,
+  RotateCcw,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -50,6 +51,8 @@ interface SessionChatViewerProps {
   agentId: string;
   readOnly?: boolean;
   onClose?: () => void;
+  /** Callback when user wants to end current session and start a new chat */
+  onNewChat?: () => void;
 }
 
 // ============================================================================
@@ -62,6 +65,7 @@ export function SessionChatViewer({
   conversationId,
   agentId,
   readOnly = false,
+  onNewChat,
 }: SessionChatViewerProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -353,6 +357,17 @@ export function SessionChatViewer({
         </div>
         <div className="flex items-center gap-2">
           <ConnectionStatus />
+          {/* New Chat button - ends current session and starts fresh */}
+          {!readOnly && !executionId && messages.length > 0 && !isProcessing && onNewChat && (
+            <button
+              onClick={onNewChat}
+              className="flex items-center gap-1.5 text-sm text-muted-foreground hover:text-primary px-2 py-1.5 rounded-lg hover:bg-accent transition-colors"
+              title="End session and start new chat"
+            >
+              <RotateCcw className="w-4 h-4" />
+              New Chat
+            </button>
+          )}
           {isProcessing && (
             <div className="flex items-center gap-2 text-primary text-sm font-medium bg-primary/10 px-3 py-1.5 rounded-lg">
               <Loader2 className="w-4 h-4 animate-spin" />
