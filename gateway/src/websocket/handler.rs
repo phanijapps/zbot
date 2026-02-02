@@ -91,29 +91,63 @@ impl WebSocketHandler {
                                     info!("Event router received: {:?}", event);
                                 }
 
-                                // PHASE 2: Route by session_id instead of conversation_id
-                                // This ensures all events from a session (including subagent events)
-                                // are routed to subscribers of that session.
+                                // PHASE 2: Route by BOTH session_id AND conversation_id
+                                // - session_id: routes to session-based subscribers (future)
+                                // - conversation_id: routes to conversation-based subscribers (current frontend)
+                                // This ensures events reach both subscription types during transition.
                                 let session_id = event.session_id().map(|s| s.to_string());
+                                let conversation_id = event.conversation_id().map(|s| s.to_string());
 
                                 if let Some(server_msg) = gateway_event_to_server_message(event) {
-                                    if let Some(session_id) = session_id {
-                                        // Route by session_id for server-side subscription routing
-                                        let result = router_subscriptions
-                                            .route_event(&session_id, server_msg)
-                                            .await;
+                                    let mut total_sent = 0u64;
 
-                                        // Debug: log routing results
-                                        if result.sent > 0 || session_id.starts_with("sess-") {
+                                    // Route by session_id (for session-based subscriptions)
+                                    if let Some(ref sid) = session_id {
+                                        let result = router_subscriptions
+                                            .route_event(sid, server_msg.clone())
+                                            .await;
+                                        total_sent += result.sent;
+
+                                        if result.sent > 0 {
                                             debug!(
-                                                session_id = %session_id,
+                                                session_id = %sid,
                                                 sent = result.sent,
-                                                dropped = result.dropped,
                                                 "Routed event by session_id"
                                             );
                                         }
-                                    } else {
-                                        // Global events (like Pong) - broadcast to all
+                                    }
+
+                                    // ALSO route by conversation_id (for current frontend compatibility)
+                                    // This allows clients subscribed by conversation_id to receive events
+                                    if let Some(ref cid) = conversation_id {
+                                        // Avoid double-send if session_id == conversation_id
+                                        if session_id.as_ref() != Some(cid) {
+                                            let result = router_subscriptions
+                                                .route_event(cid, server_msg.clone())
+                                                .await;
+                                            total_sent += result.sent;
+
+                                            if result.sent > 0 {
+                                                debug!(
+                                                    conversation_id = %cid,
+                                                    sent = result.sent,
+                                                    "Routed event by conversation_id"
+                                                );
+                                            }
+                                        }
+                                    }
+
+                                    // If no subscribers found by either key, log for debugging
+                                    if total_sent == 0 && (session_id.is_some() || conversation_id.is_some()) {
+                                        debug!(
+                                            session_id = ?session_id,
+                                            conversation_id = ?conversation_id,
+                                            "No subscribers found for event"
+                                        );
+                                    }
+
+                                    // Global events (like Pong) with no identifiers - broadcast to all
+                                    if session_id.is_none() && conversation_id.is_none() {
                                         router_subscriptions.broadcast_global(server_msg).await;
                                     }
                                 }
