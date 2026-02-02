@@ -202,8 +202,10 @@ export function SessionChatViewer({
   const eventScope: SubscriptionScope = executionId ? `execution:${executionId}` : "session";
 
   // Subscribe to events for this session with appropriate scope
+  // Note: We subscribe even in readOnly mode to receive live streaming events
+  // readOnly only prevents sending messages, not receiving events
   useEffect(() => {
-    if (!subscriptionId || readOnly) return;
+    if (!subscriptionId) return;
 
     let unsubscribe: (() => void) | null = null;
     let cancelled = false;
@@ -231,7 +233,7 @@ export function SessionChatViewer({
         unsubscribe();
       }
     };
-  }, [subscriptionId, readOnly, handleStreamEvent, eventScope]);
+  }, [subscriptionId, handleStreamEvent, eventScope]);
 
   // Load conversation history
   useEffect(() => {

@@ -358,6 +358,18 @@ impl SubscriptionManager {
             .unwrap_or(false);
 
         if already_subscribed {
+            // Update scope if it changed (e.g., switching from Session to Execution scope)
+            let entry_key = (conversation_id.clone(), client_id.clone());
+            if let Some(entry) = state.subscription_entries.get_mut(&entry_key) {
+                if entry.scope != scope {
+                    debug!(
+                        "Updating subscription scope for {} from {:?} to {:?}",
+                        conversation_id, entry.scope, scope
+                    );
+                    entry.scope = scope;
+                    entry.scope_state = scope_state;
+                }
+            }
             let current_seq = *state.sequence_numbers.get(&conversation_id).unwrap_or(&0);
             return Ok(SubscribeResult::AlreadySubscribed { current_sequence: current_seq });
         }
@@ -1341,5 +1353,68 @@ mod tests {
         assert_eq!(result.sent, 1);
         let received = rx.recv().await.unwrap();
         assert!(matches!(received, ServerMessage::DelegationStarted { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_scope_update_on_resubscribe() {
+        // Tests that re-subscribing with a different scope updates the filter
+        // This is critical for: Session scope -> Execution scope transition
+        // (e.g., viewing subagent detail from main chat view)
+        let manager = SubscriptionManager::new();
+        let (tx, mut rx) = create_test_sender();
+
+        manager.connect("client-1".to_string(), tx).await;
+
+        // First subscribe with Session scope
+        let mut root_ids = HashSet::new();
+        root_ids.insert("exec-root".to_string());
+        let scope_state = SessionScopeState::new(root_ids);
+
+        manager
+            .subscribe_with_scope(
+                &"client-1".to_string(),
+                "sess-1".to_string(),
+                SubscriptionScope::Session,
+                Some(scope_state),
+            )
+            .await
+            .unwrap();
+
+        // Verify Session scope filters out subagent events
+        let subagent_msg = ServerMessage::Token {
+            session_id: "sess-1".to_string(),
+            execution_id: "exec-subagent".to_string(),
+            conversation_id: None,
+            delta: "subagent output".to_string(),
+            seq: None,
+        };
+        let metadata = EventMetadata::with_execution("exec-subagent");
+        let result = manager.route_event_scoped("sess-1", subagent_msg.clone(), &metadata).await;
+        assert_eq!(result.sent, 0, "Session scope should filter subagent events");
+
+        // Now re-subscribe with Execution scope targeting the subagent
+        let result = manager
+            .subscribe_with_scope(
+                &"client-1".to_string(),
+                "sess-1".to_string(),
+                SubscriptionScope::Execution("exec-subagent".to_string()),
+                None,
+            )
+            .await;
+
+        // Should return AlreadySubscribed (but scope was updated internally)
+        assert!(matches!(result, Ok(SubscribeResult::AlreadySubscribed { .. })));
+
+        // Verify scope was updated - subagent events should now pass
+        let result = manager.route_event_scoped("sess-1", subagent_msg, &metadata).await;
+        assert_eq!(result.sent, 1, "Execution scope should allow subagent events");
+
+        // Verify we received the event
+        let received = rx.recv().await.unwrap();
+        if let ServerMessage::Token { delta, .. } = received {
+            assert_eq!(delta, "subagent output");
+        } else {
+            panic!("Expected Token message");
+        }
     }
 }
