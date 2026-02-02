@@ -3,7 +3,7 @@
 // Chat interface for the web dashboard (uses transport layer instead of Tauri)
 // ============================================================================
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -118,6 +118,9 @@ export function WebChatPanel() {
     loadHistory();
   }, [conversationId]);
 
+  // Keep a ref to the latest event handler to avoid stale closures
+  const handleStreamEventRef = useRef<(event: StreamEvent) => void>(() => {});
+
   // Subscribe to events when conversation changes
   useEffect(() => {
     if (!conversationId) return;
@@ -126,7 +129,10 @@ export function WebChatPanel() {
 
     const subscribe = async () => {
       const transport = await getTransport();
-      unsubscribe = transport.subscribe(conversationId, handleStreamEvent);
+      // Use ref to always call the latest handler
+      unsubscribe = transport.subscribe(conversationId, (event) => {
+        handleStreamEventRef.current(event);
+      });
     };
 
     subscribe();
@@ -143,7 +149,8 @@ export function WebChatPanel() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
-  const handleStreamEvent = (event: StreamEvent) => {
+  // Event handler for stream events
+  const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case "agent_started":
         console.log("[SESSION_DEBUG] agent_started event received:", {
@@ -397,7 +404,12 @@ export function WebChatPanel() {
         console.log("[SESSION_DEBUG] Session ended confirmation received");
         break;
     }
-  };
+  }, []); // State setters are stable, no deps needed
+
+  // Keep the ref updated with the latest handler
+  useEffect(() => {
+    handleStreamEventRef.current = handleStreamEvent;
+  }, [handleStreamEvent]);
 
   // End the current session and optionally start a new one
   const handleEndSession = async (startNew: boolean) => {
