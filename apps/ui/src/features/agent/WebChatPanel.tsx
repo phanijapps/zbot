@@ -118,38 +118,7 @@ export function WebChatPanel() {
     loadHistory();
   }, [conversationId]);
 
-  // Keep a ref to the latest event handler to avoid stale closures
-  const handleStreamEventRef = useRef<(event: StreamEvent) => void>(() => {});
-
-  // Subscribe to events when conversation changes
-  useEffect(() => {
-    if (!conversationId) return;
-
-    let unsubscribe: (() => void) | null = null;
-
-    const subscribe = async () => {
-      const transport = await getTransport();
-      // Use ref to always call the latest handler
-      unsubscribe = transport.subscribe(conversationId, (event) => {
-        handleStreamEventRef.current(event);
-      });
-    };
-
-    subscribe();
-
-    return () => {
-      if (unsubscribe) {
-        unsubscribe();
-      }
-    };
-  }, [conversationId]);
-
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages]);
-
-  // Event handler for stream events
+  // Event handler for stream events - defined before subscription so it's in scope
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case "agent_started":
@@ -406,10 +375,36 @@ export function WebChatPanel() {
     }
   }, []); // State setters are stable, no deps needed
 
-  // Keep the ref updated with the latest handler
+  // Subscribe to events when conversation changes
   useEffect(() => {
-    handleStreamEventRef.current = handleStreamEvent;
-  }, [handleStreamEvent]);
+    if (!conversationId) return;
+
+    let unsubscribe: (() => void) | null = null;
+    let cancelled = false;  // Track if cleanup ran before subscribe completed
+
+    const subscribe = async () => {
+      const transport = await getTransport();
+
+      // If cleanup already ran while we were awaiting, don't subscribe
+      if (cancelled) return;
+
+      unsubscribe = transport.subscribe(conversationId, handleStreamEvent);
+    };
+
+    subscribe();
+
+    return () => {
+      cancelled = true;  // Prevent late subscription
+      if (unsubscribe) {
+        unsubscribe();
+      }
+    };
+  }, [conversationId, handleStreamEvent]);
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
   // End the current session and optionally start a new one
   const handleEndSession = async (startNew: boolean) => {

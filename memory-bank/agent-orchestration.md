@@ -131,10 +131,11 @@ CREATE TABLE sessions (
 **Root Cause**: Stale closure - `handleStreamEvent` was captured once when subscription
 was set up, causing delegation events to use old state references.
 
-**Fix**: Use `useCallback` + ref pattern:
-- `handleStreamEventRef` always points to latest handler
-- Subscription calls through the ref, not the stale closure
-- Handler updates on every render via `useEffect`
+**Fix**: Use `useCallback` with empty deps:
+- `handleStreamEvent` defined with `useCallback(fn, [])` - stable reference
+- State setters (setMessages, setIsProcessing, etc.) are inherently stable
+- Subscription effect depends on `[conversationId, handleStreamEvent]`
+- No ref pattern needed - simpler and avoids double-event issues
 
 ### 3. Future: Control Tools
 - `delegation_status` - Query pending/completed delegations
