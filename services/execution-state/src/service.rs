@@ -380,13 +380,50 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     // =========================================================================
-    // CRASH RECOVERY
+    // SHUTDOWN & CRASH RECOVERY
     // =========================================================================
+
+    /// Mark all running sessions and their executions as paused (graceful shutdown).
+    ///
+    /// This should be called during graceful server shutdown to pause active sessions
+    /// so they can be resumed when the server restarts.
+    pub fn mark_running_as_paused(&self) -> Result<u64, String> {
+        let sessions = self.repo.list_sessions(&SessionFilter {
+            status: Some(SessionStatus::Running),
+            ..Default::default()
+        })?;
+
+        let count = sessions.len() as u64;
+
+        for session in &sessions {
+            // First, mark all running/queued executions in this session as paused
+            let executions = self.repo.list_executions(&ExecutionFilter {
+                session_id: Some(session.id.clone()),
+                ..Default::default()
+            })?;
+
+            for exec in executions {
+                if matches!(exec.status, ExecutionStatus::Running | ExecutionStatus::Queued) {
+                    if let Err(e) = self.repo.update_execution_status(&exec.id, ExecutionStatus::Paused) {
+                        tracing::warn!("Failed to pause execution {} during shutdown: {}", exec.id, e);
+                    }
+                }
+            }
+
+            // Then mark the session as paused
+            if let Err(e) = self.repo.update_session_status(&session.id, SessionStatus::Paused) {
+                tracing::warn!("Failed to pause session {} during shutdown: {}", session.id, e);
+            }
+        }
+
+        Ok(count)
+    }
 
     /// Mark all running sessions and their executions as crashed (on startup).
     ///
     /// This is called during server startup to clean up any sessions/executions
-    /// that were running when the server previously crashed or was stopped.
+    /// that were still in RUNNING state - these must have been interrupted by
+    /// an unexpected crash (graceful shutdown would have paused them).
     pub fn mark_running_as_crashed(&self) -> Result<u64, String> {
         let sessions = self.repo.list_sessions(&SessionFilter {
             status: Some(SessionStatus::Running),

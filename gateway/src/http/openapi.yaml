@@ -1,0 +1,1418 @@
+openapi: 3.0.3
+info:
+  title: AgentZero Gateway API
+  description: |
+    RESTful API for the AgentZero AI agent runtime.
+
+    ## Overview
+    AgentZero provides a multi-agent orchestration platform with support for:
+    - Agent configuration and management
+    - Session-based conversations with context preservation
+    - Real-time event streaming via SSE
+    - MCP (Model Context Protocol) server integration
+    - Webhook integrations for external platforms
+
+    ## Authentication
+    Currently, the API does not require authentication. This will be added in a future release.
+
+    ## Base URLs
+    - HTTP API: `http://localhost:18791`
+    - WebSocket: `ws://localhost:18790`
+  version: 0.1.0
+  contact:
+    name: AgentZero
+  license:
+    name: MIT
+
+servers:
+  - url: http://localhost:18791
+    description: Local development server
+
+tags:
+  - name: Health
+    description: Health check and status endpoints
+  - name: Gateway
+    description: Session submission and control for agent execution
+  - name: Agents
+    description: Agent configuration CRUD operations
+  - name: Sessions
+    description: Session and execution state management
+  - name: Conversations
+    description: Conversation and message history
+  - name: Skills
+    description: Skill configuration CRUD operations
+  - name: Providers
+    description: LLM provider configuration
+  - name: MCP Servers
+    description: Model Context Protocol server management
+  - name: Tools
+    description: Available tools and settings
+  - name: Events
+    description: Server-Sent Events for real-time updates
+  - name: Webhooks
+    description: Webhook endpoints for external integrations
+
+paths:
+  # ============================================================================
+  # Health Endpoints
+  # ============================================================================
+  /api/health:
+    get:
+      tags: [Health]
+      summary: Health check
+      description: Basic health check endpoint
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Server is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /api/status:
+    get:
+      tags: [Health]
+      summary: Detailed status
+      description: Detailed server status including agent count
+      operationId: getStatus
+      responses:
+        '200':
+          description: Server status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  # ============================================================================
+  # Gateway Bus Endpoints (Session Control)
+  # ============================================================================
+  /api/gateway/submit:
+    post:
+      tags: [Gateway]
+      summary: Submit a session
+      description: |
+        Submit a new session or continue an existing one.
+        This is the main entry point for executing agent requests.
+      operationId: submitSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SessionRequest'
+      responses:
+        '200':
+          description: Session submitted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionHandle'
+        '400':
+          description: Invalid request (agent or provider error)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Internal server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/gateway/status/{session_id}:
+    get:
+      tags: [Gateway]
+      summary: Get session status
+      description: Get the current status of a session
+      operationId: getSessionStatus
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: Session ID (e.g., sess-abc123)
+      responses:
+        '200':
+          description: Session status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionStatusResponse'
+        '404':
+          description: Session not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /api/gateway/cancel/{session_id}:
+    post:
+      tags: [Gateway]
+      summary: Cancel a session
+      description: Cancel a running session
+      operationId: cancelSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Session cancelled
+        '404':
+          description: Session not found
+        '409':
+          description: Invalid state (session not running)
+
+  /api/gateway/pause/{session_id}:
+    post:
+      tags: [Gateway]
+      summary: Pause a session
+      description: Pause a running session
+      operationId: pauseSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Session paused
+        '404':
+          description: Session not found
+        '409':
+          description: Invalid state (session not running)
+
+  /api/gateway/resume/{session_id}:
+    post:
+      tags: [Gateway]
+      summary: Resume a session
+      description: Resume a paused session
+      operationId: resumeSession
+      parameters:
+        - name: session_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Session resumed
+        '404':
+          description: Session not found
+        '409':
+          description: Invalid state (session not paused)
+
+  # ============================================================================
+  # Agent Endpoints
+  # ============================================================================
+  /api/agents:
+    get:
+      tags: [Agents]
+      summary: List all agents
+      description: Get a list of all configured agents
+      operationId: listAgents
+      responses:
+        '200':
+          description: List of agents
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Agent'
+    post:
+      tags: [Agents]
+      summary: Create an agent
+      description: Create a new agent configuration
+      operationId: createAgent
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateAgentRequest'
+      responses:
+        '200':
+          description: Agent created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '500':
+          description: Creation failed
+
+  /api/agents/{id}:
+    get:
+      tags: [Agents]
+      summary: Get an agent
+      description: Get an agent by ID
+      operationId: getAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Agent details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '404':
+          description: Agent not found
+    put:
+      tags: [Agents]
+      summary: Update an agent
+      description: Update an existing agent configuration
+      operationId: updateAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateAgentRequest'
+      responses:
+        '200':
+          description: Agent updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Agent'
+        '404':
+          description: Agent not found
+    delete:
+      tags: [Agents]
+      summary: Delete an agent
+      description: Delete an agent configuration
+      operationId: deleteAgent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Agent deleted
+        '404':
+          description: Agent not found
+
+  # ============================================================================
+  # Session/Execution State Endpoints
+  # ============================================================================
+  /api/executions/sessions:
+    get:
+      tags: [Sessions]
+      summary: List sessions
+      description: List all sessions with their executions
+      operationId: listSessions
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [queued, running, paused, completed, crashed]
+        - name: source
+          in: query
+          schema:
+            type: string
+            enum: [web, cli, api, cron, plugin]
+      responses:
+        '200':
+          description: List of sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/SessionWithExecutions'
+
+  /api/executions/sessions/{id}:
+    get:
+      tags: [Sessions]
+      summary: Get a session
+      description: Get session details by ID
+      operationId: getSessionById
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SessionWithExecutions'
+        '404':
+          description: Session not found
+
+  /api/executions/sessions/{id}/end:
+    post:
+      tags: [Sessions]
+      summary: End a session
+      description: Mark a session as completed
+      operationId: endSession
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Session ended
+        '404':
+          description: Session not found
+
+  /api/executions/sessions/{id}/messages:
+    get:
+      tags: [Sessions]
+      summary: Get session messages
+      description: Get all messages for a session
+      operationId: getSessionMessages
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: scope
+          in: query
+          schema:
+            type: string
+            enum: [all, root]
+            default: all
+          description: Filter messages by scope (all or root executions only)
+      responses:
+        '200':
+          description: List of messages
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Message'
+
+  /api/executions/stats:
+    get:
+      tags: [Sessions]
+      summary: Get dashboard stats
+      description: Get aggregated statistics for the dashboard
+      operationId: getDashboardStats
+      responses:
+        '200':
+          description: Dashboard statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardStats'
+
+  # ============================================================================
+  # Skill Endpoints
+  # ============================================================================
+  /api/skills:
+    get:
+      tags: [Skills]
+      summary: List all skills
+      operationId: listSkills
+      responses:
+        '200':
+          description: List of skills
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Skill'
+    post:
+      tags: [Skills]
+      summary: Create a skill
+      operationId: createSkill
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateSkillRequest'
+      responses:
+        '200':
+          description: Skill created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+
+  /api/skills/{id}:
+    get:
+      tags: [Skills]
+      summary: Get a skill
+      operationId: getSkill
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Skill details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Skill'
+        '404':
+          description: Skill not found
+    put:
+      tags: [Skills]
+      summary: Update a skill
+      operationId: updateSkill
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSkillRequest'
+      responses:
+        '200':
+          description: Skill updated
+        '404':
+          description: Skill not found
+    delete:
+      tags: [Skills]
+      summary: Delete a skill
+      operationId: deleteSkill
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Skill deleted
+        '404':
+          description: Skill not found
+
+  # ============================================================================
+  # Provider Endpoints
+  # ============================================================================
+  /api/providers:
+    get:
+      tags: [Providers]
+      summary: List all providers
+      operationId: listProviders
+      responses:
+        '200':
+          description: List of providers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Provider'
+    post:
+      tags: [Providers]
+      summary: Create a provider
+      operationId: createProvider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProviderRequest'
+      responses:
+        '200':
+          description: Provider created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+
+  /api/providers/{id}:
+    get:
+      tags: [Providers]
+      summary: Get a provider
+      operationId: getProvider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Provider details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Provider'
+        '404':
+          description: Provider not found
+    put:
+      tags: [Providers]
+      summary: Update a provider
+      operationId: updateProvider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProviderRequest'
+      responses:
+        '200':
+          description: Provider updated
+        '404':
+          description: Provider not found
+    delete:
+      tags: [Providers]
+      summary: Delete a provider
+      operationId: deleteProvider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Provider deleted
+        '404':
+          description: Provider not found
+
+  /api/providers/{id}/test:
+    post:
+      tags: [Providers]
+      summary: Test a provider
+      description: Test connection to a configured provider
+      operationId: testProvider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProviderTestResult'
+
+  /api/providers/{id}/default:
+    post:
+      tags: [Providers]
+      summary: Set default provider
+      description: Set a provider as the default
+      operationId: setDefaultProvider
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Provider set as default
+        '404':
+          description: Provider not found
+
+  # ============================================================================
+  # MCP Server Endpoints
+  # ============================================================================
+  /api/mcps:
+    get:
+      tags: [MCP Servers]
+      summary: List MCP servers
+      operationId: listMcpServers
+      responses:
+        '200':
+          description: List of MCP servers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/McpServer'
+    post:
+      tags: [MCP Servers]
+      summary: Create MCP server
+      operationId: createMcpServer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMcpRequest'
+      responses:
+        '200':
+          description: MCP server created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServer'
+
+  /api/mcps/{id}:
+    get:
+      tags: [MCP Servers]
+      summary: Get MCP server
+      operationId: getMcpServer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: MCP server details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpServer'
+        '404':
+          description: MCP server not found
+    put:
+      tags: [MCP Servers]
+      summary: Update MCP server
+      operationId: updateMcpServer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateMcpRequest'
+      responses:
+        '200':
+          description: MCP server updated
+        '404':
+          description: MCP server not found
+    delete:
+      tags: [MCP Servers]
+      summary: Delete MCP server
+      operationId: deleteMcpServer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: MCP server deleted
+        '404':
+          description: MCP server not found
+
+  /api/mcps/{id}/test:
+    post:
+      tags: [MCP Servers]
+      summary: Test MCP server
+      description: Test connection to an MCP server
+      operationId: testMcpServer
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test result with available tools
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/McpTestResult'
+
+  # ============================================================================
+  # Tool Endpoints
+  # ============================================================================
+  /api/tools:
+    get:
+      tags: [Tools]
+      summary: List available tools
+      operationId: listTools
+      responses:
+        '200':
+          description: List of tools
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Tool'
+
+  /api/settings/tools:
+    get:
+      tags: [Tools]
+      summary: Get tool settings
+      operationId: getToolSettings
+      responses:
+        '200':
+          description: Tool settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ToolSettings'
+    put:
+      tags: [Tools]
+      summary: Update tool settings
+      operationId: updateToolSettings
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ToolSettings'
+      responses:
+        '200':
+          description: Settings updated
+
+  # ============================================================================
+  # Event Streaming (SSE)
+  # ============================================================================
+  /api/events:
+    get:
+      tags: [Events]
+      summary: Stream all events
+      description: Server-Sent Events stream for all gateway events (for debugging)
+      operationId: streamAllEvents
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/GatewayEvent'
+
+  /api/events/{conversation_id}:
+    get:
+      tags: [Events]
+      summary: Stream conversation events
+      description: Server-Sent Events stream for a specific conversation
+      operationId: streamConversationEvents
+      parameters:
+        - name: conversation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: SSE event stream
+          content:
+            text/event-stream:
+              schema:
+                $ref: '#/components/schemas/GatewayEvent'
+
+  # ============================================================================
+  # Webhook Endpoints
+  # ============================================================================
+  /api/webhooks/{hook_type}/{hook_id}:
+    post:
+      tags: [Webhooks]
+      summary: Handle webhook
+      description: Generic webhook handler for external integrations
+      operationId: handleWebhook
+      parameters:
+        - name: hook_type
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: hook_id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/WebhookPayload'
+      responses:
+        '200':
+          description: Webhook processed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/WebhookResponse'
+
+components:
+  schemas:
+    # ============================================================================
+    # Health Schemas
+    # ============================================================================
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        version:
+          type: string
+          example: 0.1.0
+
+    StatusResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        version:
+          type: string
+        agents:
+          type: integer
+
+    # ============================================================================
+    # Gateway Schemas
+    # ============================================================================
+    SessionRequest:
+      type: object
+      required:
+        - agent_id
+        - message
+      properties:
+        agent_id:
+          type: string
+          description: ID of the agent to use
+          example: root
+        message:
+          type: string
+          description: User message to process
+          example: Hello, how can you help me?
+        source:
+          type: string
+          enum: [web, cli, api, cron, plugin]
+          default: web
+          description: Source of the request
+        session_id:
+          type: string
+          nullable: true
+          description: Existing session ID to continue
+        priority:
+          type: integer
+          nullable: true
+          description: Request priority (higher = more urgent)
+        external_ref:
+          type: string
+          nullable: true
+          description: External reference for tracking
+        metadata:
+          type: object
+          additionalProperties: true
+          description: Custom metadata
+
+    SessionHandle:
+      type: object
+      properties:
+        session_id:
+          type: string
+          example: sess-abc123
+        execution_id:
+          type: string
+          example: exec-def456
+        conversation_id:
+          type: string
+          example: web-ghi789
+
+    SessionStatusResponse:
+      type: object
+      properties:
+        session_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, paused, completed, crashed]
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+        code:
+          type: string
+          enum: [SESSION_NOT_FOUND, EXECUTION_NOT_FOUND, AGENT_ERROR, PROVIDER_ERROR, INVALID_STATE, INTERNAL_ERROR]
+
+    # ============================================================================
+    # Agent Schemas
+    # ============================================================================
+    Agent:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        providerId:
+          type: string
+        model:
+          type: string
+        temperature:
+          type: number
+          format: float
+        maxTokens:
+          type: integer
+        thinkingEnabled:
+          type: boolean
+        voiceRecordingEnabled:
+          type: boolean
+        instructions:
+          type: string
+        mcps:
+          type: array
+          items:
+            type: string
+        skills:
+          type: array
+          items:
+            type: string
+        middleware:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+          format: date-time
+
+    CreateAgentRequest:
+      type: object
+      required:
+        - name
+        - providerId
+        - model
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        providerId:
+          type: string
+        model:
+          type: string
+        temperature:
+          type: number
+          default: 0.7
+        maxTokens:
+          type: integer
+          default: 2000
+        instructions:
+          type: string
+        mcps:
+          type: array
+          items:
+            type: string
+        skills:
+          type: array
+          items:
+            type: string
+
+    UpdateAgentRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        displayName:
+          type: string
+        description:
+          type: string
+        providerId:
+          type: string
+        model:
+          type: string
+        temperature:
+          type: number
+        maxTokens:
+          type: integer
+        thinkingEnabled:
+          type: boolean
+        voiceRecordingEnabled:
+          type: boolean
+        instructions:
+          type: string
+        mcps:
+          type: array
+          items:
+            type: string
+        skills:
+          type: array
+          items:
+            type: string
+        middleware:
+          type: string
+
+    # ============================================================================
+    # Session Schemas
+    # ============================================================================
+    SessionWithExecutions:
+      type: object
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, paused, completed, crashed]
+        source:
+          type: string
+          enum: [web, cli, api, cron, plugin]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        executions:
+          type: array
+          items:
+            $ref: '#/components/schemas/Execution'
+
+    Execution:
+      type: object
+      properties:
+        id:
+          type: string
+        session_id:
+          type: string
+        agent_id:
+          type: string
+        status:
+          type: string
+          enum: [queued, running, paused, completed, crashed, cancelled]
+        delegation_type:
+          type: string
+          enum: [root, sequential, parallel]
+        parent_execution_id:
+          type: string
+          nullable: true
+        tokens_in:
+          type: integer
+        tokens_out:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    Message:
+      type: object
+      properties:
+        id:
+          type: string
+        execution_id:
+          type: string
+        role:
+          type: string
+          enum: [user, assistant, system, tool]
+        content:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    DashboardStats:
+      type: object
+      properties:
+        sessions_total:
+          type: integer
+        sessions_running:
+          type: integer
+        sessions_paused:
+          type: integer
+        sessions_completed:
+          type: integer
+        sessions_crashed:
+          type: integer
+        executions_total:
+          type: integer
+        tokens_total:
+          type: integer
+
+    # ============================================================================
+    # Skill Schemas
+    # ============================================================================
+    Skill:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        instructions:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    CreateSkillRequest:
+      type: object
+      required:
+        - name
+        - instructions
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        instructions:
+          type: string
+
+    UpdateSkillRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        category:
+          type: string
+        instructions:
+          type: string
+
+    # ============================================================================
+    # Provider Schemas
+    # ============================================================================
+    Provider:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        provider_type:
+          type: string
+          enum: [anthropic, openai, google, ollama, custom]
+        base_url:
+          type: string
+          nullable: true
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    CreateProviderRequest:
+      type: object
+      required:
+        - name
+        - provider_type
+        - api_key
+      properties:
+        name:
+          type: string
+        provider_type:
+          type: string
+          enum: [anthropic, openai, google, ollama, custom]
+        api_key:
+          type: string
+        base_url:
+          type: string
+
+    UpdateProviderRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        api_key:
+          type: string
+        base_url:
+          type: string
+
+    ProviderTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        models:
+          type: array
+          items:
+            type: string
+
+    # ============================================================================
+    # MCP Server Schemas
+    # ============================================================================
+    McpServer:
+      type: object
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        server_type:
+          type: string
+          enum: [stdio, http, sse, streamable-http]
+        config:
+          type: object
+        enabled:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+
+    CreateMcpRequest:
+      type: object
+      required:
+        - name
+        - server_type
+      properties:
+        name:
+          type: string
+        server_type:
+          type: string
+          enum: [stdio, http, sse, streamable-http]
+        command:
+          type: string
+          description: For stdio type
+        args:
+          type: array
+          items:
+            type: string
+        url:
+          type: string
+          description: For http/sse types
+        env:
+          type: object
+          additionalProperties:
+            type: string
+
+    McpTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        tools:
+          type: array
+          items:
+            type: string
+
+    # ============================================================================
+    # Tool Schemas
+    # ============================================================================
+    Tool:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        parameters:
+          type: object
+        risk_level:
+          type: string
+          enum: [low, medium, high]
+
+    ToolSettings:
+      type: object
+      properties:
+        grep_enabled:
+          type: boolean
+        glob_enabled:
+          type: boolean
+        python_enabled:
+          type: boolean
+        web_fetch_enabled:
+          type: boolean
+        knowledge_graph_enabled:
+          type: boolean
+        offload_threshold:
+          type: integer
+
+    # ============================================================================
+    # Event Schemas
+    # ============================================================================
+    GatewayEvent:
+      type: object
+      description: |
+        Server-Sent Event types:
+        - token: Streaming token
+        - thinking: Agent thinking content
+        - tool_call: Tool invocation
+        - tool_result: Tool result
+        - agent_started: Agent began processing
+        - agent_completed: Agent finished
+        - delegation_started: Subagent spawned
+        - delegation_completed: Subagent finished
+        - error: Error occurred
+      properties:
+        type:
+          type: string
+        data:
+          type: object
+
+    # ============================================================================
+    # Webhook Schemas
+    # ============================================================================
+    WebhookPayload:
+      type: object
+      properties:
+        source_id:
+          type: string
+        channel_id:
+          type: string
+        message:
+          type: string
+        agent_id:
+          type: string
+        metadata:
+          type: object
+
+    WebhookResponse:
+      type: object
+      properties:
+        status:
+          type: string
+        conversation_id:
+          type: string
+        error:
+          type: string
+          nullable: true

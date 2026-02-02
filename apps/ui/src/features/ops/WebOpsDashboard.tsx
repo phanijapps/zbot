@@ -26,6 +26,7 @@ import {
   Loader2,
   ChevronDown,
   ChevronRight,
+  ChevronLeft,
   Bot,
   History,
   XCircle,
@@ -482,12 +483,18 @@ export function WebOpsDashboard() {
   const [sourceFilter, setSourceFilter] = useState<TriggerSource | "all">("all");
   const [autoRefresh, setAutoRefresh] = useState(true);
 
+  // Pagination state
+  const SESSIONS_PER_PAGE = 5;
+  const [activeSessionPage, setActiveSessionPage] = useState(0);
+  const [historySessionPage, setHistorySessionPage] = useState(0);
+
   // Chat slider state
   const [selectedExecution, setSelectedExecution] = useState<{
     sessionId: string;
     executionId?: string;  // Only set for subagent views
     agentId: string;
     isSubagent: boolean;
+    fromActiveSession: boolean;  // True if opened from active sessions, false if from history
   } | null>(null);
 
   // Derived data - split sessions into active and closed
@@ -512,6 +519,29 @@ export function WebOpsDashboard() {
       ? closedSessions
       : closedSessions.filter((s) => s.status === historyFilter)
   );
+
+  // Pagination calculations
+  const activeTotalPages = Math.ceil(filteredActiveSessions.length / SESSIONS_PER_PAGE);
+  const historyTotalPages = Math.ceil(filteredClosedSessions.length / SESSIONS_PER_PAGE);
+
+  const paginatedActiveSessions = filteredActiveSessions.slice(
+    activeSessionPage * SESSIONS_PER_PAGE,
+    (activeSessionPage + 1) * SESSIONS_PER_PAGE
+  );
+
+  const paginatedHistorySessions = filteredClosedSessions.slice(
+    historySessionPage * SESSIONS_PER_PAGE,
+    (historySessionPage + 1) * SESSIONS_PER_PAGE
+  );
+
+  // Reset pagination when filters change
+  useEffect(() => {
+    setActiveSessionPage(0);
+  }, [activeFilter, sourceFilter]);
+
+  useEffect(() => {
+    setHistorySessionPage(0);
+  }, [historyFilter, sourceFilter]);
 
   // Load sessions and stats using V2 API
   const loadData = useCallback(async () => {
@@ -598,7 +628,7 @@ export function WebOpsDashboard() {
     }
   };
 
-  const handleOpenChat = useCallback((execution: AgentExecution) => {
+  const handleOpenChat = useCallback((execution: AgentExecution, fromActiveSession: boolean) => {
     const isSubagent = execution.delegation_type !== 'root';
     setSelectedExecution({
       sessionId: execution.session_id,
@@ -606,6 +636,7 @@ export function WebOpsDashboard() {
       executionId: isSubagent ? execution.id : undefined,
       agentId: execution.agent_id,
       isSubagent,
+      fromActiveSession,
     });
   }, []);
 
@@ -674,7 +705,7 @@ export function WebOpsDashboard() {
             </button>
             <button
               className="btn btn--primary btn--md"
-              onClick={() => navigate("/chat")}
+              onClick={() => navigate("/chat?new=1")}
             >
               <Plus size={16} />
               <span>New Chat</span>
@@ -778,7 +809,7 @@ export function WebOpsDashboard() {
                 </div>
               ) : (
                 <>
-                  {filteredActiveSessions.map((session) => (
+                  {paginatedActiveSessions.map((session) => (
                     <SessionCard
                       key={session.id}
                       session={session}
@@ -789,7 +820,7 @@ export function WebOpsDashboard() {
                       onPause={() => handlePause(session.id)}
                       onResume={() => handleResume(session.id)}
                       onCancel={() => handleCancel(session.id)}
-                      onOpenChat={handleOpenChat}
+                      onOpenChat={(exec) => handleOpenChat(exec, true)}
                       isProcessing={processingSession === session.id}
                       showControls={true}
                     />
@@ -797,6 +828,34 @@ export function WebOpsDashboard() {
                 </>
               )}
             </div>
+
+            {/* Pagination */}
+            {activeTotalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-border px-4 py-2">
+                <span className="text-xs text-muted-foreground">
+                  {activeSessionPage * SESSIONS_PER_PAGE + 1}-{Math.min((activeSessionPage + 1) * SESSIONS_PER_PAGE, filteredActiveSessions.length)} of {filteredActiveSessions.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="btn btn--ghost btn--sm p-1"
+                    onClick={() => setActiveSessionPage(p => Math.max(0, p - 1))}
+                    disabled={activeSessionPage === 0}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="text-xs text-muted-foreground px-2">
+                    {activeSessionPage + 1} / {activeTotalPages}
+                  </span>
+                  <button
+                    className="btn btn--ghost btn--sm p-1"
+                    onClick={() => setActiveSessionPage(p => Math.min(activeTotalPages - 1, p + 1))}
+                    disabled={activeSessionPage >= activeTotalPages - 1}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Session History */}
@@ -845,7 +904,7 @@ export function WebOpsDashboard() {
                 </div>
               ) : (
                 <>
-                  {filteredClosedSessions.slice(0, 50).map((session) => (
+                  {paginatedHistorySessions.map((session) => (
                     <SessionCard
                       key={session.id}
                       session={session}
@@ -853,18 +912,41 @@ export function WebOpsDashboard() {
                       onToggle={() =>
                         setExpandedSession(expandedSession === session.id ? null : session.id)
                       }
-                      onOpenChat={handleOpenChat}
+                      onOpenChat={(exec) => handleOpenChat(exec, false)}
                       showControls={false}
                     />
                   ))}
-                  {filteredClosedSessions.length > 50 && (
-                    <div className="p-3 text-center text-sm text-muted-foreground border-t border-border">
-                      Showing 50 of {filteredClosedSessions.length} sessions
-                    </div>
-                  )}
                 </>
               )}
             </div>
+
+            {/* Pagination */}
+            {historyTotalPages > 1 && (
+              <div className="flex items-center justify-between border-t border-border px-4 py-2">
+                <span className="text-xs text-muted-foreground">
+                  {historySessionPage * SESSIONS_PER_PAGE + 1}-{Math.min((historySessionPage + 1) * SESSIONS_PER_PAGE, filteredClosedSessions.length)} of {filteredClosedSessions.length}
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    className="btn btn--ghost btn--sm p-1"
+                    onClick={() => setHistorySessionPage(p => Math.max(0, p - 1))}
+                    disabled={historySessionPage === 0}
+                  >
+                    <ChevronLeft size={16} />
+                  </button>
+                  <span className="text-xs text-muted-foreground px-2">
+                    {historySessionPage + 1} / {historyTotalPages}
+                  </span>
+                  <button
+                    className="btn btn--ghost btn--sm p-1"
+                    onClick={() => setHistorySessionPage(p => Math.min(historyTotalPages - 1, p + 1))}
+                    disabled={historySessionPage >= historyTotalPages - 1}
+                  >
+                    <ChevronRight size={16} />
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -877,6 +959,20 @@ export function WebOpsDashboard() {
             executionId={selectedExecution.executionId}
             agentId={selectedExecution.agentId}
             readOnly={selectedExecution.isSubagent}
+            // Only show New Chat button for active sessions, not session history
+            onNewChat={selectedExecution.fromActiveSession ? async () => {
+              // End the current session and navigate to new chat
+              if (selectedExecution.sessionId) {
+                try {
+                  const transport = await getTransport();
+                  await transport.endSession(selectedExecution.sessionId);
+                } catch (err) {
+                  console.error("Failed to end session:", err);
+                }
+              }
+              handleCloseChat();
+              navigate("/chat?new=1");
+            } : undefined}
           />
         )}
       </ChatSlider>

@@ -8,6 +8,7 @@ mod events;
 mod gateway_bus;
 mod health;
 mod mcps;
+mod openapi;
 mod providers;
 mod settings;
 mod skills;
@@ -38,6 +39,10 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
     };
 
     let mut router = Router::new()
+        // OpenAPI documentation
+        .route("/api/openapi.yaml", get(openapi::openapi_yaml))
+        .route("/api/openapi.json", get(openapi::openapi_json))
+        .route("/api/docs", get(openapi::swagger_ui))
         // Health endpoints
         .route("/api/health", get(health::health_check))
         .route("/api/status", get(health::status))

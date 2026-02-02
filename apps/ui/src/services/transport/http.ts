@@ -890,13 +890,21 @@ export class HttpTransport implements Transport {
   private sendSubscribe(conversationId: string, scope?: SubscriptionScope): void {
     const effectiveScope = scope ?? this.conversationSubscriptions.get(conversationId)?.scope ?? "all";
 
+    // Convert execution scope string format to object format for backend
+    // Frontend uses: "execution:exec-456" (template literal type)
+    // Backend expects: {"execution": "exec-456"} (serde enum with data)
+    let scopePayload: string | { execution: string } = effectiveScope;
+    if (typeof effectiveScope === 'string' && effectiveScope.startsWith('execution:')) {
+      scopePayload = { execution: effectiveScope.slice('execution:'.length) };
+    }
+
     if (this.ws?.readyState === WebSocket.OPEN) {
-      console.log(`[Transport] Sending subscribe for ${conversationId} with scope: ${effectiveScope}`);
+      console.log(`[Transport] Sending subscribe for ${conversationId} with scope: ${JSON.stringify(scopePayload)}`);
       this.ws.send(
         JSON.stringify({
           type: "subscribe",
           conversation_id: conversationId,
-          scope: effectiveScope,
+          scope: scopePayload,
         })
       );
       this.pendingSubscriptions.delete(conversationId);

@@ -265,6 +265,61 @@ Sessions are the top-level container for user interactions. A session groups mul
 | **Execution** | Single agent turn | One agent processing one request |
 | **Conversation** | Message thread | Persists chat history for context |
 
+### Session and Execution States
+
+**Session Status:**
+| Status | Description |
+|--------|-------------|
+| `queued` | Created but not yet started |
+| `running` | Actively processing |
+| `paused` | Paused by user or server shutdown |
+| `completed` | Successfully finished |
+| `crashed` | Failed with error or unexpected interruption |
+
+**Execution Status:**
+| Status | Description |
+|--------|-------------|
+| `queued` | Created but not yet started |
+| `running` | Actively executing |
+| `paused` | Paused (session paused or waiting) |
+| `completed` | Successfully finished |
+| `crashed` | Failed with error |
+| `cancelled` | Cancelled by user or parent |
+
+### Server Shutdown Behavior
+
+The server handles session states differently based on shutdown type:
+
+**Graceful Shutdown (Ctrl+C):**
+- All running sessions are marked as `paused`
+- All running/queued executions are marked as `paused`
+- Sessions can be resumed when the server restarts
+
+**Unexpected Crash:**
+- Sessions remain in `running` state in the database
+- On startup, any sessions still in `running` state are marked as `crashed`
+- This indicates they were interrupted unexpectedly
+
+```
+Graceful Shutdown:
+  Server receives SIGINT/SIGTERM
+       │
+       ▼
+  mark_running_as_paused()  ──► Sessions: running → paused
+       │                        Executions: running/queued → paused
+       ▼
+  Shutdown HTTP/WebSocket servers
+
+Startup Recovery:
+  Server starts
+       │
+       ▼
+  mark_running_as_crashed()  ──► Only sessions still in "running" state
+       │                         (unexpected crash) marked as crashed
+       ▼
+  Normal operation
+```
+
 ### Frontend Session Persistence
 
 The frontend stores session state in localStorage:

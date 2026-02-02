@@ -80,8 +80,117 @@ StreamEvent::ActionDelegate { .. } => GatewayEvent::AgentStarted { ... },
 ```
 
 **Also Fixed**: Frontend subscription duplication
-- `WebChatPanel.tsx` was subscribing by BOTH `conversationId` (web-xxx) AND `activeSessionId` (sess-xxx)
-- Consolidated to single subscription: prefer `session_id` when available, fallback to `conversation_id`
+
+## Bug Fix #4: Execution Scope Serialization Mismatch (2026-02-02)
+
+**Issue**: Running subagent chat was empty in dashboard - no live events displayed.
+
+**Root Cause**: Serialization format mismatch between frontend and backend for execution-scoped subscriptions:
+- Frontend sent: `scope: "execution:exec-456"` (string with colon separator)
+- Backend expected: `scope: {"execution": "exec-456"}` (JSON object per serde enum)
+
+The backend's `SubscriptionScope::Execution(String)` variant uses serde's default enum serialization which produces `{"execution": "value"}` format, but the frontend was sending a template literal string `execution:${id}`.
+
+**Fix**: Updated `sendSubscribe()` in frontend to convert execution scope format:
+```typescript
+// http.ts - convert scope format for backend compatibility
+let scopePayload: string | { execution: string } = effectiveScope;
+if (typeof effectiveScope === 'string' && effectiveScope.startsWith('execution:')) {
+  scopePayload = { execution: effectiveScope.slice('execution:'.length) };
+}
+
+this.ws.send(JSON.stringify({
+  type: "subscribe",
+  conversation_id: conversationId,
+  scope: scopePayload,  // Now sends {"execution": "exec-456"} for execution scopes
+}));
+```
+
+**Files Changed**:
+- `apps/ui/src/services/transport/http.ts:890-915` - Convert execution scope to object format
+
+**Why It Worked For Completed Subagents**: Historical messages load via REST API, not WebSocket subscriptions. Only live streaming events were affected by the scope mismatch.
+
+## Bug Fix #5: Scope Not Updated on Re-subscribe (2026-02-02)
+
+**Issue**: Running subagent chat STILL empty even after Bug Fix #4.
+
+**Root Cause**: When re-subscribing with a different scope, the backend returned early without updating the scope:
+```rust
+// subscribe_with_scope() in subscriptions.rs
+if already_subscribed {
+    // BUG: Returns early WITHOUT updating scope!
+    let current_seq = *state.sequence_numbers.get(&conversation_id).unwrap_or(&0);
+    return Ok(SubscribeResult::AlreadySubscribed { current_sequence: current_seq });
+}
+```
+
+**Scenario**:
+1. WebChatPanel subscribes to `sess-xxx` with scope `Session`
+2. User opens subagent chat → SessionChatViewer tries to subscribe to same `sess-xxx` with scope `Execution("exec-yyy")`
+3. Backend sees "already subscribed", returns early
+4. **Old scope (`Session`) continues filtering** - subagent events are filtered out!
+
+**Fix**: Update scope when re-subscribing with a different scope:
+```rust
+if already_subscribed {
+    // Update scope if it changed
+    let entry_key = (conversation_id.clone(), client_id.clone());
+    if let Some(entry) = state.subscription_entries.get_mut(&entry_key) {
+        if entry.scope != scope {
+            debug!("Updating subscription scope for {} from {:?} to {:?}",
+                conversation_id, entry.scope, scope);
+            entry.scope = scope;
+            entry.scope_state = scope_state;
+        }
+    }
+    let current_seq = *state.sequence_numbers.get(&conversation_id).unwrap_or(&0);
+    return Ok(SubscribeResult::AlreadySubscribed { current_sequence: current_seq });
+}
+```
+
+**Files Changed**:
+- `gateway/src/websocket/subscriptions.rs:360-374` - Update scope on re-subscribe
+- Added `test_subscribe_scope_update_on_resubscribe` test
+
+## Bug Fix #6: readOnly Prop Prevented Event Subscription (2026-02-02)
+
+**Issue**: Subagent chat panel showed "No messages" even for completed subagents.
+
+**Root Cause**: The `readOnly` prop in SessionChatViewer was blocking the subscription effect entirely:
+```typescript
+// BEFORE (broken)
+useEffect(() => {
+  if (!subscriptionId || readOnly) return;  // readOnly blocks subscription!
+  // ... subscription setup
+}, [subscriptionId, handleStreamEvent, eventScope, readOnly]);
+```
+
+**Scenario**:
+1. User clicks "View subagent chat (read-only)" button
+2. SessionChatViewer opens with `readOnly={true}`
+3. Subscription effect sees `readOnly=true` and returns early
+4. No subscription established - no live events received
+
+**Fix**: Remove `readOnly` from subscription condition - it should only affect input UI:
+```typescript
+// AFTER (fixed)
+useEffect(() => {
+  if (!subscriptionId) return;  // readOnly removed!
+
+  // Subscribe even in readOnly mode to receive live streaming events
+  // readOnly only prevents sending messages, not receiving events
+  // ... subscription setup
+}, [subscriptionId, handleStreamEvent, eventScope]);  // readOnly removed from deps
+```
+
+**Files Changed**:
+- `apps/ui/src/components/SessionChatViewer.tsx:207-236` - Remove readOnly from subscription effect
+
+**Why readOnly Should Only Affect Input**:
+- `readOnly` means "don't allow user to send messages"
+- It should NOT mean "don't receive events"
+- Users viewing a subagent chat still want to see live streaming output
 
 ---
 

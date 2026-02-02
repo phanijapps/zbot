@@ -136,26 +136,50 @@ impl GatewayServer {
     }
 
     /// Shutdown the gateway server gracefully.
+    ///
+    /// This pauses all running sessions so they can be resumed on restart,
+    /// then sends the shutdown signal to HTTP and WebSocket servers.
     pub async fn shutdown(&self) {
+        // Pause all running sessions before shutting down
+        self.pause_running_sessions();
+
         if let Some(tx) = &self.shutdown_tx {
             let _ = tx.send(());
             info!("Gateway shutdown signal sent");
         }
     }
 
-    /// Recover sessions that were interrupted by daemon crash.
+    /// Pause all running sessions during graceful shutdown.
     ///
-    /// Marks any sessions in RUNNING state as CRASHED so they can be resumed.
+    /// This marks running sessions as paused so they can be resumed when the server restarts.
+    fn pause_running_sessions(&self) {
+        match self.state.state_service.mark_running_as_paused() {
+            Ok(count) if count > 0 => {
+                info!("Paused {} running session(s) for graceful shutdown", count);
+            }
+            Ok(_) => {
+                info!("No running sessions to pause");
+            }
+            Err(e) => {
+                warn!("Failed to pause running sessions: {}", e);
+            }
+        }
+    }
+
+    /// Recover sessions that were interrupted by unexpected crash.
+    ///
+    /// Sessions in RUNNING state at startup indicate an unexpected crash
+    /// (graceful shutdown would have paused them). Mark them as CRASHED.
     fn recover_crashed_sessions(&self) {
         match self.state.state_service.mark_running_as_crashed() {
             Ok(count) if count > 0 => {
                 warn!(
-                    "Recovered {} interrupted session(s) - marked as CRASHED",
+                    "Found {} session(s) still in RUNNING state - marked as CRASHED (unexpected shutdown)",
                     count
                 );
             }
             Ok(_) => {
-                info!("No interrupted sessions to recover");
+                // No running sessions means either clean start or graceful previous shutdown
             }
             Err(e) => {
                 warn!("Failed to recover crashed sessions: {}", e);
