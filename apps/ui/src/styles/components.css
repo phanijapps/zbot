@@ -75,24 +75,11 @@
 .sidebar__logo {
   display: flex;
   align-items: center;
-  gap: var(--spacing-3);
 }
 
-.sidebar__logo-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: var(--radius-md);
-  background-color: var(--primary);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: white;
-}
-
-.sidebar__logo-text {
-  font-size: var(--text-base);
-  font-weight: 600;
-  color: white;
+.sidebar__logo-img {
+  height: 28px;
+  width: auto;
 }
 
 .sidebar__nav {

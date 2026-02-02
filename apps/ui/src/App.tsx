@@ -262,10 +262,7 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
       <nav className="sidebar">
         <div className="sidebar__header">
           <div className="sidebar__logo">
-            <div className="sidebar__logo-icon">
-              <Bot style={{ width: 18, height: 18 }} />
-            </div>
-            <span className="sidebar__logo-text">AgentZero</span>
+            <img src="/logo.svg" alt="AgentZero" className="sidebar__logo-img" />
           </div>
         </div>
 
