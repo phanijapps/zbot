@@ -96,6 +96,10 @@ export class HttpTransport implements Transport {
   private visibilityHandler: (() => void) | null = null;
   private onlineHandler: (() => void) | null = null;
 
+  // Simple deduplication for events delivered via multiple subscription paths
+  private recentEvents = new Set<string>();
+  private readonly MAX_RECENT = 500;
+
   // =========================================================================
   // Initialization
   // =========================================================================
@@ -476,8 +480,6 @@ export class HttpTransport implements Transport {
       session_id: sessionId,
     };
 
-    console.log("[SESSION_DEBUG] Sending end_session command:", sessionId);
-
     try {
       this.ws.send(JSON.stringify(command));
       return { success: true };
@@ -541,12 +543,6 @@ export class HttpTransport implements Transport {
       command.session_id = sessionId;
     }
 
-    console.log("[SESSION_DEBUG] WebSocket sending invoke command:", {
-      type: command.type,
-      agent_id: command.agent_id,
-      conversation_id: command.conversation_id,
-      session_id: command.session_id || "(none - new session)",
-    });
 
     try {
       this.ws.send(JSON.stringify(command));
@@ -1004,21 +1000,42 @@ export class HttpTransport implements Transport {
   }
 
   private handleConversationMessage(message: StreamEvent): boolean {
+    // Primary routing key: conversation_id (or parent_conversation_id for delegation events)
     const conversationId = (message.conversation_id ??
       message.parent_conversation_id) as string | undefined;
 
-    // Debug: log all conversation-related messages
-    if (conversationId) {
-      console.log(`[Transport] Received event type=${message.type} for conv=${conversationId.slice(0, 20)}...`);
+    // Secondary routing key: session_id (for session-based subscriptions)
+    const sessionId = message.session_id as string | undefined;
+
+    // Deduplicate events (same event may arrive via multiple paths)
+    const seq = message.seq as number | undefined;
+    let eventKey: string;
+
+    if (message.type === "delegation_started" || message.type === "delegation_completed") {
+      // Delegation events: backend emits from multiple places with different IDs
+      // Use session + child_agent + task hash for deduplication
+      const childAgent = message.child_agent_id as string | undefined;
+      const task = message.task as string | undefined;
+      eventKey = `${message.type}:${sessionId}:${childAgent}:${task?.slice(0, 50)}`;
+    } else if (seq !== undefined && conversationId) {
+      eventKey = `${conversationId}:${seq}`;
+    } else {
+      const execId = message.execution_id as string | undefined;
+      eventKey = `${message.type}:${execId || sessionId || conversationId}`;
     }
 
-    if (!conversationId) return false;
+    if (this.recentEvents.has(eventKey)) {
+      return true; // Already delivered
+    }
+    this.recentEvents.add(eventKey);
+    if (this.recentEvents.size > this.MAX_RECENT) {
+      const first = this.recentEvents.values().next().value;
+      if (first) this.recentEvents.delete(first);
+    }
 
-    const state = this.conversationSubscriptions.get(conversationId);
-    if (state) {
-      const callbacks = [...state.callbacks];
-      console.log(`[Transport] Routing ${message.type} to ${callbacks.length} subscriber(s)`);
-      for (const callback of callbacks) {
+    // Route to subscribers
+    const routeToSubscribers = (state: SubscriptionState): boolean => {
+      for (const callback of state.callbacks) {
         try {
           callback(message as ConversationEvent);
         } catch (e) {
@@ -1026,22 +1043,28 @@ export class HttpTransport implements Transport {
         }
       }
       return true;
-    } else {
-      console.log(`[Transport] No subscription for ${conversationId.slice(0, 20)}... (subscribed to: ${[...this.conversationSubscriptions.keys()].join(", ")})`);
+    };
+
+    // Try conversation_id first
+    if (conversationId) {
+      const state = this.conversationSubscriptions.get(conversationId);
+      if (state) {
+        return routeToSubscribers(state);
+      }
     }
+
+    // Fall back to session_id routing (for subagent events)
+    if (sessionId && sessionId !== conversationId) {
+      const state = this.conversationSubscriptions.get(sessionId);
+      if (state) {
+        return routeToSubscribers(state);
+      }
+    }
+
     return false;
   }
 
   private handleEvent(event: StreamEvent): void {
-    // Log agent_started events for session debugging
-    if (event.type === "agent_started") {
-      console.log("[SESSION_DEBUG] Received agent_started event from server:", {
-        type: event.type,
-        session_id: event.session_id,
-        conversation_id: event.conversation_id,
-        agent_id: event.agent_id,
-      });
-    }
 
     // Extract conversation_id from event
     // For most events: conversation_id

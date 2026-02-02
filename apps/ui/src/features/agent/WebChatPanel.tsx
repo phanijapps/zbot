@@ -54,21 +54,17 @@ function createNewConversationId(): string {
   const convId = `web-${crypto.randomUUID()}`;
   localStorage.setItem(WEB_CONV_ID_KEY, convId);
   // Clear session_id when starting a new conversation
-  console.log("[SESSION_DEBUG] /new command - clearing session_id, new conversation_id:", convId);
   localStorage.removeItem(WEB_SESSION_ID_KEY);
   return convId;
 }
 
 // Get the current session ID (if any)
 function getSessionId(): string | null {
-  const sessionId = localStorage.getItem(WEB_SESSION_ID_KEY);
-  console.log("[SESSION_DEBUG] getSessionId() =>", sessionId);
-  return sessionId;
+  return localStorage.getItem(WEB_SESSION_ID_KEY);
 }
 
 // Store the session ID from backend
 function setSessionId(sessionId: string): void {
-  console.log("[SESSION_DEBUG] setSessionId() storing:", sessionId);
   localStorage.setItem(WEB_SESSION_ID_KEY, sessionId);
 }
 
@@ -80,6 +76,10 @@ export function WebChatPanel() {
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  // Session-based subscription for receiving subagent events
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
+  const sessionUnsubscribeRef = useRef<(() => void) | null>(null);
 
   // Generative Canvas state
   const [canvasOpen, setCanvasOpen] = useState(false);
@@ -123,17 +123,12 @@ export function WebChatPanel() {
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case "agent_started":
-        console.log("[SESSION_DEBUG] agent_started event received:", {
-          session_id: event.session_id,
-          agent_id: event.agent_id,
-          conversation_id: event.conversation_id,
-        });
         setIsProcessing(true);
-        // Capture session_id from the backend for session continuity
+        // Capture session_id from the backend for session continuity AND subscription
         if (event.session_id && typeof event.session_id === "string") {
           setSessionId(event.session_id);
-        } else {
-          console.warn("[SESSION_DEBUG] agent_started event missing session_id!", event);
+          // Also update state to trigger session-based subscription for subagent events
+          setActiveSessionId(event.session_id);
         }
         break;
 
@@ -212,8 +207,11 @@ export function WebChatPanel() {
 
       case "delegation_started": {
         const childAgentId = event.child_agent_id as string;
-        const childConvId = event.child_conversation_id as string;
+        // Use child_conversation_id if available, otherwise fall back to child_execution_id
+        const childConvId = (event.child_conversation_id ?? event.child_execution_id) as string;
         const task = event.task as string;
+
+        if (!childConvId) break; // Skip if no identifier available
 
         // Track the active delegation with full activity data
         setSubagentActivities((prev) => {
@@ -246,9 +244,11 @@ export function WebChatPanel() {
       }
 
       case "delegation_completed": {
-        const childConvId = event.child_conversation_id as string;
+        const childConvId = (event.child_conversation_id ?? event.child_execution_id) as string;
         const childAgentId = event.child_agent_id as string;
         const result = event.result as string | undefined;
+
+        if (!childConvId) break;
 
         // Update subagent activity to completed status
         setSubagentActivities((prev) => {
@@ -371,7 +371,6 @@ export function WebChatPanel() {
         break;
 
       case "session_ended":
-        console.log("[SESSION_DEBUG] Session ended confirmation received");
         break;
     }
   }, []); // State setters are stable, no deps needed
@@ -404,6 +403,46 @@ export function WebChatPanel() {
     };
   }, [conversationId, handleStreamEvent]);
 
+  // Subscribe by session_id to receive subagent events
+  // This is separate from conversation subscription because:
+  // - Conversation subscription gets initial events (before we know session_id)
+  // - Session subscription gets ALL events from the session including subagents
+  useEffect(() => {
+    if (!activeSessionId) return;
+
+    // Don't double-subscribe if session_id equals conversation_id
+    if (activeSessionId === conversationId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const setupSessionSubscription = async () => {
+      const transport = await getTransport();
+
+      if (cancelled) return;
+
+      // Clean up any existing session subscription
+      if (sessionUnsubscribeRef.current) {
+        sessionUnsubscribeRef.current();
+      }
+
+      sessionUnsubscribeRef.current = transport.subscribeConversation(activeSessionId, {
+        onEvent: handleStreamEvent,
+      });
+    };
+
+    setupSessionSubscription();
+
+    return () => {
+      cancelled = true;
+      if (sessionUnsubscribeRef.current) {
+        sessionUnsubscribeRef.current();
+        sessionUnsubscribeRef.current = null;
+      }
+    };
+  }, [activeSessionId, conversationId, handleStreamEvent]);
+
   // Auto-scroll to bottom
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -415,13 +454,13 @@ export function WebChatPanel() {
     if (currentSessionId) {
       try {
         const transport = await getTransport();
-        console.log("[SESSION_DEBUG] Ending session:", currentSessionId);
         await transport.endSession(currentSessionId);
       } catch (error) {
         console.error("Failed to end session:", error);
       }
       // Always clear the session_id after ending
       localStorage.removeItem(WEB_SESSION_ID_KEY);
+      setActiveSessionId(null); // Clear session subscription
     }
 
     if (startNew) {

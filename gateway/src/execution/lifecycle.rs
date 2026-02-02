@@ -322,6 +322,11 @@ pub async fn emit_agent_started(
 }
 
 /// Emit delegation started event.
+///
+/// Note: This emits with `child_conversation_id: None` because the conversation_id
+/// is not available at the spawn/lifecycle level. The primary DelegationStarted event
+/// with proper conversation_id is emitted via events.rs when converting StreamEvent::ActionDelegate.
+/// Frontend filters events without child_conversation_id to prevent duplicates.
 pub async fn emit_delegation_started(
     event_bus: &EventBus,
     parent_agent_id: &str,
@@ -345,6 +350,8 @@ pub async fn emit_delegation_started(
 }
 
 /// Emit delegation completed event.
+///
+/// Note: See `emit_delegation_started` for explanation of `child_conversation_id: None`.
 pub async fn emit_delegation_completed(
     event_bus: &EventBus,
     parent_agent_id: &str,
