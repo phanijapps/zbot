@@ -674,7 +674,7 @@ export function WebOpsDashboard() {
             </button>
             <button
               className="btn btn--primary btn--md"
-              onClick={() => navigate("/chat")}
+              onClick={() => navigate("/chat?new=1")}
             >
               <Plus size={16} />
               <span>New Chat</span>

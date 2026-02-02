@@ -4,6 +4,7 @@
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSearchParams } from "react-router-dom";
 import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info, RotateCcw, StopCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -69,6 +70,7 @@ function setSessionId(sessionId: string): void {
 }
 
 export function WebChatPanel() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -87,6 +89,20 @@ export function WebChatPanel() {
 
   // Delegation tracking - uses SubagentActivity for detailed tracking
   const [subagentActivities, setSubagentActivities] = useState<Map<string, SubagentActivity>>(new Map());
+
+  // Handle ?new=1 param to start a fresh session
+  useEffect(() => {
+    if (searchParams.get("new") === "1") {
+      // Clear the param to avoid re-triggering on re-renders
+      setSearchParams({}, { replace: true });
+      // Create a new conversation (clears session and creates new conv ID)
+      const newConvId = createNewConversationId();
+      setConversationId(newConvId);
+      setActiveSessionId(null);
+      setMessages([]);
+      setSubagentActivities(new Map());
+    }
+  }, [searchParams, setSearchParams]);
 
   // Load conversation history on mount and when conversationId changes
   useEffect(() => {
