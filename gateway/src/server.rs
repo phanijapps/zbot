@@ -2,7 +2,9 @@
 //!
 //! Main server lifecycle management.
 
+use crate::bus::HttpGatewayBus;
 use crate::config::GatewayConfig;
+use crate::cron::{CronScheduler, CronService};
 use crate::error::Result;
 use crate::events::EventBus;
 use crate::http::create_http_router;
@@ -89,6 +91,9 @@ impl GatewayServer {
         if let Err(e) = self.state.connector_registry.init().await {
             warn!("Failed to initialize connector registry: {}", e);
         }
+
+        // Initialize cron scheduler
+        self.init_cron_scheduler().await;
 
         let (shutdown_tx, _) = broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
@@ -188,6 +193,46 @@ impl GatewayServer {
             }
             Err(e) => {
                 warn!("Failed to recover crashed sessions: {}", e);
+            }
+        }
+    }
+
+    /// Initialize the cron scheduler.
+    async fn init_cron_scheduler(&mut self) {
+        // Get the execution runner from the runtime service
+        let runner = match self.state.runtime.runner() {
+            Some(r) => r.clone(),
+            None => {
+                warn!("Cannot initialize cron scheduler: execution runner not available");
+                return;
+            }
+        };
+
+        // Create the gateway bus for cron to submit sessions
+        let gateway_bus = Arc::new(HttpGatewayBus::new(
+            runner,
+            self.state.state_service.clone(),
+            self.state.config_dir.clone(),
+        ));
+
+        // Create cron service and scheduler
+        let cron_service = CronService::new(self.state.config_dir.clone());
+
+        match CronScheduler::new(cron_service, gateway_bus).await {
+            Ok(scheduler) => {
+                // Start the scheduler
+                if let Err(e) = scheduler.start().await {
+                    warn!("Failed to start cron scheduler: {}", e);
+                    return;
+                }
+
+                // Store in state
+                self.state.cron_scheduler = Some(Arc::new(scheduler));
+
+                info!("Cron scheduler initialized and started");
+            }
+            Err(e) => {
+                warn!("Failed to create cron scheduler: {}", e);
             }
         }
     }

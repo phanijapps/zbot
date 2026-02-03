@@ -5,6 +5,7 @@
 use api_logs::LogService;
 use execution_state::StateService;
 use crate::connectors::{ConnectorRegistry, ConnectorService};
+use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::DelegationRegistry;
@@ -54,6 +55,10 @@ pub struct AppState {
 
     /// Connector registry for external bridge management.
     pub connector_registry: Arc<ConnectorRegistry>,
+
+    /// Cron scheduler for scheduled agent triggers.
+    /// Optional because it requires async initialization with GatewayBus.
+    pub cron_scheduler: Option<Arc<CronScheduler>>,
 
     /// Configuration directory path.
     pub config_dir: PathBuf,
@@ -125,6 +130,7 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
+            cron_scheduler: None, // Initialized by server.start()
             config_dir,
         }
     }
@@ -162,6 +168,7 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
+            cron_scheduler: None,
             config_dir,
         }
     }
@@ -194,6 +201,7 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
+            cron_scheduler: None,
             config_dir,
         }
     }

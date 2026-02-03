@@ -5,6 +5,7 @@
 mod agents;
 mod connectors;
 mod conversations;
+mod cron;
 mod events;
 mod gateway_bus;
 mod health;
@@ -93,6 +94,15 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/connectors/:id/test", post(connectors::test_connector))
         .route("/api/connectors/:id/enable", post(connectors::enable_connector))
         .route("/api/connectors/:id/disable", post(connectors::disable_connector))
+        // Cron job endpoints
+        .route("/api/cron", get(cron::list_cron_jobs))
+        .route("/api/cron", post(cron::create_cron_job))
+        .route("/api/cron/:id", get(cron::get_cron_job))
+        .route("/api/cron/:id", put(cron::update_cron_job))
+        .route("/api/cron/:id", delete(cron::delete_cron_job))
+        .route("/api/cron/:id/trigger", post(cron::trigger_cron_job))
+        .route("/api/cron/:id/enable", post(cron::enable_cron_job))
+        .route("/api/cron/:id/disable", post(cron::disable_cron_job))
         // Webhook endpoints
         .route(
             "/api/webhooks/:hook_type/:hook_id",
