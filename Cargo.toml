@@ -24,8 +24,6 @@ members = [
     "services/api-logs",
     "services/daily-sessions",
     "services/execution-state",
-    "services/search-index",
-    "services/session-archive",
     "services/knowledge-graph",
 
     # Gateway - Network layer
