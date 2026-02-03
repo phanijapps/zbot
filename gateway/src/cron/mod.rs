@@ -128,17 +128,19 @@ impl CronScheduler {
 
         let job = Job::new_async(job_config.schedule.as_str(), move |_uuid, _lock| {
             let job_id = job_id.clone();
-            let agent_id = agent_id.clone();
+            let _agent_id = agent_id.clone(); // Kept for logging, but not used
             let message = message.clone();
             let respond_to = respond_to.clone();
             let bus = bus.clone();
             let service = service.clone();
 
             Box::pin(async move {
-                info!(job_id = %job_id, agent_id = %agent_id, "Cron job triggered");
+                // Always send to root agent - cron jobs are external triggers
+                // that should go through the main orchestrating agent
+                info!(job_id = %job_id, "Cron job triggered (routing to root agent)");
 
-                // Create session request
-                let request = SessionRequest::new(&agent_id, &message)
+                // Create session request - always route to root agent
+                let request = SessionRequest::new("root", &message)
                     .with_source(TriggerSource::Cron)
                     .with_external_ref(format!("cron-{}", job_id))
                     .with_respond_to(respond_to);
@@ -225,10 +227,11 @@ impl CronScheduler {
     pub async fn trigger(&self, job_id: &str) -> Result<TriggerResult, CronSchedulerError> {
         let job = self.service.get(job_id).await?;
 
-        info!(job_id = %job_id, agent_id = %job.agent_id, "Manually triggering cron job");
+        // Always send to root agent - cron jobs are external triggers
+        info!(job_id = %job_id, "Manually triggering cron job (routing to root agent)");
 
-        // Create session request
-        let request = SessionRequest::new(&job.agent_id, &job.message)
+        // Create session request - always route to root agent
+        let request = SessionRequest::new("root", &job.message)
             .with_source(TriggerSource::Cron)
             .with_external_ref(format!("cron-{}-manual", job_id))
             .with_respond_to(job.respond_to.clone());
