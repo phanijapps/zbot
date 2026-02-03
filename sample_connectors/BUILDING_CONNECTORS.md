@@ -2,36 +2,46 @@
 
 ## 1. Trigger an Agent
 
-Send a POST request to start an agent execution:
-
 ```
 POST http://localhost:18791/api/gateway/submit
 Content-Type: application/json
+```
 
+```json
 {
   "agent_id": "root",
   "message": "Your prompt to the agent",
-  "respond_to": ["your-connector-id"]
+  "respond_to": ["your-connector-id"],
+  "metadata": {
+    "user_id": "u-123",
+    "channel": "slack-general",
+    "custom_field": "any value"
+  },
+  "thread_id": "thread-456",
+  "external_ref": "slack-msg-789"
 }
 ```
 
 | Field | Required | Description |
 |-------|----------|-------------|
 | `agent_id` | Yes | Always use `"root"` |
-| `message` | Yes | The prompt/instruction for the agent |
-| `respond_to` | Yes | Array of connector IDs to receive the response |
+| `message` | Yes | The prompt for the agent |
+| `respond_to` | Yes | Connector IDs to receive the response |
+| `metadata` | No | Arbitrary JSON passed to agent context |
+| `thread_id` | No | For threaded conversations |
+| `external_ref` | No | Your reference ID for correlation |
 
 ---
 
 ## 2. Receive Agent Response
 
-Your webhook receives a POST with this payload:
+Your webhook receives:
 
 ```json
 {
   "context": {
     "session_id": "sess-abc123",
-    "thread_id": null,
+    "thread_id": "thread-456",
     "agent_id": "root",
     "timestamp": "2024-01-15T09:00:00Z"
   },
@@ -45,40 +55,48 @@ Your webhook receives a POST with this payload:
 ```
 
 **Your endpoint must:**
-- Handle `HEAD /webhook` → return `200 OK` (for connectivity test)
-- Handle `POST /webhook` → return `{"success": true}` or `{"success": false, "error": "reason"}`
+- `HEAD /webhook` → return `200 OK`
+- `POST /webhook` → return `{"success": true}`
 
 ---
 
 ## 3. Metadata Reference
 
-### Context Object
+### Trigger Fields (Inbound)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `session_id` | string | Groups related executions |
-| `thread_id` | string \| null | For threaded conversations |
-| `agent_id` | string | Which agent responded |
-| `timestamp` | string | ISO 8601 dispatch time |
+| `agent_id` | string | Target agent (use `"root"`) |
+| `message` | string | Prompt text |
+| `respond_to` | string[] | Connector IDs for response |
+| `metadata` | object | Custom data for agent context |
+| `thread_id` | string | Thread identifier |
+| `external_ref` | string | Your correlation ID |
+| `session_id` | string | Continue existing session |
+| `connector_id` | string | Your connector ID |
 
-### Payload Object
+### Response Fields (Outbound)
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `message` | string | The agent's response |
-| `execution_id` | string | Unique execution ID |
-| `conversation_id` | string | Conversation ID |
+| `context.session_id` | string | Session identifier |
+| `context.thread_id` | string \| null | Thread ID (echoed back) |
+| `context.agent_id` | string | Responding agent |
+| `context.timestamp` | string | ISO 8601 timestamp |
+| `payload.message` | string | Agent's response |
+| `payload.execution_id` | string | Execution ID |
+| `payload.conversation_id` | string | Conversation ID |
 
 ---
 
-## Register Your Connector
+## Register Connector
 
 ```bash
 curl -X POST http://localhost:18791/api/connectors \
   -H "Content-Type: application/json" \
   -d '{
     "id": "your-connector-id",
-    "name": "Your Connector Name",
+    "name": "Your Connector",
     "transport": {
       "type": "http",
       "callback_url": "http://your-server/webhook",
