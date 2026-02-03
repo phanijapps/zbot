@@ -45,6 +45,8 @@ tags:
     description: LLM provider configuration
   - name: MCP Servers
     description: Model Context Protocol server management
+  - name: Connectors
+    description: External connector/bridge management for bidirectional messaging
   - name: Tools
     description: Available tools and settings
   - name: Events
@@ -759,6 +761,205 @@ paths:
                 $ref: '#/components/schemas/McpTestResult'
 
   # ============================================================================
+  # Connector Endpoints
+  # ============================================================================
+  /api/connectors:
+    get:
+      tags: [Connectors]
+      summary: List all connectors
+      description: Get a list of all registered external connectors
+      operationId: listConnectors
+      responses:
+        '200':
+          description: List of connectors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConnectorConfig'
+    post:
+      tags: [Connectors]
+      summary: Create a connector
+      description: Register a new external connector
+      operationId: createConnector
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectorRequest'
+      responses:
+        '201':
+          description: Connector created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '400':
+          description: Invalid connector ID
+        '409':
+          description: Connector already exists
+
+  /api/connectors/{id}:
+    get:
+      tags: [Connectors]
+      summary: Get connector
+      description: Get a connector by ID
+      operationId: getConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+    put:
+      tags: [Connectors]
+      summary: Update connector
+      description: Update an existing connector's configuration
+      operationId: updateConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConnectorRequest'
+      responses:
+        '200':
+          description: Connector updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+    delete:
+      tags: [Connectors]
+      summary: Delete connector
+      description: Remove a registered connector
+      operationId: deleteConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Connector deleted
+        '404':
+          description: Connector not found
+
+  /api/connectors/{id}/metadata:
+    get:
+      tags: [Connectors]
+      summary: Get connector metadata
+      description: Get connector capabilities and additional metadata
+      operationId: getConnectorMetadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector metadata including capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorMetadata'
+        '404':
+          description: Connector not found
+
+  /api/connectors/{id}/test:
+    post:
+      tags: [Connectors]
+      summary: Test connector
+      description: Test connectivity to a connector's transport endpoint
+      operationId: testConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorTestResult'
+        '404':
+          description: Connector not found
+        '503':
+          description: Test failed (connectivity issue)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorTestResult'
+
+  /api/connectors/{id}/enable:
+    post:
+      tags: [Connectors]
+      summary: Enable connector
+      description: Enable a disabled connector
+      operationId: enableConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+
+  /api/connectors/{id}/disable:
+    post:
+      tags: [Connectors]
+      summary: Disable connector
+      description: Disable a connector without deleting it
+      operationId: disableConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+
+  # ============================================================================
   # Tool Endpoints
   # ============================================================================
   /api/tools:
@@ -935,6 +1136,20 @@ components:
           type: object
           additionalProperties: true
           description: Custom metadata
+        respond_to:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Connector IDs to send response to at end of execution
+        connector_id:
+          type: string
+          nullable: true
+          description: Connector ID that triggered this session
+        thread_id:
+          type: string
+          nullable: true
+          description: Thread ID for conversation threading with connectors
 
     SessionHandle:
       type: object
@@ -1334,6 +1549,219 @@ components:
           type: array
           items:
             type: string
+
+    # ============================================================================
+    # Connector Schemas
+    # ============================================================================
+    ConnectorConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique connector identifier
+          example: gmail-bridge
+        name:
+          type: string
+          description: Human-readable name
+          example: Gmail Bridge
+        transport:
+          $ref: '#/components/schemas/ConnectorTransport'
+        metadata:
+          $ref: '#/components/schemas/ConnectorMetadata'
+        enabled:
+          type: boolean
+          description: Whether the connector is enabled
+          default: true
+        outbound_enabled:
+          type: boolean
+          description: Whether outbound dispatch is enabled
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ConnectorTransport:
+      type: object
+      description: Transport configuration for connector communication
+      required:
+        - type
+      discriminator:
+        propertyName: type
+      oneOf:
+        - $ref: '#/components/schemas/HttpTransport'
+        - $ref: '#/components/schemas/CliTransport'
+        - $ref: '#/components/schemas/GrpcTransport'
+        - $ref: '#/components/schemas/WebSocketTransport'
+        - $ref: '#/components/schemas/IpcTransport'
+
+    HttpTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [http]
+        callback_url:
+          type: string
+          format: uri
+          description: URL to POST responses to
+          example: http://localhost:9001/callback
+        method:
+          type: string
+          enum: [POST, PUT]
+          default: POST
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom headers to include
+        timeout_ms:
+          type: integer
+          description: Request timeout in milliseconds
+          nullable: true
+
+    CliTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [cli]
+        command:
+          type: string
+          description: Command to execute
+          example: /usr/bin/notify-send
+        args:
+          type: array
+          items:
+            type: string
+          description: Command arguments
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables
+
+    GrpcTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [grpc]
+        endpoint:
+          type: string
+          description: gRPC endpoint
+        service:
+          type: string
+          description: Service name
+        method:
+          type: string
+          description: Method name
+
+    WebSocketTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [websocket]
+        url:
+          type: string
+          format: uri
+          description: WebSocket URL
+
+    IpcTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [ipc]
+        socket_path:
+          type: string
+          description: Unix socket path
+
+    ConnectorMetadata:
+      type: object
+      properties:
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectorCapability'
+          description: Available actions/capabilities
+      additionalProperties: true
+      description: Additional connector-specific data
+
+    ConnectorCapability:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Capability name
+          example: send_email
+        schema:
+          type: object
+          description: JSON schema for payload
+        description:
+          type: string
+          nullable: true
+          description: Human-readable description
+
+    CreateConnectorRequest:
+      type: object
+      required:
+        - id
+        - name
+        - transport
+      properties:
+        id:
+          type: string
+          description: Unique connector identifier (alphanumeric, -, _)
+        name:
+          type: string
+          description: Human-readable name
+        transport:
+          $ref: '#/components/schemas/ConnectorTransport'
+        metadata:
+          $ref: '#/components/schemas/ConnectorMetadata'
+        enabled:
+          type: boolean
+          default: true
+        outbound_enabled:
+          type: boolean
+          default: true
+
+    UpdateConnectorRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        transport:
+          $ref: '#/components/schemas/ConnectorTransport'
+        metadata:
+          $ref: '#/components/schemas/ConnectorMetadata'
+        enabled:
+          type: boolean
+          nullable: true
+        outbound_enabled:
+          type: boolean
+          nullable: true
+
+    ConnectorTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the connectivity test succeeded
+        message:
+          type: string
+          description: Test result message
+        latency_ms:
+          type: integer
+          nullable: true
+          description: Response latency in milliseconds (if successful)
 
     # ============================================================================
     # Tool Schemas

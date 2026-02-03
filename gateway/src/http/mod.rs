@@ -3,6 +3,7 @@
 //! RESTful HTTP API for the gateway.
 
 mod agents;
+mod connectors;
 mod conversations;
 mod events;
 mod gateway_bus;
@@ -82,6 +83,16 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/mcps/:id", put(mcps::update_mcp))
         .route("/api/mcps/:id", delete(mcps::delete_mcp))
         .route("/api/mcps/:id/test", post(mcps::test_mcp))
+        // Connector endpoints
+        .route("/api/connectors", get(connectors::list_connectors))
+        .route("/api/connectors", post(connectors::create_connector))
+        .route("/api/connectors/:id", get(connectors::get_connector))
+        .route("/api/connectors/:id", put(connectors::update_connector))
+        .route("/api/connectors/:id", delete(connectors::delete_connector))
+        .route("/api/connectors/:id/metadata", get(connectors::get_connector_metadata))
+        .route("/api/connectors/:id/test", post(connectors::test_connector))
+        .route("/api/connectors/:id/enable", post(connectors::enable_connector))
+        .route("/api/connectors/:id/disable", post(connectors::disable_connector))
         // Webhook endpoints
         .route(
             "/api/webhooks/:hook_type/:hook_id",

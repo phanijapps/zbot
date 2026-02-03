@@ -85,6 +85,11 @@ impl GatewayServer {
         // Seed default agents and other initial data
         self.state.seed_defaults().await;
 
+        // Initialize connector registry
+        if let Err(e) = self.state.connector_registry.init().await {
+            warn!("Failed to initialize connector registry: {}", e);
+        }
+
         let (shutdown_tx, _) = broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
 
