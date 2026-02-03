@@ -90,8 +90,12 @@ impl AppState {
         // Create state service for execution state management
         let state_service = Arc::new(StateService::new(db_manager));
 
-        // Create runtime with execution runner
-        let runtime = Arc::new(RuntimeService::with_runner(
+        // Create connector registry
+        let connector_service = ConnectorService::new(config_dir.clone());
+        let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
+
+        // Create runtime with execution runner and connector registry
+        let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
             event_bus.clone(),
             agents.clone(),
             provider_service.clone(),
@@ -101,6 +105,7 @@ impl AppState {
             skills.clone(),
             log_service.clone(),
             state_service.clone(),
+            Some(connector_registry.clone()),
         ));
 
         // Create hook registry
@@ -111,10 +116,6 @@ impl AppState {
 
         // Create settings service
         let settings = Arc::new(SettingsService::new(config_dir.clone()));
-
-        // Create connector registry
-        let connector_service = ConnectorService::new(config_dir.clone());
-        let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
 
         Self {
             agents,

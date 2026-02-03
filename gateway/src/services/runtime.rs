@@ -8,6 +8,7 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
+use crate::connectors::ConnectorRegistry;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{ExecutionConfig, ExecutionHandle, ExecutionRunner};
@@ -61,7 +62,34 @@ impl RuntimeService {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
-        let runner = Arc::new(ExecutionRunner::new(
+        Self::with_runner_and_connectors(
+            event_bus,
+            agent_service,
+            provider_service,
+            config_dir,
+            conversation_repo,
+            mcp_service,
+            skill_service,
+            log_service,
+            state_service,
+            None,
+        )
+    }
+
+    /// Create a runtime service with execution runner and connector registry.
+    pub fn with_runner_and_connectors(
+        event_bus: Arc<EventBus>,
+        agent_service: Arc<AgentService>,
+        provider_service: Arc<ProviderService>,
+        config_dir: PathBuf,
+        conversation_repo: Arc<ConversationRepository>,
+        mcp_service: Arc<McpService>,
+        skill_service: Arc<SkillService>,
+        log_service: Arc<LogService<DatabaseManager>>,
+        state_service: Arc<StateService<DatabaseManager>>,
+        connector_registry: Option<Arc<ConnectorRegistry>>,
+    ) -> Self {
+        let runner = Arc::new(ExecutionRunner::with_connector_registry(
             event_bus.clone(),
             agent_service,
             provider_service,
@@ -71,6 +99,7 @@ impl RuntimeService {
             skill_service,
             log_service,
             state_service,
+            connector_registry,
         ));
         Self {
             event_bus,

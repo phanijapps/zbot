@@ -308,6 +308,7 @@ async fn handle_execution_success(
     save_messages(conversation_repo, execution_id, task_msg, response);
 
     // Complete execution and emit events
+    // Delegations don't dispatch to connectors (they're internal subagent calls)
     complete_execution(
         state_service,
         log_service,
@@ -317,6 +318,8 @@ async fn handle_execution_success(
         agent_id,
         conv_id,
         Some(response.to_string()),
+        None,
+        None,
     )
     .await;
 

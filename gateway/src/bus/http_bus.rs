@@ -89,6 +89,13 @@ impl HttpGatewayBus {
             config = config.with_session_id(session_id.clone());
         }
 
+        // Set connector IDs for response routing
+        if let Some(respond_to) = &request.respond_to {
+            if !respond_to.is_empty() {
+                config = config.with_respond_to(respond_to.clone());
+            }
+        }
+
         config
     }
 }

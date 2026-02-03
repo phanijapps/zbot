@@ -72,6 +72,8 @@ pub struct ExecutionRunner {
     log_service: Arc<LogService<DatabaseManager>>,
     /// State service for execution state management
     state_service: Arc<StateService<DatabaseManager>>,
+    /// Connector registry for response routing to external connectors
+    connector_registry: Option<Arc<crate::connectors::ConnectorRegistry>>,
 }
 
 impl ExecutionRunner {
@@ -90,6 +92,33 @@ impl ExecutionRunner {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
+        Self::with_connector_registry(
+            event_bus,
+            agent_service,
+            provider_service,
+            config_dir,
+            conversation_repo,
+            mcp_service,
+            skill_service,
+            log_service,
+            state_service,
+            None,
+        )
+    }
+
+    /// Create a new execution runner with connector registry for response routing.
+    pub fn with_connector_registry(
+        event_bus: Arc<EventBus>,
+        agent_service: Arc<AgentService>,
+        provider_service: Arc<ProviderService>,
+        config_dir: PathBuf,
+        conversation_repo: Arc<ConversationRepository>,
+        mcp_service: Arc<McpService>,
+        skill_service: Arc<crate::services::SkillService>,
+        log_service: Arc<LogService<DatabaseManager>>,
+        state_service: Arc<StateService<DatabaseManager>>,
+        connector_registry: Option<Arc<crate::connectors::ConnectorRegistry>>,
+    ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
 
@@ -106,6 +135,7 @@ impl ExecutionRunner {
             delegation_tx,
             log_service,
             state_service,
+            connector_registry,
         };
 
         // Spawn delegation handler task
@@ -376,6 +406,8 @@ impl ExecutionRunner {
         let log_service = self.log_service.clone();
         let state_service = self.state_service.clone();
         let delegation_tx = self.delegation_tx.clone();
+        let connector_registry = self.connector_registry.clone();
+        let respond_to = config.respond_to.clone();
 
         tokio::spawn(async move {
             // Create stream context for event processing
@@ -438,6 +470,8 @@ impl ExecutionRunner {
                         &agent_id,
                         &conversation_id,
                         Some(accumulated_response),
+                        connector_registry.as_ref(),
+                        respond_to.as_ref(),
                     )
                     .await;
                 }
@@ -867,6 +901,7 @@ async fn invoke_continuation(
                     &accumulated_response,
                 );
 
+                // Continuation turns don't dispatch to connectors (they're internal)
                 complete_execution(
                     &state_service,
                     &log_service,
@@ -876,6 +911,8 @@ async fn invoke_continuation(
                     &agent_id_clone,
                     &conversation_id,
                     Some(accumulated_response),
+                    None,
+                    None,
                 )
                 .await;
             }
