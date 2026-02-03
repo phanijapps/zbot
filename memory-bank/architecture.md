@@ -605,3 +605,122 @@ CREATE TABLE execution_logs (
 - Version control friendly
 - Markdown rendering in UI
 - Separates behavior from configuration
+
+## Connectors
+
+Connectors are external services that receive agent responses. When an agent execution completes, AgentZero can dispatch the response to one or more configured connectors.
+
+### Connector Flow
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Trigger       │────▶│   AgentZero     │────▶│   Connector     │
+│ (Cron/API/Web)  │     │   Gateway       │     │   (Your Service)│
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                              │
+                              │ respond_to: ["my-connector"]
+                              ▼
+                        ┌─────────────────┐
+                        │  HTTP POST to   │
+                        │  your endpoint  │
+                        └─────────────────┘
+```
+
+### Transport Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `http` | HTTP POST to callback URL | Webhooks, external APIs |
+| `cli` | Execute local command | Scripts, local integrations |
+
+### Connector Payload
+
+When dispatching to connectors, Gateway sends:
+
+```json
+{
+  "context": {
+    "session_id": "sess-abc123",
+    "thread_id": null,
+    "agent_id": "root",
+    "timestamp": "2024-01-15T09:00:00Z"
+  },
+  "capability": "respond",
+  "payload": {
+    "message": "The agent's response text",
+    "execution_id": "exec-xyz789",
+    "conversation_id": "conv-abc123"
+  }
+}
+```
+
+### Connector API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/connectors` | List all connectors |
+| GET | `/api/connectors/:id` | Get connector by ID |
+| POST | `/api/connectors` | Create connector |
+| PUT | `/api/connectors/:id` | Update connector |
+| DELETE | `/api/connectors/:id` | Delete connector |
+| POST | `/api/connectors/:id/test` | Test connector |
+| POST | `/api/connectors/:id/enable` | Enable connector |
+| POST | `/api/connectors/:id/disable` | Disable connector |
+
+## Cron Scheduler
+
+Built-in scheduler that triggers agents on a schedule. Cron jobs always route to the **root agent** for orchestration.
+
+### Cron Configuration
+
+```json
+{
+  "id": "daily-report",
+  "name": "Daily Report Generator",
+  "schedule": "0 0 9 * * *",
+  "message": "Generate the daily sales report",
+  "respond_to": ["slack-notifier"],
+  "enabled": true
+}
+```
+
+**Note**: Schedule uses 6-field cron format: `sec min hour day month weekday`
+
+### Cron API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/cron` | List all cron jobs |
+| GET | `/api/cron/:id` | Get cron job by ID |
+| POST | `/api/cron` | Create cron job |
+| PUT | `/api/cron/:id` | Update cron job |
+| DELETE | `/api/cron/:id` | Delete cron job |
+| POST | `/api/cron/:id/trigger` | Manually trigger job |
+| POST | `/api/cron/:id/enable` | Enable job |
+| POST | `/api/cron/:id/disable` | Disable job |
+
+## Response Routing
+
+The `respond_to` field controls where agent responses are delivered:
+
+```json
+{
+  "agent_id": "root",
+  "message": "Generate a report",
+  "respond_to": ["slack-notifier", "email-bridge"]
+}
+```
+
+- **Empty/null**: Response goes to web UI only (default)
+- **Specified**: Response dispatched to listed connectors
+- **Original source NOT automatically included** (explicit routing)
+
+## Data Layer Additions
+
+The following JSON files are added to the data directory:
+
+```
+~/Documents/agentzero/
+├── connectors.json      # Connector configurations
+└── cron_jobs.json       # Scheduled job configurations
+```

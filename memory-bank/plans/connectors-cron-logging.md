@@ -1,6 +1,8 @@
 # Connectors, Cron & Logging Design
 
-## Status: DRAFT
+## Status: IMPLEMENTED ✅
+
+> **Note**: Phases 1-3 and 5 completed on 2026-02-02. Rolling file logs (Phase 4) deferred.
 
 ## Overview
 
@@ -447,36 +449,36 @@ fn setup_logging(config: &LogConfig) {
 
 ## Implementation Phases
 
-### Phase 1: Connector Infrastructure
-- [ ] `ConnectorConfig` and `ConnectorTransport` types
-- [ ] `ConnectorRegistry` with CRUD operations
-- [ ] Persistence to `connectors.json`
-- [ ] HTTP endpoints for connector management
-- [ ] Add `respond_to` field to `SessionRequest`
+### Phase 1: Connector Infrastructure ✅
+- [x] `ConnectorConfig` and `ConnectorTransport` types
+- [x] `ConnectorRegistry` with CRUD operations
+- [x] Persistence to `connectors.json`
+- [x] HTTP endpoints for connector management
+- [x] Add `respond_to` field to `SessionRequest`
 
-### Phase 2: Response Routing
-- [ ] Extend `HookContext` with `respond_to: Vec<String>`
-- [ ] Implement `ConnectorRegistry.dispatch()` for HTTP transport
-- [ ] Wire response routing at end of execution
-- [ ] Add other transports (gRPC, CLI, etc.)
+### Phase 2: Response Routing ✅
+- [x] Extend `HookContext` with `respond_to: Vec<String>`
+- [x] Implement `ConnectorRegistry.dispatch()` for HTTP transport
+- [x] Wire response routing at end of execution
+- [x] Add CLI transport
 
-### Phase 3: Cron Scheduler
-- [ ] `CronJobConfig` type
-- [ ] `CronScheduler` with tokio-cron-scheduler
-- [ ] Persistence to `cron_jobs.json`
-- [ ] HTTP endpoints for cron management
-- [ ] Wire to gateway submit
+### Phase 3: Cron Scheduler ✅
+- [x] `CronJobConfig` type
+- [x] `CronScheduler` with tokio-cron-scheduler
+- [x] Persistence to `cron_jobs.json`
+- [x] HTTP endpoints for cron management
+- [x] Wire to gateway submit (always routes to root agent)
 
-### Phase 4: Rolling Logs
+### Phase 4: Rolling Logs (Deferred)
 - [ ] Add logging config to `GatewayConfig`
 - [ ] CLI args for log configuration
 - [ ] Setup tracing-appender with rolling files
 - [ ] Test log rotation
 
-### Phase 5: UI Integration
-- [ ] Connector management page
-- [ ] Cron job management page
-- [ ] Test connector connectivity from UI
+### Phase 5: UI Integration ✅
+- [x] Connector management page (WebConnectorsPanel)
+- [x] Cron job management page (WebCronPanel)
+- [x] Test connector connectivity from UI
 
 ---
 
