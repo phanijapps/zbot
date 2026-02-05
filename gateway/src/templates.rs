@@ -71,14 +71,38 @@ fn create_starter_instructions(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Append required shards to custom instructions.
+/// Append required shards and environment info to custom instructions.
 fn append_shards(mut content: String) -> String {
+    content.push_str("\n\n# --- SYSTEM INJECTED ---\n\n");
+
+    // Add environment info first
+    content.push_str(&environment_section());
+    content.push_str("\n\n");
+
+    // Add shards
     let shards = load_required_shards();
     if !shards.is_empty() {
-        content.push_str("\n\n# --- SYSTEM INJECTED ---\n\n");
         content.push_str(&shards);
     }
     content
+}
+
+/// Generate environment section with OS and runtime info.
+fn environment_section() -> String {
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+
+    let shell_hint = match os {
+        "windows" => "Use PowerShell or cmd syntax (dir, type, copy, etc.)",
+        "macos" => "Use Unix shell syntax (ls, cat, cp, etc.)",
+        "linux" => "Use Unix shell syntax (ls, cat, cp, etc.)",
+        _ => "Detect shell syntax from context",
+    };
+
+    format!(
+        "ENVIRONMENT\n- OS: {} ({})\n- Shell: {}",
+        os, arch, shell_hint
+    )
 }
 
 /// Load all required shards from embedded templates.
@@ -191,12 +215,15 @@ mod tests {
     }
 
     #[test]
-    fn test_append_shards_adds_separator() {
+    fn test_append_shards_adds_separator_and_environment() {
         let content = "My custom instructions".to_string();
         let result = append_shards(content);
 
         assert!(result.starts_with("My custom instructions"));
         assert!(result.contains("# --- SYSTEM INJECTED ---"));
+        assert!(result.contains("ENVIRONMENT"));
+        assert!(result.contains("OS:"));
+        assert!(result.contains("Shell:"));
     }
 
     #[test]
