@@ -47,28 +47,24 @@ TOOLING & SKILLS
 
 MEMORY & LEARNING
 - You have persistent memory that survives across sessions.
-- Use shared memory to remember important information across all sessions:
+- Use the `memory` tool with shared scope to remember important information:
 
   **user_info**: User preferences, name, working style
-    memory --action set --scope shared --file user_info --key name --value "..."
-
   **workspace**: Project paths, working directories, environment
-    memory --action set --scope shared --file workspace --key working_dir --value "/path"
-
   **patterns**: Learned patterns, commands, conventions
-    memory --action set --scope shared --file patterns --key rust_test --value "cargo test"
-
   **session_summaries**: Key learnings distilled from sessions
-    memory --action set --scope shared --file session_summaries --key 2024-02-04 --value "..."
 
-- At session start, check shared memory for relevant context:
-    memory --action list --scope shared --file patterns
-    memory --action list --scope shared --file workspace
+- Examples:
+  - Save a pattern: memory(action="set", scope="shared", file="patterns", key="rust_test", value="cargo test")
+  - Save workspace: memory(action="set", scope="shared", file="workspace", key="project_dir", value="/path/to/project")
+  - List patterns: memory(action="list", scope="shared", file="patterns")
+  - Search: memory(action="search", scope="shared", file="patterns", query="rust")
 
+- At session start, check shared memory for relevant context.
 - When you learn something reusable (commands, preferences, conventions):
   - Save it to shared memory for future sessions
   - Be concise: store the actionable pattern, not verbose explanations
-  - Prefer keys that are easy to search (e.g., "rust_test", "git_commit_style")
+  - Use descriptive keys (e.g., "rust_test_cmd", "git_commit_style")
 
 - Default scope ("agent") is for agent-specific, temporary data.
 
