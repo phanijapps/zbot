@@ -210,7 +210,7 @@ impl WebSocketHandler {
                                             "No subscribers found for event"
                                         );
                                     } else if total_sent > 0 {
-                                        info!(
+                                        debug!(
                                             session_id = ?session_id,
                                             conversation_id = ?conversation_id,
                                             total_sent = total_sent,

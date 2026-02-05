@@ -7,9 +7,114 @@
 //!
 //! Core traits for middleware implementation.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use crate::types::{ChatMessage, StreamEvent};
+
+// ============================================================================
+// EXECUTION STATE
+// State passed from the executor to middleware for context-aware processing
+// ============================================================================
+
+/// Information about a loaded skill for middleware consumption
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SkillInfo {
+    /// Name of the skill
+    pub name: String,
+    /// Tool call ID when this skill's SKILL.md was loaded
+    pub tool_call_id: String,
+    /// Tool call IDs for all resources loaded under this skill
+    pub resource_tool_call_ids: Vec<String>,
+}
+
+/// Execution state passed to middleware.
+///
+/// Contains information about the current execution that middleware
+/// can use to make context-aware decisions (e.g., skill-aware compaction).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ExecutionState {
+    /// Currently loaded skills with their tool_call_ids.
+    /// Key is skill name, value is skill info.
+    pub loaded_skills: HashMap<String, SkillInfo>,
+}
+
+impl ExecutionState {
+    /// Build execution state by scanning conversation messages for skill-related tool calls.
+    ///
+    /// This extracts skill information from the message history, allowing middleware
+    /// to identify which tool results are skill loads vs regular tool calls.
+    pub fn from_messages(messages: &[crate::types::ChatMessage]) -> Self {
+        let mut loaded_skills: HashMap<String, SkillInfo> = HashMap::new();
+
+        // Scan for assistant messages with tool calls
+        for (idx, message) in messages.iter().enumerate() {
+            if let Some(tool_calls) = &message.tool_calls {
+                for tool_call in tool_calls {
+                    if tool_call.name == "load_skill" {
+                        // Extract skill name from arguments
+                        if let Some(skill_name) = tool_call.arguments.get("skill")
+                            .and_then(|v| v.as_str())
+                        {
+                            // This is a main skill load
+                            let entry = loaded_skills.entry(skill_name.to_string())
+                                .or_insert_with(|| SkillInfo {
+                                    name: skill_name.to_string(),
+                                    tool_call_id: tool_call.id.clone(),
+                                    resource_tool_call_ids: vec![],
+                                });
+                            // Update tool_call_id if this is a newer load
+                            entry.tool_call_id = tool_call.id.clone();
+                        } else if let Some(file_path) = tool_call.arguments.get("file")
+                            .and_then(|v| v.as_str())
+                        {
+                            // This is a resource file load - try to extract skill name
+                            let skill_name = Self::extract_skill_from_file_arg(file_path, messages, idx);
+                            if let Some(name) = skill_name {
+                                let entry = loaded_skills.entry(name.clone())
+                                    .or_insert_with(|| SkillInfo {
+                                        name,
+                                        tool_call_id: String::new(),
+                                        resource_tool_call_ids: vec![],
+                                    });
+                                entry.resource_tool_call_ids.push(tool_call.id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Self { loaded_skills }
+    }
+
+    /// Extract skill name from a file argument.
+    /// Handles formats like "@skill:skill-name/path" or uses current skill context.
+    fn extract_skill_from_file_arg(
+        file_path: &str,
+        _messages: &[crate::types::ChatMessage],
+        _current_idx: usize,
+    ) -> Option<String> {
+        if file_path.starts_with("@skill:") {
+            let path = &file_path[7..]; // Skip "@skill:"
+            if path.contains('/') {
+                let parts: Vec<&str> = path.splitn(2, '/').collect();
+                return Some(parts[0].to_string());
+            }
+            // Just skill name without path
+            let has_extension = [".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".rs", ".py", ".js", ".ts"]
+                .iter()
+                .any(|ext| path.ends_with(ext));
+            if !has_extension {
+                return Some(path.to_string());
+            }
+        }
+        // TODO: Could search backwards through messages to find current skill context
+        None
+    }
+}
 
 /// Context passed to middleware during execution
 #[derive(Clone, Debug)]
@@ -28,9 +133,13 @@ pub struct MiddlewareContext {
     pub estimated_tokens: usize,
     /// Additional metadata
     pub metadata: Value,
+    /// Execution state from the tool context (skills, etc.)
+    /// This allows middleware to make skill-aware decisions during compaction.
+    pub execution_state: ExecutionState,
 }
 
 impl MiddlewareContext {
+    /// Create a new middleware context
     pub fn new(
         agent_id: String,
         conversation_id: Option<String>,
@@ -45,17 +154,30 @@ impl MiddlewareContext {
             message_count: 0,
             estimated_tokens: 0,
             metadata: Value::Object(Default::default()),
+            execution_state: ExecutionState::default(),
         }
     }
 
+    /// Set message and token counts
     pub fn with_counts(mut self, message_count: usize, estimated_tokens: usize) -> Self {
         self.message_count = message_count;
         self.estimated_tokens = estimated_tokens;
         self
     }
 
+    /// Set additional metadata
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = metadata;
+        self
+    }
+
+    /// Set execution state (loaded skills, etc.)
+    ///
+    /// This allows middleware to access skill information for context-aware
+    /// processing, such as leaving meaningful placeholders when compacting
+    /// skill-related tool results.
+    pub fn with_execution_state(mut self, execution_state: ExecutionState) -> Self {
+        self.execution_state = execution_state;
         self
     }
 }

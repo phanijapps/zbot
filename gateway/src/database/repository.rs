@@ -211,17 +211,58 @@ impl ConversationRepository {
         })
     }
 
-    /// Convert messages to ChatMessage format for LLM
+    /// Convert messages to ChatMessage format for LLM.
+    ///
+    /// For assistant messages with tool_calls stored, this converts them to
+    /// the ToolCall format expected by the LLM. This allows the agent to see
+    /// what tools it called in previous turns.
     pub fn messages_to_chat_format(&self, messages: &[Message]) -> Vec<agent_runtime::ChatMessage> {
         messages
             .iter()
-            .map(|m| agent_runtime::ChatMessage {
-                role: m.role.clone(),
-                content: m.content.clone(),
-                tool_calls: None,
-                tool_call_id: None,
+            .map(|m| {
+                // Parse tool_calls if present on assistant messages
+                let tool_calls = if m.role == "assistant" {
+                    m.tool_calls.as_ref().and_then(|tc_json| {
+                        self.parse_tool_calls_json(tc_json)
+                    })
+                } else {
+                    None
+                };
+
+                agent_runtime::ChatMessage {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                    tool_calls,
+                    tool_call_id: None,
+                }
             })
             .collect()
+    }
+
+    /// Parse stored tool calls JSON into ToolCall format.
+    ///
+    /// Our stored format: [{"tool_id": "...", "tool_name": "...", "args": {...}, "result": "...", "error": null}]
+    /// LLM format: [{"id": "...", "name": "...", "arguments": {...}}]
+    fn parse_tool_calls_json(&self, json_str: &str) -> Option<Vec<agent_runtime::types::ToolCall>> {
+        // Parse our stored format
+        let stored: Vec<serde_json::Value> = serde_json::from_str(json_str).ok()?;
+
+        let tool_calls: Vec<agent_runtime::types::ToolCall> = stored
+            .into_iter()
+            .filter_map(|v| {
+                let tool_id = v.get("tool_id")?.as_str()?.to_string();
+                let tool_name = v.get("tool_name")?.as_str()?.to_string();
+                let args = v.get("args")?.clone();
+
+                Some(agent_runtime::types::ToolCall::new(tool_id, tool_name, args))
+            })
+            .collect();
+
+        if tool_calls.is_empty() {
+            None
+        } else {
+            Some(tool_calls)
+        }
     }
 }
 

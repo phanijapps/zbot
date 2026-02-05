@@ -104,7 +104,8 @@ pub trait CallbackContext: ReadonlyContext {
 /// Tool context provides additional context for tool execution.
 pub trait ToolContext: CallbackContext {
     /// Get the function call ID for this tool execution.
-    fn function_call_id(&self) -> &str;
+    /// Returns a String to allow implementations using interior mutability (RwLock).
+    fn function_call_id(&self) -> String;
 
     /// Get the current event actions.
     fn actions(&self) -> EventActions;

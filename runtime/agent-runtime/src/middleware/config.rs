@@ -211,6 +211,36 @@ pub struct ContextEditingConfig {
     /// Placeholder text to insert for cleared outputs
     #[serde(default = "default_placeholder")]
     pub placeholder: String,
+
+    // =========================================================================
+    // SKILL-AWARE EDITING OPTIONS
+    // =========================================================================
+
+    /// Whether to use skill-specific placeholder messages when unloading skills.
+    /// When true, unloaded skills show a message like:
+    /// "[Skill 'skill-name' was loaded and unloaded. Reload with load_skill(skill=\"skill-name\") if needed.]"
+    /// When false, uses the generic placeholder for all tool results.
+    #[serde(default = "default_skill_aware_placeholders")]
+    pub skill_aware_placeholders: bool,
+
+    /// Whether to cascade unload resources when a skill's SKILL.md is unloaded.
+    /// When true, all resource files loaded by the skill are also unloaded.
+    /// When false, only the SKILL.md content is cleared; resources remain until
+    /// selected for clearing by the regular tool result clearing logic.
+    #[serde(default = "default_cascade_unload")]
+    pub cascade_unload: bool,
+
+    /// Custom template for skill placeholder messages.
+    /// Available variables: {skill_name}
+    /// Default: "[Skill '{skill_name}' was loaded and unloaded. Reload with load_skill(skill=\"{skill_name}\") if needed.]"
+    #[serde(default)]
+    pub skill_placeholder_template: Option<String>,
+
+    /// Custom template for skill resource placeholder messages.
+    /// Available variables: {skill_name}
+    /// Default: "[Resource from skill '{skill_name}' was unloaded.]"
+    #[serde(default)]
+    pub resource_placeholder_template: Option<String>,
 }
 
 impl Default for ContextEditingConfig {
@@ -223,6 +253,10 @@ impl Default for ContextEditingConfig {
             clear_tool_inputs: false,
             exclude_tools: Vec::new(),
             placeholder: default_placeholder(),
+            skill_aware_placeholders: true,
+            cascade_unload: true,
+            skill_placeholder_template: None,
+            resource_placeholder_template: None,
         }
     }
 }
@@ -263,6 +297,14 @@ fn default_min_reclaim() -> usize {
 
 fn default_placeholder() -> String {
     "[cleared]".to_string()
+}
+
+fn default_skill_aware_placeholders() -> bool {
+    true
+}
+
+fn default_cascade_unload() -> bool {
+    true
 }
 
 #[cfg(test)]

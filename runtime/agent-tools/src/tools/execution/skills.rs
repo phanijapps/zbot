@@ -2,13 +2,111 @@
 // LOAD SKILL TOOL
 // ============================================================================
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 use zero_core::{Tool, ToolContext, Result};
 use zero_core::FileSystemContext;
+
+// ============================================================================
+// SKILL STATE TYPES
+// ============================================================================
+
+/// Entry for a loaded skill in the skill graph
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillEntry {
+    /// Tool call ID when the skill was loaded
+    pub tool_call_id: String,
+    /// Timestamp when the skill was loaded (millis since epoch)
+    pub loaded_at: i64,
+    /// Resources (files) loaded within this skill
+    pub resources: Vec<ResourceEntry>,
+}
+
+/// Entry for a resource file loaded within a skill
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResourceEntry {
+    /// Relative path within the skill directory
+    pub path: String,
+    /// Tool call ID when this resource was loaded
+    pub tool_call_id: String,
+}
+
+/// Skill graph: maps skill name -> skill entry
+pub type SkillGraph = HashMap<String, SkillEntry>;
+
+// ============================================================================
+// SKILL STATE HELPERS
+// ============================================================================
+
+/// Track a skill being loaded in the context state
+fn track_skill_load(ctx: &Arc<dyn ToolContext>, skill_name: &str, tool_call_id: &str) {
+    // Get or create the skill graph
+    let mut graph: SkillGraph = ctx.get_state("skill:graph")
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    // Add/update this skill entry
+    graph.insert(skill_name.to_string(), SkillEntry {
+        tool_call_id: tool_call_id.to_string(),
+        loaded_at: chrono::Utc::now().timestamp_millis(),
+        resources: vec![],
+    });
+
+    ctx.set_state("skill:graph".to_string(), json!(graph));
+
+    // Update the loaded_skills list
+    let mut loaded: Vec<String> = ctx.get_state("skill:loaded_skills")
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    if !loaded.contains(&skill_name.to_string()) {
+        loaded.push(skill_name.to_string());
+        ctx.set_state("skill:loaded_skills".to_string(), json!(loaded));
+    }
+}
+
+/// Track a resource file being loaded within a skill
+fn track_resource_load(ctx: &Arc<dyn ToolContext>, skill_name: &str, resource_path: &str, tool_call_id: &str) {
+    let mut graph: SkillGraph = ctx.get_state("skill:graph")
+        .and_then(|v| serde_json::from_value(v).ok())
+        .unwrap_or_default();
+
+    if let Some(entry) = graph.get_mut(skill_name) {
+        // Add resource to existing skill entry
+        entry.resources.push(ResourceEntry {
+            path: resource_path.to_string(),
+            tool_call_id: tool_call_id.to_string(),
+        });
+        ctx.set_state("skill:graph".to_string(), json!(graph));
+    } else {
+        // Skill not in graph yet (unusual case - resource loaded before main skill)
+        // Create a placeholder entry with just this resource
+        graph.insert(skill_name.to_string(), SkillEntry {
+            tool_call_id: String::new(), // Unknown - skill wasn't loaded via load_skill
+            loaded_at: chrono::Utc::now().timestamp_millis(),
+            resources: vec![ResourceEntry {
+                path: resource_path.to_string(),
+                tool_call_id: tool_call_id.to_string(),
+            }],
+        });
+        ctx.set_state("skill:graph".to_string(), json!(graph));
+
+        // Also add to loaded_skills list
+        let mut loaded: Vec<String> = ctx.get_state("skill:loaded_skills")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
+        if !loaded.contains(&skill_name.to_string()) {
+            loaded.push(skill_name.to_string());
+            ctx.set_state("skill:loaded_skills".to_string(), json!(loaded));
+        }
+    }
+}
 
 // ============================================================================
 // LOAD SKILL TOOL
@@ -133,6 +231,10 @@ impl LoadSkillTool {
         // Store current skill in state for subsequent convenience file loads
         ctx.set_state("skill:current_skill".to_string(), json!(skill_name));
 
+        // Track this skill load in the skill graph
+        let tool_call_id = ctx.function_call_id();
+        track_skill_load(&ctx, skill_name, &tool_call_id);
+
         Ok(json!({
             "name": skill_name,
             "metadata": metadata,
@@ -197,9 +299,17 @@ impl LoadSkillTool {
         let content = std::fs::read_to_string(&full_path)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read skill file: {}", e)))?;
 
-        // Update current skill in state if we explicitly loaded a different skill
+        // Get the tool call ID for tracking
+        let tool_call_id = ctx.function_call_id();
+
+        // Update current skill in state if we explicitly loaded a different skill's SKILL.md
         if is_explicit && relative_path == "SKILL.md" {
             ctx.set_state("skill:current_skill".to_string(), json!(skill_name));
+            // Track as a skill load
+            track_skill_load(&ctx, &skill_name, &tool_call_id);
+        } else {
+            // Track as a resource load under the parent skill
+            track_resource_load(&ctx, &skill_name, &relative_path, &tool_call_id);
         }
 
         Ok(json!({

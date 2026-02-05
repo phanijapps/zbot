@@ -85,8 +85,8 @@ impl CallbackContext for ToolContextImpl {
 }
 
 impl ToolContext for ToolContextImpl {
-    fn function_call_id(&self) -> &str {
-        &self.function_call_id
+    fn function_call_id(&self) -> String {
+        self.function_call_id.clone()
     }
 
     fn actions(&self) -> EventActions {

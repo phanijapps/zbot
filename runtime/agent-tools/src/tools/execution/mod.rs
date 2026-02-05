@@ -9,6 +9,7 @@ pub mod todos;
 
 pub use shell::ShellTool;
 pub use todos::TodoTool;
+pub use skills::{SkillEntry, ResourceEntry, SkillGraph};
 
 use std::sync::Arc;
 

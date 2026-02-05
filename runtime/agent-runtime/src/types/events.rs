@@ -148,6 +148,23 @@ pub enum StreamEvent {
         /// Cumulative output tokens (completion tokens)
         tokens_out: u64,
     },
+
+    // ========================================================================
+    // CHECKPOINT EVENTS
+    // ========================================================================
+
+    /// Execution context state for checkpoint persistence.
+    ///
+    /// Emitted at the end of execution (after Done) to allow the gateway
+    /// to persist the context state for session resumption. Contains skill
+    /// tracking information and other tool context state.
+    #[serde(rename = "context_state")]
+    ContextState {
+        /// Timestamp when state was captured
+        timestamp: u64,
+        /// Serialized tool context state (skill graph, loaded skills, etc.)
+        state: Value,
+    },
 }
 
 impl StreamEvent {
@@ -167,7 +184,8 @@ impl StreamEvent {
             | Self::RequestInput { timestamp, .. }
             | Self::ActionRespond { timestamp, .. }
             | Self::ActionDelegate { timestamp, .. }
-            | Self::TokenUpdate { timestamp, .. } => *timestamp,
+            | Self::TokenUpdate { timestamp, .. }
+            | Self::ContextState { timestamp, .. } => *timestamp,
         }
     }
 

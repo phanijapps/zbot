@@ -242,8 +242,10 @@ fn spawn_execution_task(
                     response_acc.append(&delta);
                 }
 
-                // Broadcast the gateway event
-                broadcast_event(stream_ctx.event_bus.clone(), gateway_event);
+                // Broadcast the gateway event (if not an internal-only event)
+                if let Some(event) = gateway_event {
+                    broadcast_event(stream_ctx.event_bus.clone(), event);
+                }
             })
             .await;
 
@@ -304,8 +306,8 @@ async fn handle_execution_success(
     parent_agent: &str,
     parent_execution_id: &str,
 ) {
-    // Save conversation messages
-    save_messages(conversation_repo, execution_id, task_msg, response);
+    // Save conversation messages (subagent tool calls tracked separately for now)
+    save_messages(conversation_repo, execution_id, task_msg, response, None);
 
     // Complete execution and emit events
     // Delegations don't dispatch to connectors (they're internal subagent calls)

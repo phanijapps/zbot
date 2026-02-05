@@ -265,11 +265,12 @@ pub fn handle_delegation(
 
 /// Process a stream event: log it, handle special cases, and return the gateway event.
 ///
-/// Returns the gateway event and whether the response accumulator should be updated.
+/// Returns the gateway event (if any) and whether the response accumulator should be updated.
+/// Returns `None` for the gateway event if it's an internal event that shouldn't be broadcast.
 pub fn process_stream_event(
     ctx: &StreamContext,
     event: &StreamEvent,
-) -> (GatewayEvent, Option<String>) {
+) -> (Option<GatewayEvent>, Option<String>) {
     // Handle delegation events
     if let StreamEvent::ActionDelegate {
         agent_id: child_agent,
@@ -312,7 +313,7 @@ pub fn process_stream_event(
         _ => {}
     }
 
-    // Convert to gateway event
+    // Convert to gateway event (may return None for internal events)
     let gateway_event = convert_stream_event(
         event.clone(),
         &ctx.agent_id,
@@ -322,9 +323,15 @@ pub fn process_stream_event(
     );
 
     // Extract response content for accumulation
+    // Note: Token events stream incrementally during final response (when no tool calls)
+    // TurnComplete contains the final response and is used as fallback marker
     let response_delta = match &gateway_event {
-        GatewayEvent::Token { delta, .. } => Some(delta.clone()),
-        GatewayEvent::Respond { message, .. } => Some(format!("\n\n{}", message)),
+        Some(GatewayEvent::Token { delta, .. }) => Some(delta.clone()),
+        Some(GatewayEvent::Respond { message, .. }) => Some(format!("\n\n{}", message)),
+        // TurnComplete is handled specially - marked with prefix so accumulator can detect fallback
+        Some(GatewayEvent::TurnComplete { message, .. }) if !message.is_empty() => {
+            Some(format!("\x00TURN_COMPLETE\x00{}", message))
+        }
         _ => None,
     };
 
@@ -342,10 +349,16 @@ pub fn broadcast_event(event_bus: Arc<EventBus>, event: GatewayEvent) {
 // RESPONSE ACCUMULATOR
 // ============================================================================
 
+/// Marker prefix for TurnComplete fallback content.
+const TURN_COMPLETE_MARKER: &str = "\x00TURN_COMPLETE\x00";
+
 /// Accumulator for building the final response from stream events.
 #[derive(Default)]
 pub struct ResponseAccumulator {
+    /// Content accumulated from Token events
     content: String,
+    /// Fallback content from TurnComplete (used if no Token events received)
+    turn_complete_fallback: Option<String>,
 }
 
 impl ResponseAccumulator {
@@ -356,6 +369,13 @@ impl ResponseAccumulator {
 
     /// Append content to the response.
     pub fn append(&mut self, content: &str) {
+        // Check for TurnComplete marker (fallback for when Token events aren't streamed)
+        if let Some(message) = content.strip_prefix(TURN_COMPLETE_MARKER) {
+            // Store as fallback - only used if no Token events were accumulated
+            self.turn_complete_fallback = Some(message.to_string());
+            return;
+        }
+
         // Handle leading newlines for respond tool messages
         if content.starts_with("\n\n") && !self.content.is_empty() {
             self.content.push_str(content);
@@ -365,18 +385,103 @@ impl ResponseAccumulator {
     }
 
     /// Get the accumulated response.
+    ///
+    /// Returns Token-accumulated content if available, otherwise falls back to
+    /// TurnComplete content (for cases where agent made tool calls and Token
+    /// events weren't streamed).
     pub fn into_response(self) -> String {
-        self.content.trim().to_string()
+        let trimmed = self.content.trim();
+        if !trimmed.is_empty() {
+            trimmed.to_string()
+        } else if let Some(fallback) = self.turn_complete_fallback {
+            fallback.trim().to_string()
+        } else {
+            String::new()
+        }
     }
 
-    /// Check if the accumulator is empty.
+    /// Check if the accumulator has any content (from tokens or fallback).
     pub fn is_empty(&self) -> bool {
-        self.content.trim().is_empty()
+        self.content.trim().is_empty() && self.turn_complete_fallback.is_none()
     }
 
-    /// Get a reference to the current content.
+    /// Get a reference to the current token content.
     pub fn content(&self) -> &str {
         &self.content
+    }
+}
+
+// ============================================================================
+// TOOL CALL ACCUMULATOR
+// ============================================================================
+
+/// Record of a single tool call during execution.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+pub struct ToolCallRecord {
+    /// Unique ID for this tool call
+    pub tool_id: String,
+    /// Name of the tool called
+    pub tool_name: String,
+    /// Arguments passed to the tool
+    pub args: serde_json::Value,
+    /// Result returned by the tool (if completed)
+    pub result: Option<String>,
+    /// Error message (if tool failed)
+    pub error: Option<String>,
+}
+
+/// Accumulator for tool calls during execution.
+///
+/// Tracks all tool calls made during a single execution turn,
+/// allowing them to be persisted and loaded for context continuity.
+#[derive(Default)]
+pub struct ToolCallAccumulator {
+    calls: Vec<ToolCallRecord>,
+}
+
+impl ToolCallAccumulator {
+    /// Create a new tool call accumulator.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the start of a tool call.
+    pub fn start_call(&mut self, tool_id: String, tool_name: String, args: serde_json::Value) {
+        self.calls.push(ToolCallRecord {
+            tool_id,
+            tool_name,
+            args,
+            result: None,
+            error: None,
+        });
+    }
+
+    /// Record the completion of a tool call.
+    pub fn complete_call(&mut self, tool_id: &str, result: String, error: Option<String>) {
+        if let Some(call) = self.calls.iter_mut().find(|c| c.tool_id == tool_id) {
+            call.result = Some(result);
+            call.error = error;
+        }
+    }
+
+    /// Convert accumulated tool calls to JSON for storage.
+    /// Returns None if no tool calls were made.
+    pub fn to_json(&self) -> Option<String> {
+        if self.calls.is_empty() {
+            None
+        } else {
+            serde_json::to_string(&self.calls).ok()
+        }
+    }
+
+    /// Check if any tool calls were accumulated.
+    pub fn is_empty(&self) -> bool {
+        self.calls.is_empty()
+    }
+
+    /// Get the number of tool calls.
+    pub fn len(&self) -> usize {
+        self.calls.len()
     }
 }
 

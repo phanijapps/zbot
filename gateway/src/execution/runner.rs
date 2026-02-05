@@ -28,7 +28,7 @@ use super::delegation::{
 pub use super::handle::ExecutionHandle;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext, ToolCallAccumulator,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started,
@@ -423,6 +423,7 @@ impl ExecutionRunner {
             );
 
             let mut response_acc = ResponseAccumulator::new();
+            let mut tool_acc = ToolCallAccumulator::new();
 
             // Execute with streaming
             let result = executor
@@ -434,6 +435,17 @@ impl ExecutionRunner {
 
                     handle.increment();
 
+                    // Accumulate tool calls for persistence
+                    match &event {
+                        agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                            tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                        }
+                        agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                            tool_acc.complete_call(tool_id, result.clone(), error.clone());
+                        }
+                        _ => {}
+                    }
+
                     // Process the event (logging, delegation, token tracking)
                     let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
 
@@ -442,22 +454,33 @@ impl ExecutionRunner {
                         response_acc.append(&delta);
                     }
 
-                    // Broadcast the gateway event
-                    broadcast_event(stream_ctx.event_bus.clone(), gateway_event);
+                    // Broadcast the gateway event (if not an internal-only event)
+                    if let Some(event) = gateway_event {
+                        broadcast_event(stream_ctx.event_bus.clone(), event);
+                    }
                 })
                 .await;
 
             let accumulated_response = response_acc.into_response();
+            let tool_calls_json = tool_acc.to_json();
+
+            tracing::info!(
+                execution_id = %execution_id,
+                response_len = accumulated_response.len(),
+                tool_calls_count = tool_acc.len(),
+                "Execution stream completed"
+            );
 
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Save conversation messages
+                    // Save conversation messages with tool calls
                     save_messages(
                         &conversation_repo,
                         &execution_id,
                         &message,
                         &accumulated_response,
+                        tool_calls_json.as_deref(),
                     );
 
                     // Complete execution and emit events
@@ -870,6 +893,7 @@ async fn invoke_continuation(
         );
 
         let mut response_acc = ResponseAccumulator::new();
+        let mut tool_acc = ToolCallAccumulator::new();
 
         let result = executor
             .execute_stream(continuation_message, &history, |event| {
@@ -879,26 +903,42 @@ async fn invoke_continuation(
 
                 handle.increment();
 
+                // Accumulate tool calls for persistence
+                match &event {
+                    agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                        tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                    }
+                    agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                        tool_acc.complete_call(tool_id, result.clone(), error.clone());
+                    }
+                    _ => {}
+                }
+
                 let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
 
                 if let Some(delta) = response_delta {
                     response_acc.append(&delta);
                 }
 
-                broadcast_event(stream_ctx.event_bus.clone(), gateway_event);
+                // Broadcast the gateway event (if not an internal-only event)
+                if let Some(event) = gateway_event {
+                    broadcast_event(stream_ctx.event_bus.clone(), event);
+                }
             })
             .await;
 
         let accumulated_response = response_acc.into_response();
+        let tool_calls_json = tool_acc.to_json();
 
         match result {
             Ok(()) => {
-                // Save the continuation message and response
+                // Save the continuation message and response with tool calls
                 save_messages(
                     &conversation_repo,
                     &execution_id,
                     continuation_message,
                     &accumulated_response,
+                    tool_calls_json.as_deref(),
                 );
 
                 // Continuation turns don't dispatch to connectors (they're internal)

@@ -147,7 +147,7 @@ mod tests {
         }
 
         impl ToolContext for MockCtx {
-            fn function_call_id(&self) -> &str { "test" }
+            fn function_call_id(&self) -> String { "test".to_string() }
             fn actions(&self) -> EventActions { EventActions::default() }
             fn set_actions(&self, _actions: EventActions) {}
         }

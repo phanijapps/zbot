@@ -31,7 +31,6 @@ use crate::middleware::MiddlewarePipeline;
 use crate::middleware::traits::MiddlewareContext;
 use crate::middleware::token_counter::estimate_total_tokens;
 use zero_core::event::EventActions;
-use zero_core::CallbackContext;
 use zero_core::ToolContext as ZeroToolContext;
 
 /// Result from tool execution including any actions set by the tool
@@ -227,13 +226,20 @@ impl AgentExecutor {
         // Create middleware context
         let message_count = messages.len();
         let estimated_tokens = estimate_total_tokens(&messages);
+
+        // Build execution state from message history.
+        // This extracts skill information from previous tool calls so middleware
+        // can make skill-aware decisions during context compaction.
+        let execution_state = crate::middleware::traits::ExecutionState::from_messages(&messages);
+
         let middleware_context = MiddlewareContext::new(
             self.config.agent_id.clone(),
             self.config.conversation_id.clone(),
             self.config.provider_id.clone(),
             self.config.model.clone(),
         )
-        .with_counts(message_count, estimated_tokens);
+        .with_counts(message_count, estimated_tokens)
+        .with_execution_state(execution_state);
 
         // Process messages through middleware pipeline
         let processed_messages = self.middleware_pipeline
@@ -272,6 +278,16 @@ impl AgentExecutor {
         // Track cumulative token usage across the session
         let mut total_tokens_in: u64 = 0;
         let mut total_tokens_out: u64 = 0;
+
+        // Create shared tool context that persists across all tool calls in this execution.
+        // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
+        // that other tools and middleware can access throughout the execution loop.
+        let shared_tool_context = Arc::new(ToolContext::full_with_state(
+            self.config.agent_id.clone(),
+            self.config.conversation_id.clone(),
+            self.config.skills.clone(),
+            self.config.initial_state.clone(),
+        ));
 
         loop {
             if max_iterations == 0 {
@@ -360,7 +376,7 @@ impl AgentExecutor {
                     args: args.clone(),
                 });
 
-                let result = self.execute_tool(tool_name, args).await;
+                let result = self.execute_tool(&shared_tool_context, &tool_call.id, tool_name, args).await;
 
                 match result {
                     Ok(tool_result) => {
@@ -527,26 +543,37 @@ impl AgentExecutor {
             token_count: full_response.len(),
         });
 
+        // Emit context state for checkpoint persistence
+        // This includes skill tracking (graph), loaded skills, and other tool context state
+        // that should be persisted for session resumption.
+        on_event(StreamEvent::ContextState {
+            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+            state: shared_tool_context.export_state(),
+        });
+
         Ok(())
     }
 
-    async fn execute_tool(&self, tool_name: &str, arguments: &Value) -> Result<ToolExecutionResult, String> {
+    async fn execute_tool(
+        &self,
+        shared_ctx: &Arc<ToolContext>,
+        tool_call_id: &str,
+        tool_name: &str,
+        arguments: &Value,
+    ) -> Result<ToolExecutionResult, String> {
         // First try built-in tools
         if let Some(tool) = self.tool_registry.find(tool_name) {
-            // Create tool context with agent_id, conversation_id, skills, and initial state
-            // This ensures tools have access to hook context, delegation context, etc.
-            let ctx = Arc::new(ToolContext::full_with_state(
-                self.config.agent_id.clone(),
-                self.config.conversation_id.clone(),
-                self.config.skills.clone(),
-                self.config.initial_state.clone(),
-            ));
-            let result = tool.execute(ctx.clone(), arguments.clone()).await
+            // Use shared context that persists across all tool calls in this execution.
+            // Set the function_call_id for this specific tool call so tools can track
+            // their position in the conversation (e.g., for skill loading).
+            shared_ctx.set_function_call_id(tool_call_id.to_string());
+
+            let result = tool.execute(shared_ctx.clone(), arguments.clone()).await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
-            
+
             // Get any actions that were set by the tool
-            let actions = ctx.actions();
-            
+            let actions = shared_ctx.actions();
+
             return Ok(ToolExecutionResult {
                 output: serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string()),
                 actions,
