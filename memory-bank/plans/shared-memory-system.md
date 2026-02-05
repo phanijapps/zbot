@@ -2,6 +2,23 @@
 
 ## Status: COMPLETE
 
+## Workspace Auto-Inject (COMPLETE)
+
+The executor automatically loads `workspace.json` from shared memory and injects it into initial state:
+- Loaded at executor build time in `gateway/src/execution/invoke/executor.rs`
+- Available to tools via `context.get_state("workspace")`
+- Contains flattened key-value pairs (e.g., `working_dir`, `project_name`)
+
+## Future Enhancements
+
+- **Fuzzy search**: Add fuzzy matching to `memory(action="search")` for approximate key/value matching
+- **Concurrent access safety**: File locking or atomic writes for parallel agent access
+  - Multiple agents may read/write shared memory simultaneously
+  - Options: file locks (`flock`), atomic rename, or SQLite for shared state
+- **Inter-agent communication**: Agents may need to communicate via shared memory
+  - Consider a message queue or pub/sub pattern for real-time coordination
+  - Separate from persistent memory (ephemeral channels vs durable storage)
+
 ## Overview
 
 Extend the memory tool to support shared memory across all sessions, enabling pattern learning and cross-session knowledge retention.
