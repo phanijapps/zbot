@@ -37,6 +37,20 @@ pub struct SessionRequest {
     /// Optional conversation ID for legacy message persistence.
     /// If not provided, will be auto-generated.
     pub conversation_id: Option<String>,
+
+    /// Connector IDs to send the response to at end of execution.
+    /// If empty/None, response goes to web UI only (default behavior).
+    /// Original trigger source is NOT automatically included (explicit routing).
+    #[serde(default)]
+    pub respond_to: Option<Vec<String>>,
+
+    /// Connector ID that triggered this session (for correlation).
+    #[serde(default)]
+    pub connector_id: Option<String>,
+
+    /// Thread ID for conversation threading with external connectors.
+    #[serde(default)]
+    pub thread_id: Option<String>,
 }
 
 impl SessionRequest {
@@ -64,6 +78,9 @@ impl SessionRequest {
             external_ref: None,
             metadata: None,
             conversation_id: None,
+            respond_to: None,
+            connector_id: None,
+            thread_id: None,
         }
     }
 
@@ -100,6 +117,24 @@ impl SessionRequest {
     /// Set the conversation ID for legacy message persistence.
     pub fn with_conversation_id(mut self, conversation_id: impl Into<String>) -> Self {
         self.conversation_id = Some(conversation_id.into());
+        self
+    }
+
+    /// Set the connector IDs to send the response to at end of execution.
+    pub fn with_respond_to(mut self, connector_ids: Vec<String>) -> Self {
+        self.respond_to = Some(connector_ids);
+        self
+    }
+
+    /// Set the connector ID that triggered this session.
+    pub fn with_connector_id(mut self, connector_id: impl Into<String>) -> Self {
+        self.connector_id = Some(connector_id.into());
+        self
+    }
+
+    /// Set the thread ID for conversation threading.
+    pub fn with_thread_id(mut self, thread_id: impl Into<String>) -> Self {
+        self.thread_id = Some(thread_id.into());
         self
     }
 }

@@ -598,3 +598,143 @@ export interface SubscriptionOptions {
   /** Subscription scope - defaults to "all" for backward compatibility */
   scope?: SubscriptionScope;
 }
+
+// ============================================================================
+// Connector Types
+// ============================================================================
+
+/** Transport configuration for a connector */
+export type ConnectorTransport =
+  | {
+      type: "http";
+      callback_url: string;
+      method: string;
+      headers: Record<string, string>;
+      timeout_ms?: number;
+    }
+  | {
+      type: "cli";
+      command: string;
+      args: string[];
+      env: Record<string, string>;
+    }
+  | {
+      type: "grpc";
+      endpoint: string;
+      service: string;
+      method: string;
+    }
+  | {
+      type: "websocket";
+      url: string;
+    }
+  | {
+      type: "ipc";
+      socket_path: string;
+    };
+
+/** Capability that a connector provides */
+export interface ConnectorCapability {
+  name: string;
+  description?: string;
+  schema?: Record<string, unknown>;
+}
+
+/** Metadata about a connector */
+export interface ConnectorMetadata {
+  capabilities: ConnectorCapability[];
+  contacts?: unknown[];
+  additional_info?: Record<string, unknown>;
+}
+
+/** Full connector configuration */
+export interface ConnectorResponse {
+  id: string;
+  name: string;
+  transport: ConnectorTransport;
+  metadata: ConnectorMetadata;
+  enabled: boolean;
+  outbound_enabled: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Request to create a new connector */
+export interface CreateConnectorRequest {
+  id: string;
+  name: string;
+  transport: ConnectorTransport;
+  metadata?: ConnectorMetadata;
+  enabled?: boolean;
+  outbound_enabled?: boolean;
+}
+
+/** Request to update a connector */
+export interface UpdateConnectorRequest {
+  name?: string;
+  transport?: ConnectorTransport;
+  metadata?: ConnectorMetadata;
+  enabled?: boolean;
+  outbound_enabled?: boolean;
+}
+
+/** Result of testing a connector */
+export interface ConnectorTestResult {
+  success: boolean;
+  message: string;
+  latency_ms?: number;
+}
+
+// ============================================================================
+// Cron Job Types
+// ============================================================================
+
+/** Cron job configuration */
+export interface CronJobResponse {
+  id: string;
+  name: string;
+  schedule: string;
+  agent_id: string;
+  message: string;
+  respond_to: string[];
+  enabled: boolean;
+  timezone?: string;
+  metadata?: Record<string, unknown>;
+  last_run?: string;
+  next_run?: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+/** Request to create a new cron job */
+export interface CreateCronJobRequest {
+  id: string;
+  name: string;
+  schedule: string;
+  agent_id: string;
+  message: string;
+  respond_to?: string[];
+  enabled?: boolean;
+  timezone?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Request to update a cron job */
+export interface UpdateCronJobRequest {
+  name?: string;
+  schedule?: string;
+  agent_id?: string;
+  message?: string;
+  respond_to?: string[];
+  enabled?: boolean;
+  timezone?: string;
+  metadata?: Record<string, unknown>;
+}
+
+/** Result of triggering a cron job manually */
+export interface CronTriggerResult {
+  success: boolean;
+  session_id?: string;
+  execution_id?: string;
+  message: string;
+}

@@ -5,10 +5,12 @@
 //! This module centralizes all state transitions for sessions and executions,
 //! including creation, completion, error handling, and cancellation.
 
+use crate::connectors::{ConnectorRegistry, DispatchContext};
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use api_logs::{LogService, SessionStatus};
 use execution_state::{AgentExecution, Session, StateService};
+use std::sync::Arc;
 
 // ============================================================================
 // SESSION CREATION
@@ -144,10 +146,13 @@ pub fn save_messages(
 
 /// Handle successful execution completion.
 ///
-/// Updates state, logs the completion, and emits events.
+/// Updates state, logs the completion, emits events, and dispatches to connectors.
 ///
 /// For root executions with pending delegations, this will request a continuation
 /// turn to be spawned after all delegations complete.
+///
+/// If `respond_to` contains connector IDs and `connector_registry` is provided,
+/// the response will be dispatched to those connectors.
 pub async fn complete_execution(
     state_service: &StateService<DatabaseManager>,
     log_service: &LogService<DatabaseManager>,
@@ -157,6 +162,8 @@ pub async fn complete_execution(
     agent_id: &str,
     conversation_id: &str,
     response: Option<String>,
+    connector_registry: Option<&Arc<ConnectorRegistry>>,
+    respond_to: Option<&Vec<String>>,
 ) {
     // Update execution status to COMPLETED
     if let Err(e) = state_service.complete_execution(execution_id) {
@@ -207,10 +214,59 @@ pub async fn complete_execution(
             agent_id: agent_id.to_string(),
             session_id: session_id.to_string(),
             execution_id: execution_id.to_string(),
-            result: response,
+            result: response.clone(),
             conversation_id: Some(conversation_id.to_string()),
         })
         .await;
+
+    // Dispatch response to connectors if respond_to is specified
+    if let (Some(registry), Some(connector_ids)) = (connector_registry, respond_to) {
+        if !connector_ids.is_empty() {
+            if let Some(response_text) = &response {
+                let context = DispatchContext {
+                    session_id: session_id.to_string(),
+                    thread_id: None,
+                    agent_id: agent_id.to_string(),
+                    timestamp: chrono::Utc::now(),
+                };
+
+                let payload = serde_json::json!({
+                    "message": response_text,
+                    "execution_id": execution_id,
+                    "conversation_id": conversation_id,
+                });
+
+                tracing::info!(
+                    session_id = %session_id,
+                    connectors = ?connector_ids,
+                    "Dispatching response to connectors"
+                );
+
+                let results = registry
+                    .dispatch_to_many(connector_ids, "respond", payload, &context)
+                    .await;
+
+                for (connector_id, result) in results {
+                    match result {
+                        Ok(resp) => {
+                            tracing::info!(
+                                connector_id = %connector_id,
+                                success = resp.success,
+                                "Connector dispatch completed"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                connector_id = %connector_id,
+                                error = %e,
+                                "Connector dispatch failed"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 /// Handle execution error/crash.

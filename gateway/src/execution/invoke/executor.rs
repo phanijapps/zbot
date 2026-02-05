@@ -10,6 +10,7 @@ use agent_runtime::{
     OpenAiClient, RespondTool, ToolRegistry,
 };
 use agent_tools::{core_tools, optional_tools, ListAgentsTool, ToolSettings};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::FileSystemContext;
@@ -80,6 +81,13 @@ impl ExecutorBuilder {
         if !available_skills.is_empty() {
             executor_config = executor_config
                 .with_initial_state("available_skills", serde_json::Value::Array(available_skills));
+        }
+
+        // Load workspace context from shared memory
+        if let Some(workspace) = load_workspace_context(&self.config_dir) {
+            tracing::debug!("Loaded workspace context: {:?}", workspace.keys().collect::<Vec<_>>());
+            executor_config =
+                executor_config.with_initial_state("workspace", serde_json::json!(workspace));
         }
 
         // Create LLM client using provider config
@@ -206,7 +214,142 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
     }
 }
 
+/// Load workspace context from shared memory.
+///
+/// Reads `agents_data/shared/workspace.json` and returns its contents
+/// as a HashMap for injection into executor initial state.
+fn load_workspace_context(config_dir: &PathBuf) -> Option<HashMap<String, serde_json::Value>> {
+    let workspace_path = config_dir
+        .join("agents_data")
+        .join("shared")
+        .join("workspace.json");
+
+    if !workspace_path.exists() {
+        return None;
+    }
+
+    match std::fs::read_to_string(&workspace_path) {
+        Ok(content) => {
+            match serde_json::from_str::<serde_json::Value>(&content) {
+                Ok(serde_json::Value::Object(obj)) => {
+                    // Extract the "entries" field which contains the key-value pairs
+                    if let Some(serde_json::Value::Object(entries)) = obj.get("entries") {
+                        let workspace: HashMap<String, serde_json::Value> = entries
+                            .iter()
+                            .filter_map(|(k, v)| {
+                                // Each entry has a "value" field with the actual data
+                                v.get("value").map(|val| (k.clone(), val.clone()))
+                            })
+                            .collect();
+
+                        if !workspace.is_empty() {
+                            return Some(workspace);
+                        }
+                    }
+                    None
+                }
+                Ok(_) => {
+                    tracing::warn!("workspace.json is not a valid object");
+                    None
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to parse workspace.json: {}", e);
+                    None
+                }
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Failed to read workspace.json: {}", e);
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    // Tests would go here but require mocking services
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_load_workspace_context_missing_file() {
+        let dir = TempDir::new().unwrap();
+        let result = load_workspace_context(&dir.path().to_path_buf());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_workspace_context_with_data() {
+        let dir = TempDir::new().unwrap();
+        let shared_dir = dir.path().join("agents_data").join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        let workspace_data = serde_json::json!({
+            "entries": {
+                "working_dir": {
+                    "value": "/home/user/projects/myproject",
+                    "tags": [],
+                    "created_at": "2024-02-04T10:00:00Z",
+                    "updated_at": "2024-02-04T10:00:00Z"
+                },
+                "project_name": {
+                    "value": "myproject",
+                    "tags": ["active"],
+                    "created_at": "2024-02-04T10:00:00Z",
+                    "updated_at": "2024-02-04T10:00:00Z"
+                }
+            }
+        });
+
+        std::fs::write(
+            shared_dir.join("workspace.json"),
+            serde_json::to_string(&workspace_data).unwrap(),
+        )
+        .unwrap();
+
+        let result = load_workspace_context(&dir.path().to_path_buf());
+        assert!(result.is_some());
+
+        let workspace = result.unwrap();
+        assert_eq!(workspace.len(), 2);
+        assert_eq!(
+            workspace.get("working_dir"),
+            Some(&serde_json::json!("/home/user/projects/myproject"))
+        );
+        assert_eq!(
+            workspace.get("project_name"),
+            Some(&serde_json::json!("myproject"))
+        );
+    }
+
+    #[test]
+    fn test_load_workspace_context_empty_entries() {
+        let dir = TempDir::new().unwrap();
+        let shared_dir = dir.path().join("agents_data").join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        let workspace_data = serde_json::json!({
+            "entries": {}
+        });
+
+        std::fs::write(
+            shared_dir.join("workspace.json"),
+            serde_json::to_string(&workspace_data).unwrap(),
+        )
+        .unwrap();
+
+        let result = load_workspace_context(&dir.path().to_path_buf());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_workspace_context_invalid_json() {
+        let dir = TempDir::new().unwrap();
+        let shared_dir = dir.path().join("agents_data").join("shared");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+
+        std::fs::write(shared_dir.join("workspace.json"), "not valid json").unwrap();
+
+        let result = load_workspace_context(&dir.path().to_path_buf());
+        assert!(result.is_none());
+    }
 }

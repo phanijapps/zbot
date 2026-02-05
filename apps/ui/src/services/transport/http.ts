@@ -52,6 +52,16 @@ import type {
   SubscriptionErrorMessage,
   SubscriptionOptions,
   SubscriptionScope,
+  // Connector types
+  ConnectorResponse,
+  CreateConnectorRequest,
+  UpdateConnectorRequest,
+  ConnectorTestResult,
+  // Cron types
+  CronJobResponse,
+  CreateCronJobRequest,
+  UpdateCronJobRequest,
+  CronTriggerResult,
 } from "./types";
 
 // ============================================================================
@@ -1138,6 +1148,82 @@ export class HttpTransport implements Transport {
       this.connect();
     }, delay);
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Connector Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listConnectors(): Promise<TransportResult<ConnectorResponse[]>> {
+    return this.get<ConnectorResponse[]>("/api/connectors");
+  }
+
+  async getConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
+    return this.get<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}`);
+  }
+
+  async createConnector(request: CreateConnectorRequest): Promise<TransportResult<ConnectorResponse>> {
+    return this.post<ConnectorResponse>("/api/connectors", request);
+  }
+
+  async updateConnector(id: string, request: UpdateConnectorRequest): Promise<TransportResult<ConnectorResponse>> {
+    return this.put<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}`, request);
+  }
+
+  async deleteConnector(id: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/connectors/${encodeURIComponent(id)}`);
+  }
+
+  async testConnector(id: string): Promise<TransportResult<ConnectorTestResult>> {
+    return this.post<ConnectorTestResult>(`/api/connectors/${encodeURIComponent(id)}/test`, {});
+  }
+
+  async enableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
+    return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/enable`, {});
+  }
+
+  async disableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
+    return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/disable`, {});
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Cron Job Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listCronJobs(): Promise<TransportResult<CronJobResponse[]>> {
+    return this.get<CronJobResponse[]>("/api/cron");
+  }
+
+  async getCronJob(id: string): Promise<TransportResult<CronJobResponse>> {
+    return this.get<CronJobResponse>(`/api/cron/${encodeURIComponent(id)}`);
+  }
+
+  async createCronJob(request: CreateCronJobRequest): Promise<TransportResult<CronJobResponse>> {
+    return this.post<CronJobResponse>("/api/cron", request);
+  }
+
+  async updateCronJob(id: string, request: UpdateCronJobRequest): Promise<TransportResult<CronJobResponse>> {
+    return this.put<CronJobResponse>(`/api/cron/${encodeURIComponent(id)}`, request);
+  }
+
+  async deleteCronJob(id: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/cron/${encodeURIComponent(id)}`);
+  }
+
+  async triggerCronJob(id: string): Promise<TransportResult<CronTriggerResult>> {
+    return this.post<CronTriggerResult>(`/api/cron/${encodeURIComponent(id)}/trigger`, {});
+  }
+
+  async enableCronJob(id: string): Promise<TransportResult<CronJobResponse>> {
+    return this.post<CronJobResponse>(`/api/cron/${encodeURIComponent(id)}/enable`, {});
+  }
+
+  async disableCronJob(id: string): Promise<TransportResult<CronJobResponse>> {
+    return this.post<CronJobResponse>(`/api/cron/${encodeURIComponent(id)}/disable`, {});
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // HTTP Helpers
+  // ─────────────────────────────────────────────────────────────────────────
 
   private async get<T>(path: string): Promise<TransportResult<T>> {
     if (!this.config) {

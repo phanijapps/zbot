@@ -78,6 +78,10 @@ pub struct ExecutionConfig {
     /// - None: create a new session
     /// - Some(id): continue the existing session with this ID
     pub session_id: Option<String>,
+    /// Optional connector IDs to route the final response to.
+    /// - None/empty: response goes to WebSocket subscribers only (default)
+    /// - Some([...]): response also dispatched to listed connectors
+    pub respond_to: Option<Vec<String>>,
 }
 
 impl ExecutionConfig {
@@ -90,6 +94,7 @@ impl ExecutionConfig {
             max_iterations: 25,
             hook_context: None,
             session_id: None,
+            respond_to: None,
         }
     }
 
@@ -104,6 +109,13 @@ impl ExecutionConfig {
     #[must_use]
     pub fn with_session_id(mut self, session_id: String) -> Self {
         self.session_id = Some(session_id);
+        self
+    }
+
+    /// Set the connector IDs to route the final response to.
+    #[must_use]
+    pub fn with_respond_to(mut self, connector_ids: Vec<String>) -> Self {
+        self.respond_to = Some(connector_ids);
         self
     }
 }

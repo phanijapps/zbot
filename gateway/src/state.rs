@@ -4,6 +4,8 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
+use crate::connectors::{ConnectorRegistry, ConnectorService};
+use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::DelegationRegistry;
@@ -51,6 +53,13 @@ pub struct AppState {
     /// State service for execution state management.
     pub state_service: Arc<StateService<DatabaseManager>>,
 
+    /// Connector registry for external bridge management.
+    pub connector_registry: Arc<ConnectorRegistry>,
+
+    /// Cron scheduler for scheduled agent triggers.
+    /// Optional because it requires async initialization with GatewayBus.
+    pub cron_scheduler: Option<Arc<CronScheduler>>,
+
     /// Configuration directory path.
     pub config_dir: PathBuf,
 }
@@ -81,8 +90,12 @@ impl AppState {
         // Create state service for execution state management
         let state_service = Arc::new(StateService::new(db_manager));
 
-        // Create runtime with execution runner
-        let runtime = Arc::new(RuntimeService::with_runner(
+        // Create connector registry
+        let connector_service = ConnectorService::new(config_dir.clone());
+        let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
+
+        // Create runtime with execution runner and connector registry
+        let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
             event_bus.clone(),
             agents.clone(),
             provider_service.clone(),
@@ -92,6 +105,7 @@ impl AppState {
             skills.clone(),
             log_service.clone(),
             state_service.clone(),
+            Some(connector_registry.clone()),
         ));
 
         // Create hook registry
@@ -116,6 +130,8 @@ impl AppState {
             settings,
             log_service,
             state_service,
+            connector_registry,
+            cron_scheduler: None, // Initialized by server.start()
             config_dir,
         }
     }
@@ -135,6 +151,10 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
 
+        // Create connector registry
+        let connector_service = ConnectorService::new(config_dir.clone());
+        let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
+
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::new(skills_dir)),
@@ -148,6 +168,8 @@ impl AppState {
             settings: Arc::new(SettingsService::new(config_dir.clone())),
             log_service,
             state_service,
+            connector_registry,
+            cron_scheduler: None,
             config_dir,
         }
     }
@@ -163,6 +185,7 @@ impl AppState {
         conversations: Arc<ConversationRepository>,
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
+        connector_registry: Arc<ConnectorRegistry>,
         config_dir: PathBuf,
     ) -> Self {
         Self {
@@ -178,6 +201,8 @@ impl AppState {
             settings: Arc::new(SettingsService::new(config_dir.clone())),
             log_service,
             state_service,
+            connector_registry,
+            cron_scheduler: None,
             config_dir,
         }
     }

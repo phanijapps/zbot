@@ -106,14 +106,20 @@ impl<'a> ProviderResolver<'a> {
 pub struct AgentLoader<'a> {
     agent_service: &'a AgentService,
     provider_resolver: ProviderResolver<'a>,
+    config_dir: PathBuf,
 }
 
 impl<'a> AgentLoader<'a> {
     /// Create a new agent loader.
-    pub fn new(agent_service: &'a AgentService, provider_service: &'a ProviderService) -> Self {
+    pub fn new(
+        agent_service: &'a AgentService,
+        provider_service: &'a ProviderService,
+        config_dir: PathBuf,
+    ) -> Self {
         Self {
             agent_service,
             provider_resolver: ProviderResolver::new(provider_service),
+            config_dir,
         }
     }
 
@@ -169,7 +175,7 @@ impl<'a> AgentLoader<'a> {
                     thinking_enabled: false,
                     voice_recording_enabled: false,
                     system_instruction: None,
-                    instructions: crate::templates::default_system_prompt(),
+                    instructions: crate::templates::load_system_prompt(&self.config_dir),
                     mcps: vec![],
                     skills: vec![],
                     middleware: None,

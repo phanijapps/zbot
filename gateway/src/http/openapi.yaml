@@ -45,6 +45,10 @@ tags:
     description: LLM provider configuration
   - name: MCP Servers
     description: Model Context Protocol server management
+  - name: Connectors
+    description: External connector/bridge management for bidirectional messaging
+  - name: Cron
+    description: Scheduled job management for automated agent triggers
   - name: Tools
     description: Available tools and settings
   - name: Events
@@ -759,6 +763,400 @@ paths:
                 $ref: '#/components/schemas/McpTestResult'
 
   # ============================================================================
+  # Connector Endpoints
+  # ============================================================================
+  /api/connectors:
+    get:
+      tags: [Connectors]
+      summary: List all connectors
+      description: Get a list of all registered external connectors
+      operationId: listConnectors
+      responses:
+        '200':
+          description: List of connectors
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ConnectorConfig'
+    post:
+      tags: [Connectors]
+      summary: Create a connector
+      description: Register a new external connector
+      operationId: createConnector
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateConnectorRequest'
+      responses:
+        '201':
+          description: Connector created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '400':
+          description: Invalid connector ID
+        '409':
+          description: Connector already exists
+
+  /api/connectors/{id}:
+    get:
+      tags: [Connectors]
+      summary: Get connector
+      description: Get a connector by ID
+      operationId: getConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+    put:
+      tags: [Connectors]
+      summary: Update connector
+      description: Update an existing connector's configuration
+      operationId: updateConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateConnectorRequest'
+      responses:
+        '200':
+          description: Connector updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+    delete:
+      tags: [Connectors]
+      summary: Delete connector
+      description: Remove a registered connector
+      operationId: deleteConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Connector deleted
+        '404':
+          description: Connector not found
+
+  /api/connectors/{id}/metadata:
+    get:
+      tags: [Connectors]
+      summary: Get connector metadata
+      description: Get connector capabilities and additional metadata
+      operationId: getConnectorMetadata
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector metadata including capabilities
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorMetadata'
+        '404':
+          description: Connector not found
+
+  /api/connectors/{id}/test:
+    post:
+      tags: [Connectors]
+      summary: Test connector
+      description: Test connectivity to a connector's transport endpoint
+      operationId: testConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Test successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorTestResult'
+        '404':
+          description: Connector not found
+        '503':
+          description: Test failed (connectivity issue)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorTestResult'
+
+  /api/connectors/{id}/enable:
+    post:
+      tags: [Connectors]
+      summary: Enable connector
+      description: Enable a disabled connector
+      operationId: enableConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+
+  /api/connectors/{id}/disable:
+    post:
+      tags: [Connectors]
+      summary: Disable connector
+      description: Disable a connector without deleting it
+      operationId: disableConnector
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Connector disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectorConfig'
+        '404':
+          description: Connector not found
+
+  # ============================================================================
+  # Cron Job Endpoints
+  # ============================================================================
+  /api/cron:
+    get:
+      tags: [Cron]
+      summary: List all cron jobs
+      description: Get a list of all scheduled cron jobs
+      operationId: listCronJobs
+      responses:
+        '200':
+          description: List of cron jobs
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/CronJobConfig'
+        '503':
+          description: Cron scheduler not available
+    post:
+      tags: [Cron]
+      summary: Create a cron job
+      description: Schedule a new cron job for automated agent triggers
+      operationId: createCronJob
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCronJobRequest'
+      responses:
+        '201':
+          description: Cron job created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CronJobConfig'
+        '400':
+          description: Invalid ID or schedule
+        '409':
+          description: Cron job already exists
+        '503':
+          description: Cron scheduler not available
+
+  /api/cron/{id}:
+    get:
+      tags: [Cron]
+      summary: Get cron job
+      description: Get a cron job by ID
+      operationId: getCronJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cron job details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CronJobConfig'
+        '404':
+          description: Cron job not found
+        '503':
+          description: Cron scheduler not available
+    put:
+      tags: [Cron]
+      summary: Update cron job
+      description: Update an existing cron job's configuration
+      operationId: updateCronJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateCronJobRequest'
+      responses:
+        '200':
+          description: Cron job updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CronJobConfig'
+        '400':
+          description: Invalid schedule
+        '404':
+          description: Cron job not found
+        '503':
+          description: Cron scheduler not available
+    delete:
+      tags: [Cron]
+      summary: Delete cron job
+      description: Remove a scheduled cron job
+      operationId: deleteCronJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '204':
+          description: Cron job deleted
+        '404':
+          description: Cron job not found
+        '503':
+          description: Cron scheduler not available
+
+  /api/cron/{id}/trigger:
+    post:
+      tags: [Cron]
+      summary: Manually trigger cron job
+      description: Manually trigger a cron job outside of its schedule
+      operationId: triggerCronJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Job triggered successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriggerResult'
+        '404':
+          description: Cron job not found
+        '500':
+          description: Job trigger failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TriggerResult'
+        '503':
+          description: Cron scheduler not available
+
+  /api/cron/{id}/enable:
+    post:
+      tags: [Cron]
+      summary: Enable cron job
+      description: Enable a disabled cron job
+      operationId: enableCronJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cron job enabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CronJobConfig'
+        '404':
+          description: Cron job not found
+        '503':
+          description: Cron scheduler not available
+
+  /api/cron/{id}/disable:
+    post:
+      tags: [Cron]
+      summary: Disable cron job
+      description: Disable a cron job without deleting it
+      operationId: disableCronJob
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Cron job disabled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CronJobConfig'
+        '404':
+          description: Cron job not found
+        '503':
+          description: Cron scheduler not available
+
+  # ============================================================================
   # Tool Endpoints
   # ============================================================================
   /api/tools:
@@ -935,6 +1333,20 @@ components:
           type: object
           additionalProperties: true
           description: Custom metadata
+        respond_to:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Connector IDs to send response to at end of execution
+        connector_id:
+          type: string
+          nullable: true
+          description: Connector ID that triggered this session
+        thread_id:
+          type: string
+          nullable: true
+          description: Thread ID for conversation threading with connectors
 
     SessionHandle:
       type: object
@@ -1334,6 +1746,372 @@ components:
           type: array
           items:
             type: string
+
+    # ============================================================================
+    # Connector Schemas
+    # ============================================================================
+    ConnectorConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique connector identifier
+          example: gmail-bridge
+        name:
+          type: string
+          description: Human-readable name
+          example: Gmail Bridge
+        transport:
+          $ref: '#/components/schemas/ConnectorTransport'
+        metadata:
+          $ref: '#/components/schemas/ConnectorMetadata'
+        enabled:
+          type: boolean
+          description: Whether the connector is enabled
+          default: true
+        outbound_enabled:
+          type: boolean
+          description: Whether outbound dispatch is enabled
+          default: true
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    ConnectorTransport:
+      type: object
+      description: Transport configuration for connector communication
+      required:
+        - type
+      discriminator:
+        propertyName: type
+      oneOf:
+        - $ref: '#/components/schemas/HttpTransport'
+        - $ref: '#/components/schemas/CliTransport'
+        - $ref: '#/components/schemas/GrpcTransport'
+        - $ref: '#/components/schemas/WebSocketTransport'
+        - $ref: '#/components/schemas/IpcTransport'
+
+    HttpTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [http]
+        callback_url:
+          type: string
+          format: uri
+          description: URL to POST responses to
+          example: http://localhost:9001/callback
+        method:
+          type: string
+          enum: [POST, PUT]
+          default: POST
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom headers to include
+        timeout_ms:
+          type: integer
+          description: Request timeout in milliseconds
+          nullable: true
+
+    CliTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [cli]
+        command:
+          type: string
+          description: Command to execute
+          example: /usr/bin/notify-send
+        args:
+          type: array
+          items:
+            type: string
+          description: Command arguments
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          description: Environment variables
+
+    GrpcTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [grpc]
+        endpoint:
+          type: string
+          description: gRPC endpoint
+        service:
+          type: string
+          description: Service name
+        method:
+          type: string
+          description: Method name
+
+    WebSocketTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [websocket]
+        url:
+          type: string
+          format: uri
+          description: WebSocket URL
+
+    IpcTransport:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [ipc]
+        socket_path:
+          type: string
+          description: Unix socket path
+
+    ConnectorMetadata:
+      type: object
+      properties:
+        capabilities:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectorCapability'
+          description: Available actions/capabilities
+      additionalProperties: true
+      description: Additional connector-specific data
+
+    ConnectorCapability:
+      type: object
+      properties:
+        name:
+          type: string
+          description: Capability name
+          example: send_email
+        schema:
+          type: object
+          description: JSON schema for payload
+        description:
+          type: string
+          nullable: true
+          description: Human-readable description
+
+    CreateConnectorRequest:
+      type: object
+      required:
+        - id
+        - name
+        - transport
+      properties:
+        id:
+          type: string
+          description: Unique connector identifier (alphanumeric, -, _)
+        name:
+          type: string
+          description: Human-readable name
+        transport:
+          $ref: '#/components/schemas/ConnectorTransport'
+        metadata:
+          $ref: '#/components/schemas/ConnectorMetadata'
+        enabled:
+          type: boolean
+          default: true
+        outbound_enabled:
+          type: boolean
+          default: true
+
+    UpdateConnectorRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        transport:
+          $ref: '#/components/schemas/ConnectorTransport'
+        metadata:
+          $ref: '#/components/schemas/ConnectorMetadata'
+        enabled:
+          type: boolean
+          nullable: true
+        outbound_enabled:
+          type: boolean
+          nullable: true
+
+    ConnectorTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the connectivity test succeeded
+        message:
+          type: string
+          description: Test result message
+        latency_ms:
+          type: integer
+          nullable: true
+          description: Response latency in milliseconds (if successful)
+
+    # ============================================================================
+    # Cron Job Schemas
+    # ============================================================================
+    CronJobConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Unique job identifier
+          example: daily-report
+        name:
+          type: string
+          description: Human-readable name
+          example: Daily Report Generator
+        schedule:
+          type: string
+          description: Cron schedule expression (6 fields - sec min hour day month weekday)
+          example: "0 0 9 * * *"
+        agent_id:
+          type: string
+          description: Agent ID to execute
+          example: report-agent
+        message:
+          type: string
+          description: Message to send to the agent
+          example: Generate the daily sales report
+        respond_to:
+          type: array
+          items:
+            type: string
+          description: Connector IDs to send the response to
+        enabled:
+          type: boolean
+          description: Whether the job is enabled
+          default: true
+        timezone:
+          type: string
+          nullable: true
+          description: Timezone for schedule interpretation
+          example: America/New_York
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Optional metadata
+        last_run:
+          type: string
+          format: date-time
+          nullable: true
+          description: Last execution timestamp
+        next_run:
+          type: string
+          format: date-time
+          nullable: true
+          description: Next scheduled execution timestamp
+        created_at:
+          type: string
+          format: date-time
+          nullable: true
+        updated_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    CreateCronJobRequest:
+      type: object
+      required:
+        - id
+        - name
+        - schedule
+        - agent_id
+        - message
+      properties:
+        id:
+          type: string
+          description: Unique job identifier (alphanumeric, -, _)
+        name:
+          type: string
+          description: Human-readable name
+        schedule:
+          type: string
+          description: Cron schedule expression (6 fields - sec min hour day month weekday)
+        agent_id:
+          type: string
+          description: Agent ID to execute
+        message:
+          type: string
+          description: Message to send to the agent
+        respond_to:
+          type: array
+          items:
+            type: string
+          description: Connector IDs to send the response to
+        enabled:
+          type: boolean
+          default: true
+        timezone:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    UpdateCronJobRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          nullable: true
+        schedule:
+          type: string
+          nullable: true
+        agent_id:
+          type: string
+          nullable: true
+        message:
+          type: string
+          nullable: true
+        respond_to:
+          type: array
+          items:
+            type: string
+          nullable: true
+        enabled:
+          type: boolean
+          nullable: true
+        timezone:
+          type: string
+          nullable: true
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+
+    TriggerResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+          description: Whether the trigger was successful
+        session_id:
+          type: string
+          nullable: true
+          description: Session ID if successful
+        execution_id:
+          type: string
+          nullable: true
+          description: Execution ID if successful
+        message:
+          type: string
+          description: Result message
 
     # ============================================================================
     # Tool Schemas

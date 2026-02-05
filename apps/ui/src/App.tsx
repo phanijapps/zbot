@@ -7,10 +7,8 @@ import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
-  MessageSquare,
   Bot,
   Zap,
-  Webhook,
   Cable,
   Server,
   Settings,
@@ -27,12 +25,15 @@ import {
   Users,
   Eye,
   LayoutDashboard,
+  Plug,
+  Calendar,
 } from "lucide-react";
 import { initializeTransport, getTransport, type ToolSettings } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
 import { WebCronPanel } from "./features/cron/WebCronPanel";
+import { WebConnectorsPanel } from "./features/connectors/WebConnectorsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
 import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
@@ -185,6 +186,7 @@ function App() {
           <Route path="/agents" element={<WebAgentsPanel />} />
           <Route path="/skills" element={<WebSkillsPanel />} />
           <Route path="/hooks" element={<WebCronPanel />} />
+          <Route path="/connectors" element={<WebConnectorsPanel />} />
           <Route path="/providers" element={<WebIntegrationsPanel />} />
           <Route path="/mcps" element={<WebMcpsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
@@ -233,7 +235,8 @@ const navGroups: NavGroup[] = [
   {
     label: "Connect",
     items: [
-      { to: "/hooks", label: "Hooks", icon: Webhook },
+      { to: "/connectors", label: "Connectors", icon: Plug },
+      { to: "/hooks", label: "Schedules", icon: Calendar },
       { to: "/providers", label: "Providers", icon: Cable },
       { to: "/mcps", label: "MCPs", icon: Server },
     ],

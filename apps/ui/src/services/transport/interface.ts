@@ -44,6 +44,16 @@ import type {
   ConnectionStateCallback,
   GlobalCallback,
   SubscriptionOptions,
+  // Connector types
+  ConnectorResponse,
+  CreateConnectorRequest,
+  UpdateConnectorRequest,
+  ConnectorTestResult,
+  // Cron types
+  CronJobResponse,
+  CreateCronJobRequest,
+  UpdateCronJobRequest,
+  CronTriggerResult,
 } from "./types";
 
 // ============================================================================
@@ -291,4 +301,60 @@ export interface Transport {
 
   /** Manual reconnect - resets attempt counter and tries again */
   reconnect(): Promise<void>;
+
+  // =========================================================================
+  // Connector Operations
+  // =========================================================================
+
+  /** List all connectors */
+  listConnectors(): Promise<TransportResult<ConnectorResponse[]>>;
+
+  /** Get a connector by ID */
+  getConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
+
+  /** Create a new connector */
+  createConnector(request: CreateConnectorRequest): Promise<TransportResult<ConnectorResponse>>;
+
+  /** Update an existing connector */
+  updateConnector(id: string, request: UpdateConnectorRequest): Promise<TransportResult<ConnectorResponse>>;
+
+  /** Delete a connector */
+  deleteConnector(id: string): Promise<TransportResult<void>>;
+
+  /** Test a connector connection */
+  testConnector(id: string): Promise<TransportResult<ConnectorTestResult>>;
+
+  /** Enable a connector */
+  enableConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
+
+  /** Disable a connector */
+  disableConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
+
+  // =========================================================================
+  // Cron Job Operations
+  // =========================================================================
+
+  /** List all cron jobs */
+  listCronJobs(): Promise<TransportResult<CronJobResponse[]>>;
+
+  /** Get a cron job by ID */
+  getCronJob(id: string): Promise<TransportResult<CronJobResponse>>;
+
+  /** Create a new cron job */
+  createCronJob(request: CreateCronJobRequest): Promise<TransportResult<CronJobResponse>>;
+
+  /** Update an existing cron job */
+  updateCronJob(id: string, request: UpdateCronJobRequest): Promise<TransportResult<CronJobResponse>>;
+
+  /** Delete a cron job */
+  deleteCronJob(id: string): Promise<TransportResult<void>>;
+
+  /** Manually trigger a cron job */
+  triggerCronJob(id: string): Promise<TransportResult<CronTriggerResult>>;
+
+  /** Enable a cron job */
+  enableCronJob(id: string): Promise<TransportResult<CronJobResponse>>;
+
+  /** Disable a cron job */
+  disableCronJob(id: string): Promise<TransportResult<CronJobResponse>>;
 }

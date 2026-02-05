@@ -3,7 +3,9 @@
 //! RESTful HTTP API for the gateway.
 
 mod agents;
+mod connectors;
 mod conversations;
+mod cron;
 mod events;
 mod gateway_bus;
 mod health;
@@ -82,6 +84,25 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/mcps/:id", put(mcps::update_mcp))
         .route("/api/mcps/:id", delete(mcps::delete_mcp))
         .route("/api/mcps/:id/test", post(mcps::test_mcp))
+        // Connector endpoints
+        .route("/api/connectors", get(connectors::list_connectors))
+        .route("/api/connectors", post(connectors::create_connector))
+        .route("/api/connectors/:id", get(connectors::get_connector))
+        .route("/api/connectors/:id", put(connectors::update_connector))
+        .route("/api/connectors/:id", delete(connectors::delete_connector))
+        .route("/api/connectors/:id/metadata", get(connectors::get_connector_metadata))
+        .route("/api/connectors/:id/test", post(connectors::test_connector))
+        .route("/api/connectors/:id/enable", post(connectors::enable_connector))
+        .route("/api/connectors/:id/disable", post(connectors::disable_connector))
+        // Cron job endpoints
+        .route("/api/cron", get(cron::list_cron_jobs))
+        .route("/api/cron", post(cron::create_cron_job))
+        .route("/api/cron/:id", get(cron::get_cron_job))
+        .route("/api/cron/:id", put(cron::update_cron_job))
+        .route("/api/cron/:id", delete(cron::delete_cron_job))
+        .route("/api/cron/:id/trigger", post(cron::trigger_cron_job))
+        .route("/api/cron/:id/enable", post(cron::enable_cron_job))
+        .route("/api/cron/:id/disable", post(cron::disable_cron_job))
         // Webhook endpoints
         .route(
             "/api/webhooks/:hook_type/:hook_id",

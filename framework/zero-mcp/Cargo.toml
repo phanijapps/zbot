@@ -21,7 +21,7 @@ serde_json = { workspace = true }
 reqwest = { workspace = true }
 
 # MCP SDK
-rmcp = { version = "0.2", features = ["client"] }
+rmcp = { version = "0.14", features = ["client"] }
 
 # Error handling
 thiserror = { workspace = true }

@@ -84,8 +84,9 @@ mod tests {
         let service = SettingsService::new(dir.path().to_path_buf());
 
         let settings = service.load().unwrap();
-        assert!(!settings.tools.grep);
+        // Optional tools are disabled by default
         assert!(!settings.tools.python);
+        assert!(!settings.tools.web_fetch);
     }
 
     #[test]
@@ -94,13 +95,13 @@ mod tests {
         let service = SettingsService::new(dir.path().to_path_buf());
 
         let mut settings = AppSettings::default();
-        settings.tools.grep = true;
         settings.tools.python = true;
+        settings.tools.web_fetch = true;
 
         service.save(&settings).unwrap();
 
         let loaded = service.load().unwrap();
-        assert!(loaded.tools.grep);
         assert!(loaded.tools.python);
+        assert!(loaded.tools.web_fetch);
     }
 }

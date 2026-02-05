@@ -30,6 +30,8 @@
 
 pub mod bus;
 pub mod config;
+pub mod connectors;
+pub mod cron;
 pub mod database;
 pub mod error;
 pub mod events;
@@ -47,6 +49,8 @@ pub mod test_utils;
 
 pub use bus::{BusError, GatewayBus, HttpGatewayBus, SessionHandle, SessionRequest};
 pub use config::GatewayConfig;
+pub use connectors::{ConnectorConfig, ConnectorRegistry, ConnectorService, DispatchContext};
+pub use cron::{CronJobConfig, CronScheduler, CronService};
 pub use error::{GatewayError, Result};
 pub use execution::{DelegationContext, DelegationRegistry, ExecutionRunner, ExecutionConfig, ExecutionHandle};
 pub use hooks::{Attachment, Hook, HookContext, HookRegistry, HookType, ResponseFormat};

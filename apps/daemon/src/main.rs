@@ -29,7 +29,14 @@ use clap::Parser;
 use gateway::{GatewayConfig, GatewayServer};
 use std::path::PathBuf;
 use tracing::{info, Level};
-use tracing_subscriber::FmtSubscriber;
+use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_subscriber::{
+    fmt,
+    fmt::writer::MakeWriterExt,
+    layer::SubscriberExt,
+    util::SubscriberInitExt,
+    EnvFilter,
+};
 
 /// AgentZero Daemon - AI agent runtime server
 #[derive(Parser, Debug)]
@@ -60,6 +67,22 @@ struct Args {
     #[arg(long, default_value = "info")]
     log_level: String,
 
+    /// Directory for log files (enables file logging when set)
+    #[arg(long)]
+    log_dir: Option<PathBuf>,
+
+    /// Log rotation strategy: daily, hourly, minutely, or never
+    #[arg(long, default_value = "daily")]
+    log_rotation: String,
+
+    /// Maximum number of log files to keep (0 = unlimited)
+    #[arg(long, default_value_t = 7)]
+    log_max_files: usize,
+
+    /// Disable logging to stdout (only log to file)
+    #[arg(long)]
+    log_no_stdout: bool,
+
     /// Path to static files for web dashboard
     #[arg(long)]
     static_dir: Option<PathBuf>,
@@ -67,6 +90,83 @@ struct Args {
     /// Disable serving the web dashboard
     #[arg(long)]
     no_dashboard: bool,
+}
+
+/// Setup logging with optional file output.
+///
+/// Returns a guard that must be held for the lifetime of the program
+/// to ensure log files are properly flushed.
+fn setup_logging(
+    args: &Args,
+    env_filter: EnvFilter,
+) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
+    // Determine rotation strategy
+    let rotation = match args.log_rotation.to_lowercase().as_str() {
+        "hourly" => Rotation::HOURLY,
+        "minutely" => Rotation::MINUTELY,
+        "never" => Rotation::NEVER,
+        _ => Rotation::DAILY,
+    };
+
+    // Check if file logging is enabled
+    if let Some(ref log_dir) = args.log_dir {
+        // Ensure log directory exists
+        if !log_dir.exists() {
+            std::fs::create_dir_all(log_dir)?;
+        }
+
+        // Create rolling file appender
+        let file_appender = RollingFileAppender::new(rotation, log_dir, "zerod.log");
+        let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
+
+        if args.log_no_stdout {
+            // Only file logging
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(
+                    fmt::layer()
+                        .with_writer(file_writer)
+                        .with_ansi(false)
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_file(true)
+                        .with_line_number(true),
+                )
+                .init();
+        } else {
+            // Both stdout and file logging using combined writer
+            let combined_writer = file_writer.and(std::io::stdout);
+
+            tracing_subscriber::registry()
+                .with(env_filter)
+                .with(
+                    fmt::layer()
+                        .with_writer(combined_writer)
+                        .with_ansi(false) // Disable ANSI for file compatibility
+                        .with_target(true)
+                        .with_thread_ids(false)
+                        .with_file(false)
+                        .with_line_number(false),
+                )
+                .init();
+        }
+
+        Ok(Some(file_guard))
+    } else {
+        // Only stdout logging (default behavior)
+        tracing_subscriber::registry()
+            .with(env_filter)
+            .with(
+                fmt::layer()
+                    .with_target(true)
+                    .with_thread_ids(false)
+                    .with_file(false)
+                    .with_line_number(false),
+            )
+            .init();
+
+        Ok(None)
+    }
 }
 
 #[tokio::main]
@@ -83,13 +183,11 @@ async fn main() -> Result<()> {
         _ => Level::INFO,
     };
 
-    FmtSubscriber::builder()
-        .with_max_level(log_level)
-        .with_target(true)
-        .with_thread_ids(false)
-        .with_file(false)
-        .with_line_number(false)
-        .init();
+    let env_filter = EnvFilter::from_default_env()
+        .add_directive(log_level.into());
+
+    // Setup logging based on configuration
+    let _guard = setup_logging(&args, env_filter)?;
 
     info!("AgentZero Daemon v{}", env!("CARGO_PKG_VERSION"));
 

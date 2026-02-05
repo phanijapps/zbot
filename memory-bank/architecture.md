@@ -55,11 +55,17 @@
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ~/Documents/agentzero/                                                  │
 │  ├── conversations.db          # SQLite: conversations, messages        │
+│  ├── INSTRUCTIONS.md           # Custom system prompt (auto-created)    │
 │  ├── agents/{name}/            # Agent configurations                   │
 │  │   ├── config.yaml           #   Model, provider, temperature         │
 │  │   └── AGENTS.md             #   System instructions                  │
 │  ├── agents_data/{id}/         # Per-agent runtime data                 │
 │  │   └── memory.json           #   Persistent key-value storage         │
+│  ├── agents_data/shared/       # Cross-agent shared memory (file-locked)│
+│  │   ├── user_info.json        #   User preferences                     │
+│  │   ├── workspace.json        #   Project paths (auto-injected)        │
+│  │   ├── patterns.json         #   Learned patterns/conventions         │
+│  │   └── session_summaries.json#   Distilled learnings                  │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
 │  ├── providers.json            # LLM provider configurations            │
@@ -559,20 +565,39 @@ CREATE TABLE execution_logs (
 
 ## Built-in Tools
 
+### Core Tools (Always Enabled)
+
 | Tool | Description | Permissions |
 |------|-------------|-------------|
-| `read_file` | Read file contents | Safe |
-| `write_file` | Write content to file | Moderate |
-| `list_dir` | List directory contents | Safe |
-| `execute_command` | Run shell command | Dangerous |
-| `memory` | Persistent key-value store | Safe |
+| `shell` | Run shell command | Dangerous |
+| `read` | Read file contents | Safe |
+| `write` | Write content to file | Moderate |
+| `edit` | Edit file contents | Moderate |
+| `memory` | Persistent key-value store (shared/private) | Safe |
+| `todo` | Task management | Safe |
 | `list_skills` | List available skills | Safe |
-| `list_tools` | List available tools | Safe |
-| `list_mcps` | List MCP servers | Safe |
-| `list_agents` | List available agents | Safe |
 | `load_skill` | Load skill instructions | Safe |
-| `delegate_to_agent` | Delegate task to subagent | Safe |
+| `grep` | Search file contents | Safe |
+| `glob` | Find files by pattern | Safe |
+
+### Action Tools (Always Enabled)
+
+| Tool | Description | Permissions |
+|------|-------------|-------------|
 | `respond` | Send response to user | Safe |
+| `delegate_to_agent` | Delegate task to subagent | Safe |
+| `list_agents` | List available agents | Safe |
+
+### Optional Tools (Configurable)
+
+| Tool | Description | Permissions |
+|------|-------------|-------------|
+| `python` | Execute Python code | Dangerous |
+| `web_fetch` | Fetch web content | Moderate |
+| `ui_tools` | UI manipulation tools | Moderate |
+| `knowledge_graph` | Entity-relationship storage | Safe |
+| `create_agent` | Create new agents | Moderate |
+| `introspection` | Agent introspection | Safe |
 
 ## Design Decisions
 
@@ -605,3 +630,170 @@ CREATE TABLE execution_logs (
 - Version control friendly
 - Markdown rendering in UI
 - Separates behavior from configuration
+
+## System Prompt Architecture
+
+The system prompt is composed of a base template plus automatically injected shards:
+
+```
+┌─────────────────────────────────────────┐
+│ INSTRUCTIONS.md (user-customizable)     │
+│                                         │
+│ Your custom agent instructions...       │
+├─────────────────────────────────────────┤
+│ # --- SYSTEM INJECTED ---               │
+├─────────────────────────────────────────┤
+│ ENVIRONMENT                             │
+│ - OS: windows (x86_64)                  │
+│ - Shell: PowerShell/cmd syntax          │
+├─────────────────────────────────────────┤
+│ SAFETY (shard)                          │
+│ - Never exfiltrate secrets              │
+│ - Confirm before dangerous operations   │
+├─────────────────────────────────────────┤
+│ TOOLING & SKILLS (shard)                │
+│ - Skills-first approach                 │
+│ - Delegation patterns                   │
+├─────────────────────────────────────────┤
+│ MEMORY & LEARNING (shard)               │
+│ - Shared memory usage                   │
+│ - Pattern recording                     │
+└─────────────────────────────────────────┘
+```
+
+### Shards
+
+Required shards are automatically appended to custom instructions:
+
+| Shard | Purpose |
+|-------|---------|
+| `safety` | Security rules (secrets, confirmations) |
+| `tooling_skills` | Skills-first approach, delegation |
+| `memory_learning` | Shared memory patterns |
+
+### Environment Injection
+
+OS and architecture are detected at runtime and injected:
+- **Windows**: PowerShell/cmd syntax hints
+- **macOS/Linux**: Unix shell syntax hints
+
+This ensures the agent uses correct shell commands for the platform.
+
+## Connectors
+
+Connectors are external services that receive agent responses. When an agent execution completes, AgentZero can dispatch the response to one or more configured connectors.
+
+### Connector Flow
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   Trigger       │────▶│   AgentZero     │────▶│   Connector     │
+│ (Cron/API/Web)  │     │   Gateway       │     │   (Your Service)│
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+                              │
+                              │ respond_to: ["my-connector"]
+                              ▼
+                        ┌─────────────────┐
+                        │  HTTP POST to   │
+                        │  your endpoint  │
+                        └─────────────────┘
+```
+
+### Transport Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `http` | HTTP POST to callback URL | Webhooks, external APIs |
+| `cli` | Execute local command | Scripts, local integrations |
+
+### Connector Payload
+
+When dispatching to connectors, Gateway sends:
+
+```json
+{
+  "context": {
+    "session_id": "sess-abc123",
+    "thread_id": null,
+    "agent_id": "root",
+    "timestamp": "2024-01-15T09:00:00Z"
+  },
+  "capability": "respond",
+  "payload": {
+    "message": "The agent's response text",
+    "execution_id": "exec-xyz789",
+    "conversation_id": "conv-abc123"
+  }
+}
+```
+
+### Connector API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/connectors` | List all connectors |
+| GET | `/api/connectors/:id` | Get connector by ID |
+| POST | `/api/connectors` | Create connector |
+| PUT | `/api/connectors/:id` | Update connector |
+| DELETE | `/api/connectors/:id` | Delete connector |
+| POST | `/api/connectors/:id/test` | Test connector |
+| POST | `/api/connectors/:id/enable` | Enable connector |
+| POST | `/api/connectors/:id/disable` | Disable connector |
+
+## Cron Scheduler
+
+Built-in scheduler that triggers agents on a schedule. Cron jobs always route to the **root agent** for orchestration.
+
+### Cron Configuration
+
+```json
+{
+  "id": "daily-report",
+  "name": "Daily Report Generator",
+  "schedule": "0 0 9 * * *",
+  "message": "Generate the daily sales report",
+  "respond_to": ["slack-notifier"],
+  "enabled": true
+}
+```
+
+**Note**: Schedule uses 6-field cron format: `sec min hour day month weekday`
+
+### Cron API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/cron` | List all cron jobs |
+| GET | `/api/cron/:id` | Get cron job by ID |
+| POST | `/api/cron` | Create cron job |
+| PUT | `/api/cron/:id` | Update cron job |
+| DELETE | `/api/cron/:id` | Delete cron job |
+| POST | `/api/cron/:id/trigger` | Manually trigger job |
+| POST | `/api/cron/:id/enable` | Enable job |
+| POST | `/api/cron/:id/disable` | Disable job |
+
+## Response Routing
+
+The `respond_to` field controls where agent responses are delivered:
+
+```json
+{
+  "agent_id": "root",
+  "message": "Generate a report",
+  "respond_to": ["slack-notifier", "email-bridge"]
+}
+```
+
+- **Empty/null**: Response goes to web UI only (default)
+- **Specified**: Response dispatched to listed connectors
+- **Original source NOT automatically included** (explicit routing)
+
+## Data Layer Additions
+
+The following JSON files are added to the data directory:
+
+```
+~/Documents/agentzero/
+├── connectors.json      # Connector configurations
+└── cron_jobs.json       # Scheduled job configurations
+```
