@@ -12,37 +12,63 @@ pub struct Templates;
 /// These provide core functionality documentation that users shouldn't have to maintain.
 const REQUIRED_SHARDS: &[&str] = &["memory_learning"];
 
-/// Load system prompt from filesystem, falling back to embedded.
+/// Load system prompt from filesystem, creating starter if missing.
 ///
-/// When loading from filesystem:
-/// - Loads custom `INSTRUCTIONS.md` from data directory
-/// - Appends required shards (memory, tools, etc.) automatically
+/// Behavior:
+/// 1. If `INSTRUCTIONS.md` doesn't exist, creates it from starter template
+/// 2. Loads `INSTRUCTIONS.md` from data directory
+/// 3. Appends required shards (memory, tools, etc.) automatically
 ///
-/// When no custom file exists:
-/// - Returns the full embedded default template
+/// Falls back to embedded default only if file operations fail.
 pub fn load_system_prompt(data_dir: &Path) -> String {
     let instructions_path = data_dir.join("INSTRUCTIONS.md");
 
-    if instructions_path.exists() {
-        match std::fs::read_to_string(&instructions_path) {
-            Ok(content) if !content.trim().is_empty() => {
-                tracing::info!("Loaded system prompt from {:?}", instructions_path);
-                // Append required shards to custom instructions
-                return append_shards(content);
-            }
-            Ok(_) => {
-                tracing::warn!("INSTRUCTIONS.md is empty, using embedded default");
-            }
-            Err(e) => {
-                tracing::warn!(
-                    "Failed to read INSTRUCTIONS.md: {}, using embedded default",
-                    e
-                );
-            }
+    // Create starter INSTRUCTIONS.md if it doesn't exist
+    if !instructions_path.exists() {
+        if let Err(e) = create_starter_instructions(&instructions_path) {
+            tracing::warn!(
+                "Failed to create starter INSTRUCTIONS.md: {}, using embedded default",
+                e
+            );
+            return default_system_prompt();
         }
     }
 
-    default_system_prompt()
+    // Load from filesystem
+    match std::fs::read_to_string(&instructions_path) {
+        Ok(content) if !content.trim().is_empty() => {
+            tracing::info!("Loaded system prompt from {:?}", instructions_path);
+            // Append required shards to custom instructions
+            append_shards(content)
+        }
+        Ok(_) => {
+            tracing::warn!("INSTRUCTIONS.md is empty, using embedded default");
+            default_system_prompt()
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to read INSTRUCTIONS.md: {}, using embedded default",
+                e
+            );
+            default_system_prompt()
+        }
+    }
+}
+
+/// Create starter INSTRUCTIONS.md from embedded template.
+fn create_starter_instructions(path: &Path) -> std::io::Result<()> {
+    // Ensure parent directory exists
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+
+    let starter = Templates::get("instructions_starter.md")
+        .map(|file| String::from_utf8_lossy(&file.data).to_string())
+        .unwrap_or_else(|| default_system_prompt());
+
+    std::fs::write(path, starter)?;
+    tracing::info!("Created starter INSTRUCTIONS.md at {:?}", path);
+    Ok(())
 }
 
 /// Append required shards to custom instructions.
@@ -111,14 +137,22 @@ mod tests {
     }
 
     #[test]
-    fn test_load_system_prompt_falls_back_when_missing() {
+    fn test_load_system_prompt_creates_starter_when_missing() {
         let dir = TempDir::new().unwrap();
-        // No INSTRUCTIONS.md file
+        let instructions_path = dir.path().join("INSTRUCTIONS.md");
+
+        // File should not exist initially
+        assert!(!instructions_path.exists());
 
         let prompt = load_system_prompt(dir.path());
-        // Should return embedded default
-        assert!(!prompt.is_empty());
+
+        // File should now exist
+        assert!(instructions_path.exists());
+
+        // Should contain Jaffa content with injected shards
         assert!(prompt.contains("Jaffa"));
+        assert!(prompt.contains("MEMORY & LEARNING"));
+        assert!(prompt.contains("# --- SYSTEM INJECTED ---"));
     }
 
     #[test]
@@ -153,5 +187,30 @@ mod tests {
 
         assert!(result.starts_with("My custom instructions"));
         assert!(result.contains("# --- SYSTEM INJECTED ---"));
+    }
+
+    #[test]
+    fn test_create_starter_instructions_creates_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("INSTRUCTIONS.md");
+
+        let result = create_starter_instructions(&path);
+        assert!(result.is_ok());
+        assert!(path.exists());
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert!(content.contains("Jaffa"));
+        // Starter should NOT contain MEMORY & LEARNING (that's injected)
+        assert!(!content.contains("MEMORY & LEARNING"));
+    }
+
+    #[test]
+    fn test_create_starter_instructions_creates_parent_dirs() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("nested").join("dir").join("INSTRUCTIONS.md");
+
+        let result = create_starter_instructions(&path);
+        assert!(result.is_ok());
+        assert!(path.exists());
     }
 }
