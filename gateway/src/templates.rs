@@ -39,7 +39,7 @@ pub fn load_system_prompt(data_dir: &Path) -> String {
         Ok(content) if !content.trim().is_empty() => {
             tracing::info!("Loaded system prompt from {:?}", instructions_path);
             // Append required shards to custom instructions
-            append_shards(content)
+            append_shards(content, data_dir)
         }
         Ok(_) => {
             tracing::warn!("INSTRUCTIONS.md is empty, using embedded default");
@@ -72,11 +72,11 @@ fn create_starter_instructions(path: &Path) -> std::io::Result<()> {
 }
 
 /// Append required shards and environment info to custom instructions.
-fn append_shards(mut content: String) -> String {
+fn append_shards(mut content: String, data_dir: &Path) -> String {
     content.push_str("\n\n# --- SYSTEM INJECTED ---\n\n");
 
     // Add environment info first
-    content.push_str(&environment_section());
+    content.push_str(&environment_section(data_dir));
     content.push_str("\n\n");
 
     // Add shards
@@ -88,7 +88,7 @@ fn append_shards(mut content: String) -> String {
 }
 
 /// Generate environment section with OS and runtime info.
-fn environment_section() -> String {
+fn environment_section(data_dir: &Path) -> String {
     let os = std::env::consts::OS;
     let arch = std::env::consts::ARCH;
 
@@ -99,10 +99,43 @@ fn environment_section() -> String {
         _ => "Detect shell syntax from context",
     };
 
-    format!(
-        "ENVIRONMENT\n- OS: {} ({})\n- Shell: {}",
-        os, arch, shell_hint
-    )
+    let mut lines = vec![
+        "ENVIRONMENT".to_string(),
+        format!("- OS: {} ({})", os, arch),
+        format!("- Shell: {}", shell_hint),
+        format!("- Vault: {}", data_dir.display()),
+    ];
+
+    // Python venv - always show canonical location with status
+    let venv_dir = data_dir.join("venv");
+    let python_path = if cfg!(windows) {
+        venv_dir.join("Scripts").join("python.exe")
+    } else {
+        venv_dir.join("bin").join("python")
+    };
+    let pip_path = if cfg!(windows) {
+        venv_dir.join("Scripts").join("pip.exe")
+    } else {
+        venv_dir.join("bin").join("pip")
+    };
+    if python_path.exists() {
+        lines.push(format!("- Python: {} (ready)", python_path.display()));
+        lines.push(format!("- Pip: {}", pip_path.display()));
+    } else {
+        lines.push(format!("- Python: {} (not configured)", python_path.display()));
+    }
+
+    // Node environment - always show canonical location with status
+    let node_env_dir = data_dir.join("node_env");
+    let node_modules = node_env_dir.join("node_modules");
+    if node_modules.exists() {
+        lines.push(format!("- NodeModules: {} (ready)", node_modules.display()));
+        lines.push("- Node: use `node` from PATH with NODE_PATH set to NodeModules".to_string());
+    } else {
+        lines.push(format!("- NodeModules: {} (not configured)", node_modules.display()));
+    }
+
+    lines.join("\n")
 }
 
 /// Load all required shards from embedded templates.
@@ -216,14 +249,16 @@ mod tests {
 
     #[test]
     fn test_append_shards_adds_separator_and_environment() {
+        let dir = TempDir::new().unwrap();
         let content = "My custom instructions".to_string();
-        let result = append_shards(content);
+        let result = append_shards(content, dir.path());
 
         assert!(result.starts_with("My custom instructions"));
         assert!(result.contains("# --- SYSTEM INJECTED ---"));
         assert!(result.contains("ENVIRONMENT"));
         assert!(result.contains("OS:"));
         assert!(result.contains("Shell:"));
+        assert!(result.contains("Vault:"));
     }
 
     #[test]

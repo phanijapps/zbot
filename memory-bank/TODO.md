@@ -21,24 +21,25 @@ Agent was too passive - proposed plans instead of executing, lost context betwee
 - [x] Verify tool calls appear in agent context on next turn
 
 ### CodeAct: Python & Node Execution
-**Status**: Needs planning
+**Status**: IN PROGRESS
+**Plan**: `memory-bank/plans/codeact-python-node.md`
 
-Enable agents to write and execute Python/Node code to accomplish tasks (CodeAct pattern).
+Enable agents to execute Python/Node code using shell + memory (simpler than specialized tools).
 
-**Questions to resolve**:
-- [ ] Sandboxing strategy (Docker, Firecracker, WASM, or process isolation?)
-- [ ] State persistence between executions (REPL-like vs fresh each time)
-- [ ] Package/dependency management (pre-installed vs on-demand)
-- [ ] Output capture (stdout, stderr, return values, plots/images)
-- [ ] Timeout and resource limits
-- [ ] Integration with existing `python` optional tool vs new design
-- [ ] Skill-based activation (load CodeAct skill to enable?)
+**Architecture decision**: Use shell tool with injected paths instead of specialized tools.
 
-**Implementation considerations**:
-- [ ] Unified execution interface for both runtimes
-- [ ] Workspace file access (read/write from agent's working directory)
-- [ ] Error handling and stack traces for agent self-correction
-- [ ] Security boundaries (network, filesystem, system calls)
+**Completed**:
+- [x] Inject runtime paths into system prompt (templates.rs)
+  - Vault path, Python executable, Node modules
+- [x] Seed workspace memory with structured paths (state.rs)
+  - `os`, `vault_path`, `python_executable`, `node_modules_path`
+
+**Remaining**:
+- [ ] Create venv in vault if missing (manual or agent-driven)
+- [ ] Create node_env in vault if missing
+- [ ] Test: agent uses shell with injected Python path
+- [ ] Optional: python-codeact skill for patterns
+- [ ] Optional: node-codeact skill for patterns
 
 ### Skill Loading & Unloading
 **Status**: Needs planning
