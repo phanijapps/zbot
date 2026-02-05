@@ -10,7 +10,7 @@ pub struct Templates;
 
 /// Shards that are always appended to custom instructions.
 /// These provide core functionality documentation that users shouldn't have to maintain.
-const REQUIRED_SHARDS: &[&str] = &["memory_learning"];
+const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning"];
 
 /// Load system prompt from filesystem, creating starter if missing.
 ///
@@ -172,6 +172,16 @@ mod tests {
         let shard = load_shard("memory_learning");
         assert!(shard.is_some());
         assert!(shard.unwrap().contains("MEMORY & LEARNING"));
+    }
+
+    #[test]
+    fn test_load_tooling_skills_shard() {
+        let shard = load_shard("tooling_skills");
+        assert!(shard.is_some());
+        let content = shard.unwrap();
+        assert!(content.contains("TOOLING & SKILLS"));
+        assert!(content.contains("list_skills"));
+        assert!(content.contains("delegate_to_agent"));
     }
 
     #[test]
