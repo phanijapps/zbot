@@ -55,11 +55,17 @@
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ~/Documents/agentzero/                                                  │
 │  ├── conversations.db          # SQLite: conversations, messages        │
+│  ├── INSTRUCTIONS.md           # Custom system prompt (auto-created)    │
 │  ├── agents/{name}/            # Agent configurations                   │
 │  │   ├── config.yaml           #   Model, provider, temperature         │
 │  │   └── AGENTS.md             #   System instructions                  │
 │  ├── agents_data/{id}/         # Per-agent runtime data                 │
 │  │   └── memory.json           #   Persistent key-value storage         │
+│  ├── agents_data/shared/       # Cross-agent shared memory (file-locked)│
+│  │   ├── user_info.json        #   User preferences                     │
+│  │   ├── workspace.json        #   Project paths (auto-injected)        │
+│  │   ├── patterns.json         #   Learned patterns/conventions         │
+│  │   └── session_summaries.json#   Distilled learnings                  │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
 │  ├── providers.json            # LLM provider configurations            │
@@ -559,20 +565,39 @@ CREATE TABLE execution_logs (
 
 ## Built-in Tools
 
+### Core Tools (Always Enabled)
+
 | Tool | Description | Permissions |
 |------|-------------|-------------|
-| `read_file` | Read file contents | Safe |
-| `write_file` | Write content to file | Moderate |
-| `list_dir` | List directory contents | Safe |
-| `execute_command` | Run shell command | Dangerous |
-| `memory` | Persistent key-value store | Safe |
+| `shell` | Run shell command | Dangerous |
+| `read` | Read file contents | Safe |
+| `write` | Write content to file | Moderate |
+| `edit` | Edit file contents | Moderate |
+| `memory` | Persistent key-value store (shared/private) | Safe |
+| `todo` | Task management | Safe |
 | `list_skills` | List available skills | Safe |
-| `list_tools` | List available tools | Safe |
-| `list_mcps` | List MCP servers | Safe |
-| `list_agents` | List available agents | Safe |
 | `load_skill` | Load skill instructions | Safe |
-| `delegate_to_agent` | Delegate task to subagent | Safe |
+| `grep` | Search file contents | Safe |
+| `glob` | Find files by pattern | Safe |
+
+### Action Tools (Always Enabled)
+
+| Tool | Description | Permissions |
+|------|-------------|-------------|
 | `respond` | Send response to user | Safe |
+| `delegate_to_agent` | Delegate task to subagent | Safe |
+| `list_agents` | List available agents | Safe |
+
+### Optional Tools (Configurable)
+
+| Tool | Description | Permissions |
+|------|-------------|-------------|
+| `python` | Execute Python code | Dangerous |
+| `web_fetch` | Fetch web content | Moderate |
+| `ui_tools` | UI manipulation tools | Moderate |
+| `knowledge_graph` | Entity-relationship storage | Safe |
+| `create_agent` | Create new agents | Moderate |
+| `introspection` | Agent introspection | Safe |
 
 ## Design Decisions
 
@@ -605,6 +630,54 @@ CREATE TABLE execution_logs (
 - Version control friendly
 - Markdown rendering in UI
 - Separates behavior from configuration
+
+## System Prompt Architecture
+
+The system prompt is composed of a base template plus automatically injected shards:
+
+```
+┌─────────────────────────────────────────┐
+│ INSTRUCTIONS.md (user-customizable)     │
+│                                         │
+│ Your custom agent instructions...       │
+├─────────────────────────────────────────┤
+│ # --- SYSTEM INJECTED ---               │
+├─────────────────────────────────────────┤
+│ ENVIRONMENT                             │
+│ - OS: windows (x86_64)                  │
+│ - Shell: PowerShell/cmd syntax          │
+├─────────────────────────────────────────┤
+│ SAFETY (shard)                          │
+│ - Never exfiltrate secrets              │
+│ - Confirm before dangerous operations   │
+├─────────────────────────────────────────┤
+│ TOOLING & SKILLS (shard)                │
+│ - Skills-first approach                 │
+│ - Delegation patterns                   │
+├─────────────────────────────────────────┤
+│ MEMORY & LEARNING (shard)               │
+│ - Shared memory usage                   │
+│ - Pattern recording                     │
+└─────────────────────────────────────────┘
+```
+
+### Shards
+
+Required shards are automatically appended to custom instructions:
+
+| Shard | Purpose |
+|-------|---------|
+| `safety` | Security rules (secrets, confirmations) |
+| `tooling_skills` | Skills-first approach, delegation |
+| `memory_learning` | Shared memory patterns |
+
+### Environment Injection
+
+OS and architecture are detected at runtime and injected:
+- **Windows**: PowerShell/cmd syntax hints
+- **macOS/Linux**: Unix shell syntax hints
+
+This ensures the agent uses correct shell commands for the platform.
 
 ## Connectors
 
