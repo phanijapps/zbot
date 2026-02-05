@@ -24,8 +24,11 @@ const MAX_ENTRIES: usize = 1000;
 /// Maximum size of a single entry value (100 KB)
 const MAX_ENTRY_SIZE: usize = 100 * 1024;
 
-/// Memory file name
+/// Memory file name for agent-scoped memory
 const MEMORY_FILE: &str = "memory.json";
+
+/// Valid shared memory files
+const SHARED_FILES: [&str; 4] = ["user_info", "workspace", "patterns", "session_summaries"];
 
 // ============================================================================
 // MEMORY ENTRY
@@ -68,24 +71,57 @@ impl MemoryTool {
         Self { fs }
     }
 
-    /// Get the memory file path for an agent
-    fn memory_path(&self, agent_id: &str) -> Option<PathBuf> {
-        self.fs
-            .agent_data_dir(agent_id)
-            .map(|dir| dir.join(MEMORY_FILE))
+    /// Get memory file path based on scope.
+    ///
+    /// - `scope="agent"` (default): `agents_data/{agent_id}/memory.json`
+    /// - `scope="shared"`: `agents_data/shared/{file}.json`
+    fn resolve_memory_path(
+        &self,
+        agent_id: &str,
+        scope: &str,
+        file: Option<&str>,
+    ) -> Result<PathBuf> {
+        match scope {
+            "shared" => {
+                let file = file.ok_or_else(|| {
+                    ZeroError::Tool("'file' parameter required for shared scope".to_string())
+                })?;
+
+                // Validate file name
+                if !SHARED_FILES.contains(&file) {
+                    return Err(ZeroError::Tool(format!(
+                        "Invalid shared file '{}'. Valid options: {}",
+                        file,
+                        SHARED_FILES.join(", ")
+                    )));
+                }
+
+                self.fs
+                    .vault_path()
+                    .map(|p| {
+                        p.join("agents_data")
+                            .join("shared")
+                            .join(format!("{}.json", file))
+                    })
+                    .ok_or_else(|| ZeroError::Tool("No vault path configured".to_string()))
+            }
+            "agent" | _ => self
+                .fs
+                .agent_data_dir(agent_id)
+                .map(|dir| dir.join(MEMORY_FILE))
+                .ok_or_else(|| {
+                    ZeroError::Tool("No agent data directory configured".to_string())
+                }),
+        }
     }
 
     /// Load memory store from disk
-    fn load_store(&self, agent_id: &str) -> Result<MemoryStore> {
-        let path = self
-            .memory_path(agent_id)
-            .ok_or_else(|| ZeroError::Tool("No agent data directory configured".to_string()))?;
-
+    fn load_store_at_path(&self, path: &PathBuf) -> Result<MemoryStore> {
         if !path.exists() {
             return Ok(MemoryStore::default());
         }
 
-        let content = fs::read_to_string(&path)
+        let content = fs::read_to_string(path)
             .map_err(|e| ZeroError::Tool(format!("Failed to read memory file: {}", e)))?;
 
         serde_json::from_str(&content)
@@ -93,11 +129,7 @@ impl MemoryTool {
     }
 
     /// Save memory store to disk
-    fn save_store(&self, agent_id: &str, store: &MemoryStore) -> Result<()> {
-        let path = self
-            .memory_path(agent_id)
-            .ok_or_else(|| ZeroError::Tool("No agent data directory configured".to_string()))?;
-
+    fn save_store_at_path(&self, path: &PathBuf, store: &MemoryStore) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -107,7 +139,7 @@ impl MemoryTool {
         let content = serde_json::to_string_pretty(store)
             .map_err(|e| ZeroError::Tool(format!("Failed to serialize memory: {}", e)))?;
 
-        fs::write(&path, content)
+        fs::write(path, content)
             .map_err(|e| ZeroError::Tool(format!("Failed to write memory file: {}", e)))?;
 
         Ok(())
@@ -127,8 +159,8 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Persistent memory for storing facts, notes, and context across sessions. \
-        Use to remember important information about users, projects, or decisions. \
-        Supports get, set, delete, list, and search actions."
+        Supports two scopes: 'agent' (default, per-agent) and 'shared' (cross-session). \
+        Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -139,6 +171,17 @@ impl Tool for MemoryTool {
                     "type": "string",
                     "enum": ["get", "set", "delete", "list", "search"],
                     "description": "The memory operation to perform"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["agent", "shared"],
+                    "default": "agent",
+                    "description": "Memory scope: 'agent' for agent-specific, 'shared' for cross-session"
+                },
+                "file": {
+                    "type": "string",
+                    "enum": ["user_info", "workspace", "patterns", "session_summaries"],
+                    "description": "Shared memory file (required when scope is 'shared')"
                 },
                 "key": {
                     "type": "string",
@@ -181,6 +224,16 @@ impl Tool for MemoryTool {
             })
             .ok_or_else(|| ZeroError::Tool("No agent ID in context".to_string()))?;
 
+        // Get scope and file parameters
+        let scope = args
+            .get("scope")
+            .and_then(|v| v.as_str())
+            .unwrap_or("agent");
+        let file = args.get("file").and_then(|v| v.as_str());
+
+        // Resolve memory path
+        let path = self.resolve_memory_path(&agent_id, scope, file)?;
+
         // Get action
         let action = args
             .get("action")
@@ -188,11 +241,11 @@ impl Tool for MemoryTool {
             .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
 
         match action {
-            "get" => self.action_get(&agent_id, &args).await,
-            "set" => self.action_set(&agent_id, &args).await,
-            "delete" => self.action_delete(&agent_id, &args).await,
-            "list" => self.action_list(&agent_id, &args).await,
-            "search" => self.action_search(&agent_id, &args).await,
+            "get" => self.action_get(&path, &args).await,
+            "set" => self.action_set(&path, &args).await,
+            "delete" => self.action_delete(&path, &args).await,
+            "list" => self.action_list(&path, scope, file, &args).await,
+            "search" => self.action_search(&path, &args).await,
             _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
         }
     }
@@ -200,13 +253,13 @@ impl Tool for MemoryTool {
 
 impl MemoryTool {
     /// Get a memory entry by key
-    async fn action_get(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    async fn action_get(&self, path: &PathBuf, args: &Value) -> Result<Value> {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'key' parameter for get".to_string()))?;
 
-        let store = self.load_store(agent_id)?;
+        let store = self.load_store_at_path(path)?;
 
         match store.entries.get(key) {
             Some(entry) => Ok(json!({
@@ -226,7 +279,7 @@ impl MemoryTool {
     }
 
     /// Set a memory entry
-    async fn action_set(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    async fn action_set(&self, path: &PathBuf, args: &Value) -> Result<Value> {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
@@ -256,7 +309,7 @@ impl MemoryTool {
             })
             .unwrap_or_default();
 
-        let mut store = self.load_store(agent_id)?;
+        let mut store = self.load_store_at_path(path)?;
 
         // Check entry limit (only for new entries)
         if !store.entries.contains_key(key) && store.entries.len() >= MAX_ENTRIES {
@@ -282,7 +335,7 @@ impl MemoryTool {
         };
 
         store.entries.insert(key.to_string(), entry);
-        self.save_store(agent_id, &store)?;
+        self.save_store_at_path(path, &store)?;
 
         Ok(json!({
             "success": true,
@@ -293,18 +346,18 @@ impl MemoryTool {
     }
 
     /// Delete a memory entry
-    async fn action_delete(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    async fn action_delete(&self, path: &PathBuf, args: &Value) -> Result<Value> {
         let key = args
             .get("key")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'key' parameter for delete".to_string()))?;
 
-        let mut store = self.load_store(agent_id)?;
+        let mut store = self.load_store_at_path(path)?;
 
         let deleted = store.entries.remove(key).is_some();
 
         if deleted {
-            self.save_store(agent_id, &store)?;
+            self.save_store_at_path(path, &store)?;
         }
 
         Ok(json!({
@@ -316,10 +369,16 @@ impl MemoryTool {
     }
 
     /// List all memory entries
-    async fn action_list(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    async fn action_list(
+        &self,
+        path: &PathBuf,
+        scope: &str,
+        file: Option<&str>,
+        args: &Value,
+    ) -> Result<Value> {
         let tag_filter = args.get("tag_filter").and_then(|v| v.as_str());
 
-        let store = self.load_store(agent_id)?;
+        let store = self.load_store_at_path(path)?;
 
         let entries: Vec<Value> = store
             .entries
@@ -344,6 +403,8 @@ impl MemoryTool {
             .collect();
 
         Ok(json!({
+            "scope": scope,
+            "file": file,
             "total": entries.len(),
             "entries": entries,
             "tag_filter": tag_filter,
@@ -351,14 +412,14 @@ impl MemoryTool {
     }
 
     /// Search memory entries
-    async fn action_search(&self, agent_id: &str, args: &Value) -> Result<Value> {
+    async fn action_search(&self, path: &PathBuf, args: &Value) -> Result<Value> {
         let query = args
             .get("query")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'query' parameter for search".to_string()))?;
 
         let query_lower = query.to_lowercase();
-        let store = self.load_store(agent_id)?;
+        let store = self.load_store_at_path(path)?;
 
         let matches: Vec<Value> = store
             .entries
@@ -393,6 +454,42 @@ impl MemoryTool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
+
+    /// Test file system context that uses a temp directory
+    struct TestFileSystem {
+        base_dir: PathBuf,
+    }
+
+    impl TestFileSystem {
+        fn new(base_dir: PathBuf) -> Self {
+            Self { base_dir }
+        }
+    }
+
+    impl FileSystemContext for TestFileSystem {
+        fn conversation_dir(&self, _id: &str) -> Option<PathBuf> {
+            None
+        }
+        fn outputs_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn skills_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn agents_dir(&self) -> Option<PathBuf> {
+            None
+        }
+        fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf> {
+            Some(self.base_dir.join("agents_data").join(agent_id))
+        }
+        fn python_executable(&self) -> Option<PathBuf> {
+            None
+        }
+        fn vault_path(&self) -> Option<PathBuf> {
+            Some(self.base_dir.clone())
+        }
+    }
 
     #[test]
     fn test_memory_entry_serialization() {
@@ -414,5 +511,101 @@ mod tests {
     fn test_memory_store_default() {
         let store = MemoryStore::default();
         assert!(store.entries.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_agent_memory_path() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        let path = tool.resolve_memory_path("test-agent", "agent", None).unwrap();
+        assert!(path.ends_with("agents_data/test-agent/memory.json"));
+    }
+
+    #[test]
+    fn test_resolve_shared_memory_path() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        let path = tool
+            .resolve_memory_path("test-agent", "shared", Some("patterns"))
+            .unwrap();
+        assert!(path.ends_with("agents_data/shared/patterns.json"));
+    }
+
+    #[test]
+    fn test_shared_memory_requires_file() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        let result = tool.resolve_memory_path("test-agent", "shared", None);
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("'file' parameter required"));
+    }
+
+    #[test]
+    fn test_shared_memory_invalid_file() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Invalid shared file"));
+    }
+
+    #[test]
+    fn test_all_shared_files_valid() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        for file in SHARED_FILES {
+            let result = tool.resolve_memory_path("test-agent", "shared", Some(file));
+            assert!(result.is_ok(), "Failed for file: {}", file);
+        }
+    }
+
+    #[test]
+    fn test_load_store_creates_default_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        let path = dir.path().join("nonexistent").join("memory.json");
+        let store = tool.load_store_at_path(&path).unwrap();
+        assert!(store.entries.is_empty());
+    }
+
+    #[test]
+    fn test_save_and_load_store() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
+        let tool = MemoryTool::new(fs);
+
+        let path = dir.path().join("test_memory.json");
+
+        let mut store = MemoryStore::default();
+        store.entries.insert(
+            "key1".to_string(),
+            MemoryEntry {
+                value: "value1".to_string(),
+                tags: vec!["tag1".to_string()],
+                created_at: "2024-01-01T00:00:00Z".to_string(),
+                updated_at: "2024-01-01T00:00:00Z".to_string(),
+            },
+        );
+
+        tool.save_store_at_path(&path, &store).unwrap();
+
+        let loaded = tool.load_store_at_path(&path).unwrap();
+        assert_eq!(loaded.entries.len(), 1);
+        assert_eq!(loaded.entries.get("key1").unwrap().value, "value1");
     }
 }
