@@ -113,7 +113,7 @@ pub async fn spawn_delegated_agent(
     .await;
 
     // Load agent and provider using AgentLoader
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service);
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, config_dir.clone());
     let (agent, provider) = match agent_loader.load(&request.child_agent_id).await {
         Ok(result) => result,
         Err(e) => {

@@ -338,7 +338,7 @@ impl ExecutionRunner {
         .await;
 
         // Load agent configuration (or create default for "root" agent)
-        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service);
+        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.config_dir.clone());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -810,7 +810,7 @@ async fn invoke_continuation(
     emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
 
     // Load agent and provider
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service);
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, config_dir.clone());
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
     // Load full session history (includes callback messages from subagents)
