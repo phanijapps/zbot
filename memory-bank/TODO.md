@@ -12,8 +12,8 @@
 ## Medium Priority
 
 ### Concurrent Access Safety
-- [ ] Add file locking for shared memory files
-- [ ] Consider SQLite for shared state
+- [x] Add file locking for shared memory files (fs2 crate)
+- [ ] Consider SQLite for shared state (future)
 - [ ] Design inter-agent communication pattern
 
 ### Skills
