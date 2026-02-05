@@ -14,14 +14,6 @@ Read `memory-bank/ui-architecture.md` before embarking on UI changes or adding n
 ## Common Commands
 Check Installation section in `AGENTS.md` at workspace level.
 
-### Agents & Skills
-You have access to various agents and skills and use them as needed.
-#### Skills
-/agentzero-react - React/TypeScript patterns for AgentZero UI development
-/agentzero-rust - Rust patterns for AgentZero backend development
-/rust-desktop-applications - for rust desktop applications
-/rust-development - for rust development
-/documenting-rust-code - for documenting rust code.
 
 ## Architecture
 
