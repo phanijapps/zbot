@@ -23,6 +23,7 @@ tracing = "0.1"
 thiserror = "2.0"
 dirs = "5.0"
 chrono = "0.4"
+fs2 = "0.4"
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

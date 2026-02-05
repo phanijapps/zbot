@@ -4,9 +4,12 @@
 // ============================================================================
 
 use std::collections::HashMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
+
+use fs2::FileExt;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -116,19 +119,30 @@ impl MemoryTool {
     }
 
     /// Load memory store from disk
+    /// Load memory store with shared lock (allows concurrent reads).
     fn load_store_at_path(&self, path: &PathBuf) -> Result<MemoryStore> {
         if !path.exists() {
             return Ok(MemoryStore::default());
         }
 
-        let content = fs::read_to_string(path)
+        let file = File::open(path)
+            .map_err(|e| ZeroError::Tool(format!("Failed to open memory file: {}", e)))?;
+
+        // Acquire shared lock (allows other readers)
+        file.lock_shared()
+            .map_err(|e| ZeroError::Tool(format!("Failed to lock memory file: {}", e)))?;
+
+        let mut content = String::new();
+        (&file)
+            .read_to_string(&mut content)
             .map_err(|e| ZeroError::Tool(format!("Failed to read memory file: {}", e)))?;
 
+        // Lock released when file is dropped
         serde_json::from_str(&content)
             .map_err(|e| ZeroError::Tool(format!("Failed to parse memory file: {}", e)))
     }
 
-    /// Save memory store to disk
+    /// Save memory store with exclusive lock (blocks other readers/writers).
     fn save_store_at_path(&self, path: &PathBuf, store: &MemoryStore) -> Result<()> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
@@ -139,9 +153,22 @@ impl MemoryTool {
         let content = serde_json::to_string_pretty(store)
             .map_err(|e| ZeroError::Tool(format!("Failed to serialize memory: {}", e)))?;
 
-        fs::write(path, content)
+        // Open/create file with write access
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|e| ZeroError::Tool(format!("Failed to open memory file for writing: {}", e)))?;
+
+        // Acquire exclusive lock (blocks all other access)
+        file.lock_exclusive()
+            .map_err(|e| ZeroError::Tool(format!("Failed to lock memory file: {}", e)))?;
+
+        file.write_all(content.as_bytes())
             .map_err(|e| ZeroError::Tool(format!("Failed to write memory file: {}", e)))?;
 
+        // Lock released when file is dropped
         Ok(())
     }
 
