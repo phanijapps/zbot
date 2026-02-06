@@ -28,8 +28,8 @@ use super::delegation::{
 pub use super::handle::ExecutionHandle;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext, ToolCallAccumulator,
-    WorkspaceCache,
+    spawn_batch_writer, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    ToolCallAccumulator, WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started,
@@ -420,6 +420,9 @@ impl ExecutionRunner {
         let respond_to = config.respond_to.clone();
 
         tokio::spawn(async move {
+            // Create batch writer for non-blocking DB writes
+            let batch_writer = spawn_batch_writer(state_service.clone(), log_service.clone());
+
             // Create stream context for event processing
             let stream_ctx = StreamContext::new(
                 agent_id.clone(),
@@ -430,7 +433,8 @@ impl ExecutionRunner {
                 log_service.clone(),
                 state_service.clone(),
                 delegation_tx,
-            );
+            )
+            .with_batch_writer(batch_writer);
 
             let mut response_acc = ResponseAccumulator::new();
             let mut tool_acc = ToolCallAccumulator::new();
@@ -897,6 +901,9 @@ async fn invoke_continuation(
     let agent_id_clone = root_agent_id.to_string();
 
     tokio::spawn(async move {
+        // Create batch writer for non-blocking DB writes
+        let batch_writer = spawn_batch_writer(state_service.clone(), log_service.clone());
+
         let stream_ctx = StreamContext::new(
             agent_id_clone.clone(),
             conversation_id.clone(),
@@ -906,7 +913,8 @@ async fn invoke_continuation(
             log_service.clone(),
             state_service.clone(),
             delegation_tx,
-        );
+        )
+        .with_batch_writer(batch_writer);
 
         let mut response_acc = ResponseAccumulator::new();
         let mut tool_acc = ToolCallAccumulator::new();

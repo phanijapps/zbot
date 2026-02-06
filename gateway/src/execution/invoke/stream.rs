@@ -10,6 +10,7 @@ use execution_state::{AgentExecution, DelegationType, StateService};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
+use super::batch_writer::BatchWriterHandle;
 use super::super::delegation::DelegationRequest;
 use super::super::events::convert_stream_event;
 
@@ -39,6 +40,8 @@ pub struct StreamContext {
     pub state_service: Arc<StateService<DatabaseManager>>,
     /// Channel for delegation requests
     pub delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+    /// Batch writer for non-blocking DB writes (token updates, logs)
+    pub batch_writer: Option<BatchWriterHandle>,
 }
 
 impl StreamContext {
@@ -62,7 +65,14 @@ impl StreamContext {
             log_service,
             state_service,
             delegation_tx,
+            batch_writer: None,
         }
+    }
+
+    /// Attach a batch writer for non-blocking DB writes.
+    pub fn with_batch_writer(mut self, writer: BatchWriterHandle) -> Self {
+        self.batch_writer = Some(writer);
+        self
     }
 }
 
@@ -72,39 +82,47 @@ impl StreamContext {
 
 /// Log a delegation event.
 pub fn log_delegation(ctx: &StreamContext, child_agent: &str, task: &str) {
-    let _ = ctx.log_service.log(
-        ExecutionLog::new(
-            &ctx.execution_id,
-            &ctx.session_id,
-            &ctx.agent_id,
-            LogLevel::Info,
-            LogCategory::Delegation,
-            format!("Delegating to {}", child_agent),
-        )
-        .with_metadata(serde_json::json!({
-            "child_agent": child_agent,
-            "task": task,
-        })),
-    );
+    let entry = ExecutionLog::new(
+        &ctx.execution_id,
+        &ctx.session_id,
+        &ctx.agent_id,
+        LogLevel::Info,
+        LogCategory::Delegation,
+        format!("Delegating to {}", child_agent),
+    )
+    .with_metadata(serde_json::json!({
+        "child_agent": child_agent,
+        "task": task,
+    }));
+
+    if let Some(writer) = &ctx.batch_writer {
+        writer.log(entry);
+    } else {
+        let _ = ctx.log_service.log(entry);
+    }
 }
 
 /// Log a tool call start event.
 pub fn log_tool_call(ctx: &StreamContext, tool_id: &str, tool_name: &str, args: &serde_json::Value) {
-    let _ = ctx.log_service.log(
-        ExecutionLog::new(
-            &ctx.execution_id,
-            &ctx.session_id,
-            &ctx.agent_id,
-            LogLevel::Info,
-            LogCategory::ToolCall,
-            format!("Calling tool: {}", tool_name),
-        )
-        .with_metadata(serde_json::json!({
-            "tool_id": tool_id,
-            "tool_name": tool_name,
-            "args": args,
-        })),
-    );
+    let entry = ExecutionLog::new(
+        &ctx.execution_id,
+        &ctx.session_id,
+        &ctx.agent_id,
+        LogLevel::Info,
+        LogCategory::ToolCall,
+        format!("Calling tool: {}", tool_name),
+    )
+    .with_metadata(serde_json::json!({
+        "tool_id": tool_id,
+        "tool_name": tool_name,
+        "args": args,
+    }));
+
+    if let Some(writer) = &ctx.batch_writer {
+        writer.log(entry);
+    } else {
+        let _ = ctx.log_service.log(entry);
+    }
 }
 
 /// Log a tool result event.
@@ -128,37 +146,47 @@ pub fn log_tool_result(
         result.to_string()
     };
 
-    let _ = ctx.log_service.log(
-        ExecutionLog::new(
-            &ctx.execution_id,
-            &ctx.session_id,
-            &ctx.agent_id,
-            level,
-            LogCategory::ToolResult,
-            if error.is_some() {
-                "Tool returned error"
-            } else {
-                "Tool completed"
-            },
-        )
-        .with_metadata(serde_json::json!({
-            "tool_id": tool_id,
-            "result": truncated,
-            "error": error,
-        })),
-    );
+    let entry = ExecutionLog::new(
+        &ctx.execution_id,
+        &ctx.session_id,
+        &ctx.agent_id,
+        level,
+        LogCategory::ToolResult,
+        if error.is_some() {
+            "Tool returned error"
+        } else {
+            "Tool completed"
+        },
+    )
+    .with_metadata(serde_json::json!({
+        "tool_id": tool_id,
+        "result": truncated,
+        "error": error,
+    }));
+
+    if let Some(writer) = &ctx.batch_writer {
+        writer.log(entry);
+    } else {
+        let _ = ctx.log_service.log(entry);
+    }
 }
 
 /// Log an error event.
 pub fn log_error(ctx: &StreamContext, error: &str) {
-    let _ = ctx.log_service.log(ExecutionLog::new(
+    let entry = ExecutionLog::new(
         &ctx.execution_id,
         &ctx.session_id,
         &ctx.agent_id,
         LogLevel::Error,
         LogCategory::Error,
         error,
-    ));
+    );
+
+    if let Some(writer) = &ctx.batch_writer {
+        writer.log(entry);
+    } else {
+        let _ = ctx.log_service.log(entry);
+    }
 }
 
 // ============================================================================
@@ -167,8 +195,10 @@ pub fn log_error(ctx: &StreamContext, error: &str) {
 
 /// Update token counts and emit token usage event.
 pub fn handle_token_update(ctx: &StreamContext, tokens_in: u64, tokens_out: u64) {
-    // Update execution token counts in database
-    if let Err(e) =
+    // Update execution token counts — via batch writer if available, else direct
+    if let Some(writer) = &ctx.batch_writer {
+        writer.token_update(&ctx.execution_id, tokens_in, tokens_out);
+    } else if let Err(e) =
         ctx.state_service
             .update_execution_tokens(&ctx.execution_id, tokens_in, tokens_out)
     {

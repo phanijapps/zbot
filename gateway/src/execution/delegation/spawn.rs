@@ -19,7 +19,8 @@ use tokio::sync::{mpsc, RwLock};
 use crate::execution::handle::ExecutionHandle;
 use crate::execution::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext, WorkspaceCache,
+    spawn_batch_writer, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    WorkspaceCache,
 };
 use crate::execution::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
@@ -215,6 +216,9 @@ fn spawn_execution_task(
     let parent_execution_id = request.parent_execution_id.clone();
 
     tokio::spawn(async move {
+        // Create batch writer for non-blocking DB writes
+        let batch_writer = spawn_batch_writer(state_service.clone(), log_service.clone());
+
         // Create stream context for event processing
         let stream_ctx = StreamContext::new(
             agent_id.clone(),
@@ -225,7 +229,8 @@ fn spawn_execution_task(
             log_service.clone(),
             state_service.clone(),
             delegation_tx,
-        );
+        )
+        .with_batch_writer(batch_writer);
 
         let mut response_acc = ResponseAccumulator::new();
 
