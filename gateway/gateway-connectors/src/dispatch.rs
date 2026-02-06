@@ -2,7 +2,7 @@
 //!
 //! Transport-specific dispatch logic for sending payloads to connectors.
 
-use super::config::{ConnectorConfig, ConnectorPayload, ConnectorTransport, DispatchContext};
+use crate::config::{ConnectorConfig, ConnectorPayload, ConnectorTransport, DispatchContext};
 use std::process::Stdio;
 use thiserror::Error;
 use tokio::process::Command;

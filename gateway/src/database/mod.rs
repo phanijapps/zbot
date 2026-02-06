@@ -1,11 +1,10 @@
 // ============================================================================
 // DATABASE MODULE
-// SQLite-based persistence for sessions, executions, and messages
+// Re-exports DatabaseManager from gateway-database crate.
+// ConversationRepository stays here (depends on agent-runtime types).
 // ============================================================================
 
-mod connection;
-mod schema;
 mod repository;
 
-pub use connection::DatabaseManager;
+pub use gateway_database::DatabaseManager;
 pub use repository::{ConversationRepository, Message};

@@ -1,0 +1,28 @@
+# ============================================================================
+# GATEWAY DATABASE
+# SQLite connection pool and schema management for the AgentZero gateway
+# ============================================================================
+
+[package]
+name = "gateway-database"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "SQLite connection pool and schema for the AgentZero gateway"
+
+[dependencies]
+# Internal crates (for DbProvider trait impls)
+api-logs = { path = "../../services/api-logs" }
+execution-state = { path = "../../services/execution-state" }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
+
+# Utilities
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

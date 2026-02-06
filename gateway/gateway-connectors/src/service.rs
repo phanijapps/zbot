@@ -2,7 +2,7 @@
 //!
 //! CRUD operations and persistence for connectors.
 
-use super::config::{
+use crate::config::{
     ConnectorConfig, ConnectorsStore, CreateConnectorRequest, UpdateConnectorRequest,
 };
 use std::path::PathBuf;
@@ -307,7 +307,7 @@ impl Default for UpdateConnectorRequest {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::connectors::config::ConnectorTransport;
+    use crate::config::ConnectorTransport;
     use std::collections::HashMap;
     use tempfile::TempDir;
 

@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use super::schema::initialize_database;
+use crate::schema::initialize_database;
 
 /// Database connection pool manager.
 ///

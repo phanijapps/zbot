@@ -2,7 +2,7 @@
 //!
 //! Broadcast mechanism for distributing events to subscribers.
 
-use super::GatewayEvent;
+use crate::GatewayEvent;
 use std::collections::HashMap;
 use tokio::sync::{broadcast, RwLock};
 use tracing::{debug, trace};

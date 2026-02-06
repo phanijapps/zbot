@@ -27,6 +27,10 @@ members = [
     "services/knowledge-graph",
 
     # Gateway - Network layer
+    "gateway/gateway-events",
+    "gateway/gateway-database",
+    "gateway/gateway-templates",
+    "gateway/gateway-connectors",
     "gateway",
 
     # Apps - Runnable applications
