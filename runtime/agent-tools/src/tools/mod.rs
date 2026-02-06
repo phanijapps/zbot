@@ -34,7 +34,7 @@ pub use knowledge_graph::{
 };
 pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use web::WebFetchTool;
-pub use memory::MemoryTool;
+pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
 pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
 
 // ============================================================================

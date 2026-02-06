@@ -32,11 +32,22 @@ impl DatabaseManager {
         let conn = Connection::open(&db_path)
             .map_err(|e| format!("Failed to open database: {}", e))?;
 
+        // Performance pragmas — WAL mode allows concurrent reads during writes,
+        // synchronous=NORMAL is safe with WAL, cache_size increases in-memory page cache.
+        conn.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             PRAGMA cache_size = -8000;
+             PRAGMA busy_timeout = 5000;
+             PRAGMA wal_autocheckpoint = 1000;
+             PRAGMA temp_store = MEMORY;"
+        ).map_err(|e| format!("Failed to set SQLite pragmas: {}", e))?;
+
         // Initialize schema
         initialize_database(&conn)
             .map_err(|e| format!("Failed to initialize database: {}", e))?;
 
-        tracing::info!("Database initialized at {:?}", db_path);
+        tracing::info!("Database initialized at {:?} (WAL mode)", db_path);
 
         Ok(Self {
             db_path,

@@ -7,7 +7,7 @@ use crate::services::providers::Provider;
 use crate::services::{McpService, SkillService};
 use agent_runtime::{
     AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
-    OpenAiClient, RespondTool, ToolRegistry,
+    OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
 };
 use agent_tools::{core_tools, optional_tools, ListAgentsTool, ToolSettings};
 use std::collections::HashMap;
@@ -16,6 +16,14 @@ use std::sync::Arc;
 use zero_core::FileSystemContext;
 
 use super::super::config::GatewayFileSystem;
+
+/// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
+pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
+
+/// Create an empty workspace cache.
+pub fn new_workspace_cache() -> WorkspaceCache {
+    Arc::new(tokio::sync::RwLock::new(None))
+}
 
 // ============================================================================
 // EXECUTOR BUILDER
@@ -28,6 +36,7 @@ use super::super::config::GatewayFileSystem;
 pub struct ExecutorBuilder {
     config_dir: PathBuf,
     tool_settings: ToolSettings,
+    workspace_cache: Option<WorkspaceCache>,
 }
 
 impl ExecutorBuilder {
@@ -36,7 +45,14 @@ impl ExecutorBuilder {
         Self {
             config_dir,
             tool_settings,
+            workspace_cache: None,
         }
+    }
+
+    /// Set workspace cache for this builder.
+    pub fn with_workspace_cache(mut self, cache: WorkspaceCache) -> Self {
+        self.workspace_cache = Some(cache);
+        self
     }
 
     /// Build an executor for the given agent and provider.
@@ -45,6 +61,7 @@ impl ExecutorBuilder {
     /// * `agent` - The agent configuration
     /// * `provider` - The resolved provider
     /// * `conversation_id` - The conversation ID for this execution
+    /// * `session_id` - The session ID for this execution
     /// * `available_agents` - List of available agents (for list_agents tool)
     /// * `available_skills` - List of available skills (for list_skills tool)
     /// * `hook_context` - Optional hook context for initial state
@@ -54,6 +71,7 @@ impl ExecutorBuilder {
         agent: &Agent,
         provider: &Provider,
         conversation_id: &str,
+        session_id: &str,
         available_agents: Vec<serde_json::Value>,
         available_skills: Vec<serde_json::Value>,
         hook_context: Option<&serde_json::Value>,
@@ -83,12 +101,21 @@ impl ExecutorBuilder {
                 .with_initial_state("available_skills", serde_json::Value::Array(available_skills));
         }
 
-        // Load workspace context from shared memory
-        if let Some(workspace) = load_workspace_context(&self.config_dir) {
-            tracing::debug!("Loaded workspace context: {:?}", workspace.keys().collect::<Vec<_>>());
+        // Load workspace context (from cache if available, otherwise disk)
+        let workspace = if let Some(cache) = &self.workspace_cache {
+            cache.read().await.clone()
+        } else {
+            load_workspace_from_disk(&self.config_dir)
+        };
+        if let Some(ws) = workspace {
+            tracing::debug!("Loaded workspace context: {:?}", ws.keys().collect::<Vec<_>>());
             executor_config =
-                executor_config.with_initial_state("workspace", serde_json::json!(workspace));
+                executor_config.with_initial_state("workspace", serde_json::json!(ws));
         }
+
+        // Inject session_id so tools (e.g., shell) can scope working directories
+        executor_config = executor_config
+            .with_initial_state("session_id", serde_json::Value::String(session_id.to_string()));
 
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
@@ -101,10 +128,13 @@ impl ExecutorBuilder {
         .with_max_tokens(agent.max_tokens)
         .with_thinking(agent.thinking_enabled);
 
-        let llm_client = Arc::new(
+        let raw_client: Arc<dyn agent_runtime::LlmClient> = Arc::new(
             OpenAiClient::new(llm_config)
                 .map_err(|e| format!("Failed to create LLM client: {}", e))?,
         );
+
+        // Wrap with retry logic: 3 retries, 500ms base delay, exponential backoff with jitter
+        let llm_client = Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
 
         // Create file system context for tools
         let fs_context: Arc<dyn FileSystemContext> =
@@ -218,7 +248,7 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
 ///
 /// Reads `agents_data/shared/workspace.json` and returns its contents
 /// as a HashMap for injection into executor initial state.
-fn load_workspace_context(config_dir: &PathBuf) -> Option<HashMap<String, serde_json::Value>> {
+fn load_workspace_from_disk(config_dir: &PathBuf) -> Option<HashMap<String, serde_json::Value>> {
     let workspace_path = config_dir
         .join("agents_data")
         .join("shared")
@@ -273,7 +303,7 @@ mod tests {
     #[test]
     fn test_load_workspace_context_missing_file() {
         let dir = TempDir::new().unwrap();
-        let result = load_workspace_context(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(&dir.path().to_path_buf());
         assert!(result.is_none());
     }
 
@@ -306,7 +336,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_workspace_context(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(&dir.path().to_path_buf());
         assert!(result.is_some());
 
         let workspace = result.unwrap();
@@ -337,7 +367,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_workspace_context(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(&dir.path().to_path_buf());
         assert!(result.is_none());
     }
 
@@ -349,7 +379,7 @@ mod tests {
 
         std::fs::write(shared_dir.join("workspace.json"), "not valid json").unwrap();
 
-        let result = load_workspace_context(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(&dir.path().to_path_buf());
         assert!(result.is_none());
     }
 }

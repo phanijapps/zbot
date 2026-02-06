@@ -235,10 +235,14 @@ impl LoadSkillTool {
         let tool_call_id = ctx.function_call_id();
         track_skill_load(&ctx, skill_name, &tool_call_id);
 
+        // List available resource files in the skill directory
+        let resources = list_skill_resources(&skill_dir, skill_name);
+
         Ok(json!({
             "name": skill_name,
             "metadata": metadata,
             "instructions": instructions,
+            "resources": resources,
         }))
     }
 
@@ -337,6 +341,55 @@ impl LoadSkillTool {
             Ok((json!({}), content.to_string()))
         }
     }
+}
+
+/// List resource files in a skill directory (excluding SKILL.md).
+///
+/// Returns a list of objects with filename and the load_skill command to use.
+fn list_skill_resources(skill_dir: &std::path::Path, skill_name: &str) -> Vec<Value> {
+    let mut resources = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(skill_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Skip SKILL.md itself
+                    if name.eq_ignore_ascii_case("SKILL.md") {
+                        continue;
+                    }
+                    resources.push(json!({
+                        "file": name,
+                        "load_with": format!("load_skill(file=\"{}\")", name),
+                    }));
+                }
+            }
+        }
+    }
+    // Also check subdirectories one level deep
+    if let Ok(entries) = std::fs::read_dir(skill_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                    for sub_entry in sub_entries.flatten() {
+                        let sub_path = sub_entry.path();
+                        if sub_path.is_file() {
+                            if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
+                                if let Some(file_name) = sub_path.file_name().and_then(|n| n.to_str()) {
+                                    let rel_path = format!("{}/{}", dir_name, file_name);
+                                    resources.push(json!({
+                                        "file": rel_path.clone(),
+                                        "load_with": format!("load_skill(file=\"@skill:{}/{}\")", skill_name, rel_path),
+                                    }));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    resources
 }
 
 /// Check if a file is binary based on its extension

@@ -130,10 +130,15 @@ fn environment_section(data_dir: &Path) -> String {
     let node_modules = node_env_dir.join("node_modules");
     if node_modules.exists() {
         lines.push(format!("- NodeModules: {} (ready)", node_modules.display()));
-        lines.push("- Node: use `node` from PATH with NODE_PATH set to NodeModules".to_string());
+        lines.push("- Node: NODE_PATH is auto-set to NodeModules; `npm install <pkg>` installs there".to_string());
     } else {
         lines.push(format!("- NodeModules: {} (not configured)", node_modules.display()));
     }
+
+    // Working directory info
+    let code_dir = data_dir.join("code");
+    lines.push(format!("- CodeDir: {} (shell commands run in CodeDir/{{session_id}}/)", code_dir.display()));
+    lines.push("- Attachments: use the write tool to save output files (images, docs) to agent_data".to_string());
 
     lines.join("\n")
 }

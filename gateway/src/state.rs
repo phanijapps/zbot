@@ -8,9 +8,13 @@ use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
-use crate::execution::DelegationRegistry;
+use crate::execution::{new_workspace_cache, DelegationRegistry, WorkspaceCache};
 use crate::hooks::HookRegistry;
 use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService};
+use agent_tools::MemoryEntry;
+use agent_tools::MemoryStore;
+use chrono::Utc;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -60,6 +64,9 @@ pub struct AppState {
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
 
+    /// Cached workspace context (shared with ExecutionRunner).
+    workspace_cache: WorkspaceCache,
+
     /// Configuration directory path.
     pub config_dir: PathBuf,
 }
@@ -94,6 +101,9 @@ impl AppState {
         let connector_service = ConnectorService::new(config_dir.clone());
         let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
 
+        // Create workspace cache (shared between AppState and ExecutionRunner)
+        let workspace_cache = new_workspace_cache();
+
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
             event_bus.clone(),
@@ -106,6 +116,7 @@ impl AppState {
             log_service.clone(),
             state_service.clone(),
             Some(connector_registry.clone()),
+            workspace_cache.clone(),
         ));
 
         // Create hook registry
@@ -132,6 +143,7 @@ impl AppState {
             state_service,
             connector_registry,
             cron_scheduler: None, // Initialized by server.start()
+            workspace_cache,
             config_dir,
         }
     }
@@ -170,6 +182,7 @@ impl AppState {
             state_service,
             connector_registry,
             cron_scheduler: None,
+            workspace_cache: new_workspace_cache(),
             config_dir,
         }
     }
@@ -203,6 +216,7 @@ impl AppState {
             state_service,
             connector_registry,
             cron_scheduler: None,
+            workspace_cache: new_workspace_cache(),
             config_dir,
         }
     }
@@ -240,6 +254,237 @@ impl AppState {
         // Preload skills into cache
         if let Err(e) = self.skills.preload().await {
             tracing::warn!("Failed to preload skills: {}", e);
+        }
+
+        // Create Python venv and Node env if missing, then seed workspace memory
+        self.ensure_runtime_environments().await;
+    }
+
+    /// Ensure Python venv and Node.js environment exist, then seed workspace memory.
+    async fn ensure_runtime_environments(&self) {
+        let venv_ok = self.ensure_python_venv().await;
+        let node_ok = self.ensure_node_env().await;
+        self.seed_workspace_env_status(venv_ok, node_ok);
+        self.populate_workspace_cache().await;
+    }
+
+    /// Populate the in-memory workspace cache from workspace.json.
+    ///
+    /// This is called once at startup after seeding. The same Arc is shared
+    /// with ExecutionRunner, so all executors see the cached data without
+    /// reading from disk on every invocation.
+    async fn populate_workspace_cache(&self) {
+        let workspace_path = self
+            .config_dir
+            .join("agents_data")
+            .join("shared")
+            .join("workspace.json");
+
+        let workspace = match std::fs::read_to_string(&workspace_path) {
+            Ok(content) => match serde_json::from_str::<MemoryStore>(&content) {
+                Ok(store) => {
+                    let map: HashMap<String, serde_json::Value> = store
+                        .entries
+                        .iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.value.clone())))
+                        .collect();
+                    if map.is_empty() { None } else { Some(map) }
+                }
+                Err(_) => None,
+            },
+            Err(_) => None,
+        };
+
+        if let Some(ws) = workspace {
+            let count = ws.len();
+            *self.workspace_cache.write().await = Some(ws);
+            tracing::info!("Populated workspace cache with {} entries", count);
+        }
+    }
+
+    /// Create Python venv at `{config_dir}/venv` if it doesn't exist.
+    /// Returns true if the venv exists (either already existed or was created).
+    async fn ensure_python_venv(&self) -> bool {
+        let venv_path = self.config_dir.join("venv");
+
+        let python_exe = if cfg!(windows) {
+            venv_path.join("Scripts").join("python.exe")
+        } else {
+            venv_path.join("bin").join("python")
+        };
+
+        if python_exe.exists() {
+            tracing::debug!("Python venv already exists at {}", venv_path.display());
+            return true;
+        }
+
+        tracing::info!("Creating Python venv at {}", venv_path.display());
+        let result = tokio::process::Command::new("python")
+            .args(["-m", "venv"])
+            .arg(&venv_path)
+            .output()
+            .await;
+
+        match result {
+            Ok(output) if output.status.success() => {
+                tracing::info!("Python venv created successfully");
+                true
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("Failed to create Python venv: {}", stderr.trim());
+                false
+            }
+            Err(e) => {
+                tracing::warn!("Failed to run python -m venv: {} (python may not be installed)", e);
+                false
+            }
+        }
+    }
+
+    /// Create Node.js environment at `{config_dir}/node_env` if it doesn't exist.
+    /// Returns true if the node_env exists (either already existed or was created).
+    async fn ensure_node_env(&self) -> bool {
+        let node_env_dir = self.config_dir.join("node_env");
+        let package_json = node_env_dir.join("package.json");
+
+        if package_json.exists() {
+            tracing::debug!("Node env already exists at {}", node_env_dir.display());
+            return true;
+        }
+
+        tracing::info!("Creating Node env at {}", node_env_dir.display());
+
+        // Create the directory
+        if let Err(e) = std::fs::create_dir_all(&node_env_dir) {
+            tracing::warn!("Failed to create node_env directory: {}", e);
+            return false;
+        }
+
+        // Run npm init -y to create package.json
+        let result = tokio::process::Command::new("npm")
+            .args(["init", "-y"])
+            .current_dir(&node_env_dir)
+            .output()
+            .await;
+
+        match result {
+            Ok(output) if output.status.success() => {
+                tracing::info!("Node env created successfully");
+                true
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!("Failed to initialize node_env: {}", stderr.trim());
+                false
+            }
+            Err(e) => {
+                tracing::warn!("Failed to run npm init: {} (npm may not be installed)", e);
+                false
+            }
+        }
+    }
+
+    /// Seed workspace.json with python_env and node_env status.
+    /// Only writes entries that don't already exist (preserves user state).
+    /// Uses the same MemoryStore type as the memory tool to avoid format mismatch.
+    fn seed_workspace_env_status(&self, venv_ok: bool, node_ok: bool) {
+        let workspace_path = self
+            .config_dir
+            .join("agents_data")
+            .join("shared")
+            .join("workspace.json");
+
+        // Ensure parent directory exists
+        if let Some(parent) = workspace_path.parent() {
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::warn!("Failed to create workspace directory: {}", e);
+                return;
+            }
+        }
+
+        // Load existing store using the same type as the memory tool
+        let mut store: MemoryStore = if let Ok(content) = std::fs::read_to_string(&workspace_path)
+        {
+            serde_json::from_str(&content).unwrap_or_default()
+        } else {
+            MemoryStore::default()
+        };
+
+        let now = Utc::now().to_rfc3339();
+
+        // Seed python_env if not already present
+        if !store.entries.contains_key("python_env") {
+            let venv_path = self.config_dir.join("venv");
+            let python_exe = if cfg!(windows) {
+                venv_path.join("Scripts").join("python.exe")
+            } else {
+                venv_path.join("bin").join("python")
+            };
+            let pip_exe = if cfg!(windows) {
+                venv_path.join("Scripts").join("pip.exe")
+            } else {
+                venv_path.join("bin").join("pip")
+            };
+
+            let value = serde_json::json!({
+                "exists": venv_ok,
+                "venv_path": venv_path.display().to_string(),
+                "executable": python_exe.display().to_string(),
+                "pip": pip_exe.display().to_string(),
+            });
+
+            store.entries.insert(
+                "python_env".to_string(),
+                MemoryEntry {
+                    value: value.to_string(),
+                    tags: vec![
+                        "system".to_string(),
+                        "python".to_string(),
+                        "env".to_string(),
+                    ],
+                    created_at: now.clone(),
+                    updated_at: now.clone(),
+                },
+            );
+        }
+
+        // Seed node_env if not already present
+        if !store.entries.contains_key("node_env") {
+            let node_env_dir = self.config_dir.join("node_env");
+            let node_modules = node_env_dir.join("node_modules");
+
+            let value = serde_json::json!({
+                "exists": node_ok,
+                "env_path": node_env_dir.display().to_string(),
+                "node_modules": node_modules.display().to_string(),
+            });
+
+            store.entries.insert(
+                "node_env".to_string(),
+                MemoryEntry {
+                    value: value.to_string(),
+                    tags: vec![
+                        "system".to_string(),
+                        "node".to_string(),
+                        "env".to_string(),
+                    ],
+                    created_at: now.clone(),
+                    updated_at: now,
+                },
+            );
+        }
+
+        // Write back using the same format as the memory tool
+        match serde_json::to_string_pretty(&store) {
+            Ok(content) => {
+                if let Err(e) = std::fs::write(&workspace_path, content) {
+                    tracing::warn!("Failed to write workspace.json: {}", e);
+                } else {
+                    tracing::info!("Seeded workspace.json with environment status");
+                }
+            }
+            Err(e) => tracing::warn!("Failed to serialize workspace.json: {}", e),
         }
     }
 }

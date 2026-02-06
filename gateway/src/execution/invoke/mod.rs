@@ -9,7 +9,7 @@ mod executor;
 mod setup;
 mod stream;
 
-pub use executor::{collect_agents_summary, collect_skills_summary, ExecutorBuilder};
+pub use executor::{collect_agents_summary, collect_skills_summary, new_workspace_cache, ExecutorBuilder, WorkspaceCache};
 pub use setup::AgentLoader;
 pub use stream::{
     broadcast_event, process_stream_event, ResponseAccumulator, StreamContext,

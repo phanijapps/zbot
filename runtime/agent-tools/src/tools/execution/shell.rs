@@ -392,8 +392,9 @@ impl Tool for ShellTool {
         cmd.arg(command);
 
         // Set sandboxed Python virtual environment and Node.js modules
-        if let Some(config_dir) = dirs::config_dir() {
-            let agentzero_dir = config_dir.join("agentzero");
+        // Use ~/Documents/agentzero (matching gateway data_dir resolution)
+        if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+            let agentzero_dir = doc_dir.join("agentzero");
 
             // === Python Virtual Environment ===
             let venv_path = agentzero_dir.join("venv");
@@ -407,37 +408,23 @@ impl Tool for ShellTool {
             #[cfg(not(windows))]
             let venv_bin = venv_path.join("bin");
 
-            // === Agent-specific Node.js modules ===
-            // Get agent_id from context (use root_agent_id for subagents to share node_modules)
-            let agent_id = ctx
-                .get_state("app:root_agent_id")
-                .and_then(|v| v.as_str().map(String::from))
-                .or_else(|| {
-                    ctx.get_state("app:agent_id")
-                        .and_then(|v| v.as_str().map(String::from))
-                });
+            // === Shared Node.js environment ===
+            let node_env_dir = agentzero_dir.join("node_env");
+            let node_modules = node_env_dir.join("node_modules");
 
-            // Build PATH with optional agent node_modules/.bin
+            // Build PATH with venv bin and optional node_modules/.bin
             let mut path_parts: Vec<String> = vec![venv_bin.display().to_string()];
 
-            // Add agent-specific node_modules/.bin to PATH if it exists
-            if let Some(agent_id) = &agent_id {
-                let agents_data_dir = agentzero_dir.join("agents_data").join(agent_id);
-                let node_modules = agents_data_dir.join("node_modules");
+            // Always set NODE_PATH so `npm install` targets the shared location
+            cmd.env("NODE_PATH", node_modules.display().to_string());
 
-                if node_modules.exists() {
-                    // Set NODE_PATH for module resolution
-                    cmd.env("NODE_PATH", node_modules.display().to_string());
-
-                    // Add .bin to PATH for executables
-                    let node_bin = node_modules.join(".bin");
-                    if node_bin.exists() {
-                        path_parts.push(node_bin.display().to_string());
-                    }
-
-                    tracing::debug!("Shell: added agent node_modules for {}", agent_id);
-                }
+            // Add .bin to PATH for executables if it exists
+            let node_bin = node_modules.join(".bin");
+            if node_bin.exists() {
+                path_parts.push(node_bin.display().to_string());
             }
+
+            tracing::debug!("Shell: NODE_PATH set to {}", node_modules.display());
 
             // Build PATH: venv/bin + node_modules/.bin + original PATH
             if let Ok(current_path) = std::env::var("PATH") {
@@ -452,7 +439,7 @@ impl Tool for ShellTool {
             cmd.env_remove("PYTHONHOME");
         }
 
-        // Set working directory if provided
+        // Set working directory: explicit cwd > session-scoped code dir > none
         if let Some(dir) = cwd {
             // Validate cwd doesn't contain path traversal
             if dir.contains("..") {
@@ -461,6 +448,23 @@ impl Tool for ShellTool {
                 ));
             }
             cmd.current_dir(dir);
+        } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+            // Default to session-scoped code directory
+            if let Some(session_id) = ctx
+                .get_state("session_id")
+                .and_then(|v| v.as_str().map(String::from))
+            {
+                let code_dir = doc_dir.join("agentzero").join("code").join(&session_id);
+                if !code_dir.exists() {
+                    if let Err(e) = std::fs::create_dir_all(&code_dir) {
+                        tracing::warn!("Failed to create code dir {}: {}", code_dir.display(), e);
+                    }
+                }
+                if code_dir.exists() {
+                    tracing::debug!("Shell: cwd set to {}", code_dir.display());
+                    cmd.current_dir(&code_dir);
+                }
+            }
         }
 
         // Execute with timeout

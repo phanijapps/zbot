@@ -35,9 +35,12 @@ Enable agents to execute Python/Node code using shell + memory (simpler than spe
   - `os`, `vault_path`, `python_executable`, `node_modules_path`
 
 **Remaining**:
-- [ ] Create venv in vault if missing (manual or agent-driven)
-- [ ] Create node_env in vault if missing
+- [x] Create venv in vault if missing (auto-created at gateway startup)
+- [x] Create node_env in vault if missing (auto-created at gateway startup)
+- [x] Fix Node path mismatch: shell.rs now uses shared `node_env/` instead of per-agent `agents_data/{id}/`
+- [x] Seed workspace.json with python_env/node_env status
 - [ ] Test: agent uses shell with injected Python path
+- [ ] Investigate: Python code not landing in right environments (pip install goes to venv but user scripts may run outside it)
 - [ ] Optional: python-codeact skill for patterns
 - [ ] Optional: node-codeact skill for patterns
 

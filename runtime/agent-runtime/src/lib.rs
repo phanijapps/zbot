@@ -69,6 +69,7 @@ pub use types::{
 pub use llm::{
     LlmClient, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
     ToolCallChunk, ChatResponse, TokenUsage,
+    RetryingLlmClient, RetryPolicy,
 };
 
 pub use tools::{

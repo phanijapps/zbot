@@ -223,13 +223,14 @@ impl LlmClient for OpenAiClient {
     async fn chat_stream(
         &self,
         messages: Vec<ChatMessage>,
+        tools: Option<Value>,
         callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError> {
         tracing::info!("Starting streaming chat with {} messages", messages.len());
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
-        let mut body_obj = self.build_request_body(messages, None);
+        let mut body_obj = self.build_request_body(messages, tools);
         // Enable streaming
         if let Some(obj) = body_obj.as_object_mut() {
             obj.insert("stream".to_string(), json!(true));

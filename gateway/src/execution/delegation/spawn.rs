@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, RwLock};
 use crate::execution::handle::ExecutionHandle;
 use crate::execution::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext, WorkspaceCache,
 };
 use crate::execution::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
@@ -52,6 +52,7 @@ pub async fn spawn_delegated_agent(
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
+    workspace_cache: WorkspaceCache,
 ) -> Result<String, String> {
     // Generate child conversation ID (legacy, for conversation_repo)
     let child_conversation_id = format!(
@@ -133,12 +134,14 @@ pub async fn spawn_delegated_agent(
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
     // Build executor using ExecutorBuilder
-    let builder = ExecutorBuilder::new(config_dir.clone(), tool_settings);
+    let builder = ExecutorBuilder::new(config_dir.clone(), tool_settings)
+        .with_workspace_cache(workspace_cache);
     let executor = match builder
         .build(
             &agent,
             &provider,
             &child_conversation_id,
+            &request.session_id,
             available_agents,
             available_skills,
             None,

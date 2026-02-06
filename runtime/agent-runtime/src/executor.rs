@@ -24,6 +24,7 @@ use serde_json::{json, Value};
 
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
 use crate::llm::LlmClient;
+use crate::llm::client::StreamChunk;
 use crate::tools::ToolRegistry;
 use crate::tools::context::ToolContext;
 use crate::mcp::McpManager;
@@ -295,10 +296,53 @@ impl AgentExecutor {
             }
             max_iterations -= 1;
 
-            // Make LLM call
-            let response = self.llm_client
-                .chat(current_messages.clone(), tools_schema.clone())
-                .await
+            // Real streaming via chat_stream() with mpsc channel bridge.
+            // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
+            // including intermediate text that accompanies tool calls.
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamChunk>();
+
+            let llm_client = self.llm_client.clone();
+            let messages_for_stream = current_messages.clone();
+            let tools_for_stream = tools_schema.clone();
+
+            // Spawn the streaming LLM call in a separate task
+            let stream_handle = tokio::spawn(async move {
+                llm_client.chat_stream(
+                    messages_for_stream,
+                    tools_for_stream,
+                    Box::new(move |chunk| {
+                        let _ = tx.send(chunk);
+                    }),
+                ).await
+            });
+
+            // Process chunks as they arrive — emit Token events in real-time
+            let mut streamed_content = String::new();
+            while let Some(chunk) = rx.recv().await {
+                match chunk {
+                    StreamChunk::Token(text) => {
+                        streamed_content.push_str(&text);
+                        on_event(StreamEvent::Token {
+                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                            content: text,
+                        });
+                    }
+                    StreamChunk::Reasoning(text) => {
+                        on_event(StreamEvent::Reasoning {
+                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                            content: text,
+                        });
+                    }
+                    StreamChunk::ToolCall(_) => {
+                        // Tool call chunks are accumulated by the streaming impl
+                        // and returned in the final ChatResponse. No action needed here.
+                    }
+                }
+            }
+
+            // Await the final response (channel closed = stream complete)
+            let response = stream_handle.await
+                .map_err(|e| ExecutorError::LlmError(format!("Stream task panicked: {}", e)))?
                 .map_err(|e| ExecutorError::LlmError(e.to_string()))?;
 
             // Update cumulative token counts and emit event
@@ -316,31 +360,13 @@ impl AgentExecutor {
             tracing::debug!("LLM response - content: '{}', tool_calls: {}",
                 response.content, response.tool_calls.as_ref().map_or(0, |v| v.len()));
 
-            // Emit reasoning event if available (for DeepSeek, GLM, etc.)
-            if let Some(reasoning) = &response.reasoning {
-                tracing::debug!("Emitting reasoning event, length: {}", reasoning.len());
-                on_event(StreamEvent::Reasoning {
-                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                    content: reasoning.clone(),
-                });
-            }
-
             // Check for tool calls
             let tool_calls = response.tool_calls.clone().unwrap_or_default();
             if tool_calls.is_empty() {
                 // No tool calls, this is the final response
+                // Text was already streamed in real-time above
                 full_response = response.content.clone();
-                tracing::debug!("No tool calls, final response: {}", full_response);
-
-                // Stream token events
-                for ch in response.content.chars() {
-                    on_event(StreamEvent::Token {
-                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                        content: ch.to_string(),
-                    });
-                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                }
-
+                tracing::debug!("No tool calls, final response length: {}", full_response.len());
                 break;
             }
 

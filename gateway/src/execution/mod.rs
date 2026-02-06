@@ -43,4 +43,5 @@ pub use lifecycle::{
     emit_delegation_started, get_or_create_session, save_messages, start_execution,
     stop_execution, SessionSetup,
 };
+pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use runner::ExecutionRunner;

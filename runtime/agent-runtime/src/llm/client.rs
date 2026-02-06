@@ -59,10 +59,12 @@ pub trait LlmClient: Send + Sync {
 
     /// Send a chat completion request with streaming
     ///
-    /// The callback receives events as they are generated
+    /// The callback receives events as they are generated.
+    /// Pass `tools` to enable tool calling during streaming.
     async fn chat_stream(
         &self,
         messages: Vec<ChatMessage>,
+        tools: Option<Value>,
         callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError>;
 

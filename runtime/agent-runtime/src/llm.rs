@@ -19,12 +19,14 @@
 pub mod client;
 pub mod config;
 pub mod openai;
+pub mod retry;
 
 pub use client::{
     LlmClient, ChatResponse, StreamChunk, StreamCallback, ToolCallChunk, TokenUsage
 };
 pub use config::LlmConfig;
 pub use openai::OpenAiClient;
+pub use retry::{RetryingLlmClient, RetryPolicy};
 
 // Re-export from types
 pub use crate::types::{ChatMessage, ToolCall};

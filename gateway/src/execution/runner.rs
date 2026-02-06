@@ -29,6 +29,7 @@ pub use super::handle::ExecutionHandle;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext, ToolCallAccumulator,
+    WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started,
@@ -74,6 +75,8 @@ pub struct ExecutionRunner {
     state_service: Arc<StateService<DatabaseManager>>,
     /// Connector registry for response routing to external connectors
     connector_registry: Option<Arc<crate::connectors::ConnectorRegistry>>,
+    /// Cached workspace context (avoids reading workspace.json per execution)
+    workspace_cache: WorkspaceCache,
 }
 
 impl ExecutionRunner {
@@ -103,6 +106,7 @@ impl ExecutionRunner {
             log_service,
             state_service,
             None,
+            Arc::new(tokio::sync::RwLock::new(None)),
         )
     }
 
@@ -118,6 +122,7 @@ impl ExecutionRunner {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<crate::connectors::ConnectorRegistry>>,
+        workspace_cache: WorkspaceCache,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -136,6 +141,7 @@ impl ExecutionRunner {
             log_service,
             state_service,
             connector_registry,
+            workspace_cache,
         };
 
         // Spawn delegation handler task
@@ -161,6 +167,7 @@ impl ExecutionRunner {
         let delegation_tx = self.delegation_tx.clone();
         let log_service = self.log_service.clone();
         let state_service = self.state_service.clone();
+        let workspace_cache = self.workspace_cache.clone();
 
         tokio::spawn(async move {
             while let Some(request) = rx.recv().await {
@@ -185,6 +192,7 @@ impl ExecutionRunner {
                     delegation_tx.clone(),
                     log_service.clone(),
                     state_service.clone(),
+                    workspace_cache.clone(),
                 )
                 .await
                 {
@@ -216,6 +224,7 @@ impl ExecutionRunner {
         let delegation_tx = self.delegation_tx.clone();
         let log_service = self.log_service.clone();
         let state_service = self.state_service.clone();
+        let workspace_cache = self.workspace_cache.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -257,6 +266,7 @@ impl ExecutionRunner {
                             delegation_tx.clone(),
                             log_service.clone(),
                             state_service.clone(),
+                            workspace_cache.clone(),
                         )
                         .await
                         {
@@ -365,7 +375,7 @@ impl ExecutionRunner {
             .unwrap_or_default();
 
         // Create executor
-        let executor = match self.create_executor(&agent, &provider, &config).await {
+        let executor = match self.create_executor(&agent, &provider, &config, &session_id).await {
             Ok(e) => e,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
@@ -721,6 +731,7 @@ impl ExecutionRunner {
         agent: &crate::services::agents::Agent,
         provider: &crate::services::providers::Provider,
         config: &ExecutionConfig,
+        session_id: &str,
     ) -> Result<AgentExecutor, String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
@@ -737,12 +748,14 @@ impl ExecutionRunner {
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
         // Use ExecutorBuilder to create the executor
-        let builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings);
+        let builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
+            .with_workspace_cache(self.workspace_cache.clone());
         builder
             .build(
                 agent,
                 provider,
                 &config.conversation_id,
+                session_id,
                 available_agents,
                 available_skills,
                 hook_context.as_ref(),
@@ -793,10 +806,11 @@ async fn invoke_continuation(
     config_dir: PathBuf,
     conversation_repo: Arc<ConversationRepository>,
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
-    delegation_registry: Arc<DelegationRegistry>,
+    _delegation_registry: Arc<DelegationRegistry>,
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
+    workspace_cache: WorkspaceCache,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -858,12 +872,14 @@ async fn invoke_continuation(
     let available_skills = collect_skills_summary(&skill_service).await;
 
     // Build executor
-    let builder = ExecutorBuilder::new(config_dir, tool_settings);
+    let builder = ExecutorBuilder::new(config_dir, tool_settings)
+        .with_workspace_cache(workspace_cache);
     let executor = builder
         .build(
             &agent,
             &provider,
             &conversation_id,
+            session_id,
             available_agents,
             available_skills,
             None, // No hook context for continuation
