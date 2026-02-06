@@ -15,14 +15,22 @@ description = "SQLite connection pool and schema for the AgentZero gateway"
 # Internal crates (for DbProvider trait impls)
 api-logs = { path = "../../services/api-logs" }
 execution-state = { path = "../../services/execution-state" }
+agent-runtime = { path = "../../runtime/agent-runtime" }
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
 r2d2 = "0.8"
 r2d2_sqlite = "0.25"
 
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
 # Utilities
 tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
+rusqlite = { version = "0.32", features = ["bundled"] }

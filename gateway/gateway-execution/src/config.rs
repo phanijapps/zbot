@@ -2,7 +2,7 @@
 //!
 //! Configuration types for agent execution.
 
-use crate::hooks::HookContext;
+use gateway_events::HookContext;
 use std::path::PathBuf;
 use zero_core::FileSystemContext;
 

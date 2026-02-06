@@ -27,6 +27,8 @@ gateway-events = { path = "gateway-events" }
 gateway-database = { path = "gateway-database" }
 gateway-templates = { path = "gateway-templates" }
 gateway-connectors = { path = "gateway-connectors" }
+gateway-services = { path = "gateway-services" }
+gateway-execution = { path = "gateway-execution" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws", "macros"] }

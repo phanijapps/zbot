@@ -3,8 +3,8 @@
 //! Callback formatting and handling for delegation completion.
 
 use super::context::DelegationContext;
-use crate::database::ConversationRepository;
-use crate::events::{EventBus, GatewayEvent};
+use gateway_database::ConversationRepository;
+use gateway_events::{EventBus, GatewayEvent};
 use std::sync::Arc;
 
 // ============================================================================

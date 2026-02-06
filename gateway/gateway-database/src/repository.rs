@@ -8,7 +8,7 @@ use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-use super::DatabaseManager;
+use crate::DatabaseManager;
 
 // ============================================================================
 // TYPES

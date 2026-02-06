@@ -7,7 +7,7 @@
 //! - Which agents can delegate to which subagents
 //! - Agent hierarchy and relationships
 
-use super::AgentService;
+use crate::AgentService;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::RwLock;

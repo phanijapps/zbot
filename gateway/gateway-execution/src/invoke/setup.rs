@@ -2,8 +2,8 @@
 //!
 //! Provider resolution and agent loading utilities for execution setup.
 
-use crate::services::providers::Provider;
-use crate::services::{AgentService, ProviderService, SettingsService};
+use gateway_services::providers::Provider;
+use gateway_services::{AgentService, ProviderService, SettingsService};
 use agent_tools::ToolSettings;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -129,7 +129,7 @@ impl<'a> AgentLoader<'a> {
     pub async fn load(
         &self,
         agent_id: &str,
-    ) -> Result<(crate::services::agents::Agent, Provider), String> {
+    ) -> Result<(gateway_services::agents::Agent, Provider), String> {
         let agent = self
             .agent_service
             .get(agent_id)
@@ -145,7 +145,7 @@ impl<'a> AgentLoader<'a> {
     pub async fn load_or_create_root(
         &self,
         agent_id: &str,
-    ) -> Result<(crate::services::agents::Agent, Provider), String> {
+    ) -> Result<(gateway_services::agents::Agent, Provider), String> {
         match self.agent_service.get(agent_id).await {
             Ok(agent) => {
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
@@ -162,7 +162,7 @@ impl<'a> AgentLoader<'a> {
                     .cloned()
                     .unwrap_or_else(|| "gpt-4o".to_string());
 
-                let agent = crate::services::agents::Agent {
+                let agent = gateway_services::agents::Agent {
                     id: "root".to_string(),
                     name: "root".to_string(),
                     display_name: "Root Agent".to_string(),
@@ -175,7 +175,7 @@ impl<'a> AgentLoader<'a> {
                     thinking_enabled: false,
                     voice_recording_enabled: false,
                     system_instruction: None,
-                    instructions: crate::templates::load_system_prompt(&self.config_dir),
+                    instructions: gateway_templates::load_system_prompt(&self.config_dir),
                     mcps: vec![],
                     skills: vec![],
                     middleware: None,

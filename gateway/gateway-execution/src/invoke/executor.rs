@@ -2,9 +2,9 @@
 //!
 //! Builds agent executors with all required components.
 
-use crate::services::agents::Agent;
-use crate::services::providers::Provider;
-use crate::services::{McpService, SkillService};
+use gateway_services::agents::Agent;
+use gateway_services::providers::Provider;
+use gateway_services::{McpService, SkillService};
 use agent_runtime::{
     AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
     OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::FileSystemContext;
 
-use super::super::config::GatewayFileSystem;
+use crate::config::GatewayFileSystem;
 
 /// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
@@ -211,7 +211,7 @@ impl ExecutorBuilder {
 
 /// Helper to collect available agents summary for executor state.
 pub async fn collect_agents_summary(
-    agent_service: &crate::services::AgentService,
+    agent_service: &gateway_services::AgentService,
 ) -> Vec<serde_json::Value> {
     match agent_service.list().await {
         Ok(all_agents) => all_agents

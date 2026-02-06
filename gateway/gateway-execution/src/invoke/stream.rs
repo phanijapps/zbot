@@ -2,8 +2,8 @@
 //!
 //! Stream event processing and logging for agent execution.
 
-use crate::database::DatabaseManager;
-use crate::events::{EventBus, GatewayEvent};
+use gateway_database::DatabaseManager;
+use gateway_events::{EventBus, GatewayEvent};
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
 use agent_runtime::StreamEvent;
 use execution_state::{AgentExecution, DelegationType, StateService};

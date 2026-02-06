@@ -5,9 +5,9 @@
 use super::callback::{handle_delegation_failure, handle_delegation_success};
 use super::context::{DelegationContext, DelegationRequest};
 use super::registry::DelegationRegistry;
-use crate::database::{ConversationRepository, DatabaseManager};
-use crate::events::{EventBus, GatewayEvent};
-use crate::services::{AgentService, McpService, ProviderService, SkillService};
+use gateway_database::{ConversationRepository, DatabaseManager};
+use gateway_events::{EventBus, GatewayEvent};
+use gateway_services::{AgentService, McpService, ProviderService, SkillService};
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
@@ -16,13 +16,13 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
-use crate::execution::handle::ExecutionHandle;
-use crate::execution::invoke::{
+use crate::handle::ExecutionHandle;
+use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     spawn_batch_writer, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
     WorkspaceCache,
 };
-use crate::execution::lifecycle::{
+use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
     save_messages, start_execution,
 };
@@ -131,7 +131,7 @@ pub async fn spawn_delegated_agent(
     let available_skills = collect_skills_summary(&skill_service).await;
 
     // Get tool settings
-    let settings_service = crate::services::SettingsService::new(config_dir.clone());
+    let settings_service = gateway_services::SettingsService::new(config_dir.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
     // Build executor using ExecutorBuilder

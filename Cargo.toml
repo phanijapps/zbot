@@ -31,6 +31,8 @@ members = [
     "gateway/gateway-database",
     "gateway/gateway-templates",
     "gateway/gateway-connectors",
+    "gateway/gateway-services",
+    "gateway/gateway-execution",
     "gateway",
 
     # Apps - Runnable applications

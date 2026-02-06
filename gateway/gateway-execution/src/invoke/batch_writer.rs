@@ -8,7 +8,7 @@
 //! task coalesces token updates (keeping only the latest per execution)
 //! and batch-inserts log entries.
 
-use crate::database::DatabaseManager;
+use gateway_database::DatabaseManager;
 use api_logs::{ExecutionLog, LogService};
 use execution_state::StateService;
 use std::collections::HashMap;

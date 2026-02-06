@@ -2,7 +2,7 @@
 //!
 //! Event conversion and emission helpers for agent execution.
 
-use crate::events::GatewayEvent;
+use gateway_events::GatewayEvent;
 use agent_runtime::StreamEvent;
 
 /// Convert an agent runtime stream event to a gateway event.

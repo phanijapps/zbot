@@ -6,8 +6,10 @@
 //! the AgentZero gateway for real-time event distribution.
 
 mod broadcast;
+pub mod context;
 
 pub use broadcast::EventBus;
+pub use context::{HookContext, HookType};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

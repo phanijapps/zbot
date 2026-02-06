@@ -1,10 +1,6 @@
 // ============================================================================
 // DATABASE MODULE
-// Re-exports DatabaseManager from gateway-database crate.
-// ConversationRepository stays here (depends on agent-runtime types).
+// Re-exports from gateway-database crate.
 // ============================================================================
 
-mod repository;
-
-pub use gateway_database::DatabaseManager;
-pub use repository::{ConversationRepository, Message};
+pub use gateway_database::{ConversationRepository, DatabaseManager, Message};

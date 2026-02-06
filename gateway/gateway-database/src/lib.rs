@@ -6,6 +6,8 @@
 //! and performance pragmas applied to every connection.
 
 mod connection;
+pub mod repository;
 mod schema;
 
 pub use connection::DatabaseManager;
+pub use repository::{ConversationRepository, Message};

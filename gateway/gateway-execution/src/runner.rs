@@ -10,9 +10,9 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
-use crate::database::{ConversationRepository, DatabaseManager};
-use crate::events::{EventBus, GatewayEvent};
-use crate::services::{AgentService, McpService, ProviderService};
+use gateway_database::{ConversationRepository, DatabaseManager};
+use gateway_events::{EventBus, GatewayEvent};
+use gateway_services::{AgentService, McpService, ProviderService};
 use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -58,7 +58,7 @@ pub struct ExecutionRunner {
     /// MCP service for loading MCP server configs
     mcp_service: Arc<McpService>,
     /// Skill service for loading skill configs
-    skill_service: Arc<crate::services::SkillService>,
+    skill_service: Arc<gateway_services::SkillService>,
     /// Configuration directory
     config_dir: PathBuf,
     /// Active execution handles
@@ -74,7 +74,7 @@ pub struct ExecutionRunner {
     /// State service for execution state management
     state_service: Arc<StateService<DatabaseManager>>,
     /// Connector registry for response routing to external connectors
-    connector_registry: Option<Arc<crate::connectors::ConnectorRegistry>>,
+    connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
 }
@@ -91,7 +91,7 @@ impl ExecutionRunner {
         config_dir: PathBuf,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
-        skill_service: Arc<crate::services::SkillService>,
+        skill_service: Arc<gateway_services::SkillService>,
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
     ) -> Self {
@@ -118,10 +118,10 @@ impl ExecutionRunner {
         config_dir: PathBuf,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
-        skill_service: Arc<crate::services::SkillService>,
+        skill_service: Arc<gateway_services::SkillService>,
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
-        connector_registry: Option<Arc<crate::connectors::ConnectorRegistry>>,
+        connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
         workspace_cache: WorkspaceCache,
     ) -> Self {
         // Create channel for delegation requests
@@ -732,8 +732,8 @@ impl ExecutionRunner {
     /// Create an executor for the agent using the ExecutorBuilder.
     async fn create_executor(
         &self,
-        agent: &crate::services::agents::Agent,
-        provider: &crate::services::providers::Provider,
+        agent: &gateway_services::agents::Agent,
+        provider: &gateway_services::providers::Provider,
         config: &ExecutionConfig,
         session_id: &str,
     ) -> Result<AgentExecutor, String> {
@@ -742,7 +742,7 @@ impl ExecutionRunner {
         let available_skills = collect_skills_summary(&self.skill_service).await;
 
         // Get tool settings
-        let settings_service = crate::services::SettingsService::new(config.config_dir.clone());
+        let settings_service = gateway_services::SettingsService::new(config.config_dir.clone());
         let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
         // Build hook context if present
@@ -806,7 +806,7 @@ async fn invoke_continuation(
     agent_service: Arc<AgentService>,
     provider_service: Arc<ProviderService>,
     mcp_service: Arc<McpService>,
-    skill_service: Arc<crate::services::SkillService>,
+    skill_service: Arc<gateway_services::SkillService>,
     config_dir: PathBuf,
     conversation_repo: Arc<ConversationRepository>,
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
@@ -868,7 +868,7 @@ async fn invoke_continuation(
     );
 
     // Get tool settings
-    let settings_service = crate::services::SettingsService::new(config_dir.clone());
+    let settings_service = gateway_services::SettingsService::new(config_dir.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
     // Collect available agents and skills

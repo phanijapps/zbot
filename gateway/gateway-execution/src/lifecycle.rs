@@ -5,9 +5,9 @@
 //! This module centralizes all state transitions for sessions and executions,
 //! including creation, completion, error handling, and cancellation.
 
-use crate::connectors::{ConnectorRegistry, DispatchContext};
-use crate::database::{ConversationRepository, DatabaseManager};
-use crate::events::{EventBus, GatewayEvent};
+use gateway_connectors::{ConnectorRegistry, DispatchContext};
+use gateway_database::{ConversationRepository, DatabaseManager};
+use gateway_events::{EventBus, GatewayEvent};
 use api_logs::{LogService, SessionStatus};
 use execution_state::{AgentExecution, Session, StateService};
 use std::sync::Arc;
