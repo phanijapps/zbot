@@ -6,6 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 // ============================================================================
 // Types
@@ -44,20 +45,21 @@ pub struct ProviderTestResult {
 // Service
 // ============================================================================
 
-#[derive(Clone)]
 pub struct ProviderService {
     config_path: PathBuf,
+    cache: RwLock<Option<Vec<Provider>>>,
 }
 
 impl ProviderService {
     pub fn new(config_dir: PathBuf) -> Self {
         Self {
             config_path: config_dir.join("providers.json"),
+            cache: RwLock::new(None),
         }
     }
 
-    /// Read all providers from config file
-    fn read_providers(&self) -> Result<Vec<Provider>, String> {
+    /// Read all providers from config file (bypasses cache).
+    fn read_providers_from_disk(&self) -> Result<Vec<Provider>, String> {
         if !self.config_path.exists() {
             return Ok(vec![]);
         }
@@ -69,7 +71,7 @@ impl ProviderService {
             .map_err(|e| format!("Failed to parse providers config: {}", e))
     }
 
-    /// Write providers to config file
+    /// Write providers to config file and update cache.
     fn write_providers(&self, providers: &[Provider]) -> Result<(), String> {
         let content = serde_json::to_string_pretty(providers)
             .map_err(|e| format!("Failed to serialize providers: {}", e))?;
@@ -77,17 +79,44 @@ impl ProviderService {
         fs::write(&self.config_path, content)
             .map_err(|e| format!("Failed to write providers config: {}", e))?;
 
+        // Update cache with the data we just wrote
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = Some(providers.to_vec());
+        }
+
         Ok(())
     }
 
-    /// List all providers
+    /// Invalidate the cache, forcing next read to go to disk.
+    pub fn invalidate_cache(&self) {
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = None;
+        }
+    }
+
+    /// List all providers (cached).
     pub fn list(&self) -> Result<Vec<Provider>, String> {
-        self.read_providers()
+        // Check cache first
+        if let Ok(cache) = self.cache.read() {
+            if let Some(providers) = cache.as_ref() {
+                return Ok(providers.clone());
+            }
+        }
+
+        // Cache miss: read from disk
+        let providers = self.read_providers_from_disk()?;
+
+        // Update cache
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = Some(providers.clone());
+        }
+
+        Ok(providers)
     }
 
     /// Get a single provider by ID
     pub fn get(&self, id: &str) -> Result<Provider, String> {
-        let providers = self.read_providers()?;
+        let providers = self.list()?;
         providers
             .into_iter()
             .find(|p| p.id.as_deref() == Some(id))
@@ -96,7 +125,7 @@ impl ProviderService {
 
     /// Create a new provider
     pub fn create(&self, mut provider: Provider) -> Result<Provider, String> {
-        let mut providers = self.read_providers()?;
+        let mut providers = self.list()?;
 
         // Generate ID if not provided
         let provider_id = provider.id.clone().unwrap_or_else(|| {
@@ -125,7 +154,7 @@ impl ProviderService {
 
     /// Update an existing provider
     pub fn update(&self, id: &str, mut provider: Provider) -> Result<Provider, String> {
-        let mut providers = self.read_providers()?;
+        let mut providers = self.list()?;
 
         let index = providers
             .iter()
@@ -148,7 +177,7 @@ impl ProviderService {
 
     /// Delete a provider
     pub fn delete(&self, id: &str) -> Result<(), String> {
-        let mut providers = self.read_providers()?;
+        let mut providers = self.list()?;
 
         let initial_len = providers.len();
         providers.retain(|p| p.id.as_deref() != Some(id));
@@ -163,7 +192,7 @@ impl ProviderService {
 
     /// Set a provider as the default (unsets all others)
     pub fn set_default(&self, id: &str) -> Result<Provider, String> {
-        let mut providers = self.read_providers()?;
+        let mut providers = self.list()?;
 
         let mut found = false;
         for provider in providers.iter_mut() {

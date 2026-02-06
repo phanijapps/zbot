@@ -6,10 +6,12 @@ use agent_runtime::McpServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 /// MCP service for loading and managing MCP server configurations.
 pub struct McpService {
     config_path: PathBuf,
+    cache: RwLock<Option<Vec<McpServerConfig>>>,
 }
 
 /// Summary of an MCP server for listing.
@@ -37,6 +39,7 @@ impl McpService {
     pub fn new(config_dir: PathBuf) -> Self {
         Self {
             config_path: config_dir.join("mcps.json"),
+            cache: RwLock::new(None),
         }
     }
 
@@ -45,8 +48,15 @@ impl McpService {
         &self.config_path
     }
 
-    /// List all MCP server configurations.
-    pub fn list(&self) -> Result<Vec<McpServerConfig>, String> {
+    /// Invalidate the cache, forcing next read to go to disk.
+    pub fn invalidate_cache(&self) {
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = None;
+        }
+    }
+
+    /// Read configs from disk (bypasses cache).
+    fn list_from_disk(&self) -> Result<Vec<McpServerConfig>, String> {
         if !self.config_path.exists() {
             return Ok(vec![]);
         }
@@ -56,6 +66,26 @@ impl McpService {
 
         let configs: Vec<McpServerConfig> = serde_json::from_str(&content)
             .map_err(|e| format!("Failed to parse mcps.json: {}", e))?;
+
+        Ok(configs)
+    }
+
+    /// List all MCP server configurations (cached).
+    pub fn list(&self) -> Result<Vec<McpServerConfig>, String> {
+        // Check cache first
+        if let Ok(cache) = self.cache.read() {
+            if let Some(configs) = cache.as_ref() {
+                return Ok(configs.clone());
+            }
+        }
+
+        // Cache miss: read from disk
+        let configs = self.list_from_disk()?;
+
+        // Update cache
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = Some(configs.clone());
+        }
 
         Ok(configs)
     }
@@ -91,7 +121,7 @@ impl McpService {
             .collect()
     }
 
-    /// Save MCP server configurations to disk.
+    /// Save MCP server configurations to disk and update cache.
     pub fn save(&self, configs: &[McpServerConfig]) -> Result<(), String> {
         // Ensure parent directory exists
         if let Some(parent) = self.config_path.parent() {
@@ -104,6 +134,11 @@ impl McpService {
 
         fs::write(&self.config_path, content)
             .map_err(|e| format!("Failed to write mcps.json: {}", e))?;
+
+        // Update cache with the data we just wrote
+        if let Ok(mut cache) = self.cache.write() {
+            *cache = Some(configs.to_vec());
+        }
 
         Ok(())
     }

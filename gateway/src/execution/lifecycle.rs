@@ -200,6 +200,12 @@ pub async fn complete_execution(
         tracing::warn!("Failed to complete execution: {}", e);
     }
 
+    // Eagerly aggregate session tokens so UI shows real values
+    // (web sessions never auto-complete, so without this they'd stay at 0)
+    if let Err(e) = state_service.aggregate_session_tokens(session_id) {
+        tracing::warn!("Failed to aggregate session tokens: {}", e);
+    }
+
     // Check if this is a root execution and has pending delegations
     // If so, request continuation after delegations complete
     if let Ok(Some(execution)) = state_service.get_execution(execution_id) {
@@ -320,8 +326,14 @@ pub async fn crash_execution(
 
     // Optionally crash the session too (for root executions)
     if crash_session {
+        // crash_session() already aggregates tokens
         if let Err(e) = state_service.crash_session(session_id) {
             tracing::warn!("Failed to crash session: {}", e);
+        }
+    } else {
+        // Subagent crash: still aggregate tokens for UI visibility
+        if let Err(e) = state_service.aggregate_session_tokens(session_id) {
+            tracing::warn!("Failed to aggregate session tokens: {}", e);
         }
     }
 

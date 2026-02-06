@@ -340,6 +340,16 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.update_execution_tokens(execution_id, tokens_in, tokens_out)
     }
 
+    /// Eagerly aggregate session token totals from all executions.
+    ///
+    /// This runs a SUM query over all executions in the session and updates
+    /// the session's total_tokens_in/out. Unlike `complete_session()`, this
+    /// can be called at any time without changing session status — useful for
+    /// web sessions that never auto-complete but still need token visibility.
+    pub fn aggregate_session_tokens(&self, session_id: &str) -> Result<(), String> {
+        self.repo.update_session_tokens(session_id)
+    }
+
     /// Save execution checkpoint.
     pub fn save_execution_checkpoint(&self, execution_id: &str, checkpoint: &Checkpoint) -> Result<(), String> {
         self.repo.save_execution_checkpoint(execution_id, checkpoint)
