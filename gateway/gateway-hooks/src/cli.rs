@@ -2,10 +2,9 @@
 //!
 //! Routes responses to stdout for command-line interfaces.
 
-use super::context::{HookContext, HookType};
-use super::registry::{Attachment, ResponseFormat};
-use super::Hook;
-use crate::events::{EventBus, GatewayEvent};
+use crate::{Hook, HookContext, HookType};
+use crate::registry::{Attachment, ResponseFormat};
+use gateway_events::{EventBus, GatewayEvent};
 use async_trait::async_trait;
 use std::sync::Arc;
 

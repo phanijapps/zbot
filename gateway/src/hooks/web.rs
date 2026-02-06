@@ -2,9 +2,7 @@
 //!
 //! Routes responses back to the originating WebSocket session.
 
-use super::context::{HookContext, HookType};
-use super::registry::{Attachment, ResponseFormat};
-use super::Hook;
+use super::{Attachment, Hook, HookContext, HookType, ResponseFormat};
 use crate::events::{EventBus, GatewayEvent};
 use crate::websocket::{ServerMessage, SessionRegistry};
 use async_trait::async_trait;

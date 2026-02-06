@@ -2,7 +2,7 @@
 //!
 //! CRUD operations and persistence for cron jobs.
 
-use super::config::{CronJobConfig, CronJobsStore, CreateCronJobRequest, UpdateCronJobRequest};
+use crate::config::{CronJobConfig, CronJobsStore, CreateCronJobRequest, UpdateCronJobRequest};
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;

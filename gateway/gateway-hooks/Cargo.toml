@@ -1,0 +1,26 @@
+# ============================================================================
+# GATEWAY HOOKS
+# Hook abstraction for inbound triggers (CLI, Cron, etc.)
+# ============================================================================
+
+[package]
+name = "gateway-hooks"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Hook abstraction for inbound triggers in the AgentZero gateway"
+
+[dependencies]
+# Internal crates
+gateway-events = { path = "../gateway-events" }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"

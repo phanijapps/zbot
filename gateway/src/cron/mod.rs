@@ -24,13 +24,8 @@
 //! };
 //! ```
 
-pub mod config;
-pub mod service;
-
-pub use config::{
-    CronJobConfig, CronJobsStore, CreateCronJobRequest, TriggerResult, UpdateCronJobRequest,
-};
-pub use service::{CronResult, CronService, CronServiceError};
+// Re-export config and service types from gateway-cron crate
+pub use gateway_cron::*;
 
 use crate::bus::{GatewayBus, SessionRequest};
 use execution_state::TriggerSource;

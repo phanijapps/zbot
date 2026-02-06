@@ -1,8 +1,7 @@
 //! Hook registry for managing and routing to different hooks.
 
-use super::context::{HookContext, HookType};
-use super::Hook;
-use crate::events::EventBus;
+use crate::{Hook, HookContext, HookType};
+use gateway_events::EventBus;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -181,7 +180,6 @@ impl Hook for NoOpHook {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::EventBus;
 
     #[tokio::test]
     async fn test_hook_registry() {
