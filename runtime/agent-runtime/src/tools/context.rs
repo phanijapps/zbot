@@ -291,6 +291,18 @@ impl zero_core::ToolContext for ToolContext {
     }
 }
 
+impl ToolContext {
+    /// Atomically read and clear actions. Used for parallel tool execution
+    /// to capture each tool's actions without race conditions.
+    pub fn take_actions(&self) -> EventActions {
+        if let Ok(mut a) = self.actions.write() {
+            std::mem::take(&mut *a)
+        } else {
+            EventActions::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

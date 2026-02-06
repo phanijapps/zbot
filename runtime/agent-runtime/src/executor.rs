@@ -85,6 +85,11 @@ pub struct ExecutorConfig {
     #[allow(dead_code)]
     pub initial_state: std::collections::HashMap<String, Value>,
 
+    /// Maximum characters for a tool result in context (default: 30000 chars ≈ 7500 tokens).
+    /// Results exceeding this are truncated to head + tail with a notice.
+    /// Set to 0 to disable truncation.
+    pub max_tool_result_chars: usize,
+
     /// Offload large tool results to filesystem instead of keeping in context.
     pub offload_large_results: bool,
 
@@ -112,6 +117,7 @@ impl ExecutorConfig {
             skills: Vec::new(),
             conversation_id: None,
             initial_state: std::collections::HashMap::new(),
+            max_tool_result_chars: 30_000, // ~7500 tokens
             offload_large_results: false,
             offload_threshold_chars: 20_000, // ~5000 tokens
             offload_dir: None,
@@ -388,29 +394,41 @@ impl AgentExecutor {
             // Track if respond tool was called - signals we should stop after this batch
             let mut should_stop_after_respond = false;
 
-            // Execute each tool and add its result
+            // Emit ToolCallStart events for all tools before execution
             for tool_call in &tool_calls {
-                let tool_name = &tool_call.name;
-                let args = &tool_call.arguments;
-
-                tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
-
                 on_event(StreamEvent::ToolCallStart {
                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
                     tool_id: tool_call.id.clone(),
-                    tool_name: tool_name.clone(),
-                    args: args.clone(),
+                    tool_name: tool_call.name.clone(),
+                    args: tool_call.arguments.clone(),
                 });
+            }
 
-                let result = self.execute_tool(&shared_tool_context, &tool_call.id, tool_name, args).await;
+            // Execute all tools concurrently
+            let tool_futures: Vec<_> = tool_calls.iter().map(|tc| {
+                let ctx = shared_tool_context.clone();
+                let tool_id = tc.id.clone();
+                let tool_name = tc.name.clone();
+                let args = tc.arguments.clone();
+                async move {
+                    tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
+                    self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+                }
+            }).collect();
+
+            let results = futures::future::join_all(tool_futures).await;
+
+            // Process results in original order
+            for (tool_call, result) in tool_calls.iter().zip(results) {
+                let tool_name = &tool_call.name;
 
                 match result {
                     Ok(tool_result) => {
                         let output = tool_result.output;
                         let actions = tool_result.actions;
-                        
+
                         tracing::debug!("Tool result: {}", output);
-                        
+
                         // Check for respond action
                         if let Some(respond) = &actions.respond {
                             on_event(StreamEvent::ActionRespond {
@@ -420,11 +438,10 @@ impl AgentExecutor {
                                 conversation_id: respond.conversation_id.clone(),
                                 session_id: respond.session_id.clone(),
                             });
-                            // Signal to stop after processing this batch of tool calls
                             should_stop_after_respond = true;
                             tracing::debug!("Respond action detected, will stop after current tool batch");
                         }
-                        
+
                         // Check for delegate action
                         if let Some(delegate) = &actions.delegate {
                             on_event(StreamEvent::ActionDelegate {
@@ -520,6 +537,12 @@ impl AgentExecutor {
                         // Process tool result (potentially offload large results to filesystem)
                         let processed_output = self.process_tool_result(tool_name, output);
 
+                        // Truncate if still over budget (safety net when offload is disabled)
+                        let processed_output = truncate_tool_result(
+                            processed_output,
+                            self.config.max_tool_result_chars,
+                        );
+
                         // Add tool result message
                         current_messages.push(ChatMessage {
                             role: "tool".to_string(),
@@ -551,7 +574,7 @@ impl AgentExecutor {
                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
                     tool_id: tool_call.id.clone(),
                     tool_name: tool_name.clone(),
-                    args: args.clone(),
+                    args: tool_call.arguments.clone(),
                 });
             }
 
@@ -594,11 +617,14 @@ impl AgentExecutor {
             // their position in the conversation (e.g., for skill loading).
             shared_ctx.set_function_call_id(tool_call_id.to_string());
 
+            // Clear actions before execution so we capture only this tool's actions
+            shared_ctx.set_actions(EventActions::default());
+
             let result = tool.execute(shared_ctx.clone(), arguments.clone()).await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
 
-            // Get any actions that were set by the tool
-            let actions = shared_ctx.actions();
+            // Atomically take any actions that were set by the tool
+            let actions = shared_ctx.take_actions();
 
             return Ok(ToolExecutionResult {
                 output: serde_json::to_string(&result).unwrap_or_else(|_| "null".to_string()),
@@ -933,4 +959,79 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
 
     // Fallback: return a placeholder
     json!({"_truncated": true, "_original_size": args_str.len()})
+}
+
+/// Truncate a tool result string if it exceeds max_chars.
+///
+/// Keeps the first ~80% and last ~20% of the budget with a truncation notice.
+/// Returns the original string if within limits or if max_chars is 0 (disabled).
+fn truncate_tool_result(result: String, max_chars: usize) -> String {
+    if max_chars == 0 || result.len() <= max_chars {
+        return result;
+    }
+
+    let notice = format!(
+        "\n\n--- TRUNCATED ({} chars total, showing first and last portions) ---\n\n",
+        result.len()
+    );
+    let budget = max_chars.saturating_sub(notice.len());
+    let head_size = (budget * 4) / 5; // 80%
+    let tail_size = budget - head_size; // 20%
+
+    let head = &result[..head_size];
+    let tail = &result[result.len() - tail_size..];
+
+    format!("{}{}{}", head, notice, tail)
+}
+
+#[cfg(test)]
+mod truncation_tests {
+    use super::*;
+
+    #[test]
+    fn test_truncate_tool_result_under_limit() {
+        let result = "hello world".to_string();
+        assert_eq!(truncate_tool_result(result.clone(), 100), result);
+    }
+
+    #[test]
+    fn test_truncate_tool_result_disabled() {
+        let result = "a".repeat(50_000);
+        assert_eq!(truncate_tool_result(result.clone(), 0), result);
+    }
+
+    #[test]
+    fn test_truncate_tool_result_over_limit() {
+        let result = "a".repeat(1000) + &"b".repeat(1000);
+        let truncated = truncate_tool_result(result, 500);
+        assert!(truncated.len() <= 500);
+        assert!(truncated.contains("TRUNCATED"));
+        assert!(truncated.starts_with("aaa"));
+        assert!(truncated.ends_with("bbb"));
+    }
+
+    #[test]
+    fn test_truncate_tool_result_preserves_head_tail_ratio() {
+        let result = "H".repeat(10_000) + &"T".repeat(10_000);
+        let truncated = truncate_tool_result(result, 1000);
+        // Head should be ~80%, tail ~20% of budget
+        let head_h = truncated.matches('H').count();
+        let tail_t = truncated.matches('T').count();
+        assert!(head_h > tail_t, "head ({}) should be larger than tail ({})", head_h, tail_t);
+    }
+
+    #[test]
+    fn test_truncate_tool_args_small() {
+        let args = json!({"key": "value"});
+        let result = truncate_tool_args(&args, 500);
+        assert_eq!(result, args);
+    }
+
+    #[test]
+    fn test_truncate_tool_args_large_string() {
+        let args = json!({"content": "x".repeat(500)});
+        let result = truncate_tool_args(&args, 100);
+        let content = result.get("content").unwrap().as_str().unwrap();
+        assert!(content.contains("truncated"));
+    }
 }
