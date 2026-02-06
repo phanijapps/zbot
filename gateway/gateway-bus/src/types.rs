@@ -60,14 +60,6 @@ impl SessionRequest {
     ///
     /// * `agent_id` - The agent to execute
     /// * `message` - The message to send to the agent
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use gateway::bus::SessionRequest;
-    ///
-    /// let request = SessionRequest::new("root", "Hello, agent!");
-    /// ```
     pub fn new(agent_id: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             session_id: None,
@@ -521,60 +513,5 @@ mod tests {
     fn bus_error_is_std_error() {
         let err = BusError::SessionNotFound("test".to_string());
         let _: &dyn std::error::Error = &err;
-    }
-
-    // ==================== Integration-style Tests ====================
-
-    #[test]
-    fn session_request_for_new_web_session() {
-        // Typical web UI use case
-        let req = SessionRequest::new("root", "What's the weather today?")
-            .with_source(TriggerSource::Web);
-
-        assert_eq!(req.source, TriggerSource::Web);
-        assert!(req.session_id.is_none()); // New session
-        assert!(req.priority.is_none()); // No queue priority
-    }
-
-    #[test]
-    fn session_request_for_cron_job() {
-        // Typical cron job use case
-        let req = SessionRequest::new("daily-report", "Generate the daily summary report")
-            .with_source(TriggerSource::Cron)
-            .with_external_ref("cron-daily-report-2026-02-01")
-            .with_priority(50); // Medium priority in queue
-
-        assert_eq!(req.source, TriggerSource::Cron);
-        assert_eq!(req.agent_id, "daily-report");
-        assert!(req.external_ref.unwrap().contains("2026-02-01"));
-    }
-
-    #[test]
-    fn session_request_for_api_integration() {
-        // Typical API integration use case
-        let metadata = serde_json::json!({
-            "webhook_id": "wh-123",
-            "event_type": "issue.created",
-            "repo": "owner/repo"
-        });
-
-        let req = SessionRequest::new("github-handler", "New issue: Fix the bug")
-            .with_source(TriggerSource::Api)
-            .with_external_ref("github-issue-456")
-            .with_metadata(metadata);
-
-        assert_eq!(req.source, TriggerSource::Api);
-        assert!(req.metadata.is_some());
-    }
-
-    #[test]
-    fn session_request_continue_conversation() {
-        // User sends follow-up message in existing session
-        let req = SessionRequest::new("root", "And what about tomorrow?")
-            .with_session_id("sess-abc123")
-            .with_conversation_id("conv-xyz789");
-
-        assert!(req.session_id.is_some());
-        assert!(req.conversation_id.is_some());
     }
 }

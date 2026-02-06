@@ -35,6 +35,8 @@ members = [
     "gateway/gateway-execution",
     "gateway/gateway-hooks",
     "gateway/gateway-cron",
+    "gateway/gateway-bus",
+    "gateway/gateway-ws-protocol",
     "gateway",
 
     # Apps - Runnable applications

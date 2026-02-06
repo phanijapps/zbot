@@ -31,6 +31,8 @@ gateway-services = { path = "gateway-services" }
 gateway-execution = { path = "gateway-execution" }
 gateway-hooks = { path = "gateway-hooks" }
 gateway-cron = { path = "gateway-cron" }
+gateway-bus = { path = "gateway-bus" }
+gateway-ws-protocol = { path = "gateway-ws-protocol" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws", "macros"] }

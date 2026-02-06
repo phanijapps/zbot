@@ -21,7 +21,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::{mpsc, RwLock};
 use tracing::debug;
 
-use super::messages::{ServerMessage, SubscriptionScope};
+use super::{ServerMessage, SubscriptionScope};
 
 /// Unique client identifier (WebSocket session ID)
 pub type ClientId = String;

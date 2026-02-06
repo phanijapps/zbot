@@ -2,7 +2,7 @@
 //!
 //! Handles WebSocket connections and message routing.
 
-use super::messages::{ClientMessage, ServerMessage, SubscriptionErrorCode, SubscriptionScope};
+use super::{ClientMessage, ServerMessage, SubscriptionErrorCode, SubscriptionScope};
 use super::session::{SessionRegistry, WsSession};
 use super::subscriptions::{EventMetadata, SubscribeError, SubscribeResult, SessionScopeState, SubscriptionManager};
 use crate::error::{GatewayError, Result};

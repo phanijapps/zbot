@@ -2,7 +2,7 @@
 //!
 //! Session management for WebSocket connections.
 
-use super::messages::ServerMessage;
+use super::ServerMessage;
 use std::collections::HashMap;
 use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
