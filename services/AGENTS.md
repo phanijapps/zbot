@@ -4,67 +4,72 @@ Standalone data services with minimal framework dependencies. Each service is in
 
 ## Crates
 
-| Crate | Purpose | Storage |
-|-------|---------|---------|
-| `api-logs` | Execution logging and tracing | SQLite |
-| `knowledge-graph` | Entity extraction and relationships | SQLite |
-| `search-index` | Full-text search | Tantivy |
-| `session-archive` | Long-term session archival | Parquet |
-| `daily-sessions` | Daily session management | SQLite + Cache |
+| Crate | Purpose | Storage | Tests |
+|-------|---------|---------|-------|
+| `execution-state` | Session lifecycle, execution tracking, token consumption, dashboard stats | SQLite | 82 |
+| `api-logs` | Execution logging and tracing with categories and filtering | SQLite | 0 |
+| `knowledge-graph` | Entity extraction and relationship storage | SQLite | 19 |
+| `daily-sessions` | Daily session continuity with message archiving | SQLite + moka cache | 16 |
+
+## Build & Test
+
+```bash
+cargo test -p execution-state    # 82 tests
+cargo test -p knowledge-graph    # 19 tests
+cargo test -p daily-sessions     # 16 tests
+```
 
 ## Design Pattern
 
 Services expose traits that the gateway implements:
 
 ```rust
+// In services/execution-state
+pub trait StateDbProvider {
+    fn get_connection(&self) -> Result<PooledConnection>;
+}
+
 // In services/api-logs
 pub trait DbProvider {
     fn get_connection(&self) -> &Connection;
 }
 
-// Gateway implements this trait
-impl DbProvider for AppState { ... }
+// Gateway's DatabaseManager implements both traits
 ```
 
-This inverts dependencies - services don't depend on gateway, gateway depends on services.
+This inverts dependencies — services don't depend on gateway, gateway depends on services.
+
+## execution-state
+
+The most critical service. Tracks sessions, agent executions, delegations, ward assignments, and token usage.
+
+**Key types**: `Session`, `AgentExecution`, `SessionStatus`, `ExecutionStatus`, `DelegationType`, `TriggerSource`, `DashboardStats`
+
+**HTTP routes** (11 endpoints):
+- `GET /v2/sessions` — List sessions
+- `GET /v2/sessions/:id/full` — Session with all executions
+- `POST /sessions/:id/{pause,resume,cancel}` — Control operations
+- `GET /executions/:id` — Execution details
+- `GET /stats` — Dashboard statistics
 
 ## api-logs
 
-Execution tracing with REST API:
+Execution tracing with structured log entries. Each entry has level, category, timestamp, and metadata.
 
-```
-GET  /sessions         - List execution sessions
-GET  /sessions/:id     - Get session with logs
-DELETE /sessions/:id   - Delete session
-```
+**Key types**: `ExecutionLog`, `LogLevel`, `LogCategory`, `LogFilter`, `LogSession`
+
+**Categories**: Session, Token, ToolCall, ToolResult, Thinking, Delegation, System, Error
 
 ## knowledge-graph
 
-Extract and query entities/relationships:
+Extracts and stores entities and relationships from conversations. LLM-powered extraction (stubbed).
 
-- Entity types: Person, Organization, Place, Concept
-- Relationship extraction
-- LLM-powered smart extraction
+**Key types**: `Entity`, `Relationship`, `EntityType`, `RelationshipType`, `ExtractedKnowledge`
 
-## search-index
-
-Full-text search using Tantivy:
-
-- Index conversation messages
-- Fast predicate pushdown queries
-
-## session-archive
-
-Parquet-based archival:
-
-- Columnar compression
-- Efficient long-term storage
-- Query archived sessions
+**Entity types**: Person, Organization, Location, Concept, Tool, Project, Custom
 
 ## daily-sessions
 
-Session lifecycle management:
+Manages daily conversation sessions with context continuity and system prompt version tracking.
 
-- Group sessions by day
-- Caching layer (moka)
-- Database persistence
+**Key types**: `DailySession`, `SessionMessage`, `DaySummary`, `Agent`, `SystemPromptCheck`
