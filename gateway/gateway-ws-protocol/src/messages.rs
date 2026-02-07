@@ -285,6 +285,16 @@ pub enum ServerMessage {
         seq: Option<u64>,
     },
 
+    /// Execution heartbeat — execution alive, no data flowing.
+    Heartbeat {
+        session_id: String,
+        execution_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+
     /// Token usage update for real-time metrics.
     TokenUsage {
         session_id: String,
@@ -351,6 +361,22 @@ pub enum ServerMessage {
 
     /// Session ended (completed by user request).
     SessionEnded { session_id: String },
+
+    /// Sent immediately after invoke is accepted, before execution starts.
+    /// Allows client to learn session_id without waiting for AgentStarted.
+    InvokeAccepted {
+        session_id: String,
+        conversation_id: String,
+    },
+
+    /// Agent switched to a different ward (project directory).
+    WardChanged {
+        session_id: String,
+        execution_id: String,
+        ward_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -426,11 +452,14 @@ impl ServerMessage {
             Self::ContinuationPrompt { conversation_id, .. } => conversation_id.as_deref(),
             Self::MessageAdded { conversation_id, .. } => conversation_id.as_deref(),
             Self::TokenUsage { conversation_id, .. } => conversation_id.as_deref(),
+            Self::Heartbeat { conversation_id, .. } => conversation_id.as_deref(),
             Self::DelegationStarted { parent_conversation_id, .. } => parent_conversation_id.as_deref(),
             Self::DelegationCompleted { parent_conversation_id, .. } => parent_conversation_id.as_deref(),
             Self::Subscribed { conversation_id, .. } => Some(conversation_id),
             Self::Unsubscribed { conversation_id, .. } => Some(conversation_id),
             Self::SubscriptionError { conversation_id, .. } => Some(conversation_id),
+            Self::InvokeAccepted { conversation_id, .. } => Some(conversation_id),
+            Self::WardChanged { .. } => None,
             Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
             | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
             | Self::SessionEnded { .. } => None,
@@ -479,6 +508,9 @@ impl ServerMessage {
             Self::TokenUsage { session_id, execution_id, conversation_id, tokens_in, tokens_out, .. } => {
                 Self::TokenUsage { session_id, execution_id, conversation_id, tokens_in, tokens_out, seq: Some(seq) }
             }
+            Self::Heartbeat { session_id, execution_id, conversation_id, .. } => {
+                Self::Heartbeat { session_id, execution_id, conversation_id, seq: Some(seq) }
+            }
             Self::DelegationStarted {
                 session_id, parent_execution_id, child_execution_id,
                 parent_agent_id, child_agent_id, task,
@@ -497,6 +529,9 @@ impl ServerMessage {
                 parent_agent_id, child_agent_id, result,
                 parent_conversation_id, child_conversation_id, seq: Some(seq),
             },
+            Self::WardChanged { session_id, execution_id, ward_id, .. } => {
+                Self::WardChanged { session_id, execution_id, ward_id, seq: Some(seq) }
+            }
             // Messages without sequence numbers pass through unchanged
             other => other,
         }

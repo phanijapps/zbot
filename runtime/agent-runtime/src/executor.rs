@@ -322,26 +322,45 @@ impl AgentExecutor {
                 ).await
             });
 
-            // Process chunks as they arrive — emit Token events in real-time
+            // Process chunks as they arrive — emit Token events in real-time.
+            // Uses tokio::select! with a 10s heartbeat interval so that during
+            // extended silent phases (e.g., LLM reasoning), heartbeat events keep
+            // WebSocket connections alive (client PONG_TIMEOUT is 30s).
             let mut streamed_content = String::new();
-            while let Some(chunk) = rx.recv().await {
-                match chunk {
-                    StreamChunk::Token(text) => {
-                        streamed_content.push_str(&text);
-                        on_event(StreamEvent::Token {
-                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            content: text,
-                        });
+            let mut heartbeat_interval = tokio::time::interval(std::time::Duration::from_secs(10));
+            heartbeat_interval.tick().await; // consume immediate first tick
+
+            loop {
+                tokio::select! {
+                    chunk = rx.recv() => {
+                        match chunk {
+                            Some(StreamChunk::Token(text)) => {
+                                streamed_content.push_str(&text);
+                                on_event(StreamEvent::Token {
+                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                    content: text,
+                                });
+                                heartbeat_interval.reset();
+                            }
+                            Some(StreamChunk::Reasoning(text)) => {
+                                on_event(StreamEvent::Reasoning {
+                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                    content: text,
+                                });
+                                heartbeat_interval.reset();
+                            }
+                            Some(StreamChunk::ToolCall(_)) => {
+                                // Tool call chunks are accumulated by the streaming impl
+                                // and returned in the final ChatResponse. No action needed here.
+                                heartbeat_interval.reset();
+                            }
+                            None => break, // channel closed
+                        }
                     }
-                    StreamChunk::Reasoning(text) => {
-                        on_event(StreamEvent::Reasoning {
+                    _ = heartbeat_interval.tick() => {
+                        on_event(StreamEvent::Heartbeat {
                             timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            content: text,
                         });
-                    }
-                    StreamChunk::ToolCall(_) => {
-                        // Tool call chunks are accumulated by the streaming impl
-                        // and returned in the final ChatResponse. No action needed here.
                     }
                 }
             }
@@ -525,6 +544,19 @@ impl AgentExecutor {
                                     submit_button,
                                 });
                             }
+
+                            // Check for ward_changed marker (from ward tool)
+                            if parsed.get("__ward_changed__")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                if let Some(ward_id) = parsed.get("ward_id").and_then(|v| v.as_str()) {
+                                    on_event(StreamEvent::WardChanged {
+                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                        ward_id: ward_id.to_string(),
+                                    });
+                                }
+                            }
                         }
 
                         on_event(StreamEvent::ToolResult {
@@ -687,6 +719,21 @@ impl AgentExecutor {
         Err(format!("Tool not found: {}", tool_name))
     }
 
+    /// Harden a tool parameter schema for stricter LLM compliance.
+    /// Adds "additionalProperties": false if not already present.
+    /// Ensures "required" array exists (empty if missing).
+    fn harden_tool_schema(mut schema: Value) -> Value {
+        if let Some(obj) = schema.as_object_mut() {
+            if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
+                obj.entry("additionalProperties")
+                    .or_insert(Value::Bool(false));
+                obj.entry("required")
+                    .or_insert_with(|| json!([]));
+            }
+        }
+        schema
+    }
+
     /// Normalize MCP tool parameters to OpenAI format
     ///
     /// OpenAI requires parameters to have `type: "object"` at the root.
@@ -715,7 +762,9 @@ impl AgentExecutor {
         for tool in self.tool_registry.get_all() {
             let tool_name = tool.name();
             let tool_desc = tool.description();
-            let schema = tool.parameters_schema().unwrap_or_else(|| json!(null));
+            let schema = tool.parameters_schema()
+                .map(Self::harden_tool_schema)
+                .unwrap_or_else(|| json!({"type": "object", "properties": {}, "additionalProperties": false, "required": []}));
 
             // Validate tool name and description aren't empty
             if tool_name.is_empty() {
@@ -754,8 +803,10 @@ impl AgentExecutor {
                     let tool_name_normalized = normalize_tool_name(&mcp_tool.name);
                     let tool_name = format!("{}__{}", mcp_id_normalized, tool_name_normalized);
 
-                    // Normalize parameters to OpenAI format (must have type: "object")
-                    let parameters = Self::normalize_mcp_parameters(mcp_tool.parameters);
+                    // Normalize parameters to OpenAI format and harden schema
+                    let parameters = Self::harden_tool_schema(
+                        Self::normalize_mcp_parameters(mcp_tool.parameters)
+                    );
 
                     tools.push(json!({
                         "type": "function",

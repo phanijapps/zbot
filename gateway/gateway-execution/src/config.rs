@@ -55,6 +55,22 @@ impl FileSystemContext for GatewayFileSystem {
     fn vault_path(&self) -> Option<PathBuf> {
         Some(self.vault_dir.clone())
     }
+
+    fn session_code_dir(&self, session_id: &str) -> Option<PathBuf> {
+        Some(self.vault_dir.join("code").join(session_id))
+    }
+
+    fn session_data_dir(&self, session_id: &str) -> Option<PathBuf> {
+        Some(self.vault_dir.join("agent_data").join(session_id))
+    }
+
+    fn wards_root_dir(&self) -> Option<PathBuf> {
+        Some(self.vault_dir.join("wards"))
+    }
+
+    fn ward_dir(&self, ward_id: &str) -> Option<PathBuf> {
+        Some(self.vault_dir.join("wards").join(ward_id))
+    }
 }
 
 // ============================================================================

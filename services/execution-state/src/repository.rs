@@ -43,8 +43,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                     id, status, source, root_agent_id, title,
                     created_at, started_at, completed_at,
                     total_tokens_in, total_tokens_out, metadata,
-                    pending_delegations, continuation_needed
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                    pending_delegations, continuation_needed, ward_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     session.id,
                     session.status.as_str(),
@@ -59,6 +59,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                     session.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten(),
                     session.pending_delegations as i64,
                     session.continuation_needed as i64,
+                    session.ward_id,
                 ],
             )?;
             Ok(())
@@ -76,7 +77,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata,
-                        pending_delegations, continuation_needed
+                        pending_delegations, continuation_needed, ward_id
                  FROM sessions WHERE id = ?",
             )?;
 
@@ -95,7 +96,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata,
-                        pending_delegations, continuation_needed
+                        pending_delegations, continuation_needed, ward_id
                  FROM sessions WHERE 1=1",
             );
 
@@ -266,6 +267,17 @@ impl<D: StateDbProvider> StateRepository<D> {
             conn.execute(
                 "UPDATE sessions SET title = ?1 WHERE id = ?2",
                 params![title, id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Update session ward (active project directory).
+    pub fn update_session_ward(&self, id: &str, ward_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET ward_id = ?1 WHERE id = ?2",
+                params![ward_id, id],
             )?;
             Ok(())
         })
@@ -769,6 +781,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             metadata: metadata_json.and_then(|s| serde_json::from_str(&s).ok()),
             pending_delegations: row.get::<_, i64>(11).unwrap_or(0) as u32,
             continuation_needed: row.get::<_, i64>(12).unwrap_or(0) != 0,
+            ward_id: row.get(13).ok().flatten(),
         })
     }
 
@@ -850,7 +863,8 @@ mod tests {
                     total_tokens_out INTEGER NOT NULL DEFAULT 0,
                     metadata TEXT,
                     pending_delegations INTEGER DEFAULT 0,
-                    continuation_needed INTEGER DEFAULT 0
+                    continuation_needed INTEGER DEFAULT 0,
+                    ward_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (

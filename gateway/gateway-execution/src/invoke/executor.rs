@@ -66,6 +66,7 @@ impl ExecutorBuilder {
     /// * `available_skills` - List of available skills (for list_skills tool)
     /// * `hook_context` - Optional hook context for initial state
     /// * `mcp_service` - MCP service for starting servers
+    /// * `ward_id` - Optional active ward from existing session
     pub async fn build(
         &self,
         agent: &Agent,
@@ -76,6 +77,7 @@ impl ExecutorBuilder {
         available_skills: Vec<serde_json::Value>,
         hook_context: Option<&serde_json::Value>,
         mcp_service: &McpService,
+        ward_id: Option<&str>,
     ) -> Result<AgentExecutor, String> {
         // Build executor config
         let mut executor_config = ExecutorConfig::new(
@@ -116,6 +118,12 @@ impl ExecutorBuilder {
         // Inject session_id so tools (e.g., shell) can scope working directories
         executor_config = executor_config
             .with_initial_state("session_id", serde_json::Value::String(session_id.to_string()));
+
+        // Restore ward_id from session so continuations keep the active ward
+        if let Some(ward) = ward_id {
+            executor_config = executor_config
+                .with_initial_state("ward_id", serde_json::Value::String(ward.to_string()));
+        }
 
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(

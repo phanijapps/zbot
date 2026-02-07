@@ -515,7 +515,7 @@ export type ConnectionState =
   | { status: "disconnected"; reason?: "user" | "server" | "network" }
   | { status: "connecting" }
   | { status: "connected" }
-  | { status: "reconnecting"; attempt: number; maxAttempts: number }
+  | { status: "reconnecting"; attempt: number; maxAttempts?: number }
   | { status: "failed"; error: string };
 
 /**

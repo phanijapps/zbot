@@ -134,6 +134,13 @@ pub async fn spawn_delegated_agent(
     let settings_service = gateway_services::SettingsService::new(config_dir.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
+    // Look up active ward from parent session
+    let session_ward_id = state_service
+        .get_session(&request.session_id)
+        .ok()
+        .flatten()
+        .and_then(|s| s.ward_id);
+
     // Build executor using ExecutorBuilder
     let builder = ExecutorBuilder::new(config_dir.clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
@@ -147,6 +154,7 @@ pub async fn spawn_delegated_agent(
             available_skills,
             None,
             &mcp_service,
+            session_ward_id.as_deref(),
         )
         .await
     {

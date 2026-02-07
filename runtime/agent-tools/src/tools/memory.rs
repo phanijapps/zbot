@@ -78,11 +78,13 @@ impl MemoryTool {
     ///
     /// - `scope="agent"` (default): `agents_data/{agent_id}/memory.json`
     /// - `scope="shared"`: `agents_data/shared/{file}.json`
+    /// - `scope="ward"`: `wards/{ward_id}/.ward_memory.json`
     fn resolve_memory_path(
         &self,
         agent_id: &str,
         scope: &str,
         file: Option<&str>,
+        ward_id: Option<&str>,
     ) -> Result<PathBuf> {
         match scope {
             "shared" => {
@@ -107,6 +109,18 @@ impl MemoryTool {
                             .join(format!("{}.json", file))
                     })
                     .ok_or_else(|| ZeroError::Tool("No vault path configured".to_string()))
+            }
+            "ward" => {
+                let ward_id = ward_id.ok_or_else(|| {
+                    ZeroError::Tool(
+                        "No active ward. Use ward(action=\"use\") first.".to_string(),
+                    )
+                })?;
+
+                self.fs
+                    .ward_dir(ward_id)
+                    .map(|dir| dir.join(".ward_memory.json"))
+                    .ok_or_else(|| ZeroError::Tool("Ward dir unavailable".to_string()))
             }
             "agent" | _ => self
                 .fs
@@ -186,8 +200,9 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Persistent memory for storing facts, notes, and context across sessions. \
-        Supports two scopes: 'agent' (default, per-agent) and 'shared' (cross-session). \
-        Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
+        Scopes: 'agent' (default, per-agent), 'shared' (cross-session), 'ward' (per-project). \
+        Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries. \
+        Ward memory stores project context (purpose, tech stack, build commands) in the current ward."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -201,9 +216,9 @@ impl Tool for MemoryTool {
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["agent", "shared"],
+                    "enum": ["agent", "shared", "ward"],
                     "default": "agent",
-                    "description": "Memory scope: 'agent' for agent-specific, 'shared' for cross-session"
+                    "description": "Memory scope: 'agent' (per-agent), 'shared' (cross-session), 'ward' (current project)"
                 },
                 "file": {
                     "type": "string",
@@ -258,8 +273,13 @@ impl Tool for MemoryTool {
             .unwrap_or("agent");
         let file = args.get("file").and_then(|v| v.as_str());
 
+        // Get ward_id from context state (set by ward tool)
+        let ward_id = ctx
+            .get_state("ward_id")
+            .and_then(|v| v.as_str().map(String::from));
+
         // Resolve memory path
-        let path = self.resolve_memory_path(&agent_id, scope, file)?;
+        let path = self.resolve_memory_path(&agent_id, scope, file, ward_id.as_deref())?;
 
         // Get action
         let action = args
@@ -546,7 +566,7 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs);
 
-        let path = tool.resolve_memory_path("test-agent", "agent", None).unwrap();
+        let path = tool.resolve_memory_path("test-agent", "agent", None, None).unwrap();
         assert!(path.ends_with("agents_data/test-agent/memory.json"));
     }
 
@@ -557,7 +577,7 @@ mod tests {
         let tool = MemoryTool::new(fs);
 
         let path = tool
-            .resolve_memory_path("test-agent", "shared", Some("patterns"))
+            .resolve_memory_path("test-agent", "shared", Some("patterns"), None)
             .unwrap();
         assert!(path.ends_with("agents_data/shared/patterns.json"));
     }
@@ -568,7 +588,7 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs);
 
-        let result = tool.resolve_memory_path("test-agent", "shared", None);
+        let result = tool.resolve_memory_path("test-agent", "shared", None, None);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -582,7 +602,7 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs);
 
-        let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"));
+        let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"), None);
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid shared file"));
     }
@@ -594,7 +614,7 @@ mod tests {
         let tool = MemoryTool::new(fs);
 
         for file in SHARED_FILES {
-            let result = tool.resolve_memory_path("test-agent", "shared", Some(file));
+            let result = tool.resolve_memory_path("test-agent", "shared", Some(file), None);
             assert!(result.is_ok(), "Failed for file: {}", file);
         }
     }

@@ -153,6 +153,13 @@ pub enum StreamEvent {
     // CHECKPOINT EVENTS
     // ========================================================================
 
+    /// Execution heartbeat — emitted during silent phases (e.g., LLM reasoning)
+    /// to signal the execution is still alive.
+    #[serde(rename = "heartbeat")]
+    Heartbeat {
+        timestamp: u64,
+    },
+
     /// Execution context state for checkpoint persistence.
     ///
     /// Emitted at the end of execution (after Done) to allow the gateway
@@ -164,6 +171,18 @@ pub enum StreamEvent {
         timestamp: u64,
         /// Serialized tool context state (skill graph, loaded skills, etc.)
         state: Value,
+    },
+
+    // ========================================================================
+    // WARD EVENTS
+    // ========================================================================
+
+    /// Agent switched to a different ward (project directory).
+    #[serde(rename = "ward_changed")]
+    WardChanged {
+        timestamp: u64,
+        /// The ward the agent switched to
+        ward_id: String,
     },
 }
 
@@ -185,7 +204,9 @@ impl StreamEvent {
             | Self::ActionRespond { timestamp, .. }
             | Self::ActionDelegate { timestamp, .. }
             | Self::TokenUpdate { timestamp, .. }
-            | Self::ContextState { timestamp, .. } => *timestamp,
+            | Self::Heartbeat { timestamp, .. }
+            | Self::ContextState { timestamp, .. }
+            | Self::WardChanged { timestamp, .. } => *timestamp,
         }
     }
 

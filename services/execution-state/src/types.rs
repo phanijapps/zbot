@@ -290,6 +290,10 @@ pub struct Session {
     /// Whether this session needs a continuation turn after delegations complete
     #[serde(default)]
     pub continuation_needed: bool,
+
+    /// Active ward (named project directory) for this session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ward_id: Option<String>,
 }
 
 impl Session {
@@ -314,6 +318,7 @@ impl Session {
             metadata: None,
             pending_delegations: 0,
             continuation_needed: false,
+            ward_id: None,
         }
     }
 
@@ -333,6 +338,7 @@ impl Session {
             metadata: None,
             pending_delegations: 0,
             continuation_needed: false,
+            ward_id: None,
         }
     }
 

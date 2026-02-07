@@ -11,6 +11,7 @@ mod agent;
 mod web;
 mod memory;
 mod introspection;
+mod ward;
 
 use std::sync::Arc;
 
@@ -36,6 +37,7 @@ pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use web::WebFetchTool;
 pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
 pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
+pub use ward::WardTool;
 
 // ============================================================================
 // TOOL SETTINGS
@@ -132,6 +134,8 @@ pub fn core_tools(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
         Arc::new(EditTool::new(fs.clone())),
         Arc::new(MemoryTool::new(fs.clone())),
         Arc::new(TodoTool::new()),
+        // Ward management (named project directories)
+        Arc::new(WardTool::new(fs.clone())),
         // Skill discovery (high priority - encourages delegation)
         Arc::new(ListSkillsTool::new(fs.clone())),
         Arc::new(LoadSkillTool::new(fs.clone())),

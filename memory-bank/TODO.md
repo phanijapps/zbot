@@ -20,29 +20,19 @@ Agent was too passive - proposed plans instead of executing, lost context betwee
 - [x] Verify tool calls are saved to database (3 tool calls: list_skills, load_skill, write)
 - [x] Verify tool calls appear in agent context on next turn
 
-### CodeAct: Python & Node Execution
+### Code Wards (Agent-Managed Project Containers)
 **Status**: IN PROGRESS
-**Plan**: `memory-bank/plans/codeact-python-node.md`
+**Plan**: `memory-bank/plans/code-wards.md`
 
-Enable agents to execute Python/Node code using shell + memory (simpler than specialized tools).
+Named project directories (wards) that agents create, manage, and navigate autonomously.
+Replaces per-session `code/{session_id}/` with persistent `wards/{ward_name}/`.
+Shared Python venv + Node env across all wards.
 
-**Architecture decision**: Use shell tool with injected paths instead of specialized tools.
-
-**Completed**:
-- [x] Inject runtime paths into system prompt (templates.rs)
-  - Vault path, Python executable, Node modules
-- [x] Seed workspace memory with structured paths (state.rs)
-  - `os`, `vault_path`, `python_executable`, `node_modules_path`
-
-**Remaining**:
-- [x] Create venv in vault if missing (auto-created at gateway startup)
-- [x] Create node_env in vault if missing (auto-created at gateway startup)
-- [x] Fix Node path mismatch: shell.rs now uses shared `node_env/` instead of per-agent `agents_data/{id}/`
-- [x] Seed workspace.json with python_env/node_env status
-- [ ] Test: agent uses shell with injected Python path
-- [ ] Investigate: Python code not landing in right environments (pip install goes to venv but user scripts may run outside it)
-- [ ] Optional: python-codeact skill for patterns
-- [ ] Optional: node-codeact skill for patterns
+**Phases**:
+- [ ] Phase 1: Ward tool + FileSystem trait changes
+- [ ] Phase 2: Wire existing tools (shell, write/edit/read, memory)
+- [ ] Phase 3: System prompt + skill
+- [ ] Phase 4: Creative hub (cross-ward discovery, pattern learning)
 
 ### Skill Loading & Unloading
 **Status**: Needs planning

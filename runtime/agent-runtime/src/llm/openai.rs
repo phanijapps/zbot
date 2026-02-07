@@ -255,104 +255,173 @@ impl LlmClient for OpenAiClient {
 
         let mut full_content = String::new();
         let mut reasoning_content = String::new();
-        let mut tool_calls = Vec::new();
         let prompt_tokens = 0u32;
 
-        // Read streaming response
-        let mut stream = response.bytes_stream();
+        // Accumulate streaming tool call deltas by index.
+        // OpenAI sends tool calls as incremental deltas keyed by index:
+        //   Delta 1: {index: 0, id: "call_123", function: {name: "write", arguments: ""}}
+        //   Delta 2: {index: 0, function: {arguments: "{\"path\""}}
+        //   Delta 3: {index: 0, function: {arguments: ": \"app.js\"}"}}
+        // We must accumulate the id, name, and argument fragments per index,
+        // then parse the complete JSON arguments after the stream ends.
+        struct ToolCallAccumulator {
+            id: String,
+            name: String,
+            arguments: String,
+        }
+        let mut tool_accumulators: std::collections::HashMap<u64, ToolCallAccumulator> =
+            std::collections::HashMap::new();
 
-        let mut buffer = Vec::new();
+        // Track provider-side accumulated text to handle providers that return
+        // accumulated content instead of true deltas in streaming responses.
+        // (e.g., Z.AI/GLM sends the full text so far in each delta.content)
+        let mut provider_accumulated = String::new();
+
+        // Read streaming response using line-buffered SSE parsing.
+        // Each SSE line is processed exactly once — the buffer only retains
+        // incomplete (partial) lines between HTTP chunks.
+        let mut stream = response.bytes_stream();
+        let mut sse_buffer = String::new();
+
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|e| {
                 tracing::error!("Stream error: {}", e);
                 LlmError::HttpError(e)
             })?;
-            buffer.extend_from_slice(&chunk);
+            sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
 
-            // Process complete SSE lines
-            let data_str = String::from_utf8_lossy(&buffer).to_string();
-            let lines: Vec<&str> = data_str.split('\n').collect();
-
-            // Find the last complete line and keep incomplete data in buffer
-            let last_newline_idx = data_str.rfind('\n');
-            let keep_in_buffer = if let Some(idx) = last_newline_idx {
-                let complete_bytes = data_str[..idx].as_bytes().len();
-                if idx + 1 < data_str.len() {
-                    buffer.split_off(complete_bytes)
-                } else {
-                    buffer.split_off(buffer.len())
-                }
-            } else {
-                Vec::new()
+            // Find the last complete line boundary
+            let Some(last_nl) = sse_buffer.rfind('\n') else {
+                continue; // No complete line yet, keep buffering
             };
 
-            // Process all complete lines
-            let take_count = lines.len().saturating_sub(if keep_in_buffer.is_empty() { 0 } else { 1 });
-            for line in lines.iter().take(take_count) {
+            // Split: everything up to last newline is complete; remainder is partial
+            let complete = sse_buffer[..last_nl].to_string();
+            sse_buffer = sse_buffer[last_nl + 1..].to_string();
+
+            // Process each complete SSE line exactly once
+            for line in complete.lines() {
                 let line = line.trim();
-                if line.starts_with("data: ") {
-                    let data_str = &line[6..];
-                    if data_str == "[DONE]" {
-                        continue;
+                if !line.starts_with("data: ") {
+                    continue;
+                }
+                let data_payload = &line[6..];
+                if data_payload == "[DONE]" {
+                    continue;
+                }
+
+                let json_data = match serde_json::from_str::<Value>(data_payload) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
+
+                let Some(delta) = json_data.pointer("/choices/0/delta") else {
+                    continue;
+                };
+
+                // Regular content
+                if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                    // Handle both delta-style and accumulated-style providers:
+                    // - OpenAI sends true deltas: "Hi", "!", " I", "'m"
+                    // - Some providers (Z.AI/GLM) send accumulated text: "Hi", "Hi!", "Hi! I"
+                    // Detect accumulated mode: if new content extends what we've seen so far,
+                    // extract only the new suffix as the actual delta.
+                    let actual_delta = if !provider_accumulated.is_empty()
+                        && content.starts_with(&provider_accumulated)
+                    {
+                        &content[provider_accumulated.len()..]
+                    } else {
+                        content
+                    };
+
+                    // Update tracking
+                    if !provider_accumulated.is_empty()
+                        && content.starts_with(&provider_accumulated)
+                    {
+                        provider_accumulated = content.to_string();
+                    } else {
+                        provider_accumulated.push_str(content);
                     }
 
-                    if let Ok(json_data) = serde_json::from_str::<Value>(data_str) {
-                        // Check for delta content
-                        if let Some(delta) = json_data.pointer("/choices/0/delta") {
-                            // Regular content
-                            if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                                full_content.push_str(content);
-                                callback(StreamChunk::Token(content.to_string()));
+                    if !actual_delta.is_empty() {
+                        full_content.push_str(actual_delta);
+                        callback(StreamChunk::Token(actual_delta.to_string()));
+                    }
+                }
+
+                // Reasoning content (for models with thinking enabled)
+                if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
+                    reasoning_content.push_str(reasoning);
+                    callback(StreamChunk::Reasoning(reasoning.to_string()));
+                }
+
+                // Tool calls — accumulate deltas by index
+                if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
+                    for call in calls {
+                        let index = call.get("index")
+                            .and_then(|i| i.as_u64())
+                            .unwrap_or(0);
+
+                        let acc = tool_accumulators.entry(index).or_insert_with(|| {
+                            ToolCallAccumulator {
+                                id: String::new(),
+                                name: String::new(),
+                                arguments: String::new(),
                             }
+                        });
 
-                            // Reasoning content (for models with thinking enabled)
-                            if let Some(reasoning) = delta.get("reasoning_content").and_then(|c| c.as_str()) {
-                                reasoning_content.push_str(reasoning);
-                                callback(StreamChunk::Reasoning(reasoning.to_string()));
-                            }
-
-                            // Check for tool calls
-                            if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
-                                for call in calls {
-                                    let id = call.get("id")
-                                        .and_then(|i| i.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-
-                                    let name = call.get("function")
-                                        .and_then(|f| f.get("name"))
-                                        .and_then(|n| n.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-
-                                    let args = call.get("function")
-                                        .and_then(|f| f.get("arguments"))
-                                        .and_then(|a| a.as_str())
-                                        .unwrap_or("{}");
-
-                                    if !name.is_empty() {
-                                        callback(StreamChunk::ToolCall(ToolCallChunk {
-                                            id: Some(id.clone()),
-                                            name: Some(name.clone()),
-                                            arguments: args.to_string(),
-                                        }));
-
-                                        // Parse arguments string to Value
-                                        let args_value = serde_json::from_str(args).unwrap_or(json!({}));
-
-                                        let tool_call = ToolCall::new(id.clone(), name, args_value);
-                                        tool_calls.push(tool_call);
-                                    }
-                                }
+                        // First delta for this index carries the id and name
+                        if let Some(id) = call.get("id").and_then(|i| i.as_str()) {
+                            if !id.is_empty() {
+                                acc.id = id.to_string();
                             }
                         }
+                        if let Some(name) = call.get("function")
+                            .and_then(|f| f.get("name"))
+                            .and_then(|n| n.as_str())
+                        {
+                            if !name.is_empty() {
+                                acc.name = name.to_string();
+                            }
+                        }
+
+                        // Every delta may carry an argument fragment — append it
+                        if let Some(args_fragment) = call.get("function")
+                            .and_then(|f| f.get("arguments"))
+                            .and_then(|a| a.as_str())
+                        {
+                            acc.arguments.push_str(args_fragment);
+                        }
+
+                        // Emit StreamChunk::ToolCall for UI feedback
+                        callback(StreamChunk::ToolCall(ToolCallChunk {
+                            id: if acc.id.is_empty() { None } else { Some(acc.id.clone()) },
+                            name: if acc.name.is_empty() { None } else { Some(acc.name.clone()) },
+                            arguments: acc.arguments.clone(),
+                        }));
                     }
                 }
             }
+        }
 
-            // If there was incomplete data, keep it in buffer
-            if !keep_in_buffer.is_empty() {
-                buffer = keep_in_buffer;
+        // Build final tool calls from accumulated deltas
+        let mut tool_calls: Vec<ToolCall> = Vec::new();
+        let mut indices: Vec<u64> = tool_accumulators.keys().copied().collect();
+        indices.sort();
+        for index in indices {
+            if let Some(acc) = tool_accumulators.remove(&index) {
+                if acc.name.is_empty() {
+                    tracing::warn!("Skipping tool call at index {} with empty name", index);
+                    continue;
+                }
+                let args_value = serde_json::from_str(&acc.arguments).unwrap_or_else(|e| {
+                    tracing::warn!(
+                        "Failed to parse tool call arguments for '{}': {} — raw: {}",
+                        acc.name, e, acc.arguments
+                    );
+                    json!({})
+                });
+                tool_calls.push(ToolCall::new(acc.id, acc.name, args_value));
             }
         }
 

@@ -74,6 +74,7 @@ export function SessionChatViewer({
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const isSubmittingRef = useRef(false);
 
   // Determine the message scope based on props
   const scope: MessageScope = executionId ? 'execution' : 'root';
@@ -84,6 +85,10 @@ export function SessionChatViewer({
   // Handle streaming events
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
+      case "invoke_accepted":
+        // Acknowledge invoke_accepted - session subscription is handled by the parent
+        break;
+
       case "agent_started":
         setIsProcessing(true);
         break;
@@ -302,7 +307,8 @@ export function SessionChatViewer({
   }, [messages]);
 
   const handleSend = async () => {
-    if (!input.trim() || isProcessing || readOnly) return;
+    if (!input.trim() || isProcessing || readOnly || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -324,11 +330,13 @@ export function SessionChatViewer({
     } catch (err) {
       console.error("Failed to send message:", err);
       setIsProcessing(false); // Only set to false on error
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.repeat) {
       e.preventDefault();
       handleSend();
     }

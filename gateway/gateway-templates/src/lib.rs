@@ -5,7 +5,7 @@
 //! Provides:
 //! - `Templates` struct with embedded template files
 //! - `load_system_prompt()` for loading and assembling the agent system prompt
-//! - Shard injection (safety, tooling, memory) into custom instructions
+//! - Shard injection (tooling, memory) into custom instructions
 
 use rust_embed::RustEmbed;
 use std::path::Path;
@@ -17,7 +17,7 @@ pub struct Templates;
 
 /// Shards that are always appended to custom instructions.
 /// These provide core functionality documentation that users shouldn't have to maintain.
-const REQUIRED_SHARDS: &[&str] = &["safety", "tooling_skills", "memory_learning"];
+const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning"];
 
 /// Load system prompt from filesystem, creating starter if missing.
 ///
@@ -100,52 +100,35 @@ fn environment_section(data_dir: &Path) -> String {
     let arch = std::env::consts::ARCH;
 
     let shell_hint = match os {
-        "windows" => "Use PowerShell or cmd syntax (dir, type, copy, etc.)",
-        "macos" => "Use Unix shell syntax (ls, cat, cp, etc.)",
-        "linux" => "Use Unix shell syntax (ls, cat, cp, etc.)",
-        _ => "Detect shell syntax from context",
+        "windows" => "PowerShell/cmd",
+        "macos" | "linux" => "Unix shell",
+        _ => "detect from context",
     };
 
     let mut lines = vec![
         "ENVIRONMENT".to_string(),
-        format!("- OS: {} ({})", os, arch),
-        format!("- Shell: {}", shell_hint),
+        format!("- OS: {} ({}) — Shell: {}", os, arch, shell_hint),
         format!("- Vault: {}", data_dir.display()),
     ];
 
-    // Python venv - always show canonical location with status
+    // Python venv status
     let venv_dir = data_dir.join("venv");
     let python_path = if cfg!(windows) {
         venv_dir.join("Scripts").join("python.exe")
     } else {
         venv_dir.join("bin").join("python")
     };
-    let pip_path = if cfg!(windows) {
-        venv_dir.join("Scripts").join("pip.exe")
-    } else {
-        venv_dir.join("bin").join("pip")
-    };
-    if python_path.exists() {
-        lines.push(format!("- Python: {} (ready)", python_path.display()));
-        lines.push(format!("- Pip: {}", pip_path.display()));
-    } else {
-        lines.push(format!("- Python: {} (not configured)", python_path.display()));
-    }
+    let py_status = if python_path.exists() { "ready" } else { "not configured" };
+    lines.push(format!("- Python venv: {} ({})", venv_dir.display(), py_status));
 
-    // Node environment - always show canonical location with status
-    let node_env_dir = data_dir.join("node_env");
-    let node_modules = node_env_dir.join("node_modules");
-    if node_modules.exists() {
-        lines.push(format!("- NodeModules: {} (ready)", node_modules.display()));
-        lines.push("- Node: NODE_PATH is auto-set to NodeModules; `npm install <pkg>` installs there".to_string());
-    } else {
-        lines.push(format!("- NodeModules: {} (not configured)", node_modules.display()));
-    }
+    // Node status
+    let node_modules = data_dir.join("node_env").join("node_modules");
+    let node_status = if node_modules.exists() { "ready" } else { "not configured" };
+    lines.push(format!("- Node modules: {} ({})", node_modules.display(), node_status));
 
-    // Working directory info
-    let code_dir = data_dir.join("code");
-    lines.push(format!("- CodeDir: {} (shell commands run in CodeDir/{{session_id}}/)", code_dir.display()));
-    lines.push("- Attachments: use the write tool to save output files (images, docs) to agent_data".to_string());
+    // Working directories
+    lines.push("- Shell runs in: code/{session_id}/".to_string());
+    lines.push("- Write tool routes: code files → code/{session}/, attachments/scratchpad → agent_data/{session}/".to_string());
 
     lines.join("\n")
 }

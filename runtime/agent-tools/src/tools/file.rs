@@ -118,9 +118,11 @@ impl Tool for WriteTool {
     }
 
     fn description(&self) -> &str {
-        "Write or append content to a file. Use mode='append' to add content to existing files. \
-        For large files, write the initial structure first, then use multiple append calls to add sections. \
-        Example: 'outputs/report.html' writes to {vault}/agent_data/{agent_id}/outputs/report.html"
+        "Write or append content to a file. Path routing:\n\
+         Default → current ward directory (code files, visible to shell)\n\
+         'attachments/' → agent_data/{session}/attachments/ (final outputs: .docx, .pptx)\n\
+         'scratchpad/' → agent_data/{session}/scratchpad/ (intermediate work)\n\
+         For large files (200+ lines), write the skeleton first, then use append calls."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -129,7 +131,7 @@ impl Tool for WriteTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative path for the file. Will be written under agent_data/{agent_id}/."
+                    "description": "Relative path. Default goes to code dir. Prefix 'attachments/' or 'scratchpad/' routes to agent_data."
                 },
                 "content": {
                     "type": "string",
@@ -200,31 +202,42 @@ impl Tool for WriteTool {
             ));
         }
 
-        // Get root_agent_id from session state (for subagents, this is the parent's ID)
-        // Fall back to agent_id if root_agent_id is not set
-        let data_agent_id = ctx.get_state("app:root_agent_id")
+        // Get session_id from state for path routing
+        let session_id = ctx.get_state("session_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
-            .or_else(|| ctx.get_state("app:agent_id")
-                .and_then(|v| v.as_str().map(|s| s.to_owned())))
             .ok_or_else(|| zero_core::ZeroError::Tool(
-                "Agent ID not found in state. Cannot write file.".to_string()
+                "session_id not found in state.".to_string()
             ))?;
 
         tracing::info!(
             file = %file!(),
             line = %line!(),
-            "{} file: path='{}' ({} bytes), data_agent_id={}",
+            "{} file: path='{}' ({} bytes), session_id={}",
             if is_append { "Appending to" } else { "Writing" },
-            path, content.len(), data_agent_id
+            path, content.len(), session_id
         );
 
-        // Resolve path: all paths go under agent_data/<root_agent_id>/
-        let agent_data_dir = self.fs.agent_data_dir(&data_agent_id)
-            .ok_or_else(|| zero_core::ZeroError::Tool(
-                "Agent data directory not available".to_string()
-            ))?;
+        // Route based on path prefix:
+        // attachments/ and scratchpad/ → agent_data/{session}/ (session-scoped)
+        // everything else → wards/{ward_id}/ (ward-scoped, where shell runs)
+        let final_path = if path.starts_with("attachments/") || path.starts_with("scratchpad/") {
+            let data_dir = self.fs.session_data_dir(&session_id)
+                .ok_or_else(|| zero_core::ZeroError::Tool(
+                    "Session data dir unavailable".to_string()
+                ))?;
+            data_dir.join(path)
+        } else {
+            // Use ward_id if set, otherwise fall back to "scratch"
+            let ward_id = ctx.get_state("ward_id")
+                .and_then(|v| v.as_str().map(|s| s.to_owned()))
+                .unwrap_or_else(|| "scratch".to_string());
 
-        let final_path = agent_data_dir.join(path);
+            let ward_dir = self.fs.ward_dir(&ward_id)
+                .ok_or_else(|| zero_core::ZeroError::Tool(
+                    "Ward dir unavailable".to_string()
+                ))?;
+            ward_dir.join(path)
+        };
 
         // Create parent directories
         if let Some(parent) = final_path.parent() {
@@ -293,8 +306,8 @@ impl Tool for EditTool {
     }
 
     fn description(&self) -> &str {
-        "Edit a file in your agent's data directory by performing search and replace operations. \
-        Files must exist within agent_data/{agent_id}/. Use the same relative path as when writing."
+        "Edit a file using search/replace. Same path routing as write: default → current ward, \
+         'attachments/' and 'scratchpad/' → agent_data/{session}/."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -303,7 +316,7 @@ impl Tool for EditTool {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Relative path to the file to edit. Will be resolved under agent_data/{agent_id}/"
+                    "description": "Relative path. Default goes to code dir. Prefix 'attachments/' or 'scratchpad/' routes to agent_data."
                 },
                 "replacements": {
                     "type": "array",
@@ -370,30 +383,39 @@ impl Tool for EditTool {
             ));
         }
 
-        // Get root_agent_id from session state (for subagents, this is the parent's ID)
-        // Fall back to agent_id if root_agent_id is not set
-        let data_agent_id = ctx.get_state("app:root_agent_id")
+        // Get session_id from state for path routing
+        let session_id = ctx.get_state("session_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
-            .or_else(|| ctx.get_state("app:agent_id")
-                .and_then(|v| v.as_str().map(|s| s.to_owned())))
             .ok_or_else(|| zero_core::ZeroError::Tool(
-                "Agent ID not found in state. Cannot edit file.".to_string()
+                "session_id not found in state.".to_string()
             ))?;
 
         tracing::info!(
             file = %file!(),
             line = %line!(),
-            "Editing file: path='{}', data_agent_id={}",
-            path, data_agent_id
+            "Editing file: path='{}', session_id={}",
+            path, session_id
         );
 
-        // Resolve path: all paths go under agent_data/<root_agent_id>/
-        let agent_data_dir = self.fs.agent_data_dir(&data_agent_id)
-            .ok_or_else(|| zero_core::ZeroError::Tool(
-                "Agent data directory not available".to_string()
-            ))?;
+        // Route based on path prefix (same as write tool)
+        let final_path = if path.starts_with("attachments/") || path.starts_with("scratchpad/") {
+            let data_dir = self.fs.session_data_dir(&session_id)
+                .ok_or_else(|| zero_core::ZeroError::Tool(
+                    "Session data dir unavailable".to_string()
+                ))?;
+            data_dir.join(path)
+        } else {
+            // Use ward_id if set, otherwise fall back to "scratch"
+            let ward_id = ctx.get_state("ward_id")
+                .and_then(|v| v.as_str().map(|s| s.to_owned()))
+                .unwrap_or_else(|| "scratch".to_string());
 
-        let final_path = agent_data_dir.join(path);
+            let ward_dir = self.fs.ward_dir(&ward_id)
+                .ok_or_else(|| zero_core::ZeroError::Tool(
+                    "Ward dir unavailable".to_string()
+                ))?;
+            ward_dir.join(path)
+        };
 
         let mut content = std::fs::read_to_string(&final_path)
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to read file: {}", e)))?;

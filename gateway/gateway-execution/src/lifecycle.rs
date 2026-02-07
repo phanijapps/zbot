@@ -22,6 +22,8 @@ pub struct SessionSetup {
     pub session_id: String,
     /// Execution ID
     pub execution_id: String,
+    /// Active ward from existing session (None for new sessions)
+    pub ward_id: Option<String>,
 }
 
 /// Get or create a session and execution for an agent invocation.
@@ -39,7 +41,7 @@ pub fn get_or_create_session(
     if let Some(session_id) = existing_session_id {
         // Try to continue existing session
         match state_service.get_session(session_id) {
-            Ok(Some(_session)) => {
+            Ok(Some(session)) => {
                 // Session exists, create a new execution for this message
                 let execution = AgentExecution::new_root(session_id, agent_id);
                 if let Err(e) = state_service.create_execution(&execution) {
@@ -55,6 +57,7 @@ pub fn get_or_create_session(
                 return SessionSetup {
                     session_id: session_id.to_string(),
                     execution_id: execution.id,
+                    ward_id: session.ward_id,
                 };
             }
             Ok(None) => {
@@ -79,6 +82,7 @@ pub fn get_or_create_session(
     SessionSetup {
         session_id: session.id,
         execution_id: execution.id,
+        ward_id: None,
     }
 }
 
@@ -479,8 +483,10 @@ mod tests {
         let setup = SessionSetup {
             session_id: "session-123".to_string(),
             execution_id: "exec-456".to_string(),
+            ward_id: Some("my-project".to_string()),
         };
         assert_eq!(setup.session_id, "session-123");
         assert_eq!(setup.execution_id, "exec-456");
+        assert_eq!(setup.ward_id, Some("my-project".to_string()));
     }
 }

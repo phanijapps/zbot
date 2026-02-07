@@ -34,7 +34,8 @@ impl Tool for ListEntitiesTool {
                     "description": "Optional entity type to filter by (person, organization, location, concept, tool, project)",
                     "enum": ["person", "organization", "location", "concept", "tool", "project"]
                 }
-            }
+            },
+            "required": []
         }))
     }
 

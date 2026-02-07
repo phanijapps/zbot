@@ -214,6 +214,14 @@ pub enum GatewayEvent {
         conversation_id: Option<String>,
     },
 
+    /// Execution heartbeat — signals the execution is alive during silent phases.
+    Heartbeat {
+        session_id: String,
+        execution_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+    },
+
     /// All delegations for a session have completed, continuation can proceed.
     ///
     /// Emitted when the last pending delegation completes and the session
@@ -223,6 +231,13 @@ pub enum GatewayEvent {
         root_agent_id: String,
         /// The execution ID that should be continued
         root_execution_id: String,
+    },
+
+    /// Agent switched to a different ward (project directory).
+    WardChanged {
+        session_id: String,
+        execution_id: String,
+        ward_id: String,
     },
 }
 
@@ -250,7 +265,9 @@ impl GatewayEvent {
             } => Some(parent_agent_id),
             Self::MessageAdded { .. } => None,
             Self::TokenUsage { .. } => None,
+            Self::Heartbeat { .. } => None,
             Self::SessionContinuationReady { root_agent_id, .. } => Some(root_agent_id),
+            Self::WardChanged { .. } => None,
         }
     }
 
@@ -277,7 +294,9 @@ impl GatewayEvent {
             Self::DelegationCompleted { session_id, .. } => Some(session_id),
             Self::MessageAdded { session_id, .. } => Some(session_id),
             Self::TokenUsage { session_id, .. } => Some(session_id),
+            Self::Heartbeat { session_id, .. } => Some(session_id),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
+            Self::WardChanged { session_id, .. } => Some(session_id),
         }
     }
 
@@ -309,9 +328,11 @@ impl GatewayEvent {
             } => Some(parent_execution_id),
             Self::MessageAdded { execution_id, .. } => Some(execution_id),
             Self::TokenUsage { execution_id, .. } => Some(execution_id),
+            Self::Heartbeat { execution_id, .. } => Some(execution_id),
             Self::SessionContinuationReady {
                 root_execution_id, ..
             } => Some(root_execution_id),
+            Self::WardChanged { execution_id, .. } => Some(execution_id),
         }
     }
 
@@ -342,7 +363,9 @@ impl GatewayEvent {
             } => parent_conversation_id.as_deref(),
             Self::MessageAdded { conversation_id, .. } => conversation_id.as_deref(),
             Self::TokenUsage { conversation_id, .. } => conversation_id.as_deref(),
+            Self::Heartbeat { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
+            Self::WardChanged { .. } => None,
         }
     }
 }

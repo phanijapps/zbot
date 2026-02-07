@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 5;
+const SCHEMA_VERSION: i32 = 6;
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
@@ -31,7 +31,8 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             total_tokens_out INTEGER DEFAULT 0,
             metadata TEXT,
             pending_delegations INTEGER DEFAULT 0,
-            continuation_needed INTEGER DEFAULT 0
+            continuation_needed INTEGER DEFAULT 0,
+            ward_id TEXT
         )",
         [],
     )?;

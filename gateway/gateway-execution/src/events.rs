@@ -92,8 +92,20 @@ pub fn convert_stream_event(
         // which emits DelegationStarted with proper IDs. Don't emit here to avoid
         // duplicate events or confusing the UI.
         StreamEvent::ActionDelegate { .. } => None,
+        // Heartbeat signals execution is alive during silent phases (e.g., LLM reasoning).
+        StreamEvent::Heartbeat { .. } => Some(GatewayEvent::Heartbeat {
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            conversation_id: Some(conversation_id.to_string()),
+        }),
         // ContextState is internal state for checkpoint persistence - don't emit to UI.
         StreamEvent::ContextState { .. } => None,
+        // Ward changed - agent switched to a different project directory.
+        StreamEvent::WardChanged { ward_id, .. } => Some(GatewayEvent::WardChanged {
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            ward_id,
+        }),
         // Handle other event types (ToolCallEnd, ShowContent, RequestInput, TokenUpdate)
         // These don't have direct gateway equivalents or are handled separately.
         _ => None,
@@ -156,6 +168,24 @@ mod tests {
 
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
         assert!(gateway_event.is_none(), "ContextState should return None");
+    }
+
+    #[test]
+    fn test_convert_heartbeat_event() {
+        let event = StreamEvent::Heartbeat {
+            timestamp: 12345,
+        };
+
+        let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
+
+        match gateway_event {
+            Some(GatewayEvent::Heartbeat { session_id, execution_id, conversation_id }) => {
+                assert_eq!(session_id, "session-1");
+                assert_eq!(execution_id, "exec-1");
+                assert_eq!(conversation_id, Some("conv-1".to_string()));
+            }
+            _ => panic!("Expected Some(Heartbeat) event"),
+        }
     }
 
     #[test]

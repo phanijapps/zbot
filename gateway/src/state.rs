@@ -262,10 +262,27 @@ impl AppState {
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.
     async fn ensure_runtime_environments(&self) {
+        // Create wards directory structure
+        self.ensure_wards_dir();
+
         let venv_ok = self.ensure_python_venv().await;
         let node_ok = self.ensure_node_env().await;
         self.seed_workspace_env_status(venv_ok, node_ok);
         self.populate_workspace_cache().await;
+    }
+
+    /// Create the wards directory with scratch ward.
+    fn ensure_wards_dir(&self) {
+        let wards_dir = self.config_dir.join("wards");
+        let scratch_dir = wards_dir.join("scratch");
+
+        if !scratch_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(&scratch_dir) {
+                tracing::warn!("Failed to create wards/scratch directory: {}", e);
+            } else {
+                tracing::info!("Created wards directory with scratch ward at {}", wards_dir.display());
+            }
+        }
     }
 
     /// Populate the in-memory workspace cache from workspace.json.
@@ -302,10 +319,21 @@ impl AppState {
         }
     }
 
-    /// Create Python venv at `{config_dir}/venv` if it doesn't exist.
+    /// Create Python venv at `{config_dir}/wards/.venv` if it doesn't exist.
+    /// Falls back to legacy `{config_dir}/venv` if it exists there.
     /// Returns true if the venv exists (either already existed or was created).
     async fn ensure_python_venv(&self) -> bool {
-        let venv_path = self.config_dir.join("venv");
+        let new_path = self.config_dir.join("wards").join(".venv");
+        let legacy_path = self.config_dir.join("venv");
+
+        // Use new path, but check legacy location too
+        let venv_path = if new_path.exists() {
+            new_path
+        } else if legacy_path.exists() {
+            legacy_path
+        } else {
+            new_path // Create at new location
+        };
 
         let python_exe = if cfg!(windows) {
             venv_path.join("Scripts").join("python.exe")
@@ -342,10 +370,21 @@ impl AppState {
         }
     }
 
-    /// Create Node.js environment at `{config_dir}/node_env` if it doesn't exist.
+    /// Create Node.js environment at `{config_dir}/wards/.node_env` if it doesn't exist.
+    /// Falls back to legacy `{config_dir}/node_env` if it exists there.
     /// Returns true if the node_env exists (either already existed or was created).
     async fn ensure_node_env(&self) -> bool {
-        let node_env_dir = self.config_dir.join("node_env");
+        let new_path = self.config_dir.join("wards").join(".node_env");
+        let legacy_path = self.config_dir.join("node_env");
+
+        // Use new path, but check legacy location too
+        let node_env_dir = if new_path.exists() {
+            new_path
+        } else if legacy_path.exists() {
+            legacy_path
+        } else {
+            new_path // Create at new location
+        };
         let package_json = node_env_dir.join("package.json");
 
         if package_json.exists() {

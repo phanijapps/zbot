@@ -200,6 +200,11 @@ impl<D: StateDbProvider> StateService<D> {
         Ok(())
     }
 
+    /// Update the active ward for a session.
+    pub fn update_session_ward(&self, session_id: &str, ward_id: &str) -> Result<(), String> {
+        self.repo.update_session_ward(session_id, ward_id)
+    }
+
     /// Delete a session.
     pub fn delete_session(&self, session_id: &str) -> Result<bool, String> {
         self.repo.delete_session(session_id)
@@ -592,7 +597,8 @@ mod tests {
                     total_tokens_out INTEGER NOT NULL DEFAULT 0,
                     metadata TEXT,
                     pending_delegations INTEGER DEFAULT 0,
-                    continuation_needed INTEGER DEFAULT 0
+                    continuation_needed INTEGER DEFAULT 0,
+                    ward_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (

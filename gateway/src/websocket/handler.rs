@@ -64,7 +64,7 @@ impl WebSocketHandler {
                 tokio::select! {
                     _ = interval.tick() => {
                         let cleaned = cleanup_subscriptions
-                            .cleanup_stale_clients(std::time::Duration::from_secs(60))
+                            .cleanup_stale_clients(std::time::Duration::from_secs(120))
                             .await;
                         if cleaned > 0 {
                             info!("Cleaned up {} stale WebSocket clients", cleaned);
@@ -119,21 +119,7 @@ impl WebSocketHandler {
                                                 router_subscriptions
                                                     .add_root_to_caches(session_id, execution_id)
                                                     .await;
-                                                // ALSO update cache for conversation_id subscribers
-                                                // (frontend may subscribe by conversation_id, not session_id)
-                                                if let Some(conv_id) = conversation_id {
-                                                    if conv_id != session_id {
-                                                        info!(
-                                                            conv_id = %conv_id,
-                                                            execution_id = %execution_id,
-                                                            "Also updating cache for conversation_id subscribers"
-                                                        );
-                                                        router_subscriptions
-                                                            .add_root_to_caches(conv_id, execution_id)
-                                                            .await;
-                                                    }
-                                                }
-                                            }
+                                                            }
                                         }
                                     }
                                 }
@@ -141,26 +127,10 @@ impl WebSocketHandler {
                                 // Extract metadata for scope-based filtering
                                 let metadata = gateway_event_to_metadata(&event);
 
-                                // DUAL-PATH ROUTING (for backward compatibility)
-                                //
-                                // Currently routes by BOTH session_id AND conversation_id:
-                                // - session_id: primary routing key for session-based subscriptions
-                                // - conversation_id: legacy support for older clients
-                                //
-                                // With scoped event emission (#26-#31), the server filters events
-                                // based on each subscriber's scope before sending. This means:
-                                // - Session scope: only root execution events + delegation lifecycle
-                                // - Execution scope: only events for a specific execution
-                                // - All scope: unfiltered (backward compatible)
-                                //
-                                // FUTURE OPTIMIZATION: Once all clients migrate to session_id
-                                // subscriptions, the conversation_id routing path can be removed.
-                                // This would simplify the routing logic and eliminate potential
-                                // duplicate delivery when clients subscribe by both IDs.
-                                //
-                                // Uses scoped routing to filter events based on subscription scope.
+                                // Route events by session_id only.
+                                // Clients auto-subscribe to session_id on invoke, so all events
+                                // are delivered through a single path (no duplicates).
                                 let session_id = event.session_id().map(|s| s.to_string());
-                                let conversation_id = event.conversation_id().map(|s| s.to_string());
 
                                 if let Some(server_msg) = gateway_event_to_server_message(event) {
                                     let mut total_sent = 0u64;
@@ -182,44 +152,22 @@ impl WebSocketHandler {
                                         }
                                     }
 
-                                    // ALSO route by conversation_id (for legacy frontend compatibility)
-                                    // This allows clients subscribed by conversation_id to receive events
-                                    if let Some(ref cid) = conversation_id {
-                                        // Avoid double-send if session_id == conversation_id
-                                        if session_id.as_ref() != Some(cid) {
-                                            let result = router_subscriptions
-                                                .route_event_scoped(cid, server_msg.clone(), &metadata)
-                                                .await;
-                                            total_sent += result.sent;
-
-                                            if result.sent > 0 {
-                                                debug!(
-                                                    conversation_id = %cid,
-                                                    sent = result.sent,
-                                                    "Routed event by conversation_id (scoped)"
-                                                );
-                                            }
-                                        }
-                                    }
-
-                                    // If no subscribers found by either key, log for debugging
-                                    if total_sent == 0 && (session_id.is_some() || conversation_id.is_some()) {
+                                    // If no subscribers found, log for debugging
+                                    if total_sent == 0 && session_id.is_some() {
                                         warn!(
                                             session_id = ?session_id,
-                                            conversation_id = ?conversation_id,
                                             "No subscribers found for event"
                                         );
                                     } else if total_sent > 0 {
                                         debug!(
                                             session_id = ?session_id,
-                                            conversation_id = ?conversation_id,
                                             total_sent = total_sent,
                                             "Event routed successfully"
                                         );
                                     }
 
                                     // Global events (like Pong) with no identifiers - broadcast to all
-                                    if session_id.is_none() && conversation_id.is_none() {
+                                    if session_id.is_none() {
                                         router_subscriptions.broadcast_global(server_msg).await;
                                     }
                                 }
@@ -406,7 +354,26 @@ async fn handle_client_message(
                         "Agent {} invocation started for conversation {} (session: {})",
                         agent_id, conversation_id, returned_session_id
                     );
-                    // Events will be broadcast via EventBus -> ServerMessage forwarding
+
+                    // Auto-subscribe this WS client to the new session_id so events
+                    // are received immediately (before client explicitly re-subscribes).
+                    // This eliminates the bootstrap problem where the first invoke's events
+                    // would be lost because the client only subscribed by conversation_id (web-xxx)
+                    // but events route by session_id (sess-xxx).
+                    let _ = subscriptions.subscribe_with_scope(
+                        &session_id.to_string(),
+                        returned_session_id.clone(),
+                        SubscriptionScope::Session,
+                        Some(SessionScopeState::default()),
+                    ).await;
+
+                    // Notify client of the session_id so it can update its state
+                    if let Some(session) = sessions.get(session_id).await {
+                        let _ = session.send(ServerMessage::InvokeAccepted {
+                            session_id: returned_session_id.clone(),
+                            conversation_id: conversation_id.clone(),
+                        });
+                    }
                 }
                 Err(e) => {
                     warn!("Failed to invoke agent {}: {}", agent_id, e);
@@ -882,6 +849,16 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             seq: None,
         }),
 
+        // Heartbeat signals execution alive during silent phases (LLM reasoning)
+        GatewayEvent::Heartbeat { session_id, execution_id, conversation_id } => {
+            Some(ServerMessage::Heartbeat {
+                session_id,
+                execution_id,
+                conversation_id,
+                seq: None,
+            })
+        }
+
         // Internal continuation events are handled by the system, not WebSocket
         GatewayEvent::SessionContinuationReady { .. } => None,
 
@@ -905,6 +882,16 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 conversation_id,
                 tokens_in,
                 tokens_out,
+                seq: None,
+            })
+        }
+
+        // Ward changed - agent switched project directory
+        GatewayEvent::WardChanged { session_id, execution_id, ward_id } => {
+            Some(ServerMessage::WardChanged {
+                session_id,
+                execution_id,
+                ward_id,
                 seq: None,
             })
         }

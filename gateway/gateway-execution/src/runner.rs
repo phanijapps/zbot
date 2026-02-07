@@ -374,8 +374,8 @@ impl ExecutionRunner {
             .map(|messages| self.conversation_repo.messages_to_chat_format(&messages))
             .unwrap_or_default();
 
-        // Create executor
-        let executor = match self.create_executor(&agent, &provider, &config, &session_id).await {
+        // Create executor (restore ward_id from existing session if available)
+        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref()).await {
             Ok(e) => e,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
@@ -736,6 +736,7 @@ impl ExecutionRunner {
         provider: &gateway_services::providers::Provider,
         config: &ExecutionConfig,
         session_id: &str,
+        ward_id: Option<&str>,
     ) -> Result<AgentExecutor, String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
@@ -764,6 +765,7 @@ impl ExecutionRunner {
                 available_skills,
                 hook_context.as_ref(),
                 &self.mcp_service,
+                ward_id,
             )
             .await
     }
@@ -875,6 +877,13 @@ async fn invoke_continuation(
     let available_agents = collect_agents_summary(&agent_service).await;
     let available_skills = collect_skills_summary(&skill_service).await;
 
+    // Look up active ward from session
+    let session_ward_id = state_service
+        .get_session(session_id)
+        .ok()
+        .flatten()
+        .and_then(|s| s.ward_id);
+
     // Build executor
     let builder = ExecutorBuilder::new(config_dir, tool_settings)
         .with_workspace_cache(workspace_cache);
@@ -888,6 +897,7 @@ async fn invoke_continuation(
             available_skills,
             None, // No hook context for continuation
             &mcp_service,
+            session_ward_id.as_deref(),
         )
         .await?;
 

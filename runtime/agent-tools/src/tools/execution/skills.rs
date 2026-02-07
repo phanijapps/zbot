@@ -182,7 +182,8 @@ impl Tool for LoadSkillTool {
                     "type": "string",
                     "description": "Path to file within skill directory. Use '@skill:' prefix. Examples: '@skill:rust-development' (loads SKILL.md), '@skill:rust-development/REFERENCE.md', '@skill:assets/config.json' (after loading skill)"
                 }
-            }
+            },
+            "required": []
         }))
     }
 

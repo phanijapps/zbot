@@ -395,9 +395,10 @@ impl Tool for ShellTool {
         // Use ~/Documents/agentzero (matching gateway data_dir resolution)
         if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
             let agentzero_dir = doc_dir.join("agentzero");
+            let wards_dir = agentzero_dir.join("wards");
 
-            // === Python Virtual Environment ===
-            let venv_path = agentzero_dir.join("venv");
+            // === Python Virtual Environment (shared across all wards) ===
+            let venv_path = wards_dir.join(".venv");
 
             // Set VIRTUAL_ENV to activate the venv
             cmd.env("VIRTUAL_ENV", &venv_path);
@@ -408,8 +409,8 @@ impl Tool for ShellTool {
             #[cfg(not(windows))]
             let venv_bin = venv_path.join("bin");
 
-            // === Shared Node.js environment ===
-            let node_env_dir = agentzero_dir.join("node_env");
+            // === Shared Node.js environment (shared across all wards) ===
+            let node_env_dir = wards_dir.join(".node_env");
             let node_modules = node_env_dir.join("node_modules");
 
             // Build PATH with venv bin and optional node_modules/.bin
@@ -439,7 +440,7 @@ impl Tool for ShellTool {
             cmd.env_remove("PYTHONHOME");
         }
 
-        // Set working directory: explicit cwd > session-scoped code dir > none
+        // Set working directory: explicit cwd > ward dir > scratch ward > none
         if let Some(dir) = cwd {
             // Validate cwd doesn't contain path traversal
             if dir.contains("..") {
@@ -449,21 +450,23 @@ impl Tool for ShellTool {
             }
             cmd.current_dir(dir);
         } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
-            // Default to session-scoped code directory
-            if let Some(session_id) = ctx
-                .get_state("session_id")
+            let wards_dir = doc_dir.join("agentzero").join("wards");
+
+            // Use ward_id if set, otherwise fall back to "scratch"
+            let ward_id = ctx
+                .get_state("ward_id")
                 .and_then(|v| v.as_str().map(String::from))
-            {
-                let code_dir = doc_dir.join("agentzero").join("code").join(&session_id);
-                if !code_dir.exists() {
-                    if let Err(e) = std::fs::create_dir_all(&code_dir) {
-                        tracing::warn!("Failed to create code dir {}: {}", code_dir.display(), e);
-                    }
+                .unwrap_or_else(|| "scratch".to_string());
+
+            let ward_dir = wards_dir.join(&ward_id);
+            if !ward_dir.exists() {
+                if let Err(e) = std::fs::create_dir_all(&ward_dir) {
+                    tracing::warn!("Failed to create ward dir {}: {}", ward_dir.display(), e);
                 }
-                if code_dir.exists() {
-                    tracing::debug!("Shell: cwd set to {}", code_dir.display());
-                    cmd.current_dir(&code_dir);
-                }
+            }
+            if ward_dir.exists() {
+                tracing::debug!("Shell: cwd set to {} (ward: {})", ward_dir.display(), ward_id);
+                cmd.current_dir(&ward_dir);
             }
         }
 

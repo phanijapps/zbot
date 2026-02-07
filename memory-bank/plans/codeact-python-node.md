@@ -1,6 +1,9 @@
 # CodeAct: Python & Node Execution
 
-**Status**: Planning
+> **STATUS: SUPERSEDED** — Replaced by Code Wards (`plans/code-wards.md`).
+> Wards provide persistent named project directories with shared venv/node envs.
+
+**Status**: ~~Planning~~ Superseded
 **Branch**: op_jaffa
 
 ## Goal

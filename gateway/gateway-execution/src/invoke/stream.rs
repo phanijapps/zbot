@@ -340,6 +340,12 @@ pub fn process_stream_event(
         StreamEvent::Error { error, .. } => {
             log_error(ctx, error);
         }
+        StreamEvent::WardChanged { ward_id, .. } => {
+            // Persist ward_id to session so it survives across continuations
+            if let Err(e) = ctx.state_service.update_session_ward(&ctx.session_id, ward_id) {
+                tracing::warn!("Failed to update session ward: {}", e);
+            }
+        }
         _ => {}
     }
 

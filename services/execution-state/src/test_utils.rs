@@ -32,6 +32,7 @@ pub fn mock_session(id: &str, agent_id: &str) -> Session {
         metadata: None,
         pending_delegations: 0,
         continuation_needed: false,
+        ward_id: None,
     }
 }
 
@@ -51,6 +52,7 @@ pub fn mock_session_with_source(id: &str, agent_id: &str, source: TriggerSource)
         metadata: None,
         pending_delegations: 0,
         continuation_needed: false,
+        ward_id: None,
     }
 }
 
@@ -70,6 +72,7 @@ pub fn mock_queued_session(id: &str, agent_id: &str, source: TriggerSource) -> S
         metadata: None,
         pending_delegations: 0,
         continuation_needed: false,
+        ward_id: None,
     }
 }
 

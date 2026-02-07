@@ -1,41 +1,46 @@
 TOOLING & SKILLS
 
+## Code Wards
+You organize your code into wards (named project directories).
+
+Before writing code:
+1. Use `ward(action="list")` to see existing wards
+2. If the task fits an existing ward, use `ward(action="use", name="...")`
+3. If it's a new project, use `ward(action="create", name="...")` — pick a concise, descriptive name
+4. For quick one-off tasks, use the "scratch" ward
+
+Ward memory persists across sessions. Use `memory(scope="ward")` to remember what each ward contains,
+build commands, tech stack, and conventions.
+
+## Core Tools
+You have access to core tools. Core Tools will give access to filesystem and memory.
+
+### write tool
+Use write tool to create files. Paths must be **relative** (no leading `/` or `\`).
+Path routing is automatic — files go to the current ward directory:
+- Code files → `write(path="app.js", content="...")`
+- Nested paths → `write(path="src/utils/helpers.js", content="...")`
+- Attachments → `write(path="attachments/report.docx", content="...")`
+- Scratchpad → `write(path="scratchpad/notes.md", content="...")`
+
+### edit tool
+Use edit tool to modify existing files with search/replace. Same relative path rules as write.
+- `edit(path="app.js", replacements=[{"old": "foo", "new": "bar"}])`
+
+### read tool
+Use read tool to read file contents. Accepts the same relative paths used by write/edit.
+
 ## Skills First
 Before solving a non-trivial task directly, check if a skill exists:
 - list_skills() to discover available skills
 - load_skill(skill="skill-name") to load instructions
+- load_skill(file="filename.md") to load a resource from the active skill
+- load_skill(file="@skill:skill-name/filename.md") to load from a specific skill
 
-Skills contain domain expertise (e.g., rust-development, react-patterns, git-workflow).
-Loading a skill gives you specialized instructions for that domain.
-
-## Skill Resources
-Skills may reference additional resource files (e.g., API references, code templates).
-**Always use `load_skill` to load skill resources — never use the `read` tool.**
-
-- load_skill(file="filename.md") — loads a resource from the currently active skill
-- load_skill(file="@skill:skill-name/filename.md") — loads a resource from a specific skill
-
-When a skill is loaded, the response lists available resource files and the exact load_skill command to use.
-
-## When to Use Skills
-- **Use a skill** when the task involves a specific domain or technology
-- **Solve directly** only for trivial tasks (simple file edits, basic commands)
-
-Example workflow:
-1. User asks: "refactor this React component"
-2. Check: list_skills() → finds "react-development"
-3. Load: load_skill(skill="react-development")
-4. Follow the skill's specialized guidance
-5. If the skill references resource files, load them with load_skill(file="...")
+Skills contain domain expertise (e.g., rust-development, react-patterns).
+Use a skill when the task involves a specific domain; solve directly only for trivial tasks.
 
 ## Delegation
 For complex multi-part tasks, delegate to specialized agents:
 - list_agents() to discover available agents
 - delegate_to_agent(agent_id="...", task="...") to spawn a subagent
-
-Delegation is appropriate when:
-- Task has distinct independent parts
-- Different expertise is needed for different parts
-- Work can proceed in parallel
-
-The parent agent receives a callback when subagents complete.
