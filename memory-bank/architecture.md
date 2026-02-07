@@ -74,7 +74,9 @@
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
 │  ├── providers.json            # LLM provider configurations            │
-│  └── mcps.json                 # MCP server configurations              │
+│  ├── mcps.json                 # MCP server configurations              │
+│  ├── connectors.json           # Connector configurations               │
+│  └── cron_jobs.json            # Scheduled job configurations           │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -138,10 +140,9 @@ Standalone data services:
 
 ```
 services/
+├── execution-state/     # Session/execution state machine (SQLite)
 ├── api-logs/            # Execution logging (SQLite)
 ├── knowledge-graph/     # Entity extraction
-├── search-index/        # Full-text search (Tantivy)
-├── session-archive/     # Parquet archival
 └── daily-sessions/      # Session management
 ```
 
@@ -529,49 +530,108 @@ User Message
 
 ## Database Schema
 
-### conversations
+### Entity Relationships
+
+```
+sessions ||--o{ agent_executions : contains
+agent_executions ||--o{ agent_executions : "parent-child (delegation)"
+agent_executions ||--o{ messages : has
+```
+
+### sessions
+Top-level container for a user's work session.
+
 ```sql
-CREATE TABLE conversations (
-    id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL,
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,                    -- sess-{uuid}
+    status TEXT NOT NULL,                   -- queued|running|completed|crashed|cancelled
+    source TEXT NOT NULL,                   -- web|cli|api|cron|plugin
+    root_agent_id TEXT NOT NULL,
     title TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    metadata TEXT
+    started_at TEXT,
+    completed_at TEXT,
+    error_message TEXT,                     -- null unless crashed
+    total_tokens_in INTEGER DEFAULT 0,
+    total_tokens_out INTEGER DEFAULT 0,
+    metadata TEXT,                          -- JSON
+    pending_delegations INTEGER DEFAULT 0,  -- Count of running subagents
+    continuation_needed INTEGER DEFAULT 0,  -- Flag for continuation after delegates
+    ward_id TEXT                            -- Active code ward name
+);
+```
+
+### agent_executions
+An agent's participation in a session. Root agent or delegated subagent.
+
+```sql
+CREATE TABLE agent_executions (
+    id TEXT PRIMARY KEY,                    -- exec-{uuid}
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    agent_id TEXT NOT NULL,
+    parent_execution_id TEXT REFERENCES agent_executions(id),
+    delegation_type TEXT NOT NULL,          -- root|sequential|parallel
+    task TEXT,                              -- Task description for delegated agents
+    status TEXT NOT NULL,                   -- queued|running|paused|completed|crashed|cancelled
+    started_at TEXT,
+    completed_at TEXT,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    checkpoint TEXT,                        -- JSON for resumption
+    error TEXT,
+    log_path TEXT                           -- Relative path to log file
 );
 ```
 
 ### messages
+Individual messages in an agent's conversation.
+
 ```sql
 CREATE TABLE messages (
     id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT NOT NULL,           -- user, assistant, tool
+    execution_id TEXT NOT NULL REFERENCES agent_executions(id),
+    role TEXT NOT NULL,                     -- user|assistant|tool|system
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     token_count INTEGER DEFAULT 0,
-    tool_calls TEXT,              -- JSON array
-    tool_results TEXT,            -- JSON array
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    tool_calls TEXT,                        -- JSON array
+    tool_results TEXT                       -- JSON array
 );
 ```
 
-### execution_logs
+### Indexes
+
 ```sql
-CREATE TABLE execution_logs (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,        -- Groups logs for one agent invocation
-    conversation_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    parent_session_id TEXT,          -- For delegated agents, links to parent
-    timestamp TEXT NOT NULL,
-    level TEXT NOT NULL,             -- debug, info, warn, error
-    category TEXT NOT NULL,          -- session, tool_call, tool_result, delegation, error
-    message TEXT NOT NULL,
-    metadata TEXT,                   -- JSON with tool args, results, etc.
-    duration_ms INTEGER
-);
+CREATE INDEX idx_sessions_status ON sessions(status);
+CREATE INDEX idx_sessions_created ON sessions(created_at);
+CREATE INDEX idx_executions_session ON agent_executions(session_id);
+CREATE INDEX idx_executions_parent ON agent_executions(parent_execution_id);
+CREATE INDEX idx_executions_status ON agent_executions(status);
+CREATE INDEX idx_executions_agent ON agent_executions(agent_id);
+CREATE INDEX idx_messages_execution ON messages(execution_id);
+CREATE INDEX idx_messages_created ON messages(created_at);
 ```
+
+### Status Semantics
+
+**Session Status:**
+| Status | Description |
+|--------|-------------|
+| `queued` | Created but not yet started |
+| `running` | At least one agent execution is running |
+| `completed` | All executions completed successfully |
+| `crashed` | Root execution crashed |
+| `cancelled` | User cancelled the session |
+
+**Execution Status:**
+| Status | Description |
+|--------|-------------|
+| `queued` | Waiting to start |
+| `running` | Currently executing |
+| `paused` | Paused (session paused or waiting) |
+| `completed` | Finished successfully |
+| `crashed` | Failed with error |
+| `cancelled` | Cancelled by user or parent |
 
 ## Built-in Tools
 
@@ -609,38 +669,6 @@ CREATE TABLE execution_logs (
 | `knowledge_graph` | Entity-relationship storage | Safe |
 | `create_agent` | Create new agents | Moderate |
 | `introspection` | Agent introspection | Safe |
-
-## Design Decisions
-
-### Why No Desktop Wrapper?
-- Browsers are more capable than custom webviews
-- Easier deployment (no native installers)
-- Better developer experience (standard web tools)
-- Cross-platform without platform-specific builds
-
-### Why Single Daemon?
-- Simpler deployment and debugging
-- Shared state without IPC complexity
-- Single port configuration
-- Memory efficiency
-
-### Why SQLite?
-- Zero configuration
-- Portable (single file)
-- ACID transactions
-- Fast for local workloads
-
-### Why Rust?
-- Memory safety without GC
-- Excellent async story (tokio)
-- Great tooling (cargo, clippy)
-- Single binary distribution
-
-### Why Instructions in AGENTS.md?
-- Human-readable and editable
-- Version control friendly
-- Markdown rendering in UI
-- Separates behavior from configuration
 
 ## System Prompt Architecture
 
@@ -799,12 +827,3 @@ The `respond_to` field controls where agent responses are delivered:
 - **Specified**: Response dispatched to listed connectors
 - **Original source NOT automatically included** (explicit routing)
 
-## Data Layer Additions
-
-The following JSON files are added to the data directory:
-
-```
-~/Documents/agentzero/
-├── connectors.json      # Connector configurations
-└── cron_jobs.json       # Scheduled job configurations
-```

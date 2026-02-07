@@ -107,7 +107,7 @@ Follow BEM-inspired conventions:
 
 ## What NOT to Do
 
-### ❌ Never put styles inline in components
+### Never put styles inline in components
 
 ```jsx
 // BAD - styles mixed in component
@@ -117,7 +117,7 @@ Follow BEM-inspired conventions:
 <div className="card card--interactive card__padding">
 ```
 
-### ❌ Never hardcode values
+### Never hardcode values
 
 ```css
 /* BAD */
@@ -127,7 +127,7 @@ Follow BEM-inspired conventions:
 .card { background: var(--card); border-radius: var(--radius-lg); }
 ```
 
-### ❌ Never mix concerns
+### Never mix concerns
 
 ```jsx
 // BAD - component decides styling

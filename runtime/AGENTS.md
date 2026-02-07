@@ -61,6 +61,31 @@ Built-in tools organized by category:
 
 Key files: `tools/ward.rs`, `tools/file.rs`, `tools/execution/shell.rs`, `tools/memory.rs`, `tools/mod.rs` (registration)
 
+## Orchestration & Delegation
+
+Root agent acts as orchestrator. The delegation flow:
+
+```
+User message → Root agent invoked
+  → Root calls delegate_to_agent → spawns subagent execution
+  → Root completes (pending_delegations > 0 → request_continuation)
+  → Subagent(s) execute in parallel
+  → Each subagent completes → callback added to root context
+  → Last subagent done → SessionContinuationReady event
+  → Root agent re-invoked (continuation turn)
+  → Root sees callbacks, decides: respond or delegate more
+```
+
+Key files for delegation:
+
+| File | Purpose |
+|------|---------|
+| `gateway-execution/src/runner.rs` | `spawn_continuation_handler()`, `invoke_continuation()` |
+| `gateway-execution/src/lifecycle.rs` | `request_continuation()` on root completion |
+| `gateway-execution/src/delegation/spawn.rs` | `complete_delegation()` triggers event |
+| `gateway-events/src/lib.rs` | `SessionContinuationReady`, `WardChanged` events |
+| `execution-state/src/service.rs` | StateService with delegation tracking |
+
 ## Does NOT Handle
 
 - Network I/O (that's `gateway/`)
