@@ -39,6 +39,14 @@ impl EventBus {
         }
     }
 
+    /// Publish an event synchronously to the global broadcast channel.
+    ///
+    /// Preserves insertion order when called sequentially from the same thread.
+    /// Does NOT send to agent-specific channels (use `publish()` for that).
+    pub fn publish_sync(&self, event: GatewayEvent) {
+        let _ = self.global_tx.send(event);
+    }
+
     /// Publish an event.
     pub async fn publish(&self, event: GatewayEvent) {
         let agent_id = event.agent_id().map(String::from).unwrap_or_default();

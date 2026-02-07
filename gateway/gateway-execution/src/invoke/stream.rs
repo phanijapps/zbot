@@ -368,11 +368,12 @@ pub fn process_stream_event(
     (gateway_event, response_delta)
 }
 
-/// Broadcast a gateway event asynchronously.
+/// Broadcast a gateway event synchronously to preserve token ordering.
+///
+/// Uses `publish_sync` (non-blocking `broadcast::Sender::send`) instead of
+/// spawning async tasks, which would destroy insertion order between tokens.
 pub fn broadcast_event(event_bus: Arc<EventBus>, event: GatewayEvent) {
-    tokio::spawn(async move {
-        event_bus.publish(event).await;
-    });
+    event_bus.publish_sync(event);
 }
 
 // ============================================================================
