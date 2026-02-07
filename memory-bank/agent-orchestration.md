@@ -72,28 +72,27 @@ Root agent acts as an **orchestrator** with full control over subagents. The roo
 ### Continuation System
 | File | Purpose |
 |------|---------|
-| `gateway/src/execution/runner.rs:176-253` | `spawn_continuation_handler()` - listens for events |
-| `gateway/src/execution/runner.rs:692-831` | `invoke_continuation()` - invokes root with context |
-| `gateway/src/execution/lifecycle.rs:168-186` | `request_continuation()` on root completion |
-| `gateway/src/execution/delegation/spawn.rs:331-352` | `complete_delegation()` triggers event |
+| `gateway/gateway-execution/src/runner.rs` | `spawn_continuation_handler()`, `invoke_continuation()` |
+| `gateway/gateway-execution/src/lifecycle.rs` | `request_continuation()` on root completion |
+| `gateway/gateway-execution/src/delegation/spawn.rs` | `complete_delegation()` triggers event |
 
 ### Session State
 | File | Purpose |
 |------|---------|
 | `services/execution-state/src/service.rs` | StateService with delegation tracking |
-| `services/execution-state/src/repository.rs` | DB operations for pending_delegations |
-| `gateway/src/database/schema.rs` | Schema with continuation columns |
+| `services/execution-state/src/repository.rs` | DB operations for pending_delegations, ward_id |
+| `gateway/gateway-database/src/schema.rs` | Schema with continuation + ward_id columns |
 
 ### Message Loading
 | File | Purpose |
 |------|---------|
-| `gateway/src/database/repository.rs:176-212` | `get_session_root_messages()` |
+| `gateway/gateway-database/src/repository.rs` | `get_session_root_messages()` |
 
 ### Events
 | File | Purpose |
 |------|---------|
-| `gateway/src/events/mod.rs` | `SessionContinuationReady` event |
-| `gateway/src/events/broadcast.rs` | Session-scoped subscriptions |
+| `gateway/gateway-events/src/lib.rs` | `SessionContinuationReady`, `WardChanged` events |
+| `gateway/gateway-events/src/broadcast.rs` | Session-scoped subscriptions |
 | `gateway/src/websocket/handler.rs` | Forwards delegation events to UI |
 
 ## Database Schema (sessions table)
@@ -106,7 +105,8 @@ CREATE TABLE sessions (
     root_agent_id TEXT NOT NULL,
     -- ... other fields ...
     pending_delegations INTEGER DEFAULT 0,  -- Count of running subagents
-    continuation_needed INTEGER DEFAULT 0   -- Flag: continue after all complete
+    continuation_needed INTEGER DEFAULT 0,  -- Flag: continue after all complete
+    ward_id TEXT                            -- Active code ward name
 );
 ```
 

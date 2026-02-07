@@ -23,6 +23,9 @@ erDiagram
         integer total_tokens_in
         integer total_tokens_out
         text metadata "JSON"
+        integer pending_delegations "count of running subagents"
+        integer continuation_needed "flag for continuation"
+        text ward_id "active code ward name"
     }
 
     agent_executions {
@@ -75,6 +78,9 @@ Top-level container for a user's work session. A new session is created when:
 | total_tokens_in | INTEGER | Sum of all agent execution tokens |
 | total_tokens_out | INTEGER | Sum of all agent execution tokens |
 | metadata | TEXT | JSON metadata |
+| pending_delegations | INTEGER | Count of running subagents |
+| continuation_needed | INTEGER | Flag: continue after all delegations complete |
+| ward_id | TEXT | Active code ward name (persists across session turns) |
 
 ### agent_executions
 An agent's participation in a session. Root agent or delegated subagent.

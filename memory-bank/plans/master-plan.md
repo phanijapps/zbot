@@ -9,11 +9,10 @@ it decides where to work, what to build, and how to organize its projects.
 - Responsive Agent Architecture (streaming, pooling, caching, parallel tools, crate extraction)
 - Goal-Oriented Execution (action-first agent behavior)
 - Resilient Event Delivery (heartbeat, reconnection)
-
-## Current: Code Wards
-Agent-managed project containers. See: plans/code-wards.md
+- Code Wards (agent-managed persistent project directories with shared envs)
 
 ## Future
 - Knowledge Graph / Memory Unification
 - Skill Loading & Unloading lifecycle
 - Agent Sandbox (process isolation)
+- Creative Hub (cross-ward code discovery, pattern learning)

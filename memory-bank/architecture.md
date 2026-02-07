@@ -66,6 +66,11 @@
 │  │   ├── workspace.json        #   Project paths (auto-injected)        │
 │  │   ├── patterns.json         #   Learned patterns/conventions         │
 │  │   └── session_summaries.json#   Distilled learnings                  │
+│  ├── wards/                    # Code Wards (persistent project dirs)   │
+│  │   ├── .venv/                #   Shared Python venv for all wards     │
+│  │   ├── scratch/              #   Default ward for quick tasks         │
+│  │   └── {ward-name}/          #   Agent-named project directories      │
+│  │       └── .ward_memory.json #     Per-ward context                   │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
 │  ├── providers.json            # LLM provider configurations            │
@@ -83,7 +88,7 @@
 | HTTP Server | Axum | Async HTTP framework |
 | WebSocket | tokio-tungstenite | Real-time streaming |
 | Async Runtime | tokio | Async I/O |
-| Database | SQLite (rusqlite) | Conversation persistence |
+| Database | SQLite (rusqlite + r2d2 pool) | Conversation persistence (WAL mode) |
 | Serialization | serde + serde_json | JSON handling |
 
 ## Crate Structure
@@ -142,17 +147,22 @@ services/
 
 ### Gateway (`gateway/`)
 
-Network layer:
+Network layer, decomposed into focused crates:
 
 ```
 gateway/
-├── src/
-│   ├── http/            # REST API routes
-│   ├── websocket/       # WebSocket handler
-│   ├── execution/       # Agent invocation + delegation
-│   ├── database/        # SQLite persistence
-│   └── services/        # Agent, Provider, Skill services
-└── templates/           # System prompt templates
+├── gateway-events/      # EventBus, GatewayEvent, HookContext
+├── gateway-database/    # DatabaseManager, pool, schema, ConversationRepository
+├── gateway-templates/   # Prompt assembly, shard injection
+├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
+├── gateway-services/    # AgentService, ProviderService, McpService, SkillService, SettingsService
+├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter
+├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
+├── gateway-cron/        # CronJobConfig, CronService
+├── gateway-bus/         # GatewayBus trait, SessionRequest, SessionHandle
+├── gateway-ws-protocol/ # ClientMessage, ServerMessage, SubscriptionScope
+├── src/                 # Thin shell: HTTP routes, WebSocket handler, AppState
+└── templates/           # System prompt templates (embedded at compile time)
 ```
 
 ### Apps (`apps/`)
@@ -573,7 +583,8 @@ CREATE TABLE execution_logs (
 | `read` | Read file contents | Safe |
 | `write` | Write content to file | Moderate |
 | `edit` | Edit file contents | Moderate |
-| `memory` | Persistent key-value store (shared/private) | Safe |
+| `memory` | Persistent key-value store (shared/private/ward) | Safe |
+| `ward` | Manage code wards (use, list, create, info) | Safe |
 | `todo` | Task management | Safe |
 | `list_skills` | List available skills | Safe |
 | `load_skill` | Load skill instructions | Safe |

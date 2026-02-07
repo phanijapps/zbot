@@ -1,6 +1,6 @@
 # Code Wards: Agent-Managed Project Containers
 
-**Status**: In Progress
+**Status**: COMPLETE (Phases 1-3). Phase 4 is future work.
 **Branch**: feat/responsive-agent-phase1
 
 ## Context & Problem
@@ -83,24 +83,27 @@ New events: `StreamEvent::WardChanged`, `GatewayEvent::WardChanged`, `ServerMess
 
 ## Implementation Phases
 
-### Phase 1: Ward Tool + FileSystem
-1. Add `ward_dir()`, `wards_root_dir()` to `FileSystemContext`
-2. Implement in `GatewayFileSystem`
-3. Create `WardTool` (use, list, create, info)
-4. Register as core tool
-5. Create `wards/scratch/` on startup
-6. Add `WardChanged` event to StreamEvent, GatewayEvent, ServerMessage
+### Phase 1: Ward Tool + FileSystem ✅
+1. ✅ Add `ward_dir()`, `wards_root_dir()` to `FileSystemContext`
+2. ✅ Implement in `GatewayFileSystem`
+3. ✅ Create `WardTool` (use, list, create, info)
+4. ✅ Register as core tool
+5. ✅ Create `wards/scratch/` on startup
+6. ✅ Add `WardChanged` event to StreamEvent, GatewayEvent, ServerMessage
+7. ✅ Add `ward_id` to Session struct + DB schema (v6)
+8. ✅ Persist ward_id on WardChanged event
+9. ✅ Restore ward_id on session continuation + delegation inheritance
 
-### Phase 2: Wire Existing Tools
-1. Shell: cwd from `ward_id`, venv/node from `wards/`
-2. Write/Edit: resolve via `ward_dir()` instead of `session_code_dir()`
-3. Memory: add `"ward"` scope
-4. Executor: inject `ward_id` into state, load ward memory on change
+### Phase 2: Wire Existing Tools ✅
+1. ✅ Shell: cwd from `ward_id`, venv/node from `wards/`
+2. ✅ Write/Edit/Read: resolve via `ward_dir()` instead of `session_code_dir()`
+3. ✅ Memory: add `"ward"` scope
+4. ✅ Executor: inject `ward_id` into state, load ward memory on change
 
-### Phase 3: System Prompt + Skill
-1. Add ward instructions to tooling_skills shard
-2. Create `skills/code-wards/SKILL.md`
-3. Ward memory auto-injection into executor state
+### Phase 3: System Prompt + Skill ✅
+1. ✅ Add ward instructions to tooling_skills shard
+2. ✅ Create `skills/code-wards/SKILL.md`
+3. ✅ Ward memory auto-injection into executor state
 
 ### Phase 4: Creative Hub (Future)
 1. Cross-ward code discovery

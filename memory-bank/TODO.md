@@ -21,17 +21,17 @@ Agent was too passive - proposed plans instead of executing, lost context betwee
 - [x] Verify tool calls appear in agent context on next turn
 
 ### Code Wards (Agent-Managed Project Containers)
-**Status**: IN PROGRESS
+**Status**: ✅ COMPLETE (Phases 1-3)
 **Plan**: `memory-bank/plans/code-wards.md`
 
 Named project directories (wards) that agents create, manage, and navigate autonomously.
 Replaces per-session `code/{session_id}/` with persistent `wards/{ward_name}/`.
-Shared Python venv + Node env across all wards.
+Shared Python venv across all wards. Per-ward node_modules (Node convention).
 
 **Phases**:
-- [ ] Phase 1: Ward tool + FileSystem trait changes
-- [ ] Phase 2: Wire existing tools (shell, write/edit/read, memory)
-- [ ] Phase 3: System prompt + skill
+- [x] Phase 1: Ward tool + FileSystem trait changes + ward_id persistence
+- [x] Phase 2: Wire existing tools (shell, write/edit/read, memory)
+- [x] Phase 3: System prompt + skill
 - [ ] Phase 4: Creative hub (cross-ward discovery, pattern learning)
 
 ### Skill Loading & Unloading

@@ -35,8 +35,8 @@
 │                 │   │                 │   │                         │
 │  - OpenAI       │   │  - stdio        │   │  ~/Documents/agentzero/ │
 │  - Anthropic    │   │  - HTTP/SSE     │   │  - agents/              │
-│  - Local models │   │  - Custom tools │   │  - skills/              │
-│                 │   │                 │   │  - providers/           │
+│  - Local models │   │  - Custom tools │   │  - wards/ (code wards)  │
+│                 │   │                 │   │  - skills/              │
 └─────────────────┘   └─────────────────┘   └─────────────────────────┘
 ```
 
@@ -597,7 +597,8 @@ CREATE TABLE sessions (
     total_tokens_in INTEGER DEFAULT 0,
     total_tokens_out INTEGER DEFAULT 0,
     pending_delegations INTEGER DEFAULT 0,  -- Count of running subagents
-    continuation_needed INTEGER DEFAULT 0   -- Flag for continuation after delegates
+    continuation_needed INTEGER DEFAULT 0,  -- Flag for continuation after delegates
+    ward_id TEXT                            -- Active code ward name
 );
 
 -- Execution: Single agent turn within a session
@@ -676,8 +677,12 @@ CREATE TABLE execution_logs (
 
 ```
 ~/Documents/agentzero/
-├── conversations.db      # SQLite database
+├── conversations.db      # SQLite database (WAL mode, r2d2 pool)
 ├── agents/{name}/        # Agent configs (YAML + AGENTS.md)
+├── wards/                # Code Wards (persistent project directories)
+│   ├── .venv/            #   Shared Python venv
+│   ├── scratch/          #   Default ward for quick tasks
+│   └── {ward-name}/      #   Agent-named projects
 ├── skills/{name}/        # Skill definitions (SKILL.md)
 ├── providers.json        # LLM provider configs
 ├── mcps.json             # MCP server configs
