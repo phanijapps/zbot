@@ -377,6 +377,19 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+
+    /// Executor auto-extended iterations because the agent is making progress.
+    IterationsExtended {
+        session_id: String,
+        execution_id: String,
+        iterations_used: u32,
+        iterations_added: u32,
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -460,6 +473,7 @@ impl ServerMessage {
             Self::SubscriptionError { conversation_id, .. } => Some(conversation_id),
             Self::InvokeAccepted { conversation_id, .. } => Some(conversation_id),
             Self::WardChanged { .. } => None,
+            Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
             Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
             | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
             | Self::SessionEnded { .. } => None,
@@ -531,6 +545,9 @@ impl ServerMessage {
             },
             Self::WardChanged { session_id, execution_id, ward_id, .. } => {
                 Self::WardChanged { session_id, execution_id, ward_id, seq: Some(seq) }
+            }
+            Self::IterationsExtended { session_id, execution_id, iterations_used, iterations_added, reason, conversation_id, .. } => {
+                Self::IterationsExtended { session_id, execution_id, iterations_used, iterations_added, reason, conversation_id, seq: Some(seq) }
             }
             // Messages without sequence numbers pass through unchanged
             other => other,

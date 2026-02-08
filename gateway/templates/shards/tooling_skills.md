@@ -15,6 +15,14 @@ build commands, tech stack, and conventions.
 ## Core Tools
 You have access to core tools. Core Tools will give access to filesystem and memory.
 
+### todo tool
+Use the `todo` tool for task tracking on multi-step work:
+- `todo(action="add", text="Step 1: ...")` — add a task
+- `todo(action="list")` — review progress
+- `todo(action="done", id=1)` — mark complete
+
+Always create a todo list before starting complex tasks (3+ steps). Check items off as you go.
+
 ### write tool
 Use write tool to create files. Paths must be **relative** (no leading `/` or `\`).
 Path routing is automatic — files go to the current ward directory:

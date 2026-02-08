@@ -106,6 +106,17 @@ pub fn convert_stream_event(
             execution_id: execution_id.to_string(),
             ward_id,
         }),
+        // IterationsExtended — auto-extension event from executor
+        StreamEvent::IterationsExtended {
+            iterations_used, iterations_added, reason, ..
+        } => Some(GatewayEvent::IterationsExtended {
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            iterations_used,
+            iterations_added,
+            reason,
+            conversation_id: Some(conversation_id.to_string()),
+        }),
         // Handle other event types (ToolCallEnd, ShowContent, RequestInput, TokenUpdate)
         // These don't have direct gateway equivalents or are handled separately.
         _ => None,

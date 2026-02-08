@@ -485,18 +485,18 @@ impl ExecutionRunner {
                 "Execution stream completed"
             );
 
+            // Always save messages, even on error — prevents message loss on crash
+            save_messages(
+                &conversation_repo,
+                &execution_id,
+                &message,
+                &accumulated_response,
+                tool_calls_json.as_deref(),
+            );
+
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Save conversation messages with tool calls
-                    save_messages(
-                        &conversation_repo,
-                        &execution_id,
-                        &message,
-                        &accumulated_response,
-                        tool_calls_json.as_deref(),
-                    );
-
                     // Complete execution and emit events
                     complete_execution(
                         &state_service,
@@ -964,17 +964,17 @@ async fn invoke_continuation(
         let accumulated_response = response_acc.into_response();
         let tool_calls_json = tool_acc.to_json();
 
+        // Always save messages, even on error — prevents message loss on crash
+        save_messages(
+            &conversation_repo,
+            &execution_id,
+            continuation_message,
+            &accumulated_response,
+            tool_calls_json.as_deref(),
+        );
+
         match result {
             Ok(()) => {
-                // Save the continuation message and response with tool calls
-                save_messages(
-                    &conversation_repo,
-                    &execution_id,
-                    continuation_message,
-                    &accumulated_response,
-                    tool_calls_json.as_deref(),
-                );
-
                 // Continuation turns don't dispatch to connectors (they're internal)
                 complete_execution(
                     &state_service,

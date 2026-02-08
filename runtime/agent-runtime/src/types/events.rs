@@ -184,6 +184,18 @@ pub enum StreamEvent {
         /// The ward the agent switched to
         ward_id: String,
     },
+
+    /// Executor auto-extended iterations because the agent is making progress.
+    #[serde(rename = "iterations_extended")]
+    IterationsExtended {
+        timestamp: u64,
+        /// Total iterations used so far
+        iterations_used: u32,
+        /// Additional iterations granted
+        iterations_added: u32,
+        /// Human-readable reason for extension
+        reason: String,
+    },
 }
 
 impl StreamEvent {
@@ -206,7 +218,8 @@ impl StreamEvent {
             | Self::TokenUpdate { timestamp, .. }
             | Self::Heartbeat { timestamp, .. }
             | Self::ContextState { timestamp, .. }
-            | Self::WardChanged { timestamp, .. } => *timestamp,
+            | Self::WardChanged { timestamp, .. }
+            | Self::IterationsExtended { timestamp, .. } => *timestamp,
         }
     }
 

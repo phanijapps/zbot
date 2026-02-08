@@ -298,6 +298,8 @@ fn spawn_execution_task(
                     &agent_id,
                     &conv_id,
                     &parent_execution_id,
+                    &task_msg,
+                    &accumulated_response,
                     &e.to_string(),
                 )
                 .await;
@@ -438,8 +440,13 @@ async fn handle_execution_failure(
     agent_id: &str,
     conv_id: &str,
     parent_execution_id: &str,
+    task_msg: &str,
+    response: &str,
     error: &str,
 ) {
+    // Always save messages, even on error — prevents message loss on crash
+    save_messages(conversation_repo, execution_id, task_msg, response, None);
+
     // Crash execution and emit events (don't crash session for subagent)
     crash_execution(
         state_service,

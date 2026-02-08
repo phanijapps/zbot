@@ -239,6 +239,20 @@ pub enum GatewayEvent {
         execution_id: String,
         ward_id: String,
     },
+
+    /// Executor auto-extended iterations because the agent is making progress.
+    IterationsExtended {
+        session_id: String,
+        execution_id: String,
+        /// Total iterations used so far.
+        iterations_used: u32,
+        /// Additional iterations granted.
+        iterations_added: u32,
+        /// Human-readable reason for extension.
+        reason: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+    },
 }
 
 impl GatewayEvent {
@@ -268,6 +282,7 @@ impl GatewayEvent {
             Self::Heartbeat { .. } => None,
             Self::SessionContinuationReady { root_agent_id, .. } => Some(root_agent_id),
             Self::WardChanged { .. } => None,
+            Self::IterationsExtended { .. } => None,
         }
     }
 
@@ -297,6 +312,7 @@ impl GatewayEvent {
             Self::Heartbeat { session_id, .. } => Some(session_id),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
             Self::WardChanged { session_id, .. } => Some(session_id),
+            Self::IterationsExtended { session_id, .. } => Some(session_id),
         }
     }
 
@@ -333,6 +349,7 @@ impl GatewayEvent {
                 root_execution_id, ..
             } => Some(root_execution_id),
             Self::WardChanged { execution_id, .. } => Some(execution_id),
+            Self::IterationsExtended { execution_id, .. } => Some(execution_id),
         }
     }
 
@@ -366,6 +383,7 @@ impl GatewayEvent {
             Self::Heartbeat { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
             Self::WardChanged { .. } => None,
+            Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
         }
     }
 }

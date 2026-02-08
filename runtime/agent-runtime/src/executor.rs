@@ -19,6 +19,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
 use serde_json::{json, Value};
 
@@ -98,6 +99,15 @@ pub struct ExecutorConfig {
 
     /// Directory to save offloaded tool results.
     pub offload_dir: Option<std::path::PathBuf>,
+
+    /// Maximum LLM loop iterations before checking for progress (default: 50).
+    pub max_iterations: u32,
+
+    /// Maximum times auto-extension can be granted (default: 3, so 50 + 3*25 = 125 max).
+    pub max_extensions: u32,
+
+    /// Additional iterations granted per auto-extension (default: 25).
+    pub extension_size: u32,
 }
 
 impl ExecutorConfig {
@@ -121,6 +131,9 @@ impl ExecutorConfig {
             offload_large_results: false,
             offload_threshold_chars: 20_000, // ~5000 tokens
             offload_dir: None,
+            max_iterations: 50,
+            max_extensions: 3,
+            extension_size: 25,
         }
     }
 
@@ -278,13 +291,16 @@ impl AgentExecutor {
         tracing::debug!("Tools schema: {}", tools_schema.is_some());
 
         let mut current_messages = messages;
-        let mut max_iterations = 50;
+        let mut remaining_iterations = self.config.max_iterations;
         #[allow(unused_assignments)] // Initialized here, assigned in loop exit condition
         let mut full_response = String::new();
 
         // Track cumulative token usage across the session
         let mut total_tokens_in: u64 = 0;
         let mut total_tokens_out: u64 = 0;
+
+        // Progress tracker for intelligent auto-extension
+        let mut progress_tracker = ProgressTracker::new(self.config.max_extensions);
 
         // Create shared tool context that persists across all tool calls in this execution.
         // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
@@ -297,10 +313,82 @@ impl AgentExecutor {
         ));
 
         loop {
-            if max_iterations == 0 {
-                return Err(ExecutorError::MaxIterationsReached);
+            // Early termination if agent is clearly stuck (mid-window check)
+            if progress_tracker.is_clearly_stuck() {
+                let diagnosis = progress_tracker.diagnosis();
+                tracing::warn!(
+                    total_iterations = progress_tracker.total_iterations,
+                    score = progress_tracker.score,
+                    diagnosis = %diagnosis,
+                    "Early termination: agent clearly stuck"
+                );
+                return Err(ExecutorError::MaxIterationsNeedsIntervention {
+                    iterations_used: progress_tracker.total_iterations,
+                    reason: diagnosis,
+                });
             }
-            max_iterations -= 1;
+
+            if remaining_iterations == 0 {
+                if progress_tracker.should_extend() {
+                    let reason = progress_tracker.extension_reason();
+                    let iterations_used = progress_tracker.total_iterations;
+                    let extension_size = self.config.extension_size;
+                    remaining_iterations = extension_size;
+                    progress_tracker.grant_extension();
+
+                    on_event(StreamEvent::IterationsExtended {
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                        iterations_used,
+                        iterations_added: extension_size,
+                        reason,
+                    });
+
+                    tracing::info!(
+                        iterations_used = iterations_used,
+                        extension = extension_size,
+                        extensions_granted = progress_tracker.extensions_granted,
+                        "Auto-extending iterations: agent making progress"
+                    );
+
+                    // Inject budget awareness into conversation
+                    let extensions_remaining = self
+                        .config
+                        .max_extensions
+                        .saturating_sub(progress_tracker.extensions_granted);
+                    current_messages.push(ChatMessage::user(format!(
+                        "[SYSTEM: You have used {} iterations and were granted {} more. \
+                         You have {} extension(s) remaining. \
+                         If you are repeating similar actions, stop and use the `respond` tool to \
+                         summarize what you've accomplished so far and what remains.]",
+                        iterations_used, extension_size, extensions_remaining,
+                    )));
+                } else {
+                    let diagnosis = progress_tracker.diagnosis();
+                    tracing::warn!(
+                        total_iterations = progress_tracker.total_iterations,
+                        diagnosis = %diagnosis,
+                        "Max iterations reached, no progress detected"
+                    );
+                    return Err(ExecutorError::MaxIterationsNeedsIntervention {
+                        iterations_used: progress_tracker.total_iterations,
+                        reason: diagnosis,
+                    });
+                }
+            }
+            remaining_iterations -= 1;
+            progress_tracker.tick();
+
+            // Warn agent when approaching final limit (last 10 iterations of final window)
+            let is_final_window =
+                progress_tracker.extensions_granted >= self.config.max_extensions;
+            if is_final_window && remaining_iterations == 10 {
+                current_messages.push(ChatMessage::user(
+                    "[SYSTEM: You have 10 iterations remaining and no more extensions. \
+                     Wrap up your current task. Use the `respond` tool to deliver your results. \
+                     Do not start new work.]"
+                        .to_string(),
+                ));
+            }
 
             // Real streaming via chat_stream() with mpsc channel bridge.
             // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
@@ -448,6 +536,9 @@ impl AgentExecutor {
 
                         tracing::debug!("Tool result: {}", output);
 
+                        // Track progress: tool succeeded
+                        progress_tracker.record_tool_call(tool_name, &tool_call.arguments, true);
+
                         // Check for respond action
                         if let Some(respond) = &actions.respond {
                             on_event(StreamEvent::ActionRespond {
@@ -458,6 +549,7 @@ impl AgentExecutor {
                                 session_id: respond.session_id.clone(),
                             });
                             should_stop_after_respond = true;
+                            progress_tracker.record_respond();
                             tracing::debug!("Respond action detected, will stop after current tool batch");
                         }
 
@@ -585,6 +677,11 @@ impl AgentExecutor {
                     }
                     Err(e) => {
                         tracing::debug!("Tool error: {}", e);
+
+                        // Track progress: tool failed
+                        progress_tracker.record_tool_call(tool_name, &tool_call.arguments, false);
+                        progress_tracker.record_error(&e);
+
                         on_event(StreamEvent::ToolResult {
                             timestamp: chrono::Utc::now().timestamp_millis() as u64,
                             tool_id: tool_call.id.clone(),
@@ -932,24 +1029,226 @@ fn normalize_tool_name(name: &str) -> String {
         .collect()
 }
 
+// ============================================================================
+// PROGRESS TRACKER
+// ============================================================================
+
+/// Tracks execution progress to distinguish productive work from stuck loops.
+///
+/// Used by the executor to decide whether to auto-extend iterations when
+/// `max_iterations` is reached. Scores each iteration based on tool diversity,
+/// success rate, and repetition patterns.
+struct ProgressTracker {
+    /// Recent tool calls as (name, args_hash) for repetition detection
+    recent_tool_calls: VecDeque<(String, u64)>,
+    /// Recent error messages for repeated-error detection
+    recent_errors: VecDeque<String>,
+    /// Unique tool names used during this scoring window
+    unique_tools_used: HashSet<String>,
+    /// Cumulative progress score for the current window
+    score: i32,
+    /// Number of auto-extensions granted so far
+    extensions_granted: u32,
+    /// Maximum extensions allowed
+    max_extensions: u32,
+    /// Total iterations consumed across all windows
+    total_iterations: u32,
+    /// Rolling window of tool names (last 20 calls) for diversity tracking
+    tool_name_window: VecDeque<String>,
+    /// Count of tool calls in current scoring window (for periodic diversity scoring)
+    window_tool_calls: u32,
+}
+
+impl ProgressTracker {
+    fn new(max_extensions: u32) -> Self {
+        Self {
+            recent_tool_calls: VecDeque::with_capacity(10),
+            recent_errors: VecDeque::with_capacity(5),
+            unique_tools_used: HashSet::new(),
+            score: 0,
+            extensions_granted: 0,
+            max_extensions,
+            total_iterations: 0,
+            tool_name_window: VecDeque::with_capacity(20),
+            window_tool_calls: 0,
+        }
+    }
+
+    fn hash_args(args: &Value) -> u64 {
+        let s = serde_json::to_string(args).unwrap_or_default();
+        let mut hash: u64 = 0;
+        for b in s.bytes() {
+            hash = hash.wrapping_mul(31).wrapping_add(b as u64);
+        }
+        hash
+    }
+
+    /// Record a tool call and update the progress score.
+    fn record_tool_call(&mut self, name: &str, args: &Value, succeeded: bool) {
+        let args_hash = Self::hash_args(args);
+
+        // Exact repetition detection — same tool+args in last 5 calls
+        let is_exact_repeat = self
+            .recent_tool_calls
+            .iter()
+            .any(|(n, h)| n == name && *h == args_hash);
+        if is_exact_repeat {
+            self.score -= 3;
+        }
+
+        // Tool diversity scoring via rolling window
+        self.tool_name_window.push_back(name.to_string());
+        if self.tool_name_window.len() > 20 {
+            self.tool_name_window.pop_front();
+        }
+
+        // Score diversity every 10 calls once we have enough data
+        self.window_tool_calls += 1;
+        if self.window_tool_calls % 10 == 0 && self.tool_name_window.len() >= 10 {
+            let distinct: HashSet<&str> = self.tool_name_window.iter().map(|s| s.as_str()).collect();
+            let ratio = distinct.len() as f32 / self.tool_name_window.len() as f32;
+
+            if ratio <= 0.15 {
+                // 1-2 unique tools in 20 calls — definitely stuck
+                self.score -= 8;
+            } else if ratio <= 0.25 {
+                // 3-5 unique tools in 20 calls — suspicious
+                self.score -= 3;
+            } else {
+                // Good diversity
+                self.score += 2;
+            }
+        }
+
+        // First-ever use of a tool gets a small bonus
+        if self.unique_tools_used.insert(name.to_string()) {
+            self.score += 1;
+        }
+
+        if succeeded {
+            self.score += 1;
+        }
+
+        // Track for exact-repetition detection (keep last 5)
+        self.recent_tool_calls.push_back((name.to_string(), args_hash));
+        if self.recent_tool_calls.len() > 5 {
+            self.recent_tool_calls.pop_front();
+        }
+    }
+
+    /// Record a tool error for repeated-error detection.
+    fn record_error(&mut self, error: &str) {
+        // Check if this exact error appeared 3+ times recently
+        let repeat_count = self.recent_errors.iter().filter(|e| e.as_str() == error).count();
+        if repeat_count >= 2 {
+            self.score -= 5; // Definitely stuck
+        }
+
+        self.recent_errors.push_back(error.to_string());
+        if self.recent_errors.len() > 5 {
+            self.recent_errors.pop_front();
+        }
+    }
+
+    /// Record that a respond action was emitted — agent is finishing.
+    fn record_respond(&mut self) {
+        self.score += 10;
+    }
+
+    /// Record one iteration consumed.
+    fn tick(&mut self) {
+        self.total_iterations += 1;
+    }
+
+    /// Whether an auto-extension should be granted.
+    fn should_extend(&self) -> bool {
+        self.score > 0 && self.extensions_granted < self.max_extensions
+    }
+
+    /// Check if the agent is clearly stuck and should stop early (before window boundary).
+    /// Returns true if score has gone deeply negative after at least 15 iterations in this window.
+    fn is_clearly_stuck(&self) -> bool {
+        self.window_tool_calls >= 15 && self.score <= -10
+    }
+
+    /// Grant an extension: reset the score window and increment counter.
+    /// NOTE: tool_name_window is NOT cleared — diversity tracking spans full session.
+    fn grant_extension(&mut self) {
+        self.extensions_granted += 1;
+        self.score = 0;
+        self.unique_tools_used.clear();
+        self.recent_tool_calls.clear();
+        self.recent_errors.clear();
+        self.window_tool_calls = 0;
+    }
+
+    /// Build a human-readable diagnosis of the current state.
+    fn diagnosis(&self) -> String {
+        if self.score <= -10 {
+            format!(
+                "Stuck in loop: {} repeated tool calls detected (score: {})",
+                self.recent_tool_calls.len(),
+                self.score
+            )
+        } else if self.score <= 0 {
+            format!(
+                "No progress detected after {} iterations (score: {})",
+                self.total_iterations, self.score
+            )
+        } else {
+            format!(
+                "Making progress: {} unique tools used (score: {})",
+                self.unique_tools_used.len(),
+                self.score
+            )
+        }
+    }
+
+    /// Build a reason string for the extension event.
+    fn extension_reason(&self) -> String {
+        format!(
+            "Making progress: {} unique tools used, score {} (extension {}/{})",
+            self.unique_tools_used.len(),
+            self.score,
+            self.extensions_granted + 1,
+            self.max_extensions
+        )
+    }
+}
+
 /// Executor errors
 #[derive(Debug, thiserror::Error)]
 pub enum ExecutorError {
+    /// Maximum iterations reached with no progress detected.
     #[error("Maximum iterations reached")]
     MaxIterationsReached,
 
+    /// Maximum iterations reached but agent needs user intervention.
+    #[error("Max iterations reached after {iterations_used} iterations: {reason}")]
+    MaxIterationsNeedsIntervention {
+        /// Total iterations consumed
+        iterations_used: u32,
+        /// Diagnosis of why the agent stopped
+        reason: String,
+    },
+
+    /// LLM API error.
     #[error("LLM error: {0}")]
     LlmError(String),
 
+    /// Tool execution error.
     #[error("Tool error: {0}")]
     ToolError(String),
 
+    /// MCP server error.
     #[error("MCP error: {0}")]
     McpError(String),
 
+    /// Configuration error.
     #[error("Configuration error: {0}")]
     ConfigError(String),
 
+    /// Middleware pipeline error.
     #[error("Middleware error: {0}")]
     MiddlewareError(String),
 }
@@ -1084,5 +1383,208 @@ mod truncation_tests {
         let result = truncate_tool_args(&args, 100);
         let content = result.get("content").unwrap().as_str().unwrap();
         assert!(content.contains("truncated"));
+    }
+}
+
+#[cfg(test)]
+mod progress_tracker_tests {
+    use super::*;
+
+    #[test]
+    fn test_new_tracker_no_extension() {
+        let tracker = ProgressTracker::new(3);
+        assert!(!tracker.should_extend(), "Empty tracker should not extend");
+    }
+
+    #[test]
+    fn test_unique_tools_grant_extension() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({"path": "/a"}), true);
+        tracker.record_tool_call("write", &json!({"path": "/b"}), true);
+        tracker.record_tool_call("shell", &json!({"cmd": "ls"}), true);
+        // 3 unique tools: +1 each = 3, 3 succeeded: +1 each = 3, total = 6
+        assert!(tracker.should_extend());
+    }
+
+    #[test]
+    fn test_repeated_calls_prevent_extension() {
+        let mut tracker = ProgressTracker::new(3);
+        let args = json!({"path": "/same"});
+        // Same tool+args 5 times
+        for _ in 0..5 {
+            tracker.record_tool_call("read", &args, true);
+        }
+        // First call: +1 (unique) +1 (success) = 2
+        // Subsequent 4 calls: -3 (repeat) +1 (success) = -2 each = -8
+        // Total: 2 + (-8) = -6
+        assert!(!tracker.should_extend());
+    }
+
+    #[test]
+    fn test_repeated_errors_prevent_extension() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("shell", &json!({"cmd": "fail"}), false);
+        tracker.record_error("connection refused");
+        tracker.record_error("connection refused");
+        tracker.record_error("connection refused"); // 3rd time: -5
+        // tool call: +1 (unique) +0 (failed) = 1
+        // errors: -5
+        // total: 1 - 5 = -4
+        assert!(!tracker.should_extend());
+    }
+
+    #[test]
+    fn test_respond_boosts_score() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_respond();
+        // +10 from respond
+        assert!(tracker.should_extend());
+    }
+
+    #[test]
+    fn test_max_extensions_respected() {
+        let mut tracker = ProgressTracker::new(2);
+        tracker.record_respond(); // +10
+        assert!(tracker.should_extend());
+        tracker.grant_extension();
+
+        tracker.record_respond(); // +10 (fresh window)
+        assert!(tracker.should_extend());
+        tracker.grant_extension();
+
+        tracker.record_respond(); // +10 (fresh window)
+        assert!(!tracker.should_extend(), "Should not extend beyond max_extensions=2");
+    }
+
+    #[test]
+    fn test_grant_extension_resets_window() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({}), true); // +2
+        tracker.grant_extension();
+        // After grant, score=0, unique_tools cleared, window_tool_calls reset
+        assert!(!tracker.should_extend(), "Score reset to 0 after grant");
+        assert_eq!(tracker.extensions_granted, 1);
+        assert_eq!(tracker.window_tool_calls, 0);
+    }
+
+    #[test]
+    fn test_diagnosis_stuck() {
+        let mut tracker = ProgressTracker::new(3);
+        let args = json!({"path": "/same"});
+        for _ in 0..6 {
+            tracker.record_tool_call("read", &args, true);
+        }
+        let diagnosis = tracker.diagnosis();
+        assert!(
+            diagnosis.contains("loop") || diagnosis.contains("No progress"),
+            "Got: {}",
+            diagnosis
+        );
+    }
+
+    #[test]
+    fn test_diagnosis_progress() {
+        let mut tracker = ProgressTracker::new(3);
+        // Use enough diverse tools to stay positive
+        tracker.record_tool_call("read", &json!({}), true);
+        tracker.record_tool_call("write", &json!({}), true);
+        tracker.record_tool_call("shell", &json!({}), true);
+        let diagnosis = tracker.diagnosis();
+        assert!(diagnosis.contains("progress"), "Got: {}", diagnosis);
+    }
+
+    #[test]
+    fn test_executor_config_defaults() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        assert_eq!(config.max_iterations, 50);
+        assert_eq!(config.max_extensions, 3);
+        assert_eq!(config.extension_size, 25);
+    }
+
+    #[test]
+    fn test_low_diversity_loop_detected() {
+        let mut tracker = ProgressTracker::new(3);
+        // Simulate write+shell loop for 20 iterations (different args each time)
+        for i in 0..20 {
+            let tool = if i % 2 == 0 { "write" } else { "shell" };
+            tracker.record_tool_call(tool, &json!({"i": i}), true);
+        }
+        // After 20 calls: 2 unique tools (+1 each = +2), 20 successes (+20),
+        // At call 10: diversity = 2/10 = 0.20 <= 0.15? No. <= 0.25? Yes → -3
+        // At call 20: diversity = 2/20 = 0.10 <= 0.15 → -8
+        // Total: +2 + 20 - 3 - 8 = 11 — but no exact repeats since args differ
+        // The diversity penalties bring it down
+        assert!(
+            tracker.score < 15,
+            "Low-diversity loop should have reduced score, got: {}",
+            tracker.score
+        );
+    }
+
+    #[test]
+    fn test_high_diversity_extends() {
+        let mut tracker = ProgressTracker::new(3);
+        // Use 7 unique tools in 10 calls
+        let tools = ["read", "write", "shell", "edit", "grep", "glob", "memory", "todo", "ward", "respond"];
+        for (i, tool) in tools.iter().enumerate() {
+            tracker.record_tool_call(tool, &json!({"i": i}), true);
+        }
+        // 10 unique tools: +1 each = 10, 10 successes = +10
+        // At call 10: diversity = 10/10 = 1.0 > 0.25 → +2
+        // Total: 10 + 10 + 2 = 22
+        assert!(tracker.score > 0, "High diversity should produce positive score, got: {}", tracker.score);
+        assert!(tracker.should_extend(), "High diversity should allow extension");
+    }
+
+    #[test]
+    fn test_early_stop_deeply_stuck() {
+        let mut tracker = ProgressTracker::new(3);
+        let args = json!({"path": "/same"});
+        // Same exact tool+args repeated — triggers both repetition penalty and diversity penalty
+        for _ in 0..20 {
+            tracker.record_tool_call("read", &args, true);
+        }
+        // With 15+ window_tool_calls and deeply negative score, should be stuck
+        assert!(
+            tracker.window_tool_calls >= 15,
+            "Should have 20 window_tool_calls, got: {}",
+            tracker.window_tool_calls
+        );
+        assert!(
+            tracker.score <= -10,
+            "Score should be <= -10 with exact-repeat loop, got: {}",
+            tracker.score
+        );
+        assert!(
+            tracker.is_clearly_stuck(),
+            "Should be clearly stuck with score {} after {} calls",
+            tracker.score,
+            tracker.window_tool_calls
+        );
+    }
+
+    #[test]
+    fn test_tool_name_window_preserved_across_extensions() {
+        let mut tracker = ProgressTracker::new(3);
+        // Add some tool calls to fill the name window
+        for i in 0..10 {
+            let tool = if i % 2 == 0 { "write" } else { "shell" };
+            tracker.record_tool_call(tool, &json!({"i": i}), true);
+        }
+        assert_eq!(tracker.tool_name_window.len(), 10);
+
+        // Grant extension
+        tracker.grant_extension();
+
+        // tool_name_window should be preserved
+        assert_eq!(
+            tracker.tool_name_window.len(),
+            10,
+            "tool_name_window should survive grant_extension"
+        );
+        // But window_tool_calls should reset
+        assert_eq!(tracker.window_tool_calls, 0);
+        // And score should reset
+        assert_eq!(tracker.score, 0);
     }
 }

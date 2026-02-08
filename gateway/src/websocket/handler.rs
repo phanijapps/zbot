@@ -895,6 +895,19 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 seq: None,
             })
         }
+
+        // Iterations auto-extended by executor
+        GatewayEvent::IterationsExtended {
+            session_id, execution_id, iterations_used, iterations_added, reason, conversation_id,
+        } => Some(ServerMessage::IterationsExtended {
+            session_id,
+            execution_id,
+            iterations_used,
+            iterations_added,
+            reason,
+            conversation_id,
+            seq: None,
+        }),
     }
 }
 
