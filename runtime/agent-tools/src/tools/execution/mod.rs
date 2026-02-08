@@ -1,14 +1,17 @@
 // ============================================================================
 // EXECUTION TOOLS
-// Python, Shell, LoadSkill, and TODO tools
+// Python, Shell, LoadSkill, TODO, UpdatePlan, and ApplyPatch tools
 // ============================================================================
 
+pub mod apply_patch;
 pub mod skills;
 pub mod shell;
 pub mod todos;
+pub mod update_plan;
 
 pub use shell::ShellTool;
 pub use todos::TodoTool;
+pub use update_plan::UpdatePlanTool;
 pub use skills::{SkillEntry, ResourceEntry, SkillGraph};
 
 use std::sync::Arc;

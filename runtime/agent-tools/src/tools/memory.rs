@@ -256,6 +256,12 @@ impl Tool for MemoryTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Check for error markers from truncated/malformed tool calls
+        if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
+            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            return Err(ZeroError::Tool(format!("{}: {}", error_type, message)));
+        }
+
         // Get agent ID from context
         let agent_id = ctx
             .get_state("app:agent_id")

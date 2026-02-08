@@ -25,6 +25,7 @@ pub use execution::PythonTool;
 pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
 pub use execution::TodoTool;
+pub use execution::UpdatePlanTool;
 pub use ui::{RequestInputTool, ShowContentTool};
 pub use knowledge_graph::{
     ListEntitiesTool,
@@ -47,10 +48,16 @@ pub use ward::WardTool;
 ///
 /// These settings control which optional tools are enabled beyond the core set.
 ///
-/// Core tools (always enabled):
-/// - shell, read, write, edit, memory, todo (basic operations)
-/// - list_skills, load_skill (skill discovery - encourages delegation)
-/// - grep, glob (file search)
+/// Core tools (always enabled, shell-first):
+/// - shell: Primary execution — commands, file I/O, apply_patch interceptor
+/// - memory: Persist/recall information
+/// - ward: Project directory management
+/// - update_plan: Lightweight task checklist
+/// - list_skills, load_skill: Skill discovery
+/// - grep: Structured file content search
+///
+/// Note: respond, delegate_to_agent, and list_agents are registered separately
+/// in the runner as action tools.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct ToolSettings {
@@ -80,6 +87,16 @@ pub struct ToolSettings {
     #[serde(default)]
     pub introspection: bool,
 
+    /// Enable file tools (read, write, edit, glob) as separate tools.
+    /// When false (default), the model uses shell + apply_patch instead.
+    #[serde(default)]
+    pub file_tools: bool,
+
+    /// Enable the heavyweight todos tool (SQLite-like task persistence).
+    /// When false (default), the lightweight update_plan tool is used instead.
+    #[serde(default)]
+    pub todos: bool,
+
     /// Offload large tool results to filesystem instead of keeping in context.
     /// When a tool result exceeds the token threshold, it's saved to a temp file
     /// and the agent is instructed to read it with a CLI tool.
@@ -104,54 +121,56 @@ fn default_offload_enabled() -> bool {
 // BUILT-IN TOOLS FACTORY
 // ============================================================================
 
-/// Get core tools that are always enabled (10 tools).
+/// Get core tools — the minimal, high-signal set (7 tools).
 ///
-/// Core tools (basic operations):
-/// - shell: Run any command
-/// - read: Read files
-/// - write: Write files
-/// - edit: Edit files
-/// - memory: Persist/recall information
-/// - todo: Track task progress
+/// Shell-first approach: shell handles commands, file I/O, and apply_patch interception.
+/// Separate read/write/edit/glob tools are optional (moved to optional_tools).
 ///
-/// Core tools (skill discovery - encourages delegation over direct solving):
-/// - list_skills: Discover available skills
-/// - load_skill: Load skill instructions
-///
-/// Core tools (file search):
-/// - grep: Regex search in files
-/// - glob: Find files by pattern
-///
-/// Note: respond, delegate_to_agent, and list_agents are registered separately
-/// in the runner as action tools.
+/// Core tools:
+/// - shell: Primary execution — commands, file creation, reading, apply_patch
+/// - memory: Persistent KV store
+/// - ward: Project directory management
+/// - update_plan: Lightweight task checklist
+/// - list_skills, load_skill: Skill discovery
+/// - grep: Structured file content search
 #[must_use]
 pub fn core_tools(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
     vec![
-        // Basic operations
+        // Primary execution tool (with apply_patch interception)
         Arc::new(ShellTool::new()),
-        Arc::new(ReadTool),
-        Arc::new(WriteTool::new(fs.clone())),
-        Arc::new(EditTool::new(fs.clone())),
+        // Persistent memory
         Arc::new(MemoryTool::new(fs.clone())),
-        Arc::new(TodoTool::new()),
         // Ward management (named project directories)
         Arc::new(WardTool::new(fs.clone())),
+        // Lightweight plan tracking
+        Arc::new(UpdatePlanTool::new()),
         // Skill discovery (high priority - encourages delegation)
         Arc::new(ListSkillsTool::new(fs.clone())),
         Arc::new(LoadSkillTool::new(fs.clone())),
-        // File search
+        // File search (structured output beats raw shell rg)
         Arc::new(GrepTool),
-        Arc::new(GlobTool),
     ]
 }
 
 /// Get optional tools based on settings.
 ///
-/// Returns tools that are enabled in the settings.
-/// Note: grep, glob, list_skills, load_skill are now core tools.
+/// Includes file tools (read/write/edit/glob), todos, python, web_fetch, etc.
 #[must_use]
 pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
+
+    // File tools — separate read/write/edit/glob (opt-in)
+    if settings.file_tools {
+        tools.push(Arc::new(ReadTool));
+        tools.push(Arc::new(WriteTool::new(fs.clone())));
+        tools.push(Arc::new(EditTool::new(fs.clone())));
+        tools.push(Arc::new(GlobTool));
+    }
+
+    // Heavyweight todos (opt-in, replaced by update_plan in core)
+    if settings.todos {
+        tools.push(Arc::new(TodoTool::new()));
+    }
 
     if settings.python {
         tools.push(Arc::new(PythonTool::new(fs.clone())));
@@ -200,6 +219,8 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         knowledge_graph: true,
         create_agent: true,
         introspection: true,
+        file_tools: true,
+        todos: true,
         offload_large_results: false, // Not relevant for this legacy function
         offload_threshold_tokens: default_offload_threshold(),
     };

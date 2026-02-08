@@ -101,13 +101,29 @@ pub struct ExecutorConfig {
     pub offload_dir: Option<std::path::PathBuf>,
 
     /// Maximum LLM loop iterations before checking for progress (default: 50).
+    /// Kept for diagnostics — no longer a hard stop. Set to 0 to disable diagnostics.
     pub max_iterations: u32,
 
     /// Maximum times auto-extension can be granted (default: 3, so 50 + 3*25 = 125 max).
+    /// Legacy field — iteration limits are now advisory.
     pub max_extensions: u32,
 
     /// Additional iterations granted per auto-extension (default: 25).
+    /// Legacy field — iteration limits are now advisory.
     pub extension_size: u32,
+
+    /// Context window size for the model in tokens.
+    /// When cumulative tokens exceed 80% of this, auto-compaction triggers.
+    /// Set to 0 to disable compaction.
+    pub context_window_tokens: u64,
+
+    /// Soft turn budget: inject a "wrap up" nudge after this many tool-calling iterations.
+    /// Set to 0 to disable.
+    pub turn_budget: u32,
+
+    /// Hard turn limit: forcibly stop execution after this many iterations.
+    /// Set to 0 to disable.
+    pub max_turns: u32,
 }
 
 impl ExecutorConfig {
@@ -134,6 +150,9 @@ impl ExecutorConfig {
             max_iterations: 50,
             max_extensions: 3,
             extension_size: 25,
+            context_window_tokens: 128_000, // Default to 128K context
+            turn_budget: 25,  // Soft nudge at 25 turns
+            max_turns: 50,    // Hard stop at 50 turns
         }
     }
 
@@ -291,7 +310,6 @@ impl AgentExecutor {
         tracing::debug!("Tools schema: {}", tools_schema.is_some());
 
         let mut current_messages = messages;
-        let mut remaining_iterations = self.config.max_iterations;
         #[allow(unused_assignments)] // Initialized here, assigned in loop exit condition
         let mut full_response = String::new();
 
@@ -299,8 +317,15 @@ impl AgentExecutor {
         let mut total_tokens_in: u64 = 0;
         let mut total_tokens_out: u64 = 0;
 
-        // Progress tracker for intelligent auto-extension
+        // Progress tracker for diagnostics and advisory nudges.
+        // No longer used for hard stops — agent runs until done or safety valve trips.
         let mut progress_tracker = ProgressTracker::new(self.config.max_extensions);
+
+        // Track whether we've sent a stuck-loop nudge (max 1)
+        let mut stuck_nudge_sent = false;
+
+        // Track whether the turn budget nudge has been sent (max 1)
+        let mut turn_budget_nudge_sent = false;
 
         // Create shared tool context that persists across all tool calls in this execution.
         // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
@@ -313,61 +338,69 @@ impl AgentExecutor {
         ));
 
         loop {
-            // Early termination if agent is clearly stuck (mid-window check)
-            if progress_tracker.is_clearly_stuck() {
-                let diagnosis = progress_tracker.diagnosis();
+            progress_tracker.tick();
+
+            // Turn budget: soft nudge then hard stop
+            if self.config.max_turns > 0 && progress_tracker.total_iterations >= self.config.max_turns {
                 tracing::warn!(
                     total_iterations = progress_tracker.total_iterations,
-                    score = progress_tracker.score,
-                    diagnosis = %diagnosis,
-                    "Early termination: agent clearly stuck"
+                    max_turns = self.config.max_turns,
+                    "Hard turn limit reached, stopping execution"
                 );
-                return Err(ExecutorError::MaxIterationsNeedsIntervention {
-                    iterations_used: progress_tracker.total_iterations,
-                    reason: diagnosis,
+                // Emit done with explanation
+                on_event(StreamEvent::Done {
+                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    final_message: format!(
+                        "[Turn limit reached after {} iterations. Stopping execution.]",
+                        progress_tracker.total_iterations
+                    ),
+                    token_count: 0,
                 });
+                return Ok(());
             }
 
-            if remaining_iterations == 0 {
-                if progress_tracker.should_extend() {
-                    let reason = progress_tracker.extension_reason();
-                    let iterations_used = progress_tracker.total_iterations;
-                    let extension_size = self.config.extension_size;
-                    remaining_iterations = extension_size;
-                    progress_tracker.grant_extension();
+            if self.config.turn_budget > 0
+                && progress_tracker.total_iterations >= self.config.turn_budget
+                && !turn_budget_nudge_sent
+            {
+                turn_budget_nudge_sent = true;
+                current_messages.push(ChatMessage::user(format!(
+                    "[SYSTEM: You have used {} of {} tool calls. Wrap up your current work \
+                     and call `respond` with a summary. Do not start new explorations.]",
+                    progress_tracker.total_iterations, self.config.max_turns
+                )));
+                tracing::info!(
+                    total_iterations = progress_tracker.total_iterations,
+                    turn_budget = self.config.turn_budget,
+                    "Turn budget nudge sent"
+                );
+            }
 
-                    on_event(StreamEvent::IterationsExtended {
-                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                        iterations_used,
-                        iterations_added: extension_size,
-                        reason,
-                    });
-
-                    tracing::info!(
-                        iterations_used = iterations_used,
-                        extension = extension_size,
-                        extensions_granted = progress_tracker.extensions_granted,
-                        "Auto-extending iterations: agent making progress"
+            // Advisory stuck-detection: inject nudge once, hard-stop only as safety valve
+            if progress_tracker.is_clearly_stuck() {
+                if !stuck_nudge_sent {
+                    // First time: inject advisory nudge, let agent recover
+                    stuck_nudge_sent = true;
+                    current_messages.push(ChatMessage::user(
+                        "[SYSTEM: You appear to be repeating similar actions without progress. \
+                         Step back, re-read the full context, and try a different approach. \
+                         If you cannot make progress, use the `respond` tool to summarize \
+                         what you've accomplished and what remains.]"
+                            .to_string(),
+                    ));
+                    tracing::warn!(
+                        total_iterations = progress_tracker.total_iterations,
+                        score = progress_tracker.score,
+                        "Stuck-loop advisory nudge sent"
                     );
-
-                    // Inject budget awareness into conversation
-                    let extensions_remaining = self
-                        .config
-                        .max_extensions
-                        .saturating_sub(progress_tracker.extensions_granted);
-                    current_messages.push(ChatMessage::user(format!(
-                        "[SYSTEM: You have used {} iterations and were granted {} more. \
-                         You have {} extension(s) remaining. \
-                         If you are repeating similar actions, stop and use the `respond` tool to \
-                         summarize what you've accomplished so far and what remains.]",
-                        iterations_used, extension_size, extensions_remaining,
-                    )));
-                } else {
+                } else if progress_tracker.score <= -12 {
+                    // Safety valve: agent still stuck after nudge, hard-stop
                     let diagnosis = progress_tracker.diagnosis();
                     tracing::warn!(
                         total_iterations = progress_tracker.total_iterations,
+                        score = progress_tracker.score,
                         diagnosis = %diagnosis,
-                        "Max iterations reached, no progress detected"
+                        "Safety valve: agent stuck after nudge, stopping"
                     );
                     return Err(ExecutorError::MaxIterationsNeedsIntervention {
                         iterations_used: progress_tracker.total_iterations,
@@ -375,19 +408,22 @@ impl AgentExecutor {
                     });
                 }
             }
-            remaining_iterations -= 1;
-            progress_tracker.tick();
 
-            // Warn agent when approaching final limit (last 10 iterations of final window)
-            let is_final_window =
-                progress_tracker.extensions_granted >= self.config.max_extensions;
-            if is_final_window && remaining_iterations == 10 {
-                current_messages.push(ChatMessage::user(
-                    "[SYSTEM: You have 10 iterations remaining and no more extensions. \
-                     Wrap up your current task. Use the `respond` tool to deliver your results. \
-                     Do not start new work.]"
-                        .to_string(),
-                ));
+            // Token-budget auto-compaction trigger.
+            // When cumulative tokens approach 80% of the context window, trim old messages.
+            if self.config.context_window_tokens > 0 {
+                let threshold = (self.config.context_window_tokens * 80) / 100;
+                if total_tokens_in > threshold {
+                    let before = current_messages.len();
+                    current_messages = compact_messages(current_messages);
+                    tracing::info!(
+                        tokens_in = total_tokens_in,
+                        threshold = threshold,
+                        messages_before = before,
+                        messages_after = current_messages.len(),
+                        "Context compacted"
+                    );
+                }
             }
 
             // Real streaming via chat_stream() with mpsc channel bridge.
@@ -705,6 +741,16 @@ impl AgentExecutor {
                     tool_name: tool_name.clone(),
                     args: tool_call.arguments.clone(),
                 });
+            }
+
+            // Planning enforcement: nudge if agent hasn't planned
+            if progress_tracker.needs_planning_nudge() {
+                current_messages.push(ChatMessage::user(
+                    "[SYSTEM: You have made several tool calls without creating a plan. \
+                     For complex tasks, use the `update_plan` tool to track your steps. \
+                     This helps you stay focused and avoid repeating work.]"
+                        .to_string(),
+                ));
             }
 
             // If respond tool was called, stop the loop - agent has finished responding
@@ -1038,6 +1084,7 @@ fn normalize_tool_name(name: &str) -> String {
 /// Used by the executor to decide whether to auto-extend iterations when
 /// `max_iterations` is reached. Scores each iteration based on tool diversity,
 /// success rate, and repetition patterns.
+#[allow(dead_code)] // Extension fields kept for diagnostics/legacy
 struct ProgressTracker {
     /// Recent tool calls as (name, args_hash) for repetition detection
     recent_tool_calls: VecDeque<(String, u64)>,
@@ -1057,6 +1104,16 @@ struct ProgressTracker {
     tool_name_window: VecDeque<String>,
     /// Count of tool calls in current scoring window (for periodic diversity scoring)
     window_tool_calls: u32,
+    /// Whether the agent has created a plan via todos(action="add")
+    has_plan: bool,
+    /// Number of todo items the agent has added
+    plan_items_created: u32,
+    /// Number of todo items completed via todos(action="update", completed=true)
+    plan_items_completed: u32,
+    /// Whether the planning nudge has been injected (max 1)
+    planning_nudge_sent: bool,
+    /// Non-todo tool calls made before first todos(action="add")
+    tool_calls_before_plan: u32,
 }
 
 impl ProgressTracker {
@@ -1071,6 +1128,11 @@ impl ProgressTracker {
             total_iterations: 0,
             tool_name_window: VecDeque::with_capacity(20),
             window_tool_calls: 0,
+            has_plan: false,
+            plan_items_created: 0,
+            plan_items_completed: 0,
+            planning_nudge_sent: false,
+            tool_calls_before_plan: 0,
         }
     }
 
@@ -1085,6 +1147,60 @@ impl ProgressTracker {
 
     /// Record a tool call and update the progress score.
     fn record_tool_call(&mut self, name: &str, args: &Value, succeeded: bool) {
+        // Planning enforcement: detect todo/update_plan tool usage
+        if (name == "todos" || name == "update_plan") && succeeded {
+            if name == "update_plan" {
+                // update_plan uses {plan: [{step, status}]} — lightweight, fire-and-forget
+                if let Some(plan) = args.get("plan").and_then(|v| v.as_array()) {
+                    let step_count = plan.len() as u32;
+                    let completed_count = plan
+                        .iter()
+                        .filter(|s| s.get("status").and_then(|v| v.as_str()) == Some("completed"))
+                        .count() as u32;
+                    if !self.has_plan {
+                        self.plan_items_created = step_count;
+                        self.has_plan = true;
+                        self.score += 3 + step_count.min(5) as i32;
+                    }
+                    // Reward completed steps
+                    if completed_count > self.plan_items_completed {
+                        let new_completions = completed_count - self.plan_items_completed;
+                        self.plan_items_completed = completed_count;
+                        self.score += (new_completions * 2) as i32;
+                    }
+                }
+            } else if let Some(action) = args.get("action").and_then(|v| v.as_str()) {
+                // todos tool uses {action: "add"/"update"/"list"/"delete", ...}
+                match action {
+                    "add" => {
+                        let item_count = args
+                            .get("items")
+                            .and_then(|v| v.as_array())
+                            .map(|arr| arr.len() as u32)
+                            .unwrap_or(1);
+                        self.plan_items_created += item_count;
+                        self.has_plan = true;
+                        self.score += 3 + item_count.min(5) as i32; // +3 base + 1/item (max +5)
+                    }
+                    "update" => {
+                        if args
+                            .get("completed")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                        {
+                            self.plan_items_completed += 1;
+                            self.score += 2; // Reward working the plan
+                        }
+                    }
+                    _ => {} // list, delete — neutral
+                }
+            }
+        }
+
+        if !self.has_plan && name != "todos" && name != "update_plan" {
+            self.tool_calls_before_plan += 1;
+        }
+
         let args_hash = Self::hash_args(args);
 
         // Exact repetition detection — same tool+args in last 5 calls
@@ -1125,9 +1241,8 @@ impl ProgressTracker {
             self.score += 1;
         }
 
-        if succeeded {
-            self.score += 1;
-        }
+        // No per-success bonus: +1 per success inflated scores and masked stuck loops.
+        // Diversity, planning, and respond bonuses are sufficient positive signals.
 
         // Track for exact-repetition detection (keep last 5)
         self.recent_tool_calls.push_back((name.to_string(), args_hash));
@@ -1161,18 +1276,42 @@ impl ProgressTracker {
     }
 
     /// Whether an auto-extension should be granted.
+    /// Planless agents get a -3 effective score penalty.
+    /// NOTE: No longer called from executor loop (iteration limits removed).
+    /// Kept for potential future use and testing.
+    #[allow(dead_code)]
     fn should_extend(&self) -> bool {
-        self.score > 0 && self.extensions_granted < self.max_extensions
+        let effective_score = if self.has_plan {
+            self.score
+        } else {
+            self.score - 3 // Planless agents need score > 3 to extend
+        };
+        effective_score > 0 && self.extensions_granted < self.max_extensions
     }
 
     /// Check if the agent is clearly stuck and should stop early (before window boundary).
-    /// Returns true if score has gone deeply negative after at least 15 iterations in this window.
+    /// Returns true if score has gone negative after at least 10 tool calls in this window.
+    /// Threshold lowered from 15/-10 to 10/-5 because success bonus was removed.
     fn is_clearly_stuck(&self) -> bool {
-        self.window_tool_calls >= 15 && self.score <= -10
+        self.window_tool_calls >= 10 && self.score <= -5
+    }
+
+    /// Returns true once when agent should be nudged to create a plan.
+    fn needs_planning_nudge(&mut self) -> bool {
+        if !self.has_plan && !self.planning_nudge_sent && self.tool_calls_before_plan >= 5 {
+            self.planning_nudge_sent = true;
+            true
+        } else {
+            false
+        }
     }
 
     /// Grant an extension: reset the score window and increment counter.
     /// NOTE: tool_name_window is NOT cleared — diversity tracking spans full session.
+    /// NOTE: has_plan, plan_items_created, plan_items_completed, planning_nudge_sent,
+    ///       and tool_calls_before_plan are intentionally NOT reset — planning state
+    ///       spans the full execution.
+    #[allow(dead_code)]
     fn grant_extension(&mut self) {
         self.extensions_granted += 1;
         self.score = 0;
@@ -1184,27 +1323,39 @@ impl ProgressTracker {
 
     /// Build a human-readable diagnosis of the current state.
     fn diagnosis(&self) -> String {
+        let plan_status = if self.has_plan {
+            format!(
+                ", plan: {}/{} items done",
+                self.plan_items_completed, self.plan_items_created
+            )
+        } else {
+            ", no plan created".to_string()
+        };
+
         if self.score <= -10 {
             format!(
-                "Stuck in loop: {} repeated tool calls detected (score: {})",
+                "Stuck in loop: {} repeated tool calls detected (score: {}){}",
                 self.recent_tool_calls.len(),
-                self.score
+                self.score,
+                plan_status
             )
         } else if self.score <= 0 {
             format!(
-                "No progress detected after {} iterations (score: {})",
-                self.total_iterations, self.score
+                "No progress detected after {} iterations (score: {}){}",
+                self.total_iterations, self.score, plan_status
             )
         } else {
             format!(
-                "Making progress: {} unique tools used (score: {})",
+                "Making progress: {} unique tools used (score: {}){}",
                 self.unique_tools_used.len(),
-                self.score
+                self.score,
+                plan_status
             )
         }
     }
 
     /// Build a reason string for the extension event.
+    #[allow(dead_code)]
     fn extension_reason(&self) -> String {
         format!(
             "Making progress: {} unique tools used, score {} (extension {}/{})",
@@ -1274,6 +1425,54 @@ pub async fn create_executor(
         mcp_manager,
         middleware_pipeline,
     )
+}
+
+/// Compact messages to reduce context size when approaching token limits.
+///
+/// Strategy: keep system messages, keep last N tool call/result pairs,
+/// insert a summarization placeholder for trimmed history.
+fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+    const KEEP_RECENT: usize = 20; // Keep last 20 messages
+
+    if messages.len() <= KEEP_RECENT + 2 {
+        return messages; // Nothing to compact
+    }
+
+    let mut compacted = Vec::new();
+
+    // Keep system messages at the start
+    let mut non_system_start = 0;
+    for (i, msg) in messages.iter().enumerate() {
+        if msg.role == "system" {
+            compacted.push(msg.clone());
+            non_system_start = i + 1;
+        } else {
+            break;
+        }
+    }
+
+    // Preserve the first non-system message (original user request) so the agent
+    // never loses what it was asked to do.
+    let first_user_msg = messages[non_system_start..].iter().find(|m| m.role == "user");
+    if let Some(user_msg) = first_user_msg {
+        compacted.push(user_msg.clone());
+    }
+
+    // Insert compaction notice
+    let trimmed_count = messages.len() - non_system_start - KEEP_RECENT;
+    if trimmed_count > 0 {
+        compacted.push(ChatMessage::user(format!(
+            "[SYSTEM: Context compacted. {} earlier messages were trimmed to stay within \
+             context limits. The original request above is preserved. Continue with the task.]",
+            trimmed_count
+        )));
+    }
+
+    // Keep the most recent messages
+    let recent_start = messages.len().saturating_sub(KEEP_RECENT);
+    compacted.extend(messages[recent_start..].iter().cloned());
+
+    compacted
 }
 
 /// Truncate tool arguments to prevent context explosion.
@@ -1399,10 +1598,12 @@ mod progress_tracker_tests {
     #[test]
     fn test_unique_tools_grant_extension() {
         let mut tracker = ProgressTracker::new(3);
+        // Create a plan first so the -3 planless penalty doesn't apply
+        tracker.record_tool_call("update_plan", &json!({"plan": [{"step": "read", "status": "pending"}]}), true);
         tracker.record_tool_call("read", &json!({"path": "/a"}), true);
         tracker.record_tool_call("write", &json!({"path": "/b"}), true);
         tracker.record_tool_call("shell", &json!({"cmd": "ls"}), true);
-        // 3 unique tools: +1 each = 3, 3 succeeded: +1 each = 3, total = 6
+        // update_plan: +4(plan bonus) +1(unique) = 5, then +1 each for 3 more unique tools = 8
         assert!(tracker.should_extend());
     }
 
@@ -1414,9 +1615,9 @@ mod progress_tracker_tests {
         for _ in 0..5 {
             tracker.record_tool_call("read", &args, true);
         }
-        // First call: +1 (unique) +1 (success) = 2
-        // Subsequent 4 calls: -3 (repeat) +1 (success) = -2 each = -8
-        // Total: 2 + (-8) = -6
+        // First call: +1 (unique) = 1
+        // Subsequent 4 calls: -3 (repeat) each = -12
+        // Total: 1 + (-12) = -11
         assert!(!tracker.should_extend());
     }
 
@@ -1459,7 +1660,7 @@ mod progress_tracker_tests {
     #[test]
     fn test_grant_extension_resets_window() {
         let mut tracker = ProgressTracker::new(3);
-        tracker.record_tool_call("read", &json!({}), true); // +2
+        tracker.record_tool_call("read", &json!({}), true); // +1 (unique only)
         tracker.grant_extension();
         // After grant, score=0, unique_tools cleared, window_tool_calls reset
         assert!(!tracker.should_extend(), "Score reset to 0 after grant");
@@ -1499,6 +1700,8 @@ mod progress_tracker_tests {
         assert_eq!(config.max_iterations, 50);
         assert_eq!(config.max_extensions, 3);
         assert_eq!(config.extension_size, 25);
+        assert_eq!(config.turn_budget, 25);
+        assert_eq!(config.max_turns, 50);
     }
 
     #[test]
@@ -1509,14 +1712,14 @@ mod progress_tracker_tests {
             let tool = if i % 2 == 0 { "write" } else { "shell" };
             tracker.record_tool_call(tool, &json!({"i": i}), true);
         }
-        // After 20 calls: 2 unique tools (+1 each = +2), 20 successes (+20),
-        // At call 10: diversity = 2/10 = 0.20 <= 0.15? No. <= 0.25? Yes → -3
+        // After 20 calls (no per-success bonus):
+        // 2 unique tools (+1 each = +2)
+        // At call 10: diversity = 2/10 = 0.20 <= 0.25 → -3
         // At call 20: diversity = 2/20 = 0.10 <= 0.15 → -8
-        // Total: +2 + 20 - 3 - 8 = 11 — but no exact repeats since args differ
-        // The diversity penalties bring it down
+        // Total: +2 - 3 - 8 = -9
         assert!(
-            tracker.score < 15,
-            "Low-diversity loop should have reduced score, got: {}",
+            tracker.score < 0,
+            "Low-diversity loop should have negative score, got: {}",
             tracker.score
         );
     }
@@ -1524,14 +1727,14 @@ mod progress_tracker_tests {
     #[test]
     fn test_high_diversity_extends() {
         let mut tracker = ProgressTracker::new(3);
-        // Use 7 unique tools in 10 calls
+        // Use 10 unique tools in 10 calls
         let tools = ["read", "write", "shell", "edit", "grep", "glob", "memory", "todo", "ward", "respond"];
         for (i, tool) in tools.iter().enumerate() {
             tracker.record_tool_call(tool, &json!({"i": i}), true);
         }
-        // 10 unique tools: +1 each = 10, 10 successes = +10
+        // 10 unique tools: +1 each = 10 (no per-success bonus)
         // At call 10: diversity = 10/10 = 1.0 > 0.25 → +2
-        // Total: 10 + 10 + 2 = 22
+        // Total: 10 + 2 = 12
         assert!(tracker.score > 0, "High diversity should produce positive score, got: {}", tracker.score);
         assert!(tracker.should_extend(), "High diversity should allow extension");
     }
@@ -1540,19 +1743,25 @@ mod progress_tracker_tests {
     fn test_early_stop_deeply_stuck() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // Same exact tool+args repeated — triggers both repetition penalty and diversity penalty
+        // Same exact tool+args repeated — triggers repetition penalty and diversity penalty
+        // With no per-success bonus, score drops fast:
+        // Call 1: +1 (unique) = 1
+        // Calls 2-20: -3 (repeat) each = -57
+        // At call 10: diversity ≤ 0.15 → -8
+        // At call 20: diversity ≤ 0.15 → -8
+        // Total: 1 - 57 - 8 - 8 = -72
         for _ in 0..20 {
             tracker.record_tool_call("read", &args, true);
         }
-        // With 15+ window_tool_calls and deeply negative score, should be stuck
+        // With 10+ window_tool_calls and deeply negative score, should be stuck
         assert!(
-            tracker.window_tool_calls >= 15,
+            tracker.window_tool_calls >= 10,
             "Should have 20 window_tool_calls, got: {}",
             tracker.window_tool_calls
         );
         assert!(
-            tracker.score <= -10,
-            "Score should be <= -10 with exact-repeat loop, got: {}",
+            tracker.score <= -5,
+            "Score should be <= -5 with exact-repeat loop, got: {}",
             tracker.score
         );
         assert!(
@@ -1586,5 +1795,337 @@ mod progress_tracker_tests {
         assert_eq!(tracker.window_tool_calls, 0);
         // And score should reset
         assert_eq!(tracker.score, 0);
+    }
+
+    // ========================================================================
+    // PLANNING ENFORCEMENT TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_todo_add_sets_has_plan() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), true);
+        assert!(tracker.has_plan);
+        assert_eq!(tracker.plan_items_created, 1);
+    }
+
+    #[test]
+    fn test_todo_add_batch_counts_items() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "add", "items": [
+                {"title": "step 1"},
+                {"title": "step 2"},
+                {"title": "step 3"}
+            ]}),
+            true,
+        );
+        assert!(tracker.has_plan);
+        assert_eq!(tracker.plan_items_created, 3);
+    }
+
+    #[test]
+    fn test_todo_add_boosts_score() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "add", "items": [
+                {"title": "step 1"},
+                {"title": "step 2"}
+            ]}),
+            true,
+        );
+        // +3 base + 2 items + 1 unique tool = 6 (no per-success bonus)
+        assert_eq!(tracker.score, 6);
+    }
+
+    #[test]
+    fn test_todo_update_completed_boosts_score() {
+        let mut tracker = ProgressTracker::new(3);
+        // First add a plan so we have context
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), true);
+        let score_after_add = tracker.score;
+        // Complete the item
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "update", "id": "1", "completed": true}),
+            true,
+        );
+        // +2 completion bonus (unique tool bonus already used, no per-success bonus)
+        assert_eq!(tracker.score, score_after_add + 2);
+        assert_eq!(tracker.plan_items_completed, 1);
+    }
+
+    #[test]
+    fn test_todo_update_incomplete_no_bonus() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "update", "id": "1", "completed": false}),
+            true,
+        );
+        // Only +1 unique tool = 1, no completion bonus, no per-success bonus
+        assert_eq!(tracker.score, 1);
+        assert_eq!(tracker.plan_items_completed, 0);
+    }
+
+    #[test]
+    fn test_failed_todo_call_not_counted() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), false);
+        assert!(!tracker.has_plan);
+        assert_eq!(tracker.plan_items_created, 0);
+    }
+
+    #[test]
+    fn test_tool_calls_before_plan_counted() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({"path": "/a"}), true);
+        tracker.record_tool_call("write", &json!({"path": "/b"}), true);
+        assert_eq!(tracker.tool_calls_before_plan, 2);
+
+        // Create plan
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), true);
+        assert_eq!(tracker.tool_calls_before_plan, 2); // Frozen
+
+        // More tool calls after plan — counter should not increase
+        tracker.record_tool_call("shell", &json!({"cmd": "ls"}), true);
+        assert_eq!(tracker.tool_calls_before_plan, 2);
+    }
+
+    #[test]
+    fn test_needs_planning_nudge_at_threshold() {
+        let mut tracker = ProgressTracker::new(3);
+        for i in 0..5 {
+            tracker.record_tool_call("read", &json!({"path": format!("/{}", i)}), true);
+        }
+        assert_eq!(tracker.tool_calls_before_plan, 5);
+        assert!(tracker.needs_planning_nudge());
+    }
+
+    #[test]
+    fn test_needs_planning_nudge_only_once() {
+        let mut tracker = ProgressTracker::new(3);
+        for i in 0..6 {
+            tracker.record_tool_call("read", &json!({"path": format!("/{}", i)}), true);
+        }
+        assert!(tracker.needs_planning_nudge());
+        assert!(!tracker.needs_planning_nudge(), "Nudge should fire only once");
+    }
+
+    #[test]
+    fn test_no_nudge_if_plan_exists() {
+        let mut tracker = ProgressTracker::new(3);
+        // Create plan first
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), true);
+        // Then do 10 tool calls
+        for i in 0..10 {
+            tracker.record_tool_call("read", &json!({"path": format!("/{}", i)}), true);
+        }
+        assert!(!tracker.needs_planning_nudge());
+    }
+
+    #[test]
+    fn test_should_extend_penalizes_no_plan() {
+        // Score 1 without plan → effective -2 → no extend
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({}), true); // +1 unique (no per-success bonus)
+        assert!(!tracker.has_plan);
+        assert_eq!(tracker.score, 1);
+        assert!(!tracker.should_extend(), "Score 1 without plan should not extend (effective -2)");
+
+        // Score 2 without plan → effective -1 → no extend
+        let mut tracker2 = ProgressTracker::new(3);
+        tracker2.record_tool_call("read", &json!({}), true); // +1
+        tracker2.record_tool_call("write", &json!({}), true); // +1
+        assert!(!tracker2.has_plan);
+        assert_eq!(tracker2.score, 2);
+        assert!(!tracker2.should_extend(), "Score 2 without plan should not extend (effective -1)");
+
+        // Score 4+ without plan → effective 1+ → extends
+        let mut tracker3 = ProgressTracker::new(3);
+        tracker3.record_tool_call("read", &json!({}), true); // +1
+        tracker3.record_tool_call("write", &json!({}), true); // +1
+        tracker3.record_tool_call("shell", &json!({}), true); // +1
+        tracker3.record_tool_call("edit", &json!({}), true); // +1
+        assert!(!tracker3.has_plan);
+        assert_eq!(tracker3.score, 4);
+        assert!(tracker3.should_extend(), "Score 4 without plan should extend (effective 1)");
+    }
+
+    #[test]
+    fn test_should_extend_no_penalty_with_plan() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), true);
+        tracker.record_tool_call("read", &json!({}), true);
+        tracker.record_tool_call("write", &json!({}), true);
+        assert!(tracker.has_plan);
+        assert!(tracker.score > 0);
+        assert!(tracker.should_extend(), "With plan, positive score should extend");
+    }
+
+    #[test]
+    fn test_planning_state_survives_grant_extension() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("todos", &json!({"action": "add", "title": "step 1"}), true);
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "update", "id": "1", "completed": true}),
+            true,
+        );
+        // Force a nudge scenario before plan (won't fire since has_plan=true, but set for test)
+        tracker.tool_calls_before_plan = 10;
+
+        tracker.grant_extension();
+
+        assert!(tracker.has_plan, "has_plan should survive grant_extension");
+        assert_eq!(tracker.plan_items_created, 1, "plan_items_created should survive");
+        assert_eq!(tracker.plan_items_completed, 1, "plan_items_completed should survive");
+        assert_eq!(tracker.tool_calls_before_plan, 10, "tool_calls_before_plan should survive");
+    }
+
+    #[test]
+    fn test_diagnosis_includes_plan_status() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "add", "items": [{"title": "a"}, {"title": "b"}]}),
+            true,
+        );
+        tracker.record_tool_call(
+            "todos",
+            &json!({"action": "update", "id": "1", "completed": true}),
+            true,
+        );
+        let diagnosis = tracker.diagnosis();
+        assert!(
+            diagnosis.contains("plan: 1/2 items done"),
+            "Expected plan status in diagnosis, got: {}",
+            diagnosis
+        );
+    }
+
+    #[test]
+    fn test_diagnosis_shows_no_plan() {
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({}), true);
+        let diagnosis = tracker.diagnosis();
+        assert!(
+            diagnosis.contains("no plan created"),
+            "Expected 'no plan created' in diagnosis, got: {}",
+            diagnosis
+        );
+    }
+
+    // ========================================================================
+    // STUCK DETECTION THRESHOLD TESTS (post-deflation)
+    // ========================================================================
+
+    #[test]
+    fn test_is_clearly_stuck_requires_10_calls() {
+        let mut tracker = ProgressTracker::new(3);
+        let args = json!({"path": "/same"});
+        // 9 repeated calls — not enough to trigger
+        for _ in 0..9 {
+            tracker.record_tool_call("read", &args, true);
+        }
+        assert!(
+            !tracker.is_clearly_stuck(),
+            "Should not be stuck with only {} calls (need 10), score: {}",
+            tracker.window_tool_calls,
+            tracker.score
+        );
+        // 10th call pushes over the threshold
+        tracker.record_tool_call("read", &args, true);
+        assert!(
+            tracker.is_clearly_stuck(),
+            "Should be stuck at {} calls with score {}",
+            tracker.window_tool_calls,
+            tracker.score
+        );
+    }
+
+    #[test]
+    fn test_safety_valve_at_negative_12() {
+        let mut tracker = ProgressTracker::new(3);
+        let args = json!({"path": "/same"});
+        for _ in 0..15 {
+            tracker.record_tool_call("read", &args, true);
+        }
+        // Score should be deeply negative: +1(unique) - 14*3(repeats) - 8(div@10) = 1-42-8 = -49
+        assert!(
+            tracker.score <= -12,
+            "Score should be <= -12 after 15 exact repeats, got: {}",
+            tracker.score
+        );
+    }
+
+    // ========================================================================
+    // COMPACTION TESTS
+    // ========================================================================
+
+    #[test]
+    fn test_compact_messages_preserves_original_request() {
+        let mut messages = Vec::new();
+        // System message
+        messages.push(ChatMessage {
+            role: "system".to_string(),
+            content: "You are an assistant.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        // Original user request
+        messages.push(ChatMessage {
+            role: "user".to_string(),
+            content: "Build a trinomial cheat sheet.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        });
+        // Add 30 filler messages so compaction kicks in
+        for i in 0..30 {
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: format!("Step {}", i),
+                tool_calls: None,
+                tool_call_id: None,
+            });
+        }
+
+        let compacted = compact_messages(messages);
+
+        // Should contain: system + original user request + compaction notice + last 20
+        assert!(
+            compacted.iter().any(|m| m.content.contains("trinomial cheat sheet")),
+            "Compacted messages should preserve the original user request"
+        );
+        assert!(
+            compacted.iter().any(|m| m.content.contains("Context compacted")),
+            "Compacted messages should include compaction notice"
+        );
+        assert!(
+            compacted.iter().any(|m| m.content.contains("original request above is preserved")),
+            "Compaction notice should reference the preserved original request"
+        );
+    }
+
+    #[test]
+    fn test_compact_messages_no_op_when_short() {
+        let messages = vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: "system".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "hello".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+        let compacted = compact_messages(messages.clone());
+        assert_eq!(compacted.len(), messages.len());
     }
 }

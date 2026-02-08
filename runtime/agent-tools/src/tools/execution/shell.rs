@@ -13,6 +13,8 @@ use tokio::time::timeout;
 
 use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
+use super::apply_patch;
+
 // ============================================================================
 // SECURITY CONFIGURATION
 // ============================================================================
@@ -21,7 +23,8 @@ use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 const BLOCKED_COMMANDS: &[&str] = &[
     // Disk/partition destruction
     "mkfs",
-    "dd",
+    "dd if=",
+    "dd of=",
     "fdisk",
     "parted",
     "gdisk",
@@ -234,7 +237,7 @@ impl ShellTool {
         }
 
         // Block backtick command substitution with dangerous commands
-        if command.contains('`') && (command.contains("rm ") || command.contains("dd ")) {
+        if command.contains('`') && (command.contains("rm ") || command.contains("dd if=") || command.contains("dd of=")) {
             return Err(ZeroError::Tool(
                 "Command blocked: potential command injection".to_string(),
             ));
@@ -333,6 +336,34 @@ impl Tool for ShellTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Check for error markers from truncated/malformed tool calls.
+        // Return a result (not error) with recovery guidance so the agent can retry.
+        if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
+            let original_len = args.get("__original_length__").and_then(|v| v.as_u64()).unwrap_or(0);
+            let guidance = if error_type == "TRUNCATED_ARGUMENTS" {
+                format!(
+                    "Your shell command was too large ({} bytes) and was truncated. \
+                     To fix this:\n\
+                     1. SIMPLIFY: Write shorter, simpler code. Avoid verbose formatting.\n\
+                     2. If using apply_patch: write one file per call, keep files under 200 lines.\n\
+                     3. Do NOT attempt to assemble a large file from many small chunks — this is fragile and error-prone.\n\
+                     4. Keep each shell call under 12,000 bytes of arguments.",
+                    original_len
+                )
+            } else {
+                let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+                format!("Shell command could not be parsed: {}", message)
+            };
+            return Ok(json!({
+                "success": false,
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": guidance,
+                "truncated": false,
+                "shell": "none (arguments were truncated before execution)",
+            }));
+        }
+
         // Check if tool is disabled due to elevated privileges
         if self.disabled {
             return Err(ZeroError::Tool(
@@ -364,6 +395,45 @@ impl Tool for ShellTool {
 
         // Validate command against security rules
         Self::validate_command(command)?;
+
+        // ---- apply_patch interception ----
+        // If the command is an apply_patch invocation, handle it directly without spawning a shell.
+        // This enables multi-file create/update/delete in a single tool call with zero extra schema.
+        {
+            // Resolve cwd the same way the shell would
+            let patch_cwd = if let Some(dir) = cwd {
+                std::path::PathBuf::from(dir)
+            } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+                let ward_id = ctx
+                    .get_state("ward_id")
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "scratch".to_string());
+                doc_dir.join("agentzero").join("wards").join(&ward_id)
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            };
+
+            if let Some(result) = apply_patch::intercept_apply_patch(command, &patch_cwd) {
+                return match result {
+                    Ok(output) => Ok(json!({
+                        "success": true,
+                        "exit_code": 0,
+                        "stdout": output,
+                        "stderr": "",
+                        "truncated": false,
+                        "shell": "apply_patch",
+                    })),
+                    Err(e) => Ok(json!({
+                        "success": false,
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": e.to_string(),
+                        "truncated": false,
+                        "shell": "apply_patch",
+                    })),
+                };
+            }
+        }
 
         tracing::debug!(
             "Shell: executing command ({} chars) with {}s timeout",
@@ -565,6 +635,7 @@ mod tests {
         assert!(ShellTool::validate_command("rm -rf /").is_err());
         assert!(ShellTool::validate_command("mkfs.ext4 /dev/sda1").is_err());
         assert!(ShellTool::validate_command("dd if=/dev/zero of=/dev/sda").is_err());
+        assert!(ShellTool::validate_command("dd of=/dev/sda").is_err());
         assert!(ShellTool::validate_command("format c:").is_err());
         assert!(ShellTool::validate_command("sudo su").is_err());
     }
@@ -576,6 +647,9 @@ mod tests {
         assert!(ShellTool::validate_command("pwd").is_ok());
         assert!(ShellTool::validate_command("cat file.txt").is_ok());
         assert!(ShellTool::validate_command("git status").is_ok());
+        // "dd" as substring should not be blocked
+        assert!(ShellTool::validate_command("git add .").is_ok());
+        assert!(ShellTool::validate_command("npm add express").is_ok());
     }
 
     #[test]

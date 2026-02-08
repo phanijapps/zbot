@@ -25,6 +25,51 @@ pub struct OpenAiClient {
     http_client: reqwest::Client,
 }
 
+/// Check if a JSON string is complete (has balanced braces, brackets, and strings).
+///
+/// Used to detect truncated tool call arguments when the LLM hits `max_tokens` mid-argument.
+fn is_json_complete(json_str: &str) -> bool {
+    let mut brace_count = 0i32;
+    let mut bracket_count = 0i32;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    for ch in json_str.chars() {
+        if escape_next {
+            escape_next = false;
+            continue;
+        }
+
+        match ch {
+            '\\' if in_string => {
+                escape_next = true;
+            }
+            '"' => {
+                in_string = !in_string;
+            }
+            '{' if !in_string => {
+                brace_count += 1;
+            }
+            '}' if !in_string => {
+                brace_count -= 1;
+            }
+            '[' if !in_string => {
+                bracket_count += 1;
+            }
+            ']' if !in_string => {
+                bracket_count -= 1;
+            }
+            _ => {}
+        }
+
+        if brace_count < 0 || bracket_count < 0 {
+            return false;
+        }
+    }
+
+    !in_string && brace_count == 0 && bracket_count == 0
+}
+
 impl OpenAiClient {
     /// Create a new OpenAI-compatible client
     pub fn new(config: LlmConfig) -> Result<Self, LlmError> {
@@ -255,6 +300,7 @@ impl LlmClient for OpenAiClient {
 
         let mut full_content = String::new();
         let mut reasoning_content = String::new();
+        let mut _finish_reason: Option<String> = None;
         let prompt_tokens = 0u32;
 
         // Accumulate streaming tool call deltas by index.
@@ -314,6 +360,14 @@ impl LlmClient for OpenAiClient {
                     Ok(v) => v,
                     Err(_) => continue,
                 };
+
+                // Capture finish_reason from the final chunk
+                if let Some(reason) = json_data.pointer("/choices/0/finish_reason").and_then(|v| v.as_str()) {
+                    _finish_reason = Some(reason.to_string());
+                    if reason == "length" {
+                        tracing::warn!("Stream finished with reason 'length' — response may be truncated");
+                    }
+                }
 
                 let Some(delta) = json_data.pointer("/choices/0/delta") else {
                     continue;
@@ -414,13 +468,33 @@ impl LlmClient for OpenAiClient {
                     tracing::warn!("Skipping tool call at index {} with empty name", index);
                     continue;
                 }
-                let args_value = serde_json::from_str(&acc.arguments).unwrap_or_else(|e| {
-                    tracing::warn!(
-                        "Failed to parse tool call arguments for '{}': {} — raw: {}",
-                        acc.name, e, acc.arguments
+                let args_value = if !is_json_complete(&acc.arguments) {
+                    tracing::error!(
+                        "Tool '{}' arguments JSON is incomplete (truncated). Args (first 200): '{}'",
+                        acc.name, &acc.arguments[..acc.arguments.len().min(200)]
                     );
-                    json!({})
-                });
+                    json!({
+                        "__error__": "TRUNCATED_ARGUMENTS",
+                        "__message__": "Tool call arguments were truncated. Try a shorter command or split into multiple calls.",
+                        "__original_length__": acc.arguments.len(),
+                        "__truncated__": true
+                    })
+                } else {
+                    match serde_json::from_str::<serde_json::Value>(&acc.arguments) {
+                        Ok(args) => args,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Failed to parse tool call arguments for '{}': {} — raw: {}",
+                                acc.name, e, acc.arguments
+                            );
+                            json!({
+                                "__error__": "PARSE_ERROR",
+                                "__message__": format!("JSON parse error: {}", e),
+                                "__truncated__": false
+                            })
+                        }
+                    }
+                };
                 tool_calls.push(ToolCall::new(acc.id, acc.name, args_value));
             }
         }
