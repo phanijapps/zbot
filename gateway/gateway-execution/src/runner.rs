@@ -77,6 +77,12 @@ pub struct ExecutionRunner {
     connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
+    /// Memory repository for structured fact storage
+    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    /// Session distiller for automatic fact extraction after sessions
+    distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    /// Memory recall for automatic fact retrieval at session start
+    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
 }
 
 impl ExecutionRunner {
@@ -107,6 +113,9 @@ impl ExecutionRunner {
             state_service,
             None,
             Arc::new(tokio::sync::RwLock::new(None)),
+            None,
+            None,
+            None,
         )
     }
 
@@ -123,6 +132,9 @@ impl ExecutionRunner {
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
         workspace_cache: WorkspaceCache,
+        memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+        distiller: Option<Arc<super::distillation::SessionDistiller>>,
+        memory_recall: Option<Arc<super::recall::MemoryRecall>>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -142,6 +154,9 @@ impl ExecutionRunner {
             state_service,
             connector_registry,
             workspace_cache,
+            memory_repo,
+            distiller,
+            memory_recall,
         };
 
         // Spawn delegation handler task
@@ -358,11 +373,32 @@ impl ExecutionRunner {
         };
 
         // Load full session conversation (all messages including tool calls/results)
-        let history: Vec<ChatMessage> = self
+        let mut history: Vec<ChatMessage> = self
             .conversation_repo
             .get_session_conversation(&session_id, 200)
             .map(|messages| self.conversation_repo.session_messages_to_chat_format(&messages))
             .unwrap_or_default();
+
+        // Smart recall: inject relevant facts at session start (only for fresh sessions)
+        if history.is_empty() {
+            if let Some(recall) = &self.memory_recall {
+                match recall.recall(&config.agent_id, &message, 10).await {
+                    Ok(facts) if !facts.is_empty() => {
+                        let context = super::recall::format_recalled_facts(&facts);
+                        history.insert(0, ChatMessage::system(context));
+                        tracing::info!(
+                            agent_id = %config.agent_id,
+                            fact_count = facts.len(),
+                            "Injected recalled memory facts"
+                        );
+                    }
+                    Ok(_) => {} // No facts recalled
+                    Err(e) => {
+                        tracing::warn!("Memory recall failed: {}", e);
+                    }
+                }
+            }
+        }
 
         // Create executor (restore ward_id from existing session if available)
         let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref()).await {
@@ -408,6 +444,7 @@ impl ExecutionRunner {
         let delegation_tx = self.delegation_tx.clone();
         let connector_registry = self.connector_registry.clone();
         let respond_to = config.respond_to.clone();
+        let distiller = self.distiller.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -570,6 +607,18 @@ impl ExecutionRunner {
                         respond_to.as_ref(),
                     )
                     .await;
+
+                    // Fire-and-forget session distillation
+                    if let Some(distiller) = distiller.as_ref() {
+                        let distiller = distiller.clone();
+                        let sid = session_id.clone();
+                        let aid = agent_id.clone();
+                        tokio::spawn(async move {
+                            if let Err(e) = distiller.distill(&sid, &aid).await {
+                                tracing::warn!("Session distillation failed: {}", e);
+                            }
+                        });
+                    }
                 }
                 Err(e) => {
                     // Crash execution and emit events
@@ -811,9 +860,19 @@ impl ExecutionRunner {
             .as_ref()
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
+        // Build fact store from memory repo + embedding client (if available)
+        let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = self.memory_repo.as_ref().map(|repo| {
+            // TODO: pass embedding client when available in runner context
+            Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), None))
+                as Arc<dyn zero_core::MemoryFactStore>
+        });
+
         // Use ExecutorBuilder to create the executor
-        let builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
+        let mut builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone());
+        if let Some(fs) = fact_store {
+            builder = builder.with_fact_store(fs);
+        }
         builder
             .build(
                 agent,

@@ -23,10 +23,12 @@
 pub mod config;
 pub mod continuation;
 pub mod delegation;
+pub mod distillation;
 pub mod events;
 pub mod handle;
 pub mod invoke;
 pub mod lifecycle;
+pub mod recall;
 pub mod runner;
 
 // Re-export public types
@@ -45,3 +47,5 @@ pub use lifecycle::{
 };
 pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use runner::ExecutionRunner;
+pub use distillation::SessionDistiller;
+pub use recall::{MemoryRecall, format_recalled_facts};

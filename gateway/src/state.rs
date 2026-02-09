@@ -8,12 +8,15 @@ use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
-use crate::execution::{new_workspace_cache, DelegationRegistry, WorkspaceCache};
+use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
 use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService};
+use agent_runtime::llm::LocalEmbeddingClient;
+use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
+use gateway_database::MemoryRepository;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -95,7 +98,7 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
 
         // Create state service for execution state management
-        let state_service = Arc::new(StateService::new(db_manager));
+        let state_service = Arc::new(StateService::new(db_manager.clone()));
 
         // Create connector registry
         let connector_service = ConnectorService::new(config_dir.clone());
@@ -103,6 +106,36 @@ impl AppState {
 
         // Create workspace cache (shared between AppState and ExecutionRunner)
         let workspace_cache = new_workspace_cache();
+
+        // Initialize memory evolution services
+        let memory_repo = Arc::new(MemoryRepository::new(db_manager));
+
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
+            Ok(client) => {
+                tracing::info!(
+                    "Local embedding client initialized ({}d)",
+                    client.dimensions()
+                );
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::warn!("Local embedding unavailable, FTS5-only recall: {}", e);
+                None
+            }
+        };
+
+        let memory_recall = Arc::new(MemoryRecall::new(
+            embedding_client.clone(),
+            memory_repo.clone(),
+        ));
+
+        let distiller = Arc::new(SessionDistiller::new(
+            provider_service.clone(),
+            embedding_client,
+            conversation_repo.clone(),
+            memory_repo.clone(),
+            None, // graph_storage — wired when knowledge graph is configured
+        ));
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -117,6 +150,9 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
+            Some(memory_repo),
+            Some(distiller),
+            Some(memory_recall),
         ));
 
         // Create hook registry
@@ -266,7 +302,7 @@ impl AppState {
         self.ensure_wards_dir();
 
         let venv_ok = self.ensure_python_venv().await;
-        let node_ok = self.ensure_node_env().await;
+        let node_ok = self.ensure_node_env();
         self.seed_workspace_env_status(venv_ok, node_ok);
         self.populate_workspace_cache().await;
     }
@@ -370,58 +406,34 @@ impl AppState {
         }
     }
 
-    /// Create Node.js environment at `{config_dir}/wards/.node_env` if it doesn't exist.
+    /// Ensure Node.js working directory exists at `{config_dir}/wards/.node_env`.
     /// Falls back to legacy `{config_dir}/node_env` if it exists there.
-    /// Returns true if the node_env exists (either already existed or was created).
-    async fn ensure_node_env(&self) -> bool {
+    /// Just creates the directory — no npm init needed.
+    fn ensure_node_env(&self) -> bool {
         let new_path = self.config_dir.join("wards").join(".node_env");
         let legacy_path = self.config_dir.join("node_env");
 
-        // Use new path, but check legacy location too
         let node_env_dir = if new_path.exists() {
             new_path
         } else if legacy_path.exists() {
             legacy_path
         } else {
-            new_path // Create at new location
+            new_path
         };
-        let package_json = node_env_dir.join("package.json");
 
-        if package_json.exists() {
+        if node_env_dir.exists() {
             tracing::debug!("Node env already exists at {}", node_env_dir.display());
             return true;
         }
 
         tracing::info!("Creating Node env at {}", node_env_dir.display());
 
-        // Create the directory
         if let Err(e) = std::fs::create_dir_all(&node_env_dir) {
             tracing::warn!("Failed to create node_env directory: {}", e);
             return false;
         }
 
-        // Run npm init -y to create package.json
-        let result = tokio::process::Command::new("npm")
-            .args(["init", "-y"])
-            .current_dir(&node_env_dir)
-            .output()
-            .await;
-
-        match result {
-            Ok(output) if output.status.success() => {
-                tracing::info!("Node env created successfully");
-                true
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("Failed to initialize node_env: {}", stderr.trim());
-                false
-            }
-            Err(e) => {
-                tracing::warn!("Failed to run npm init: {} (npm may not be installed)", e);
-                false
-            }
-        }
+        true
     }
 
     /// Seed workspace.json with python_env and node_env status.

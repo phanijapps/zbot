@@ -66,9 +66,11 @@ Connect to external tools via Model Context Protocol servers. Configure in `mcps
 }
 ```
 
-### 6. Persistent Memory
-Multi-tier key-value storage for facts, preferences, and context:
+### 6. Persistent Memory & Learning
 
+Hybrid memory system combining key-value storage, semantic search, and automatic session distillation.
+
+**Manual Memory** (key-value store):
 ```
 memory set user_name "Alice"           # agent-scoped
 memory get user_name
@@ -76,7 +78,24 @@ memory search preferences
 memory set scope=ward key=purpose ...  # ward-scoped
 ```
 
+**Structured Facts** (automatic + manual):
+```
+memory save_fact category=preference key=user.language content="User prefers Rust"
+memory recall query="language preferences" limit=5
+memory graph query="agentzero"         # knowledge graph entities
+```
+
 **Tiers**: Global shared → Agent → Ward → Session (ephemeral)
+
+**Memory Evolution Features**:
+- **Hybrid Search**: FTS5 BM25 keyword search (30%) + cosine vector similarity (70%) with confidence, recency, and mention-count boosting
+- **Embedding Providers**: Configurable backends — local ONNX (fastembed, default, zero cost), OpenAI-compatible APIs (Ollama, OpenAI, Voyage)
+- **Embedding Cache**: SHA-256 hash-based dedup prevents re-embedding unchanged content
+- **Session Distillation**: After sessions complete, an LLM automatically extracts durable facts (preferences, decisions, patterns, entities, instructions, corrections) and stores them with embeddings
+- **Smart Recall**: At session start, relevant facts are retrieved via hybrid search and injected as context
+- **Pre-Compaction Flush**: Before context window trimming, the agent gets a warning turn to save important facts
+- **Knowledge Graph**: Distillation extracts entities and relationships (person, project, tool, concept, file) into a graph store for structured queries
+- **Fact Dedup**: UNIQUE constraint on (agent_id, scope, key) — repeated mentions update content and bump mention_count
 
 ### 7. Code Wards
 Agent-managed persistent project directories. The agent autonomously creates, names, and navigates wards — code persists across sessions.
@@ -148,15 +167,34 @@ Cron-based scheduling for automated agent invocations. Define recurring tasks th
    - Parallel tool execution + output truncation
    - Gateway crate decomposition (13 crates)
    - Code Wards (persistent project directories)
+   - Shell-first execution + apply_patch
+   - Session Tree (continuous conversation, subagent isolation)
+   - Goal-oriented execution (scoring, stuck-detection, safety valve)
    - 300+ tests across all crates
+6. **v0.6** — Memory Evolution
+   - Embedding providers: local fastembed (default) + OpenAI-compatible
+   - Hybrid search: FTS5 BM25 + vector cosine similarity
+   - Session distillation: auto-extract facts from completed sessions
+   - Smart recall: inject relevant facts at session start
+   - Pre-compaction memory flush: save facts before context trim
+   - Knowledge graph integration: entity/relationship extraction during distillation
+   - Old standalone knowledge_graph tools removed (5 tools → unified `graph` action in memory tool)
+   - 620+ tests across all crates
 
 ### Planned
-6. **v0.6** — Creative Hub + Lifecycle
+7. **v0.7** — Creative Hub + Lifecycle
    - Code Wards Phase 4: cross-ward code discovery, pattern learning
    - Skill loading & unloading lifecycle (TTL, LRU, dependencies)
-   - Knowledge Graph / Memory unification (graph-backed memory API)
-7. **v0.7** — Context & Safety
+8. **v0.8** — Context & Safety
    - Context window management (auto-compaction, token counting)
    - Agent sandbox (process isolation)
    - Concurrent access: SQLite for shared state, inter-agent message queue
-8. **v1.0** — Stable API, documentation, packaging
+9. **v1.0** — Stable API, documentation, packaging
+
+### Stretch Goals (Memory)
+- **Contradiction Detection**: New fact conflicts with existing (same key, different content) — flag for resolution
+- **Confidence Decay**: Nightly decay of unmaintained facts. Below 0.3 → archived. Prevents stale memory buildup
+- **Cross-Agent Gossip**: Agent A saves shared fact → all agents see it at next session start. Collective intelligence
+- **Memory Compression**: When a key has 5+ updates, LLM merges them into one consolidated fact
+- **Dream Mode**: During idle time, agent reviews its own memory, finds connections, generates new insights. Runs as cron job
+- **Memory Diff**: Show user what the agent learned this session: "I learned 3 new facts: [...]". Transparency

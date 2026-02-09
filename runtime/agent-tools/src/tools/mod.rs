@@ -6,7 +6,6 @@ mod file;
 mod search;
 mod execution;
 mod ui;
-mod knowledge_graph;
 mod agent;
 mod web;
 mod memory;
@@ -18,6 +17,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use zero_core::Tool;
 use zero_core::FileSystemContext;
+use zero_core::MemoryFactStore;
 
 pub use file::{ReadTool, WriteTool, EditTool};
 pub use search::{GrepTool, GlobTool};
@@ -27,13 +27,6 @@ pub use execution::skills::LoadSkillTool;
 pub use execution::TodoTool;
 pub use execution::UpdatePlanTool;
 pub use ui::{RequestInputTool, ShowContentTool};
-pub use knowledge_graph::{
-    ListEntitiesTool,
-    SearchEntitiesTool,
-    GetEntityRelationshipsTool,
-    AddEntityTool,
-    AddRelationshipTool,
-};
 pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use web::WebFetchTool;
 pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
@@ -73,10 +66,6 @@ pub struct ToolSettings {
     /// Enable UI tools (request_input, show_content)
     #[serde(default)]
     pub ui_tools: bool,
-
-    /// Enable knowledge graph tools (5 tools)
-    #[serde(default)]
-    pub knowledge_graph: bool,
 
     /// Enable create_agent tool
     #[serde(default)]
@@ -134,12 +123,15 @@ fn default_offload_enabled() -> bool {
 /// - list_skills, load_skill: Skill discovery
 /// - grep: Structured file content search
 #[must_use]
-pub fn core_tools(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool>> {
+pub fn core_tools(
+    fs: Arc<dyn FileSystemContext>,
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
+) -> Vec<Arc<dyn Tool>> {
     vec![
         // Primary execution tool (with apply_patch interception)
         Arc::new(ShellTool::new()),
-        // Persistent memory
-        Arc::new(MemoryTool::new(fs.clone())),
+        // Persistent memory (with optional DB-backed fact store)
+        Arc::new(MemoryTool::new(fs.clone(), fact_store)),
         // Ward management (named project directories)
         Arc::new(WardTool::new(fs.clone())),
         // Lightweight plan tracking
@@ -185,14 +177,6 @@ pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -
         tools.push(Arc::new(ShowContentTool));
     }
 
-    if settings.knowledge_graph {
-        tools.push(Arc::new(ListEntitiesTool));
-        tools.push(Arc::new(SearchEntitiesTool));
-        tools.push(Arc::new(GetEntityRelationshipsTool));
-        tools.push(Arc::new(AddEntityTool));
-        tools.push(Arc::new(AddRelationshipTool));
-    }
-
     if settings.create_agent {
         tools.push(Arc::new(CreateAgentTool::new(fs.clone())));
     }
@@ -216,7 +200,6 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         python: true,
         web_fetch: true,
         ui_tools: true,
-        knowledge_graph: true,
         create_agent: true,
         introspection: true,
         file_tools: true,
@@ -225,7 +208,7 @@ pub fn builtin_tools_with_fs(fs: Arc<dyn FileSystemContext>) -> Vec<Arc<dyn Tool
         offload_threshold_tokens: default_offload_threshold(),
     };
 
-    let mut tools = core_tools(fs.clone());
+    let mut tools = core_tools(fs.clone(), None);
     tools.extend(optional_tools(fs, &all_enabled));
     tools
 }

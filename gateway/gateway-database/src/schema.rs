@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 7;
+const SCHEMA_VERSION: i32 = 8;
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
@@ -189,6 +189,92 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_logs_agent ON execution_logs(agent_id)",
+        [],
+    )?;
+
+    // =========================================================================
+    // MEMORY FACTS
+    // Structured memory facts from session distillation or manual save
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_facts (
+            id TEXT PRIMARY KEY,
+            session_id TEXT,
+            agent_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'agent',
+            category TEXT NOT NULL,
+            key TEXT NOT NULL,
+            content TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.8,
+            mention_count INTEGER NOT NULL DEFAULT 1,
+            source_summary TEXT,
+            embedding BLOB,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            expires_at TEXT,
+            UNIQUE(agent_id, scope, key)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_facts_agent ON memory_facts(agent_id, scope)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_facts_category ON memory_facts(agent_id, category)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_facts_updated ON memory_facts(updated_at)",
+        [],
+    )?;
+
+    // FTS5 virtual table for BM25 keyword search over memory facts.
+    // content='' makes it an external-content table (we sync manually).
+    conn.execute_batch(
+        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(
+            key, content, category,
+            content='memory_facts',
+            content_rowid='rowid'
+        );"
+    )?;
+
+    // Triggers to keep FTS index in sync with memory_facts table.
+    // These fire on INSERT, UPDATE, and DELETE.
+    conn.execute_batch(
+        "CREATE TRIGGER IF NOT EXISTS memory_facts_ai AFTER INSERT ON memory_facts BEGIN
+            INSERT INTO memory_facts_fts(rowid, key, content, category)
+            VALUES (new.rowid, new.key, new.content, new.category);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS memory_facts_ad AFTER DELETE ON memory_facts BEGIN
+            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, key, content, category)
+            VALUES ('delete', old.rowid, old.key, old.content, old.category);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS memory_facts_au AFTER UPDATE ON memory_facts BEGIN
+            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, key, content, category)
+            VALUES ('delete', old.rowid, old.key, old.content, old.category);
+            INSERT INTO memory_facts_fts(rowid, key, content, category)
+            VALUES (new.rowid, new.key, new.content, new.category);
+        END;"
+    )?;
+
+    // =========================================================================
+    // EMBEDDING CACHE
+    // Hash-based dedup to avoid re-embedding unchanged content
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS embedding_cache (
+            content_hash TEXT NOT NULL,
+            model TEXT NOT NULL,
+            embedding BLOB NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            PRIMARY KEY (content_hash, model)
+        )",
         [],
     )?;
 

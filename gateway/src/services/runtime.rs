@@ -11,9 +11,10 @@ use execution_state::StateService;
 use crate::connectors::ConnectorRegistry;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
-use crate::execution::{new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, WorkspaceCache};
+use crate::execution::{new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookContext;
 use crate::services::{AgentService, McpService, ProviderService, SkillService};
+use gateway_database::MemoryRepository;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -74,6 +75,9 @@ impl RuntimeService {
             state_service,
             None,
             new_workspace_cache(),
+            None,
+            None,
+            None,
         )
     }
 
@@ -90,6 +94,9 @@ impl RuntimeService {
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Option<Arc<ConnectorRegistry>>,
         workspace_cache: WorkspaceCache,
+        memory_repo: Option<Arc<MemoryRepository>>,
+        distiller: Option<Arc<SessionDistiller>>,
+        memory_recall: Option<Arc<MemoryRecall>>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -103,6 +110,9 @@ impl RuntimeService {
             state_service,
             connector_registry,
             workspace_cache,
+            memory_repo,
+            distiller,
+            memory_recall,
         ));
         Self {
             event_bus,

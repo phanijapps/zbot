@@ -1,6 +1,6 @@
 // ============================================================================
 // MEMORY TOOL
-// Persistent key-value storage for agents
+// Persistent key-value storage for agents + structured fact storage via DB
 // ============================================================================
 
 use std::collections::HashMap;
@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
-use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
 // ============================================================================
 // CONFIGURATION
@@ -65,13 +65,14 @@ pub struct MemoryStore {
 /// Tool for persistent memory across sessions
 pub struct MemoryTool {
     fs: Arc<dyn FileSystemContext>,
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
 }
 
 impl MemoryTool {
-    /// Create a new MemoryTool with file system context
+    /// Create a new MemoryTool with file system context and optional fact store.
     #[must_use]
-    pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<dyn FileSystemContext>, fact_store: Option<Arc<dyn MemoryFactStore>>) -> Self {
+        Self { fs, fact_store }
     }
 
     /// Get memory file path based on scope.
@@ -200,9 +201,11 @@ impl Tool for MemoryTool {
 
     fn description(&self) -> &str {
         "Persistent memory for storing facts, notes, and context across sessions. \
-        Scopes: 'agent' (default, per-agent), 'shared' (cross-session), 'ward' (per-project). \
-        Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries. \
-        Ward memory stores project context (purpose, tech stack, build commands) in the current ward."
+        Actions: get/set/delete/list/search (key-value store), \
+        save_fact (structured fact with category/key/content/confidence — automatically embedded for semantic search), \
+        recall (hybrid semantic + keyword search over saved facts). \
+        Scopes: 'agent' (default), 'shared' (cross-session), 'ward' (per-project). \
+        Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -211,8 +214,25 @@ impl Tool for MemoryTool {
             "properties": {
                 "action": {
                     "type": "string",
-                    "enum": ["get", "set", "delete", "list", "search"],
+                    "enum": ["get", "set", "delete", "list", "search", "save_fact", "recall"],
                     "description": "The memory operation to perform"
+                },
+                "category": {
+                    "type": "string",
+                    "enum": ["preference", "decision", "pattern", "entity", "instruction", "correction"],
+                    "description": "Fact category (for save_fact action)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Fact content — 1-2 sentence description (for save_fact action)"
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence 0.0-1.0 (for save_fact, default 0.8)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results to return (for recall, default 5)"
                 },
                 "scope": {
                     "type": "string",
@@ -227,7 +247,7 @@ impl Tool for MemoryTool {
                 },
                 "key": {
                     "type": "string",
-                    "description": "Memory key (required for get, set, delete)"
+                    "description": "Memory key (required for get, set, delete, save_fact). For save_fact use dot-notation like 'user.preferred_format'"
                 },
                 "value": {
                     "type": "string",
@@ -240,7 +260,7 @@ impl Tool for MemoryTool {
                 },
                 "query": {
                     "type": "string",
-                    "description": "Search query (for search action)"
+                    "description": "Search query (for search/recall action)"
                 },
                 "tag_filter": {
                     "type": "string",
@@ -284,21 +304,26 @@ impl Tool for MemoryTool {
             .get_state("ward_id")
             .and_then(|v| v.as_str().map(String::from));
 
-        // Resolve memory path
-        let path = self.resolve_memory_path(&agent_id, scope, file, ward_id.as_deref())?;
-
-        // Get action
+        // Resolve memory path (only needed for KV actions, not save_fact/recall)
         let action = args
             .get("action")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
 
         match action {
-            "get" => self.action_get(&path, &args).await,
-            "set" => self.action_set(&path, &args).await,
-            "delete" => self.action_delete(&path, &args).await,
-            "list" => self.action_list(&path, scope, file, &args).await,
-            "search" => self.action_search(&path, &args).await,
+            "get" | "set" | "delete" | "list" | "search" => {
+                let path = self.resolve_memory_path(&agent_id, scope, file, ward_id.as_deref())?;
+                match action {
+                    "get" => self.action_get(&path, &args).await,
+                    "set" => self.action_set(&path, &args).await,
+                    "delete" => self.action_delete(&path, &args).await,
+                    "list" => self.action_list(&path, scope, file, &args).await,
+                    "search" => self.action_search(&path, &args).await,
+                    _ => unreachable!(),
+                }
+            }
+            "save_fact" => self.action_save_fact(&agent_id, &args).await,
+            "recall" => self.action_recall(&agent_id, &args).await,
             _ => Err(ZeroError::Tool(format!("Unknown action: {}", action))),
         }
     }
@@ -464,6 +489,140 @@ impl MemoryTool {
         }))
     }
 
+    /// Save a structured memory fact via the DB-backed fact store.
+    async fn action_save_fact(&self, agent_id: &str, args: &Value) -> Result<Value> {
+        let category = args
+            .get("category")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'category' for save_fact".to_string()))?;
+
+        let key = args
+            .get("key")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'key' for save_fact".to_string()))?;
+
+        let content = args
+            .get("content")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'content' for save_fact".to_string()))?;
+
+        let confidence = args
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.8);
+
+        // Validate
+        let valid_categories = ["preference", "decision", "pattern", "entity", "instruction", "correction"];
+        if !valid_categories.contains(&category) {
+            return Err(ZeroError::Tool(format!(
+                "Invalid category '{}'. Valid: {}",
+                category,
+                valid_categories.join(", ")
+            )));
+        }
+
+        if content.len() > 500 {
+            return Err(ZeroError::Tool(
+                "Fact content too long. Keep to 1-2 sentences (max 500 chars).".to_string(),
+            ));
+        }
+
+        // Use DB-backed fact store if available
+        match &self.fact_store {
+            Some(store) => {
+                store
+                    .save_fact(agent_id, category, key, content, confidence, None)
+                    .await
+                    .map_err(|e| ZeroError::Tool(e))
+            }
+            None => {
+                // Fallback: store in legacy KV file
+                let kv_path = self.resolve_memory_path(agent_id, "agent", None, None)?;
+                let mut store = self.load_store_at_path(&kv_path)?;
+
+                let fact_key = format!("fact:{}", key);
+                let now = Self::now();
+                let entry = MemoryEntry {
+                    value: format!("[{}] {} (confidence: {:.2})", category, content, confidence),
+                    tags: vec!["fact".to_string(), category.to_string()],
+                    created_at: store
+                        .entries
+                        .get(&fact_key)
+                        .map(|e| e.created_at.clone())
+                        .unwrap_or_else(|| now.clone()),
+                    updated_at: now,
+                };
+
+                store.entries.insert(fact_key, entry);
+                self.save_store_at_path(&kv_path, &store)?;
+
+                Ok(json!({
+                    "success": true,
+                    "action": "save_fact",
+                    "key": key,
+                    "category": category,
+                    "confidence": confidence,
+                    "message": format!("Fact saved (file fallback): [{}] {}", category, content),
+                }))
+            }
+        }
+    }
+
+    /// Recall relevant facts using hybrid search via the DB-backed fact store.
+    async fn action_recall(&self, agent_id: &str, args: &Value) -> Result<Value> {
+        let query = args
+            .get("query")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'query' for recall".to_string()))?;
+
+        let limit = args
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(5) as usize;
+
+        // Use DB-backed fact store if available
+        match &self.fact_store {
+            Some(store) => {
+                store
+                    .recall_facts(agent_id, query, limit)
+                    .await
+                    .map_err(|e| ZeroError::Tool(e))
+            }
+            None => {
+                // Fallback: search KV store
+                let kv_path = self.resolve_memory_path(agent_id, "agent", None, None)?;
+                let store = self.load_store_at_path(&kv_path)?;
+
+                let query_lower = query.to_lowercase();
+                let results: Vec<Value> = store
+                    .entries
+                    .iter()
+                    .filter(|(k, entry)| {
+                        k.to_lowercase().contains(&query_lower)
+                            || entry.value.to_lowercase().contains(&query_lower)
+                            || entry.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                    })
+                    .take(limit)
+                    .map(|(key, entry)| {
+                        json!({
+                            "key": key,
+                            "content": entry.value,
+                            "tags": entry.tags,
+                            "source": "kv_store",
+                        })
+                    })
+                    .collect();
+
+                Ok(json!({
+                    "query": query,
+                    "results": results,
+                    "count": results.len(),
+                    "source": "kv_store",
+                }))
+            }
+        }
+    }
+
     /// Search memory entries
     async fn action_search(&self, path: &PathBuf, args: &Value) -> Result<Value> {
         let query = args
@@ -570,7 +729,7 @@ mod tests {
     fn test_resolve_agent_memory_path() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         let path = tool.resolve_memory_path("test-agent", "agent", None, None).unwrap();
         assert!(path.ends_with("agents_data/test-agent/memory.json"));
@@ -580,7 +739,7 @@ mod tests {
     fn test_resolve_shared_memory_path() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         let path = tool
             .resolve_memory_path("test-agent", "shared", Some("patterns"), None)
@@ -592,7 +751,7 @@ mod tests {
     fn test_shared_memory_requires_file() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         let result = tool.resolve_memory_path("test-agent", "shared", None, None);
         assert!(result.is_err());
@@ -606,7 +765,7 @@ mod tests {
     fn test_shared_memory_invalid_file() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"), None);
         assert!(result.is_err());
@@ -617,7 +776,7 @@ mod tests {
     fn test_all_shared_files_valid() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         for file in SHARED_FILES {
             let result = tool.resolve_memory_path("test-agent", "shared", Some(file), None);
@@ -629,7 +788,7 @@ mod tests {
     fn test_load_store_creates_default_when_missing() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         let path = dir.path().join("nonexistent").join("memory.json");
         let store = tool.load_store_at_path(&path).unwrap();
@@ -640,7 +799,7 @@ mod tests {
     fn test_save_and_load_store() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
-        let tool = MemoryTool::new(fs);
+        let tool = MemoryTool::new(fs, None);
 
         let path = dir.path().join("test_memory.json");
 

@@ -50,6 +50,8 @@ rust-embed = { workspace = true }
 lazy_static = { workspace = true }
 base64 = { workspace = true }
 dirs = "5.0"
+sha2 = "0.10"
+fastembed = "4"
 
 [dev-dependencies]
 tokio-test = "0.4"

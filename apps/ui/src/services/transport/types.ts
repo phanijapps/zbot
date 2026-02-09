@@ -279,7 +279,6 @@ export interface ToolSettings {
   webFetch: boolean;
   loadSkill: boolean;
   uiTools: boolean;
-  knowledgeGraph: boolean;
   createAgent: boolean;
   introspection: boolean;
   /** Offload large tool results to filesystem instead of keeping in context */

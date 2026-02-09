@@ -55,8 +55,6 @@ pub struct UpdateToolSettingsRequest {
     #[serde(default)]
     pub ui_tools: bool,
     #[serde(default)]
-    pub knowledge_graph: bool,
-    #[serde(default)]
     pub create_agent: bool,
     #[serde(default)]
     pub introspection: bool,
@@ -80,7 +78,6 @@ impl From<UpdateToolSettingsRequest> for ToolSettings {
             python: req.python,
             web_fetch: req.web_fetch,
             ui_tools: req.ui_tools,
-            knowledge_graph: req.knowledge_graph,
             create_agent: req.create_agent,
             introspection: req.introspection,
             file_tools: req.file_tools,
