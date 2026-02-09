@@ -224,7 +224,38 @@ pub trait LlmClient: Send + Sync {
 
 ## Session Management Architecture
 
-Sessions are the top-level container for user interactions. A session groups multiple agent executions (turns) together, enabling multi-turn conversations with context preservation.
+Sessions are the top-level container for user interactions. Each session has one continuous
+message stream — all tool calls, results, and intermediate context persist across user messages.
+Subagents get isolated context via child sessions.
+
+### Session Tree
+
+```
+ROOT SESSION (parent_session_id = NULL)
+│
+├── messages stream (ALL messages — continuous across user turns)
+│   ├── user: "build me a docx"
+│   ├── assistant: [tool_calls: list_skills]
+│   ├── tool: "16 skills available..."              (tool_call_id: call_001)
+│   ├── assistant: [tool_calls: shell(pip install)]
+│   ├── tool: "installed python-docx"               (tool_call_id: call_002)
+│   ├── assistant: "Done! Created the docx file."
+│   ├── user: "convert to pdf"                       ← 2nd message, SAME session
+│   ├── assistant: [tool_calls: shell(libreoffice)]
+│   ├── tool: "converted to /tmp/out.pdf"            (tool_call_id: call_003)
+│   ├── assistant: "Done! PDF ready."
+│   └── system: "## From Researcher\n..."            ← callback from child
+│
+├── exec-{uuid} (root, REUSED across all user messages)
+│
+└── CHILD SESSION (parent_session_id = root session)
+    ├── messages stream (ISOLATED — only subagent sees these)
+    │   ├── user: "research X for the docx"
+    │   ├── assistant: [tool_calls: web_fetch]
+    │   ├── tool: "fetched data..."
+    │   └── assistant: "Found Y. Here's the summary."
+    └── exec-{uuid} (root of child session)
+```
 
 ### Session Lifecycle
 
@@ -243,14 +274,14 @@ Sessions are the top-level container for user interactions. A session groups mul
 │            │                                                            │
 │            ▼                                                            │
 │   ┌─────────────────┐                                                   │
-│   │ Create Root     │ ──► exec-{uuid} created, parent=null              │
+│   │ Create Root     │ ──► exec-{uuid} created, delegation_type=root     │
 │   │ Execution       │                                                   │
 │   └────────┬────────┘                                                   │
 │            │                                                            │
 │            ▼                                                            │
 │   ┌─────────────────┐                                                   │
-│   │ agent_started   │ ──► Frontend receives session_id                  │
-│   │ event emitted   │     Frontend stores in localStorage               │
+│   │ Stream messages │ ──► user, assistant, tool messages appended        │
+│   │ to session      │     to session stream as they happen              │
 │   └────────┬────────┘                                                   │
 │            │                                                            │
 │            ▼                                                            │
@@ -258,9 +289,18 @@ Sessions are the top-level container for user interactions. A session groups mul
 │        │                                                                │
 │        ▼                                                                │
 │   ┌─────────────────┐                                                   │
-│   │ Lookup existing │ ──► Same session reused                           │
-│   │ Session         │     New execution created under same session      │
-│   └────────┬────────┘                                                   │
+│   │ Reuse root      │ ──► Same session, same root execution             │
+│   │ execution       │     Reactivated if completed/crashed              │
+│   └────────┬────────┘     Full conversation history available           │
+│            │                                                            │
+│            ▼                                                            │
+│   Delegation spawns child session                                       │
+│        │                                                                │
+│        ▼                                                                │
+│   ┌─────────────────┐                                                   │
+│   │ Child session   │ ──► sess-{uuid} with parent_session_id set        │
+│   │ (isolated)      │     Subagent messages go to child stream          │
+│   └────────┬────────┘     Callback result posted to parent stream       │
 │            │                                                            │
 │            ▼                                                            │
 │   User sends /new command                                               │
@@ -278,9 +318,9 @@ Sessions are the top-level container for user interactions. A session groups mul
 
 | Concept | Scope | Purpose |
 |---------|-------|---------|
-| **Session** | User work session | Groups all activity until `/new` command |
-| **Execution** | Single agent turn | One agent processing one request |
-| **Conversation** | Message thread | Persists chat history for context |
+| **Session** (`sess-{uuid}`) | User work session | Groups all messages until `/new`. One continuous stream. |
+| **Execution** (`exec-{uuid}`) | Agent lifetime | Root execution reused across messages. Child executions for subagents. |
+| **Conversation ID** (`web-{uuid}`) | Client-side only | Generated in localStorage for WebSocket event routing. NOT in core DB schema. |
 
 ### Session and Execution States
 
@@ -385,9 +425,10 @@ User Message
 │   Resolution    │
 ├─────────────────┤
 │ if session_id { │
-│   lookup(id)    │ ──► Reuse existing session
+│   lookup(id)    │ ──► Reuse session + root execution
+│   reactivate()  │     (reactivate if completed/crashed)
 │ } else {        │
-│   create_new()  │ ──► New session + execution
+│   create_new()  │ ──► New session + root execution
 │ }               │
 └────────┬────────┘
          │
@@ -397,28 +438,34 @@ User Message
 │   Runner        │
 ├─────────────────┤
 │ 1. Load agent   │
-│ 2. Load history │ ◄── SQLite (by conversation_id)
-│ 3. Create LLM   │
+│ 2. Load history │ ◄── get_session_conversation(session_id, 200)
+│ 3. Create LLM   │     Full conversation with tool calls
 │ 4. Build tools  │
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐
-│   Agent         │
-│   Executor      │
-├─────────────────┤
-│ while !done {   │
-│   llm.call()    │──► Stream tokens ──► WebSocket ──► UI
-│   if tool_call {│
-│     execute()   │──► Stream result ──► WebSocket ──► UI
-│   }             │
-│ }               │
-└────────┬────────┘
+┌──────────────────────────────────────────────────────────┐
+│   Agent Executor (messages streamed via BatchWriter)     │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  append_message(user, input)        ──► session stream   │
+│                                                          │
+│  while !done {                                           │
+│    llm.call()                       ──► tokens → WS → UI│
+│    append_message(assistant, text+tool_calls)             │
+│    if tool_call {                                        │
+│      execute()                      ──► result → WS → UI│
+│      append_message(tool, result, tool_call_id)          │
+│    }                                                     │
+│  }                                                       │
+│                                                          │
+│  append_message(assistant, final_response)               │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────┐
-│  Save Messages  │ ──► SQLite
-│  Update Session │ ──► Status, timestamps
+│  Update Session │ ──► Status, token aggregation
 └─────────────────┘
 ```
 
@@ -533,13 +580,15 @@ User Message
 ### Entity Relationships
 
 ```
+sessions ||--o{ sessions : "parent-child (delegation)"
 sessions ||--o{ agent_executions : contains
+sessions ||--o{ messages : "conversation stream"
 agent_executions ||--o{ agent_executions : "parent-child (delegation)"
-agent_executions ||--o{ messages : has
 ```
 
 ### sessions
-Top-level container for a user's work session.
+Top-level container. Root sessions have `parent_session_id = NULL`.
+Child sessions (for subagents) link back to their parent.
 
 ```sql
 CREATE TABLE sessions (
@@ -557,12 +606,13 @@ CREATE TABLE sessions (
     metadata TEXT,                          -- JSON
     pending_delegations INTEGER DEFAULT 0,  -- Count of running subagents
     continuation_needed INTEGER DEFAULT 0,  -- Flag for continuation after delegates
-    ward_id TEXT                            -- Active code ward name
+    ward_id TEXT,                           -- Active code ward name
+    parent_session_id TEXT                  -- NULL=root, sess-{uuid}=child (subagent)
 );
 ```
 
 ### agent_executions
-An agent's participation in a session. Root agent or delegated subagent.
+An agent's participation in a session. Root execution is reused across user messages.
 
 ```sql
 CREATE TABLE agent_executions (
@@ -584,32 +634,46 @@ CREATE TABLE agent_executions (
 ```
 
 ### messages
-Individual messages in an agent's conversation.
+Conversation stream linked directly to sessions (not via execution JOIN).
+Messages are streamed in real-time via BatchWriter as they happen.
 
 ```sql
 CREATE TABLE messages (
-    id TEXT PRIMARY KEY,
-    execution_id TEXT NOT NULL REFERENCES agent_executions(id),
+    id TEXT PRIMARY KEY,                    -- msg-{uuid}
+    execution_id TEXT,                      -- exec-{uuid}, nullable (audit trail)
+    session_id TEXT,                        -- sess-{uuid}, primary FK for queries
     role TEXT NOT NULL,                     -- user|assistant|tool|system
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     token_count INTEGER DEFAULT 0,
-    tool_calls TEXT,                        -- JSON array
-    tool_results TEXT                       -- JSON array
+    tool_calls TEXT,                        -- JSON array (on assistant messages)
+    tool_results TEXT,                      -- JSON (legacy, unused in new path)
+    tool_call_id TEXT                       -- Links tool results to their tool call
 );
 ```
+
+### ID Conventions
+
+| Table | Prefix | Example |
+|-------|--------|---------|
+| sessions | `sess-` | `sess-03782b12-c041-4115-9cc7-c5fcc17775a6` |
+| agent_executions | `exec-` | `exec-f11b1447-9338-405c-a7d6-06f92cb87c84` |
+| messages | `msg-` | `msg-28ba79f2-b386-4a1c-8e5f-1a2b3c4d5e6f` |
 
 ### Indexes
 
 ```sql
 CREATE INDEX idx_sessions_status ON sessions(status);
 CREATE INDEX idx_sessions_created ON sessions(created_at);
+CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX idx_executions_session ON agent_executions(session_id);
 CREATE INDEX idx_executions_parent ON agent_executions(parent_execution_id);
 CREATE INDEX idx_executions_status ON agent_executions(status);
 CREATE INDEX idx_executions_agent ON agent_executions(agent_id);
 CREATE INDEX idx_messages_execution ON messages(execution_id);
 CREATE INDEX idx_messages_created ON messages(created_at);
+CREATE INDEX idx_messages_session ON messages(session_id);
+CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 ```
 
 ### Status Semantics

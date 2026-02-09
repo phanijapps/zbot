@@ -34,7 +34,7 @@ pub struct AgentConfig {
 }
 
 fn default_max_tokens() -> u32 {
-    2000
+    8192
 }
 
 fn default_voice_recording_enabled() -> bool {
@@ -370,7 +370,7 @@ impl AgentService {
                 provider_id: default_provider_id.to_string(),
                 model: "gpt-4o".to_string(),
                 temperature: 0.7,
-                max_tokens: 4096,
+                max_tokens: 8192,
                 thinking_enabled: false,
                 voice_recording_enabled: false,
                 system_instruction: None,

@@ -54,6 +54,14 @@ impl<D: StateDbProvider> StateService<D> {
         Ok((session, execution))
     }
 
+    /// Create a session from a pre-built Session object.
+    ///
+    /// Used for child sessions (subagent isolation) where the Session is
+    /// constructed via `Session::new_child()`.
+    pub fn create_session_from(&self, session: &Session) -> Result<(), String> {
+        self.repo.create_session(session)
+    }
+
     /// Create a new session in QUEUED state (does not create root execution yet).
     pub fn create_session_queued(&self, agent_id: &str, source: TriggerSource) -> Result<Session, String> {
         let session = Session::new_queued(agent_id, source);
@@ -195,6 +203,21 @@ impl<D: StateDbProvider> StateService<D> {
                 "Reactivating terminal session for new execution"
             );
             self.repo.update_session_status(session_id, SessionStatus::Running)?;
+        }
+
+        Ok(())
+    }
+
+    /// Reactivate a completed/crashed execution back to running state.
+    ///
+    /// Used when continuing a session — the root execution is reused rather
+    /// than creating a new one per user message.
+    pub fn reactivate_execution(&self, execution_id: &str) -> Result<(), String> {
+        let execution = self.repo.get_execution(execution_id)?
+            .ok_or_else(|| format!("Execution not found: {}", execution_id))?;
+
+        if execution.status == ExecutionStatus::Completed || execution.status == ExecutionStatus::Crashed {
+            self.repo.update_execution_status(execution_id, ExecutionStatus::Running)?;
         }
 
         Ok(())
@@ -598,7 +621,8 @@ mod tests {
                     metadata TEXT,
                     pending_delegations INTEGER DEFAULT 0,
                     continuation_needed INTEGER DEFAULT 0,
-                    ward_id TEXT
+                    ward_id TEXT,
+                    parent_session_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (
@@ -621,17 +645,22 @@ mod tests {
 
                 CREATE TABLE IF NOT EXISTS messages (
                     id TEXT PRIMARY KEY,
-                    execution_id TEXT NOT NULL,
+                    execution_id TEXT,
+                    session_id TEXT,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL,
+                    token_count INTEGER DEFAULT 0,
                     tool_calls TEXT,
                     tool_results TEXT,
-                    FOREIGN KEY (execution_id) REFERENCES agent_executions(id)
+                    tool_call_id TEXT,
+                    FOREIGN KEY (execution_id) REFERENCES agent_executions(id),
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_agent_executions_session ON agent_executions(session_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
+                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
                 "#,
             )
             .expect("Failed to create tables");

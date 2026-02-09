@@ -43,8 +43,9 @@ impl<D: StateDbProvider> StateRepository<D> {
                     id, status, source, root_agent_id, title,
                     created_at, started_at, completed_at,
                     total_tokens_in, total_tokens_out, metadata,
-                    pending_delegations, continuation_needed, ward_id
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    pending_delegations, continuation_needed, ward_id,
+                    parent_session_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     session.id,
                     session.status.as_str(),
@@ -60,6 +61,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                     session.pending_delegations as i64,
                     session.continuation_needed as i64,
                     session.ward_id,
+                    session.parent_session_id,
                 ],
             )?;
             Ok(())
@@ -77,7 +79,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata,
-                        pending_delegations, continuation_needed, ward_id
+                        pending_delegations, continuation_needed, ward_id,
+                        parent_session_id
                  FROM sessions WHERE id = ?",
             )?;
 
@@ -96,8 +99,9 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, status, source, root_agent_id, title,
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata,
-                        pending_delegations, continuation_needed, ward_id
-                 FROM sessions WHERE 1=1",
+                        pending_delegations, continuation_needed, ward_id,
+                        parent_session_id
+                 FROM sessions WHERE parent_session_id IS NULL",
             );
 
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
@@ -569,7 +573,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             // SESSION COUNTS BY STATUS
             // =====================================================================
             let mut stmt = conn.prepare(
-                "SELECT status, COUNT(*) FROM sessions GROUP BY status",
+                "SELECT status, COUNT(*) FROM sessions WHERE parent_session_id IS NULL GROUP BY status",
             )?;
 
             let mut sessions_queued = 0u64;
@@ -635,7 +639,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
             let mut stmt = conn.prepare(
                 "SELECT COUNT(*), COALESCE(SUM(total_tokens_in + total_tokens_out), 0)
-                 FROM sessions WHERE DATE(created_at) = ?",
+                 FROM sessions WHERE parent_session_id IS NULL AND DATE(created_at) = ?",
             )?;
 
             let (today_sessions, today_tokens) = stmt.query_row(params![today], |row| {
@@ -646,7 +650,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             // SESSIONS BY SOURCE
             // =====================================================================
             let mut stmt = conn.prepare(
-                "SELECT source, COUNT(*) FROM sessions GROUP BY source",
+                "SELECT source, COUNT(*) FROM sessions WHERE parent_session_id IS NULL GROUP BY source",
             )?;
 
             let mut sessions_by_source = std::collections::HashMap::new();
@@ -782,6 +786,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             pending_delegations: row.get::<_, i64>(11).unwrap_or(0) as u32,
             continuation_needed: row.get::<_, i64>(12).unwrap_or(0) != 0,
             ward_id: row.get(13).ok().flatten(),
+            parent_session_id: row.get(14).ok().flatten(),
         })
     }
 
@@ -864,7 +869,8 @@ mod tests {
                     metadata TEXT,
                     pending_delegations INTEGER DEFAULT 0,
                     continuation_needed INTEGER DEFAULT 0,
-                    ward_id TEXT
+                    ward_id TEXT,
+                    parent_session_id TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (
@@ -887,19 +893,23 @@ mod tests {
 
                 CREATE TABLE IF NOT EXISTS messages (
                     id TEXT PRIMARY KEY,
-                    execution_id TEXT NOT NULL,
+                    execution_id TEXT,
+                    session_id TEXT,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     token_count INTEGER DEFAULT 0,
                     tool_calls TEXT,
                     tool_results TEXT,
-                    FOREIGN KEY (execution_id) REFERENCES agent_executions(id)
+                    tool_call_id TEXT,
+                    FOREIGN KEY (execution_id) REFERENCES agent_executions(id),
+                    FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
 
                 CREATE INDEX IF NOT EXISTS idx_agent_executions_session ON agent_executions(session_id);
                 CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
                 CREATE INDEX IF NOT EXISTS idx_messages_execution ON messages(execution_id);
+                CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id);
                 "#,
             )
             .expect("Failed to create tables");

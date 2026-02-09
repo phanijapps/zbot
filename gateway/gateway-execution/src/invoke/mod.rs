@@ -10,7 +10,7 @@ mod executor;
 mod setup;
 mod stream;
 
-pub use batch_writer::spawn_batch_writer;
+pub use batch_writer::{spawn_batch_writer, spawn_batch_writer_with_repo, BatchWriterHandle};
 pub use executor::{collect_agents_summary, collect_skills_summary, new_workspace_cache, ExecutorBuilder, WorkspaceCache};
 pub use setup::AgentLoader;
 pub use stream::{

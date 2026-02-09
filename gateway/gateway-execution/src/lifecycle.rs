@@ -6,7 +6,7 @@
 //! including creation, completion, error handling, and cancellation.
 
 use gateway_connectors::{ConnectorRegistry, DispatchContext};
-use gateway_database::{ConversationRepository, DatabaseManager};
+use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
 use api_logs::{LogService, SessionStatus};
 use execution_state::{AgentExecution, Session, StateService};
@@ -42,11 +42,18 @@ pub fn get_or_create_session(
         // Try to continue existing session
         match state_service.get_session(session_id) {
             Ok(Some(session)) => {
-                // Session exists, create a new execution for this message
-                let execution = AgentExecution::new_root(session_id, agent_id);
-                if let Err(e) = state_service.create_execution(&execution) {
-                    tracing::warn!("Failed to create execution in existing session: {}", e);
-                }
+                // Reuse the existing root execution (one continuous conversation)
+                let execution_id = match state_service.get_root_execution(session_id) {
+                    Ok(Some(root_exec)) => root_exec.id,
+                    _ => {
+                        // Fallback: create new root execution if none found
+                        let execution = AgentExecution::new_root(session_id, agent_id);
+                        if let Err(e) = state_service.create_execution(&execution) {
+                            tracing::warn!("Failed to create execution in existing session: {}", e);
+                        }
+                        execution.id
+                    }
+                };
 
                 // Reactivate session if it was in a terminal state (completed/crashed)
                 // This handles the case where user sends a new message to a completed session
@@ -54,9 +61,14 @@ pub fn get_or_create_session(
                     tracing::warn!("Failed to reactivate session: {}", e);
                 }
 
+                // Also reactivate the execution if it was completed
+                if let Err(e) = state_service.reactivate_execution(&execution_id) {
+                    tracing::warn!("Failed to reactivate execution: {}", e);
+                }
+
                 return SessionSetup {
                     session_id: session_id.to_string(),
-                    execution_id: execution.id,
+                    execution_id,
                     ward_id: session.ward_id,
                 };
             }
@@ -116,62 +128,6 @@ pub fn start_execution(
         agent_id = %agent_id,
         "Execution started"
     );
-}
-
-// ============================================================================
-// MESSAGE PERSISTENCE
-// ============================================================================
-
-/// Save conversation messages (user input and assistant response).
-///
-/// # Arguments
-/// * `conversation_repo` - Repository for message storage
-/// * `execution_id` - ID of the current execution
-/// * `user_message` - The user's input message
-/// * `assistant_response` - The assistant's response text
-/// * `tool_calls_json` - Optional JSON string of tool calls made during this turn
-pub fn save_messages(
-    conversation_repo: &ConversationRepository,
-    execution_id: &str,
-    user_message: &str,
-    assistant_response: &str,
-    tool_calls_json: Option<&str>,
-) {
-    // Save user message
-    if let Err(e) = conversation_repo.add_message(execution_id, "user", user_message, None, None) {
-        tracing::error!("Failed to save user message: {}", e);
-    }
-
-    // Save assistant response if there's content OR tool calls
-    // (agent may have made tool calls without text output)
-    let has_content = !assistant_response.is_empty();
-    let has_tool_calls = tool_calls_json.is_some();
-
-    tracing::debug!(
-        execution_id = %execution_id,
-        response_len = assistant_response.len(),
-        has_tool_calls = has_tool_calls,
-        "Saving assistant message"
-    );
-
-    if has_content || has_tool_calls {
-        // If no text content but has tool calls, save a placeholder
-        let content = if has_content {
-            assistant_response
-        } else {
-            "[Tool calls only - see tool_calls field]"
-        };
-
-        if let Err(e) = conversation_repo.add_message(
-            execution_id,
-            "assistant",
-            content,
-            tool_calls_json,
-            None,
-        ) {
-            tracing::error!("Failed to save assistant message: {}", e);
-        }
-    }
 }
 
 // ============================================================================

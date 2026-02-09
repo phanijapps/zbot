@@ -55,6 +55,8 @@ pub fn get_context_window(model_name: &str) -> usize {
         200000
     } else if model.contains("claude-2") {
         100000
+    } else if model.contains("glm-4.7") {
+        100000
     } else {
         // Conservative default
         8192
@@ -110,6 +112,7 @@ mod tests {
         assert_eq!(get_context_window("claude-3-opus"), 200000);
         assert_eq!(get_context_window("claude-3-sonnet"), 200000);
         assert_eq!(get_context_window("claude-2"), 100000);
+        assert_eq!(get_context_window("glm-4.7"), 100000);
         assert_eq!(get_context_window("unknown-model"), 8192);
     }
 }

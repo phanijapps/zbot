@@ -40,7 +40,7 @@ pub use handle::ExecutionHandle;
 pub use continuation::{check_and_spawn_continuation, spawn_continuation_turn};
 pub use lifecycle::{
     complete_execution, crash_execution, emit_agent_started, emit_delegation_completed,
-    emit_delegation_started, get_or_create_session, save_messages, start_execution,
+    emit_delegation_started, get_or_create_session, start_execution,
     stop_execution, SessionSetup,
 };
 pub use invoke::{new_workspace_cache, WorkspaceCache};

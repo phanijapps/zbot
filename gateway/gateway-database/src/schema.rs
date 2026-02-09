@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 6;
+const SCHEMA_VERSION: i32 = 7;
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
@@ -32,7 +32,8 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             metadata TEXT,
             pending_delegations INTEGER DEFAULT 0,
             continuation_needed INTEGER DEFAULT 0,
-            ward_id TEXT
+            ward_id TEXT,
+            parent_session_id TEXT
         )",
         [],
     )?;
@@ -54,6 +55,11 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_sessions_source ON sessions(source)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id)",
         [],
     )?;
 
@@ -115,14 +121,17 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     conn.execute(
         "CREATE TABLE IF NOT EXISTS messages (
             id TEXT PRIMARY KEY,
-            execution_id TEXT NOT NULL,
+            execution_id TEXT,
+            session_id TEXT,
             role TEXT NOT NULL,
             content TEXT NOT NULL,
             created_at TEXT NOT NULL,
             token_count INTEGER DEFAULT 0,
             tool_calls TEXT,
             tool_results TEXT,
-            FOREIGN KEY (execution_id) REFERENCES agent_executions(id) ON DELETE CASCADE
+            tool_call_id TEXT,
+            FOREIGN KEY (execution_id) REFERENCES agent_executions(id) ON DELETE CASCADE,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
         )",
         [],
     )?;
@@ -134,6 +143,16 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_messages_created ON messages(created_at)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_created ON messages(session_id, created_at)",
         [],
     )?;
 

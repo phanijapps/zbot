@@ -18,13 +18,15 @@ use crate::DatabaseManager;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Message {
     pub id: String,
-    pub execution_id: String,
+    pub execution_id: Option<String>,
+    pub session_id: Option<String>,
     pub role: String,
     pub content: String,
     pub created_at: String,
     pub token_count: i32,
     pub tool_calls: Option<String>,
     pub tool_results: Option<String>,
+    pub tool_call_id: Option<String>,
 }
 
 // ============================================================================
@@ -46,19 +48,6 @@ impl ConversationRepository {
     // LEGACY COMPATIBILITY
     // These methods exist for backward compatibility during migration
     // =========================================================================
-
-    /// Get or create a conversation - now a no-op since sessions/executions are created elsewhere
-    pub fn get_or_create_conversation(
-        &self,
-        _conversation_id: &str,
-        _agent_id: &str,
-    ) -> Result<(), String> {
-        // Sessions and executions are created by StateService
-        // This is now a no-op for compatibility
-        Ok(())
-    }
-
-    // =========================================================================
     // MESSAGE OPERATIONS
     // =========================================================================
 
@@ -72,18 +61,20 @@ impl ConversationRepository {
         tool_results: Option<&str>,
     ) -> Result<Message, String> {
         let now = Utc::now().to_rfc3339();
-        let id = uuid::Uuid::new_v4().to_string();
+        let id = format!("msg-{}", uuid::Uuid::new_v4());
         let token_count = content.len() as i32 / 4; // Rough estimate
 
         let message = Message {
             id: id.clone(),
-            execution_id: execution_id.to_string(),
+            execution_id: Some(execution_id.to_string()),
+            session_id: None,
             role: role.to_string(),
             content: content.to_string(),
             created_at: now.clone(),
             token_count,
             tool_calls: tool_calls.map(String::from),
             tool_results: tool_results.map(String::from),
+            tool_call_id: None,
         };
 
         self.db.with_connection(|conn| {
@@ -111,25 +102,13 @@ impl ConversationRepository {
     pub fn get_messages(&self, execution_id: &str) -> Result<Vec<Message>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, execution_id, role, content, created_at, token_count, tool_calls, tool_results
+                "SELECT id, execution_id, role, content, created_at, token_count, tool_calls, tool_results, session_id, tool_call_id
                  FROM messages
                  WHERE execution_id = ?1
                  ORDER BY created_at ASC",
             )?;
 
-            let rows = stmt.query_map([execution_id], |row| {
-                Ok(Message {
-                    id: row.get(0)?,
-                    execution_id: row.get(1)?,
-                    role: row.get(2)?,
-                    content: row.get(3)?,
-                    created_at: row.get(4)?,
-                    token_count: row.get(5)?,
-                    tool_calls: row.get(6)?,
-                    tool_results: row.get(7)?,
-                })
-            })?;
-
+            let rows = stmt.query_map([execution_id], |row| Self::row_to_message(row))?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -142,25 +121,14 @@ impl ConversationRepository {
     ) -> Result<Vec<Message>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, execution_id, role, content, created_at, token_count, tool_calls, tool_results
+                "SELECT id, execution_id, role, content, created_at, token_count, tool_calls, tool_results, session_id, tool_call_id
                  FROM messages
                  WHERE execution_id = ?1
                  ORDER BY created_at DESC
                  LIMIT ?2",
             )?;
 
-            let rows = stmt.query_map(params![execution_id, limit as i64], |row| {
-                Ok(Message {
-                    id: row.get(0)?,
-                    execution_id: row.get(1)?,
-                    role: row.get(2)?,
-                    content: row.get(3)?,
-                    created_at: row.get(4)?,
-                    token_count: row.get(5)?,
-                    tool_calls: row.get(6)?,
-                    tool_results: row.get(7)?,
-                })
-            })?;
+            let rows = stmt.query_map(params![execution_id, limit as i64], |row| Self::row_to_message(row))?;
 
             // Collect and reverse to get chronological order
             let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>, _>>()?;
@@ -173,50 +141,92 @@ impl ConversationRepository {
     ///
     /// This loads the full conversation history across all root agent turns,
     /// including callback messages from completed subagents.
-    pub fn get_session_root_messages(
+    // =========================================================================
+    // SESSION-BASED MESSAGE OPERATIONS
+    // =========================================================================
+
+    /// Append a single message to a session's conversation stream.
+    ///
+    /// This is the primary write path for the session tree architecture.
+    /// Messages are written directly to the session (not via execution JOIN).
+    pub fn append_session_message(
+        &self,
+        session_id: &str,
+        execution_id: &str,
+        role: &str,
+        content: &str,
+        tool_calls: Option<&str>,
+        tool_call_id: Option<&str>,
+    ) -> Result<Message, String> {
+        let now = Utc::now().to_rfc3339();
+        let id = format!("msg-{}", uuid::Uuid::new_v4());
+        let token_count = content.len() as i32 / 4;
+
+        let message = Message {
+            id: id.clone(),
+            execution_id: Some(execution_id.to_string()),
+            session_id: Some(session_id.to_string()),
+            role: role.to_string(),
+            content: content.to_string(),
+            created_at: now,
+            token_count,
+            tool_calls: tool_calls.map(String::from),
+            tool_results: None,
+            tool_call_id: tool_call_id.map(String::from),
+        };
+
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO messages (id, execution_id, session_id, role, content, created_at, token_count, tool_calls, tool_call_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    message.id,
+                    message.execution_id,
+                    message.session_id,
+                    message.role,
+                    message.content,
+                    message.created_at,
+                    message.token_count,
+                    message.tool_calls,
+                    message.tool_call_id,
+                ],
+            )?;
+            Ok(())
+        })?;
+
+        Ok(message)
+    }
+
+    /// Get full conversation for a session (no JOIN needed).
+    ///
+    /// Returns messages in chronological order, newest-limited then reversed.
+    pub fn get_session_conversation(
         &self,
         session_id: &str,
         limit: usize,
     ) -> Result<Vec<Message>, String> {
         self.db.with_connection(|conn| {
-            // Join messages with agent_executions to filter by session and root only
-            // Root executions have delegation_type = 'root'
             let mut stmt = conn.prepare(
-                "SELECT m.id, m.execution_id, m.role, m.content, m.created_at,
-                        m.token_count, m.tool_calls, m.tool_results
-                 FROM messages m
-                 INNER JOIN agent_executions e ON m.execution_id = e.id
-                 WHERE e.session_id = ?1 AND e.delegation_type = 'root'
-                 ORDER BY m.created_at DESC
+                "SELECT id, execution_id, role, content, created_at, token_count, tool_calls, tool_results, session_id, tool_call_id
+                 FROM messages
+                 WHERE session_id = ?1
+                 ORDER BY created_at DESC
                  LIMIT ?2",
             )?;
 
-            let rows = stmt.query_map(params![session_id, limit as i64], |row| {
-                Ok(Message {
-                    id: row.get(0)?,
-                    execution_id: row.get(1)?,
-                    role: row.get(2)?,
-                    content: row.get(3)?,
-                    created_at: row.get(4)?,
-                    token_count: row.get(5)?,
-                    tool_calls: row.get(6)?,
-                    tool_results: row.get(7)?,
-                })
-            })?;
+            let rows = stmt.query_map(params![session_id, limit as i64], |row| Self::row_to_message(row))?;
 
-            // Collect and reverse to get chronological order
             let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>, _>>()?;
             messages.reverse();
             Ok(messages)
         })
     }
 
-    /// Convert messages to ChatMessage format for LLM.
+    /// Convert session messages to ChatMessage format for LLM.
     ///
-    /// For assistant messages with tool_calls stored, this converts them to
-    /// the ToolCall format expected by the LLM. This allows the agent to see
-    /// what tools it called in previous turns.
-    pub fn messages_to_chat_format(&self, messages: &[Message]) -> Vec<agent_runtime::ChatMessage> {
+    /// Handles role='tool' messages with tool_call_id, and assistant messages
+    /// with tool_calls arrays. This produces the exact format the LLM expects.
+    pub fn session_messages_to_chat_format(&self, messages: &[Message]) -> Vec<agent_runtime::ChatMessage> {
         messages
             .iter()
             .map(|m| {
@@ -233,10 +243,33 @@ impl ConversationRepository {
                     role: m.role.clone(),
                     content: m.content.clone(),
                     tool_calls,
-                    tool_call_id: None,
+                    tool_call_id: m.tool_call_id.clone(),
                 }
             })
             .collect()
+    }
+
+    // =========================================================================
+    // HELPERS
+    // =========================================================================
+
+    /// Map a database row to a Message struct.
+    ///
+    /// Expected column order: id, execution_id, role, content, created_at,
+    /// token_count, tool_calls, tool_results, session_id, tool_call_id
+    fn row_to_message(row: &rusqlite::Row) -> Result<Message, rusqlite::Error> {
+        Ok(Message {
+            id: row.get(0)?,
+            execution_id: row.get(1)?,
+            role: row.get(2)?,
+            content: row.get(3)?,
+            created_at: row.get(4)?,
+            token_count: row.get(5)?,
+            tool_calls: row.get(6)?,
+            tool_results: row.get(7)?,
+            session_id: row.get(8)?,
+            tool_call_id: row.get(9)?,
+        })
     }
 
     /// Parse stored tool calls JSON into ToolCall format.
@@ -311,107 +344,160 @@ mod tests {
         .unwrap();
     }
 
+    // ========================================================================
+    // Session conversation tests
+    // ========================================================================
+
     #[test]
-    fn test_get_session_root_messages_filters_by_session() {
+    fn test_append_session_message_user() {
         let db = create_test_db();
         let repo = ConversationRepository::new(db.clone());
 
-        // Create two sessions
         create_test_session(&db, "session-1", "root-agent");
-        create_test_session(&db, "session-2", "root-agent");
-
-        // Create root executions in each session
         create_test_execution(&db, "exec-1", "session-1", "root-agent", "root");
-        create_test_execution(&db, "exec-2", "session-2", "root-agent", "root");
 
-        // Add messages to both
-        repo.add_message("exec-1", "user", "Message in session 1", None, None)
-            .unwrap();
-        repo.add_message("exec-2", "user", "Message in session 2", None, None)
+        let msg = repo
+            .append_session_message("session-1", "exec-1", "user", "Hello world", None, None)
             .unwrap();
 
-        // Query session 1 - should only get session 1 messages
-        let messages = repo.get_session_root_messages("session-1", 50).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content, "Message in session 1");
+        assert_eq!(msg.role, "user");
+        assert_eq!(msg.content, "Hello world");
+        assert_eq!(msg.session_id, Some("session-1".to_string()));
+        assert_eq!(msg.execution_id, Some("exec-1".to_string()));
+        assert!(msg.tool_call_id.is_none());
     }
 
     #[test]
-    fn test_get_session_root_messages_excludes_delegate_executions() {
+    fn test_append_session_message_tool_result() {
         let db = create_test_db();
         let repo = ConversationRepository::new(db.clone());
 
         create_test_session(&db, "session-1", "root-agent");
+        create_test_execution(&db, "exec-1", "session-1", "root-agent", "root");
 
-        // Create root and delegate executions
-        create_test_execution(&db, "root-exec", "session-1", "root-agent", "root");
-        create_test_execution(&db, "delegate-exec", "session-1", "sub-agent", "sequential");
-
-        // Add messages to both
-        repo.add_message("root-exec", "user", "Root message", None, None)
+        let msg = repo
+            .append_session_message(
+                "session-1",
+                "exec-1",
+                "tool",
+                "file created at /tmp/output.txt",
+                None,
+                Some("call_abc123"),
+            )
             .unwrap();
-        repo.add_message("delegate-exec", "user", "Delegate message", None, None)
-            .unwrap();
 
-        // Query should only get root messages
-        let messages = repo.get_session_root_messages("session-1", 50).unwrap();
-        assert_eq!(messages.len(), 1);
-        assert_eq!(messages[0].content, "Root message");
+        assert_eq!(msg.role, "tool");
+        assert_eq!(msg.tool_call_id, Some("call_abc123".to_string()));
     }
 
     #[test]
-    fn test_get_session_root_messages_includes_all_root_executions() {
+    fn test_get_session_conversation_returns_all_types() {
         let db = create_test_db();
         let repo = ConversationRepository::new(db.clone());
 
         create_test_session(&db, "session-1", "root-agent");
-
-        // Create multiple root executions (simulating multiple user messages)
         create_test_execution(&db, "exec-1", "session-1", "root-agent", "root");
-        create_test_execution(&db, "exec-2", "session-1", "root-agent", "root");
 
-        // Add messages to both root executions
-        repo.add_message("exec-1", "user", "First user message", None, None)
-            .unwrap();
-        repo.add_message("exec-1", "assistant", "First response", None, None)
-            .unwrap();
-        repo.add_message("exec-1", "system", "Callback from subagent", None, None)
-            .unwrap();
-        repo.add_message("exec-2", "user", "Second user message", None, None)
+        // Simulate a full conversation flow
+        repo.append_session_message("session-1", "exec-1", "user", "build a docx", None, None)
             .unwrap();
 
-        // Query should get all root messages in chronological order
-        let messages = repo.get_session_root_messages("session-1", 50).unwrap();
+        let tc_json = r#"[{"tool_id":"call_1","tool_name":"shell","args":{"cmd":"pip install docx"}}]"#;
+        repo.append_session_message(
+            "session-1",
+            "exec-1",
+            "assistant",
+            "[tool calls]",
+            Some(tc_json),
+            None,
+        )
+        .unwrap();
+
+        repo.append_session_message(
+            "session-1",
+            "exec-1",
+            "tool",
+            "Successfully installed python-docx",
+            None,
+            Some("call_1"),
+        )
+        .unwrap();
+
+        repo.append_session_message(
+            "session-1",
+            "exec-1",
+            "assistant",
+            "Done! Created the docx file.",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let messages = repo.get_session_conversation("session-1", 100).unwrap();
         assert_eq!(messages.len(), 4);
-
-        // Verify order (chronological)
-        assert_eq!(messages[0].content, "First user message");
-        assert_eq!(messages[1].content, "First response");
-        assert_eq!(messages[2].content, "Callback from subagent");
-        assert_eq!(messages[3].content, "Second user message");
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
+        assert!(messages[1].tool_calls.is_some());
+        assert_eq!(messages[2].role, "tool");
+        assert_eq!(messages[2].tool_call_id, Some("call_1".to_string()));
+        assert_eq!(messages[3].role, "assistant");
     }
 
     #[test]
-    fn test_get_session_root_messages_respects_limit() {
+    fn test_session_messages_to_chat_format_with_tool_call_id() {
         let db = create_test_db();
         let repo = ConversationRepository::new(db.clone());
 
         create_test_session(&db, "session-1", "root-agent");
         create_test_execution(&db, "exec-1", "session-1", "root-agent", "root");
 
-        // Add 5 messages
-        for i in 1..=5 {
-            repo.add_message("exec-1", "user", &format!("Message {}", i), None, None)
-                .unwrap();
+        repo.append_session_message("session-1", "exec-1", "user", "Hello", None, None)
+            .unwrap();
+        repo.append_session_message(
+            "session-1",
+            "exec-1",
+            "tool",
+            "Result data",
+            None,
+            Some("call_xyz"),
+        )
+        .unwrap();
+
+        let messages = repo.get_session_conversation("session-1", 100).unwrap();
+        let chat_messages = repo.session_messages_to_chat_format(&messages);
+
+        assert_eq!(chat_messages.len(), 2);
+        assert_eq!(chat_messages[0].role, "user");
+        assert!(chat_messages[0].tool_call_id.is_none());
+        assert_eq!(chat_messages[1].role, "tool");
+        assert_eq!(chat_messages[1].tool_call_id, Some("call_xyz".to_string()));
+    }
+
+    #[test]
+    fn test_get_session_conversation_respects_limit() {
+        let db = create_test_db();
+        let repo = ConversationRepository::new(db.clone());
+
+        create_test_session(&db, "session-1", "root-agent");
+        create_test_execution(&db, "exec-1", "session-1", "root-agent", "root");
+
+        for i in 1..=10 {
+            repo.append_session_message(
+                "session-1",
+                "exec-1",
+                "user",
+                &format!("Message {}", i),
+                None,
+                None,
+            )
+            .unwrap();
         }
 
-        // Query with limit of 3 - should get the MOST RECENT 3
-        let messages = repo.get_session_root_messages("session-1", 3).unwrap();
+        let messages = repo.get_session_conversation("session-1", 3).unwrap();
         assert_eq!(messages.len(), 3);
-
-        // Should be messages 3, 4, 5 in chronological order
-        assert_eq!(messages[0].content, "Message 3");
-        assert_eq!(messages[1].content, "Message 4");
-        assert_eq!(messages[2].content, "Message 5");
+        // Should be the most recent 3, in chronological order
+        assert_eq!(messages[0].content, "Message 8");
+        assert_eq!(messages[1].content, "Message 9");
+        assert_eq!(messages[2].content, "Message 10");
     }
 }

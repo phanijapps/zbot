@@ -276,9 +276,10 @@ impl LlmClient for OpenAiClient {
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let mut body_obj = self.build_request_body(messages, tools);
-        // Enable streaming
+        // Enable streaming with usage reporting
         if let Some(obj) = body_obj.as_object_mut() {
             obj.insert("stream".to_string(), json!(true));
+            obj.insert("stream_options".to_string(), json!({ "include_usage": true }));
         }
 
         tracing::debug!("Making streaming POST request to: {}", url);
@@ -301,7 +302,7 @@ impl LlmClient for OpenAiClient {
         let mut full_content = String::new();
         let mut reasoning_content = String::new();
         let mut _finish_reason: Option<String> = None;
-        let prompt_tokens = 0u32;
+        let mut stream_usage: Option<TokenUsage> = None;
 
         // Accumulate streaming tool call deltas by index.
         // OpenAI sends tool calls as incremental deltas keyed by index:
@@ -366,6 +367,21 @@ impl LlmClient for OpenAiClient {
                     _finish_reason = Some(reason.to_string());
                     if reason == "length" {
                         tracing::warn!("Stream finished with reason 'length' — response may be truncated");
+                    }
+                }
+
+                // Capture usage from the final chunk (sent when stream_options.include_usage=true)
+                if let Some(u) = json_data.get("usage") {
+                    if let (Some(pt), Some(ct), Some(tt)) = (
+                        u.get("prompt_tokens").and_then(|v| v.as_u64()),
+                        u.get("completion_tokens").and_then(|v| v.as_u64()),
+                        u.get("total_tokens").and_then(|v| v.as_u64()),
+                    ) {
+                        stream_usage = Some(TokenUsage {
+                            prompt_tokens: pt as u32,
+                            completion_tokens: ct as u32,
+                            total_tokens: tt as u32,
+                        });
                     }
                 }
 
@@ -499,12 +515,21 @@ impl LlmClient for OpenAiClient {
             }
         }
 
-        let total_tokens = (full_content.len() + reasoning_content.len()) as u32;
+        // Use provider-reported usage if available, otherwise estimate from character count
+        let usage = stream_usage.unwrap_or_else(|| {
+            let estimated_completion = (full_content.len() + reasoning_content.len()) as u32 / 4;
+            TokenUsage {
+                prompt_tokens: 0,
+                completion_tokens: estimated_completion,
+                total_tokens: estimated_completion,
+            }
+        });
 
         tracing::info!(
-            "Streaming completed: {} content tokens, {} reasoning tokens, {} tool calls",
-            full_content.len(),
-            reasoning_content.len(),
+            "Streaming completed: prompt={} completion={} total={} tokens, {} tool calls",
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
             tool_calls.len()
         );
 
@@ -512,11 +537,7 @@ impl LlmClient for OpenAiClient {
             content: full_content,
             tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
             reasoning: if reasoning_content.is_empty() { None } else { Some(reasoning_content) },
-            usage: Some(TokenUsage {
-                prompt_tokens,
-                completion_tokens: total_tokens,
-                total_tokens: prompt_tokens + total_tokens,
-            }),
+            usage: Some(usage),
         })
     }
 

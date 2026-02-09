@@ -78,7 +78,7 @@ pub fn format_error_callback_message(
 // CALLBACK SENDING
 // ============================================================================
 
-/// Send a callback message to the parent execution.
+/// Send a callback message to the parent session stream.
 ///
 /// Returns true if the message was sent successfully.
 pub async fn send_callback_to_parent(
@@ -88,7 +88,15 @@ pub async fn send_callback_to_parent(
     parent_execution_id: &str,
     message: &str,
 ) -> bool {
-    match conversation_repo.add_message(parent_execution_id, "system", message, None, None) {
+    // Write to parent session stream (new path) for continuity
+    match conversation_repo.append_session_message(
+        session_id,
+        parent_execution_id,
+        "system",
+        message,
+        None,
+        None,
+    ) {
         Ok(_) => {
             // Emit event so frontend can refresh
             event_bus
@@ -105,7 +113,8 @@ pub async fn send_callback_to_parent(
         Err(e) => {
             tracing::error!(
                 parent_execution = %parent_execution_id,
-                "Failed to add callback message: {}", e
+                session_id = %session_id,
+                "Failed to add callback message to session: {}", e
             );
             false
         }

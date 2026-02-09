@@ -162,6 +162,7 @@ impl ExecutorBuilder {
         executor_config.conversation_id = Some(conversation_id.to_string());
         executor_config.temperature = agent.temperature;
         executor_config.max_tokens = agent.max_tokens;
+        executor_config.context_window_tokens = agent_runtime::middleware::token_counter::get_model_context_window(&agent.model) as u64;
         executor_config.mcps = agent.mcps.clone();
 
         // Configure tool result offload settings

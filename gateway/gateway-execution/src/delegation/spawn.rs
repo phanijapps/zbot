@@ -19,12 +19,12 @@ use tokio::sync::{mpsc, RwLock};
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
     WorkspaceCache,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
-    save_messages, start_execution,
+    start_execution,
 };
 
 /// Spawn a delegated agent.
@@ -55,7 +55,18 @@ pub async fn spawn_delegated_agent(
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
 ) -> Result<String, String> {
-    // Generate child conversation ID (legacy, for conversation_repo)
+    // Create a child session for subagent isolation
+    let child_session = execution_state::Session::new_child(
+        &request.child_agent_id,
+        &request.session_id,
+    );
+    let child_session_id = child_session.id.clone();
+
+    if let Err(e) = state_service.create_session_from(&child_session) {
+        tracing::warn!("Failed to create child session: {}", e);
+    }
+
+    // Generate child conversation ID (legacy, for event routing)
     let child_conversation_id = format!(
         "{}-sub-{}",
         request.session_id,
@@ -184,6 +195,7 @@ pub async fn spawn_delegated_agent(
         request.clone(),
         execution_id.clone(),
         session_id,
+        child_session_id,
         child_conversation_id.clone(),
         event_bus,
         conversation_repo,
@@ -210,6 +222,7 @@ fn spawn_execution_task(
     request: DelegationRequest,
     execution_id: String,
     session_id: String,
+    child_session_id: String,
     conv_id: String,
     event_bus: Arc<EventBus>,
     conversation_repo: Arc<ConversationRepository>,
@@ -224,8 +237,12 @@ fn spawn_execution_task(
     let parent_execution_id = request.parent_execution_id.clone();
 
     tokio::spawn(async move {
-        // Create batch writer for non-blocking DB writes
-        let batch_writer = spawn_batch_writer(state_service.clone(), log_service.clone());
+        // Create batch writer with conversation repo for session message streaming
+        let batch_writer = spawn_batch_writer_with_repo(
+            state_service.clone(),
+            log_service.clone(),
+            Some(conversation_repo.clone()),
+        );
 
         // Create stream context for event processing
         let stream_ctx = StreamContext::new(
@@ -238,9 +255,25 @@ fn spawn_execution_task(
             state_service.clone(),
             delegation_tx,
         )
-        .with_batch_writer(batch_writer);
+        .with_batch_writer(batch_writer.clone());
 
         let mut response_acc = ResponseAccumulator::new();
+
+        // Append task message to child session stream
+        batch_writer.session_message(
+            &child_session_id,
+            &execution_id,
+            "user",
+            &task_msg,
+            None,
+            None,
+        );
+
+        let child_session_id_inner = child_session_id.clone();
+        let execution_id_inner = execution_id.clone();
+        let batch_writer_inner = batch_writer.clone();
+        let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
+        let mut turn_text = String::new();
 
         let result = executor
             .execute_stream(&task_msg, &[], |event| {
@@ -249,6 +282,54 @@ fn spawn_execution_task(
                 }
 
                 handle.increment();
+
+                // Stream messages to child session
+                match &event {
+                    agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                        turn_tool_calls.push(serde_json::json!({
+                            "tool_id": tool_id,
+                            "tool_name": tool_name,
+                            "args": args,
+                        }));
+                    }
+                    agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                        if !turn_tool_calls.is_empty() {
+                            let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                            let content = if turn_text.is_empty() {
+                                "[tool calls]".to_string()
+                            } else {
+                                std::mem::take(&mut turn_text)
+                            };
+                            batch_writer_inner.session_message(
+                                &child_session_id_inner,
+                                &execution_id_inner,
+                                "assistant",
+                                &content,
+                                Some(&tc_json),
+                                None,
+                            );
+                            turn_tool_calls.clear();
+                        }
+
+                        let tool_content = if let Some(err) = error {
+                            format!("Error: {}", err)
+                        } else {
+                            result.clone()
+                        };
+                        batch_writer_inner.session_message(
+                            &child_session_id_inner,
+                            &execution_id_inner,
+                            "tool",
+                            &tool_content,
+                            None,
+                            Some(tool_id),
+                        );
+                    }
+                    agent_runtime::StreamEvent::Token { content, .. } => {
+                        turn_text.push_str(content);
+                    }
+                    _ => {}
+                }
 
                 // Process the event (logging, delegation, token tracking)
                 let (gateway_event, response_delta) = process_stream_event(&stream_ctx, &event);
@@ -267,6 +348,18 @@ fn spawn_execution_task(
 
         let accumulated_response = response_acc.into_response();
 
+        // Emit final assistant response to child session stream
+        if !accumulated_response.is_empty() {
+            batch_writer.session_message(
+                &child_session_id,
+                &execution_id,
+                "assistant",
+                &accumulated_response,
+                None,
+                None,
+            );
+        }
+
         match result {
             Ok(()) => {
                 handle_execution_success(
@@ -279,7 +372,6 @@ fn spawn_execution_task(
                     &session_id,
                     &agent_id,
                     &conv_id,
-                    &task_msg,
                     &accumulated_response,
                     &parent_agent,
                     &parent_execution_id,
@@ -298,8 +390,6 @@ fn spawn_execution_task(
                     &agent_id,
                     &conv_id,
                     &parent_execution_id,
-                    &task_msg,
-                    &accumulated_response,
                     &e.to_string(),
                 )
                 .await;
@@ -319,13 +409,11 @@ async fn handle_execution_success(
     session_id: &str,
     agent_id: &str,
     conv_id: &str,
-    task_msg: &str,
     response: &str,
     parent_agent: &str,
     parent_execution_id: &str,
 ) {
-    // Save conversation messages (subagent tool calls tracked separately for now)
-    save_messages(conversation_repo, execution_id, task_msg, response, None);
+    // Messages already streamed to child session during execution
 
     // Complete execution and emit events
     // Delegations don't dispatch to connectors (they're internal subagent calls)
@@ -440,12 +528,9 @@ async fn handle_execution_failure(
     agent_id: &str,
     conv_id: &str,
     parent_execution_id: &str,
-    task_msg: &str,
-    response: &str,
     error: &str,
 ) {
-    // Always save messages, even on error — prevents message loss on crash
-    save_messages(conversation_repo, execution_id, task_msg, response, None);
+    // Messages already streamed to child session during execution
 
     // Crash execution and emit events (don't crash session for subagent)
     crash_execution(

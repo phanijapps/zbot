@@ -28,12 +28,12 @@ use super::delegation::{
 pub use super::handle::ExecutionHandle;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator, WorkspaceCache,
+    spawn_batch_writer_with_repo, AgentLoader,
+    ExecutorBuilder, ResponseAccumulator, StreamContext, ToolCallAccumulator, WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started,
-    get_or_create_session, save_messages, start_execution,
+    get_or_create_session, start_execution,
     stop_execution,
 };
 
@@ -357,21 +357,11 @@ impl ExecutionRunner {
             }
         };
 
-        // Legacy no-op (sessions/executions are created by StateService)
-        let _ = self.conversation_repo.get_or_create_conversation(
-            &config.conversation_id,
-            &config.agent_id,
-        );
-
-        // Load message history for this session
-        // For root executions, we load from ALL root executions in the session
-        // This ensures the agent sees the full conversation including:
-        // - Previous user messages and responses
-        // - Callback messages from completed subagents
+        // Load full session conversation (all messages including tool calls/results)
         let history: Vec<ChatMessage> = self
             .conversation_repo
-            .get_session_root_messages(&session_id, 50)
-            .map(|messages| self.conversation_repo.messages_to_chat_format(&messages))
+            .get_session_conversation(&session_id, 200)
+            .map(|messages| self.conversation_repo.session_messages_to_chat_format(&messages))
             .unwrap_or_default();
 
         // Create executor (restore ward_id from existing session if available)
@@ -420,8 +410,12 @@ impl ExecutionRunner {
         let respond_to = config.respond_to.clone();
 
         tokio::spawn(async move {
-            // Create batch writer for non-blocking DB writes
-            let batch_writer = spawn_batch_writer(state_service.clone(), log_service.clone());
+            // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
+            let batch_writer = spawn_batch_writer_with_repo(
+                state_service.clone(),
+                log_service.clone(),
+                Some(conversation_repo.clone()),
+            );
 
             // Create stream context for event processing
             let stream_ctx = StreamContext::new(
@@ -434,10 +428,29 @@ impl ExecutionRunner {
                 state_service.clone(),
                 delegation_tx,
             )
-            .with_batch_writer(batch_writer);
+            .with_batch_writer(batch_writer.clone());
 
             let mut response_acc = ResponseAccumulator::new();
             let mut tool_acc = ToolCallAccumulator::new();
+
+            // Append user message to session stream BEFORE execution
+            batch_writer.session_message(
+                &session_id,
+                &execution_id,
+                "user",
+                &message,
+                None,
+                None,
+            );
+
+            // Track per-turn tool calls for assistant message emission
+            let session_id_inner = session_id.clone();
+            let execution_id_inner = execution_id.clone();
+            let batch_writer_inner = batch_writer.clone();
+            // Track tool calls for the current assistant turn
+            let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
+            // Track accumulated text for the current assistant turn
+            let mut turn_text = String::new();
 
             // Execute with streaming
             let result = executor
@@ -449,13 +462,56 @@ impl ExecutionRunner {
 
                     handle.increment();
 
-                    // Accumulate tool calls for persistence
+                    // Stream messages to session as they happen
                     match &event {
                         agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
                             tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                            // Accumulate tool call for the current assistant message
+                            turn_tool_calls.push(serde_json::json!({
+                                "tool_id": tool_id,
+                                "tool_name": tool_name,
+                                "args": args,
+                            }));
                         }
                         agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
                             tool_acc.complete_call(tool_id, result.clone(), error.clone());
+
+                            // Emit the assistant message for this turn (with accumulated tool_calls)
+                            if !turn_tool_calls.is_empty() {
+                                let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                                let content = if turn_text.is_empty() {
+                                    "[tool calls]".to_string()
+                                } else {
+                                    std::mem::take(&mut turn_text)
+                                };
+                                batch_writer_inner.session_message(
+                                    &session_id_inner,
+                                    &execution_id_inner,
+                                    "assistant",
+                                    &content,
+                                    Some(&tc_json),
+                                    None,
+                                );
+                                turn_tool_calls.clear();
+                            }
+
+                            // Emit tool result message
+                            let tool_content = if let Some(err) = error {
+                                format!("Error: {}", err)
+                            } else {
+                                result.clone()
+                            };
+                            batch_writer_inner.session_message(
+                                &session_id_inner,
+                                &execution_id_inner,
+                                "tool",
+                                &tool_content,
+                                None,
+                                Some(tool_id),
+                            );
+                        }
+                        agent_runtime::StreamEvent::Token { content, .. } => {
+                            turn_text.push_str(content);
                         }
                         _ => {}
                     }
@@ -476,7 +532,6 @@ impl ExecutionRunner {
                 .await;
 
             let accumulated_response = response_acc.into_response();
-            let tool_calls_json = tool_acc.to_json();
 
             tracing::info!(
                 execution_id = %execution_id,
@@ -485,14 +540,18 @@ impl ExecutionRunner {
                 "Execution stream completed"
             );
 
-            // Always save messages, even on error — prevents message loss on crash
-            save_messages(
-                &conversation_repo,
-                &execution_id,
-                &message,
-                &accumulated_response,
-                tool_calls_json.as_deref(),
-            );
+            // Emit final assistant response to session stream
+            // (only if there's content not already emitted as part of a tool-call turn)
+            if !accumulated_response.is_empty() {
+                batch_writer.session_message(
+                    &session_id,
+                    &execution_id,
+                    "assistant",
+                    &accumulated_response,
+                    None,
+                    None,
+                );
+            }
 
             // Handle completion
             match result {
@@ -825,16 +884,20 @@ async fn invoke_continuation(
         uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
     );
 
-    // Create a new root execution in the existing session
-    let execution = execution_state::AgentExecution::new_root(session_id, root_agent_id);
-    let execution_id = execution.id.clone();
-    state_service.create_execution(&execution)?;
+    // Reuse the root execution for continuation (one continuous conversation)
+    let execution_id = match state_service.get_root_execution(session_id)? {
+        Some(root_exec) => root_exec.id,
+        None => {
+            // Fallback: create new root execution if none found
+            let execution = execution_state::AgentExecution::new_root(session_id, root_agent_id);
+            state_service.create_execution(&execution)?;
+            execution.id
+        }
+    };
 
-    // Reactivate session if it was in a terminal state
+    // Reactivate session and execution if they were in a terminal state
     state_service.reactivate_session(session_id)?;
-
-    // Start execution tracking
-    state_service.start_execution(&execution_id)?;
+    state_service.reactivate_execution(&execution_id)?;
     let _ = log_service.log_session_start(
         &execution_id,
         &conversation_id,
@@ -856,10 +919,10 @@ async fn invoke_continuation(
     let agent_loader = AgentLoader::new(&agent_service, &provider_service, config_dir.clone());
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
-    // Load full session history (includes callback messages from subagents)
+    // Load full session conversation (includes tool calls, results, and callbacks)
     let history: Vec<ChatMessage> = conversation_repo
-        .get_session_root_messages(session_id, 50)
-        .map(|messages| conversation_repo.messages_to_chat_format(&messages))
+        .get_session_conversation(session_id, 200)
+        .map(|messages| conversation_repo.session_messages_to_chat_format(&messages))
         .unwrap_or_default();
 
     tracing::info!(
@@ -911,8 +974,12 @@ async fn invoke_continuation(
     let agent_id_clone = root_agent_id.to_string();
 
     tokio::spawn(async move {
-        // Create batch writer for non-blocking DB writes
-        let batch_writer = spawn_batch_writer(state_service.clone(), log_service.clone());
+        // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
+        let batch_writer = spawn_batch_writer_with_repo(
+            state_service.clone(),
+            log_service.clone(),
+            Some(conversation_repo.clone()),
+        );
 
         let stream_ctx = StreamContext::new(
             agent_id_clone.clone(),
@@ -924,10 +991,26 @@ async fn invoke_continuation(
             state_service.clone(),
             delegation_tx,
         )
-        .with_batch_writer(batch_writer);
+        .with_batch_writer(batch_writer.clone());
 
         let mut response_acc = ResponseAccumulator::new();
         let mut tool_acc = ToolCallAccumulator::new();
+
+        // Append continuation system message to session stream
+        batch_writer.session_message(
+            &session_id_clone,
+            &execution_id,
+            "system",
+            continuation_message,
+            None,
+            None,
+        );
+
+        let session_id_inner = session_id_clone.clone();
+        let execution_id_inner = execution_id.clone();
+        let batch_writer_inner = batch_writer.clone();
+        let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
+        let mut turn_text = String::new();
 
         let result = executor
             .execute_stream(continuation_message, &history, |event| {
@@ -937,13 +1020,55 @@ async fn invoke_continuation(
 
                 handle.increment();
 
-                // Accumulate tool calls for persistence
+                // Stream messages to session as they happen
                 match &event {
                     agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
                         tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                        turn_tool_calls.push(serde_json::json!({
+                            "tool_id": tool_id,
+                            "tool_name": tool_name,
+                            "args": args,
+                        }));
                     }
                     agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
                         tool_acc.complete_call(tool_id, result.clone(), error.clone());
+
+                        // Emit assistant message for this turn
+                        if !turn_tool_calls.is_empty() {
+                            let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                            let content = if turn_text.is_empty() {
+                                "[tool calls]".to_string()
+                            } else {
+                                std::mem::take(&mut turn_text)
+                            };
+                            batch_writer_inner.session_message(
+                                &session_id_inner,
+                                &execution_id_inner,
+                                "assistant",
+                                &content,
+                                Some(&tc_json),
+                                None,
+                            );
+                            turn_tool_calls.clear();
+                        }
+
+                        // Emit tool result message
+                        let tool_content = if let Some(err) = error {
+                            format!("Error: {}", err)
+                        } else {
+                            result.clone()
+                        };
+                        batch_writer_inner.session_message(
+                            &session_id_inner,
+                            &execution_id_inner,
+                            "tool",
+                            &tool_content,
+                            None,
+                            Some(tool_id),
+                        );
+                    }
+                    agent_runtime::StreamEvent::Token { content, .. } => {
+                        turn_text.push_str(content);
                     }
                     _ => {}
                 }
@@ -962,16 +1087,18 @@ async fn invoke_continuation(
             .await;
 
         let accumulated_response = response_acc.into_response();
-        let tool_calls_json = tool_acc.to_json();
 
-        // Always save messages, even on error — prevents message loss on crash
-        save_messages(
-            &conversation_repo,
-            &execution_id,
-            continuation_message,
-            &accumulated_response,
-            tool_calls_json.as_deref(),
-        );
+        // Emit final assistant response to session stream
+        if !accumulated_response.is_empty() {
+            batch_writer.session_message(
+                &session_id_clone,
+                &execution_id,
+                "assistant",
+                &accumulated_response,
+                None,
+                None,
+            );
+        }
 
         match result {
             Ok(()) => {

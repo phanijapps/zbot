@@ -171,7 +171,7 @@ impl<'a> AgentLoader<'a> {
                     provider_id: provider.id.clone().unwrap_or_default(),
                     model,
                     temperature: 0.7,
-                    max_tokens: 4096,
+                    max_tokens: 8192,
                     thinking_enabled: false,
                     voice_recording_enabled: false,
                     system_instruction: None,
