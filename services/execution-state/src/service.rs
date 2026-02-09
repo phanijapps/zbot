@@ -317,29 +317,14 @@ impl<D: StateDbProvider> StateService<D> {
 
     /// Try to complete a session, but only if all executions are done.
     ///
-    /// Returns true if session was completed, false if:
-    /// - There are still running executions
-    /// - The session source doesn't auto-complete (e.g., Web sessions stay open)
+    /// Returns true if session was completed, false if there are still running executions.
     ///
-    /// Web sessions stay open for interactive use until user explicitly ends them.
-    /// CLI, Cron, API sessions auto-complete when all executions finish.
+    /// All sessions (including Web) complete when no running executions remain.
+    /// Web sessions are reopened automatically when the user sends a new message
+    /// (via `reactivate_session()` + `reactivate_execution()` in lifecycle).
     pub fn try_complete_session(&self, session_id: &str) -> Result<bool, String> {
         // Check if there are running executions
         if self.has_running_executions(session_id)? {
-            return Ok(false);
-        }
-
-        // Get session to check if it should auto-complete
-        let session = self.repo.get_session(session_id)?
-            .ok_or_else(|| format!("Session not found: {}", session_id))?;
-
-        // Web sessions stay open for interactive use
-        if !session.source.should_auto_complete_session() {
-            tracing::debug!(
-                session_id = %session_id,
-                source = %session.source,
-                "Session staying open (source doesn't auto-complete)"
-            );
             return Ok(false);
         }
 
@@ -845,7 +830,7 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_web_session_does_not_auto_complete() {
+    fn test_web_session_auto_completes() {
         let service = setup_service();
         // Default source is Web
         let (session, execution) = service.create_session("test-agent").unwrap();
@@ -854,13 +839,14 @@ mod tests {
         // Complete the execution
         service.complete_execution(&execution.id).unwrap();
 
-        // Try to auto-complete - should return false for Web sessions
+        // Web sessions now auto-complete like all other sources.
+        // They reopen via reactivate_session() when the user sends a new message.
         let completed = service.try_complete_session(&session.id).unwrap();
-        assert!(!completed, "Web sessions should NOT auto-complete");
+        assert!(completed, "Web sessions should auto-complete");
 
-        // Session should still be Running
+        // Session should be Completed
         let session_state = service.get_session(&session.id).unwrap().unwrap();
-        assert_eq!(session_state.status, SessionStatus::Running);
+        assert_eq!(session_state.status, SessionStatus::Completed);
     }
 
     #[test]

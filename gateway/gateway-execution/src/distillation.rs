@@ -5,7 +5,7 @@
 
 //! The `SessionDistiller` analyzes completed session transcripts and extracts
 //! structured facts worth remembering for future sessions. This is AgentZero's
-//! key advantage over systems like Clawdbot — we have full tool call history
+//! key advantage over other memory frameworks — we have full tool call history
 //! (Session Tree) and can automatically distill it without the agent needing
 //! to explicitly save.
 //!

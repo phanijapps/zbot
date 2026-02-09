@@ -302,7 +302,7 @@ impl AppState {
         self.ensure_wards_dir();
 
         let venv_ok = self.ensure_python_venv().await;
-        let node_ok = self.ensure_node_env().await;
+        let node_ok = self.ensure_node_env();
         self.seed_workspace_env_status(venv_ok, node_ok);
         self.populate_workspace_cache().await;
     }
@@ -406,58 +406,34 @@ impl AppState {
         }
     }
 
-    /// Create Node.js environment at `{config_dir}/wards/.node_env` if it doesn't exist.
+    /// Ensure Node.js working directory exists at `{config_dir}/wards/.node_env`.
     /// Falls back to legacy `{config_dir}/node_env` if it exists there.
-    /// Returns true if the node_env exists (either already existed or was created).
-    async fn ensure_node_env(&self) -> bool {
+    /// Just creates the directory — no npm init needed.
+    fn ensure_node_env(&self) -> bool {
         let new_path = self.config_dir.join("wards").join(".node_env");
         let legacy_path = self.config_dir.join("node_env");
 
-        // Use new path, but check legacy location too
         let node_env_dir = if new_path.exists() {
             new_path
         } else if legacy_path.exists() {
             legacy_path
         } else {
-            new_path // Create at new location
+            new_path
         };
-        let package_json = node_env_dir.join("package.json");
 
-        if package_json.exists() {
+        if node_env_dir.exists() {
             tracing::debug!("Node env already exists at {}", node_env_dir.display());
             return true;
         }
 
         tracing::info!("Creating Node env at {}", node_env_dir.display());
 
-        // Create the directory
         if let Err(e) = std::fs::create_dir_all(&node_env_dir) {
             tracing::warn!("Failed to create node_env directory: {}", e);
             return false;
         }
 
-        // Run npm init -y to create package.json
-        let result = tokio::process::Command::new("npm")
-            .args(["init", "-y"])
-            .current_dir(&node_env_dir)
-            .output()
-            .await;
-
-        match result {
-            Ok(output) if output.status.success() => {
-                tracing::info!("Node env created successfully");
-                true
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!("Failed to initialize node_env: {}", stderr.trim());
-                false
-            }
-            Err(e) => {
-                tracing::warn!("Failed to run npm init: {} (npm may not be installed)", e);
-                false
-            }
-        }
+        true
     }
 
     /// Seed workspace.json with python_env and node_env status.

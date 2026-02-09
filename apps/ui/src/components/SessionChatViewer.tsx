@@ -72,9 +72,17 @@ export function SessionChatViewer({
   const [isLoading, setIsLoading] = useState(true);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Incremented on agent_completed to trigger a message reload from DB
+  const [reloadTrigger, setReloadTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const isSubmittingRef = useRef(false);
+
+  // Tool call collapse — single rolling message instead of one per call
+  const toolCallCountRef = useRef(0);
+  const toolActivityIdRef = useRef<string | null>(null);
+  // Dedup respond display between turn_complete and agent_completed
+  const respondDisplayedRef = useRef(false);
 
   // Determine the message scope based on props
   const scope: MessageScope = executionId ? 'execution' : 'root';
@@ -82,28 +90,28 @@ export function SessionChatViewer({
   // The ID to subscribe to for events - use sessionId (which is what execute sends events to)
   const subscriptionId = sessionId || conversationId || null;
 
-  // Handle streaming events
+  // Handle streaming events (mirrors WebChatPanel behavior)
   const handleStreamEvent = useCallback((event: StreamEvent) => {
     switch (event.type) {
       case "invoke_accepted":
-        // Acknowledge invoke_accepted - session subscription is handled by the parent
         break;
 
       case "agent_started":
         setIsProcessing(true);
+        toolCallCountRef.current = 0;
+        toolActivityIdRef.current = null;
+        respondDisplayedRef.current = false;
         break;
 
       case "token":
         setMessages((prev) => {
           const last = prev[prev.length - 1];
           if (last && last.role === "assistant" && !last.id.startsWith("msg-")) {
-            // Append to existing streaming message
             return [
               ...prev.slice(0, -1),
               { ...last, content: last.content + (event.delta as string) },
             ];
           }
-          // Start new streaming message
           return [
             ...prev,
             {
@@ -116,36 +124,55 @@ export function SessionChatViewer({
         });
         break;
 
-      case "tool_call":
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: `tool-${Date.now()}`,
-            role: "tool" as const,
-            content: `Calling ${event.tool}...`,
-            timestamp: new Date(),
-            toolName: event.tool as string,
-          },
-        ]);
-        break;
+      case "tool_call": {
+        toolCallCountRef.current += 1;
+        const toolName = event.tool as string;
+        const count = toolCallCountRef.current;
 
-      case "tool_result":
-        setMessages((prev) => {
-          const toolCallIndex = prev.findIndex(
-            (m) => m.role === "tool" && m.content.includes("...")
-          );
-          if (toolCallIndex >= 0) {
-            const updated = [...prev];
-            const result = event.result as string;
-            updated[toolCallIndex] = {
-              ...updated[toolCallIndex],
-              content: `${updated[toolCallIndex].toolName}: ${result.substring(0, 200)}${result.length > 200 ? "..." : ""}`,
-            };
-            return updated;
-          }
-          return prev;
-        });
+        if (!toolActivityIdRef.current) {
+          const id = `tool-${Date.now()}`;
+          toolActivityIdRef.current = id;
+          setMessages((prev) => [
+            ...prev,
+            { id, role: "tool" as const, content: `Calling ${toolName}...`, timestamp: new Date(), toolName },
+          ]);
+        } else {
+          const activityId = toolActivityIdRef.current;
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === activityId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = { ...updated[idx], content: `Calling ${toolName}... (${count} tool calls)`, toolName };
+              return updated;
+            }
+            return prev;
+          });
+        }
         break;
+      }
+
+      case "tool_result": {
+        const activityId = toolActivityIdRef.current;
+        if (activityId) {
+          const result = event.result as string;
+          const count = toolCallCountRef.current;
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === activityId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              const toolName = updated[idx].toolName || "tool";
+              const suffix = count > 1 ? ` (${count} tools)` : "";
+              updated[idx] = {
+                ...updated[idx],
+                content: `${toolName}: ${result.substring(0, 200)}${result.length > 200 ? "..." : ""}${suffix}`,
+              };
+              return updated;
+            }
+            return prev;
+          });
+        }
+        break;
+      }
 
       case "delegation_started": {
         const childAgentId = event.child_agent_id as string;
@@ -172,7 +199,6 @@ export function SessionChatViewer({
             (m) => m.role === "delegation" && m.childAgentId === childAgentId && m.delegationStatus === "started"
           );
           if (startedIndex >= 0) {
-            // Update existing delegation message
             const updated = [...prev];
             updated[startedIndex] = {
               ...updated[startedIndex],
@@ -181,7 +207,6 @@ export function SessionChatViewer({
             };
             return updated;
           }
-          // No matching started message (subscribed late) - add completion message
           return [
             ...prev,
             {
@@ -197,10 +222,34 @@ export function SessionChatViewer({
         break;
       }
 
+      case "turn_complete": {
+        const finalMessage = event.final_message as string | undefined;
+        if (finalMessage && !respondDisplayedRef.current) {
+          respondDisplayedRef.current = true;
+          setMessages((prev) => {
+            const cleaned = prev.filter((m) => m.role !== "tool");
+            return [
+              ...cleaned,
+              {
+                id: `respond-${Date.now()}`,
+                role: "assistant" as const,
+                content: finalMessage,
+                timestamp: new Date(),
+              },
+            ];
+          });
+          toolActivityIdRef.current = null;
+          setIsProcessing(false);
+        }
+        break;
+      }
+
       case "agent_completed":
-      case "turn_complete":
       case "error":
         setIsProcessing(false);
+        toolActivityIdRef.current = null;
+        // Reload messages from DB — authoritative source for the respond tool output
+        setReloadTrigger((c) => c + 1);
         break;
     }
   }, []);
@@ -261,14 +310,16 @@ export function SessionChatViewer({
           });
 
           if (result.success && result.data) {
-            const loadedMessages: ChatMessage[] = result.data.map((m: SessionMessage) => ({
-              id: m.id,
-              role: m.role as ChatMessage["role"],
-              content: m.content,
-              timestamp: new Date(m.created_at),
-              agentId: m.agent_id,
-              delegationType: m.delegation_type,
-            }));
+            const loadedMessages: ChatMessage[] = result.data
+              .filter((m: SessionMessage) => m.role !== "tool" && !m.tool_calls)
+              .map((m: SessionMessage) => ({
+                id: m.id,
+                role: m.role as ChatMessage["role"],
+                content: m.content,
+                timestamp: new Date(m.created_at),
+                agentId: m.agent_id,
+                delegationType: m.delegation_type,
+              }));
             setMessages(loadedMessages);
           } else {
             setError(result.error || "Failed to load messages");
@@ -278,12 +329,14 @@ export function SessionChatViewer({
           const result = await transport.getMessages(conversationId);
 
           if (result.success && result.data) {
-            const loadedMessages: ChatMessage[] = result.data.map((m: MessageResponse) => ({
-              id: m.id,
-              role: m.role as ChatMessage["role"],
-              content: m.content,
-              timestamp: new Date(m.timestamp),
-            }));
+            const loadedMessages: ChatMessage[] = result.data
+              .filter((m: MessageResponse) => m.role !== "tool")
+              .map((m: MessageResponse) => ({
+                id: m.id,
+                role: m.role as ChatMessage["role"],
+                content: m.content,
+                timestamp: new Date(m.timestamp),
+              }));
             setMessages(loadedMessages);
           } else {
             setError(result.error || "Failed to load messages");
@@ -299,7 +352,7 @@ export function SessionChatViewer({
     };
 
     loadHistory();
-  }, [sessionId, executionId, conversationId, scope]);
+  }, [sessionId, executionId, conversationId, scope, reloadTrigger]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -424,7 +477,7 @@ export function SessionChatViewer({
           </div>
         ) : (
           <div className="max-w-3xl mx-auto space-y-4">
-            {messages.map((message) => (
+            {messages.filter((m) => isProcessing || m.role !== "tool").map((message) => (
               <div
                 key={message.id}
                 className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : ""}`}

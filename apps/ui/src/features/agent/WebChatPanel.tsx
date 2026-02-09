@@ -8,7 +8,7 @@ import { useSearchParams } from "react-router-dom";
 import { MessageSquare, Send, Loader2, Wrench, User, Bot, GitBranch, CheckCircle2, Info, RotateCcw, StopCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { getTransport, type StreamEvent, type MessageResponse } from "@/services/transport";
+import { getTransport, type StreamEvent, type MessageResponse, type SessionMessage } from "@/services/transport";
 import type { ShowContentEvent, RequestInputEvent } from "@/shared/types";
 import { GenerativeCanvas, type ContentState } from "./GenerativeCanvas";
 import { SubagentActivityPanel, type SubagentActivity } from "./SubagentActivityPanel";
@@ -76,6 +76,7 @@ export function WebChatPanel() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [conversationId, setConversationId] = useState<string>(() => getOrCreateConversationId());
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [reloadTrigger, setReloadTrigger] = useState(0);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
@@ -95,6 +96,13 @@ export function WebChatPanel() {
   const rafIdRef = useRef<number | null>(null);
   const lastSeqRef = useRef<number>(0);
 
+  // Tool call collapse — single rolling message instead of one per call
+  const toolCallCountRef = useRef(0);
+  const toolActivityIdRef = useRef<string | null>(null);
+
+  // Track whether respond content was already displayed this execution (dedup turn_complete vs agent_completed)
+  const respondDisplayedRef = useRef(false);
+
   // Synchronous guard to prevent double-submission (React state is async)
   const isSubmittingRef = useRef(false);
 
@@ -112,25 +120,44 @@ export function WebChatPanel() {
     }
   }, [searchParams, setSearchParams]);
 
-  // Load conversation history on mount and when conversationId changes
+  // Load conversation history on mount, when conversationId changes, or on reloadTrigger
   useEffect(() => {
     const loadHistory = async () => {
-      if (!conversationId) return;
-
       setIsLoadingHistory(true);
       try {
         const transport = await getTransport();
-        const result = await transport.getMessages(conversationId);
 
-        if (result.success && result.data && result.data.length > 0) {
-          const loadedMessages: ChatMessage[] = result.data.map((m: MessageResponse) => ({
-            id: m.id,
-            role: m.role as "user" | "assistant" | "tool" | "delegation",
-            content: m.content,
-            timestamp: new Date(m.timestamp),
-            isStreaming: false,
-          }));
-          setMessages(loadedMessages);
+        // Prefer session-based query (returns actual data) over conversation-based
+        // (web-xxx IDs don't match any DB records — known gap)
+        if (activeSessionId) {
+          const result = await transport.getSessionMessages(activeSessionId, { scope: "root" });
+          if (result.success && result.data && result.data.length > 0) {
+            const loadedMessages: ChatMessage[] = result.data
+              .filter((m: SessionMessage) => m.role !== "tool" && !m.tool_calls)
+              .map((m: SessionMessage) => ({
+                id: m.id,
+                role: m.role as "user" | "assistant" | "delegation",
+                content: m.content,
+                timestamp: new Date(m.created_at),
+                isStreaming: false,
+              }));
+            setMessages(loadedMessages);
+          }
+        } else if (conversationId) {
+          // Fallback for first load before session is established
+          const result = await transport.getMessages(conversationId);
+          if (result.success && result.data && result.data.length > 0) {
+            const loadedMessages: ChatMessage[] = result.data
+              .filter((m: MessageResponse) => m.role !== "tool")
+              .map((m: MessageResponse) => ({
+                id: m.id,
+                role: m.role as "user" | "assistant" | "delegation",
+                content: m.content,
+                timestamp: new Date(m.timestamp),
+                isStreaming: false,
+              }));
+            setMessages(loadedMessages);
+          }
         }
       } catch (error) {
         console.error("Failed to load conversation history:", error);
@@ -140,7 +167,7 @@ export function WebChatPanel() {
     };
 
     loadHistory();
-  }, [conversationId]);
+  }, [conversationId, activeSessionId, reloadTrigger]);
 
   // Flush buffered token deltas to state (called via requestAnimationFrame)
   const flushTokenBuffer = useCallback(() => {
@@ -195,6 +222,10 @@ export function WebChatPanel() {
 
       case "agent_started":
         setIsProcessing(true);
+        // Reset per-execution state
+        toolCallCountRef.current = 0;
+        toolActivityIdRef.current = null;
+        respondDisplayedRef.current = false;
         // Capture session_id from the backend for session continuity AND subscription
         if (event.session_id && typeof event.session_id === "string") {
           setSessionId(event.session_id);
@@ -212,36 +243,67 @@ export function WebChatPanel() {
         }
         break;
 
-      case "tool_call":
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: crypto.randomUUID(),
-            role: "tool",
-            content: `Calling ${event.tool}...`,
-            timestamp: new Date(),
-            toolName: event.tool as string,
-          },
-        ]);
-        break;
+      case "tool_call": {
+        toolCallCountRef.current += 1;
+        const toolName = event.tool as string;
+        const count = toolCallCountRef.current;
 
-      case "tool_result":
-        setMessages((prev) => {
-          const toolCallIndex = prev.findIndex(
-            (m) => m.role === "tool" && m.content.includes("...")
-          );
-          if (toolCallIndex >= 0) {
-            const updated = [...prev];
-            const result = event.result as string;
-            updated[toolCallIndex] = {
-              ...updated[toolCallIndex],
-              content: `${updated[toolCallIndex].toolName}: ${result.substring(0, 200)}${result.length > 200 ? "..." : ""}`,
-            };
-            return updated;
-          }
-          return prev;
-        });
+        if (!toolActivityIdRef.current) {
+          // First tool call — create the rolling message
+          const id = crypto.randomUUID();
+          toolActivityIdRef.current = id;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id,
+              role: "tool",
+              content: `Calling ${toolName}...`,
+              timestamp: new Date(),
+              toolName,
+            },
+          ]);
+        } else {
+          // Subsequent calls — update existing message in-place
+          const activityId = toolActivityIdRef.current;
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === activityId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              updated[idx] = {
+                ...updated[idx],
+                content: `Calling ${toolName}... (${count} tool calls)`,
+                toolName,
+              };
+              return updated;
+            }
+            return prev;
+          });
+        }
         break;
+      }
+
+      case "tool_result": {
+        const activityId = toolActivityIdRef.current;
+        if (activityId) {
+          const result = event.result as string;
+          const count = toolCallCountRef.current;
+          setMessages((prev) => {
+            const idx = prev.findIndex((m) => m.id === activityId);
+            if (idx >= 0) {
+              const updated = [...prev];
+              const toolName = updated[idx].toolName || "tool";
+              const suffix = count > 1 ? ` (${count} tools)` : "";
+              updated[idx] = {
+                ...updated[idx],
+                content: `${toolName}: ${result.substring(0, 200)}${result.length > 200 ? "..." : ""}${suffix}`,
+              };
+              return updated;
+            }
+            return prev;
+          });
+        }
+        break;
+      }
 
       case "show_content":
         // Show content in generative canvas
@@ -415,9 +477,50 @@ export function WebChatPanel() {
         break;
       }
 
+      case "turn_complete": {
+        // Respond tool output arrives as turn_complete with final_message field
+        // (GatewayEvent::Respond → ServerMessage::TurnComplete { final_message })
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        flushTokenBuffer();
+
+        const finalMessage = event.final_message as string | undefined;
+        if (finalMessage && !respondDisplayedRef.current) {
+          respondDisplayedRef.current = true;
+          // Respond tool — strip tool noise, replace streaming duplicate or append
+          setMessages((prev) => {
+            const cleaned = prev.filter((m) => m.role !== "tool");
+            const lastIdx = cleaned.length - 1;
+            const last = cleaned[lastIdx];
+            if (last && last.role === "assistant" && last.isStreaming) {
+              return [
+                ...cleaned.slice(0, lastIdx),
+                { ...last, content: finalMessage, isStreaming: false },
+              ];
+            }
+            return [
+              ...cleaned.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
+              {
+                id: crypto.randomUUID(),
+                role: "assistant",
+                content: finalMessage,
+                timestamp: new Date(),
+                isStreaming: false,
+              },
+            ];
+          });
+          toolActivityIdRef.current = null;
+          setIsProcessing(false);
+        }
+        // turn_complete without final_message is a mid-execution turn boundary — ignore it.
+        // Cleanup happens on agent_completed.
+        break;
+      }
+
       case "agent_completed":
-      case "turn_complete":
-      case "error":
+      case "error": {
         // Flush any remaining buffered tokens before finalizing
         if (rafIdRef.current !== null) {
           cancelAnimationFrame(rafIdRef.current);
@@ -426,14 +529,11 @@ export function WebChatPanel() {
         flushTokenBuffer();
 
         setIsProcessing(false);
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.isStreaming) {
-            return [...prev.slice(0, -1), { ...last, isStreaming: false }];
-          }
-          return prev;
-        });
+        toolActivityIdRef.current = null;
+        // Reload messages from DB — authoritative source for the respond tool output
+        setReloadTrigger((c) => c + 1);
         break;
+      }
 
       case "session_ended":
         break;
@@ -664,7 +764,7 @@ export function WebChatPanel() {
           </div>
         ) : (
           <div className="max-w-3xl mx-auto space-y-4">
-            {messages.map((message) => (
+            {messages.filter((m) => isProcessing || m.role !== "tool").map((message) => (
               <div
                 key={message.id}
                 className={`flex gap-3 ${message.role === "user" ? "flex-row-reverse" : ""}`}

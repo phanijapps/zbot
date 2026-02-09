@@ -109,16 +109,16 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 ### Memory Evolution: Session Distillation Over Manual Memory
 **Problem**: Agents forget to save important facts. Users shouldn't have to remind them.
 **Decision**: After each session (>10 messages), fire-and-forget LLM call extracts durable facts (preferences, decisions, patterns, entities, instructions, corrections) into `memory_facts` with embeddings.
-**Advantage over Clawdbot**: We have full session transcripts (Session Tree). Clawdbot relies on agent manually writing to markdown files. Our distillation is automatic and structured.
+**Advantage**: We have full session transcripts (Session Tree).
 **Safety**: Fire-and-forget (never blocks user), async spawn, only runs on sessions with sufficient signal (>10 messages).
 
 ### Memory Evolution: Hybrid Search Scoring
 **Formula**: `(0.7 × vector_cosine + 0.3 × BM25_score) × confidence × recency_decay × mention_boost`
-**Rationale**: Vector search handles semantic similarity ("preferred language" matches "coding in Rust"), FTS5 handles exact keyword matches ("SQLite" matches "SQLite"). 70/30 split inspired by Clawdbot's analysis. Confidence, recency, and mention_count prevent stale or low-quality facts from dominating.
+**Rationale**: Vector search handles semantic similarity ("preferred language" matches "coding in Rust"), FTS5 handles exact keyword matches ("SQLite" matches "SQLite"). Confidence, recency, and mention_count prevent stale or low-quality facts from dominating.
 
 ### Memory Evolution: Embedding Cache (Hash-Based Dedup)
 **Problem**: Re-embedding unchanged content wastes API calls or compute time.
-**Decision**: SHA-256 hash of text + model name as composite key in `embedding_cache` table. Before embedding, check cache. Inspired by Clawdbot's pattern.
+**Decision**: SHA-256 hash of text + model name as composite key in `embedding_cache` table. Before embedding, check cache.
 
 ### Memory Evolution: Pre-Compaction Memory Flush
 **Problem**: When context window is trimmed, the agent loses access to potentially important information.
