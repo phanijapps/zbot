@@ -191,8 +191,8 @@ mod tests {
     }
 
     impl zero_core::context::ToolContext for MockContext {
-        fn function_call_id(&self) -> &str {
-            "call_123"
+        fn function_call_id(&self) -> String {
+            "call_123".to_string()
         }
 
         fn actions(&self) -> zero_core::EventActions {

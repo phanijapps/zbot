@@ -9,6 +9,7 @@ use std::sync::RwLock;
 use serde_json::Value;
 use zero_core::event::EventActions;
 use zero_core::types::Content;
+use zero_core::CallbackContext;
 
 /// Context for tool execution
 ///
@@ -16,6 +17,10 @@ use zero_core::types::Content;
 /// including conversation scoping and available resources.
 ///
 /// Implements `zero_core::ToolContext` trait for compatibility with tools.
+///
+/// This context is designed to be shared across all tool calls in an execution loop
+/// via `Arc<ToolContext>`. State set by one tool (e.g., loaded skills) persists and
+/// can be accessed by subsequent tools and middleware.
 pub struct ToolContext {
     /// Optional conversation ID for scoping file operations
     pub conversation_id: Option<String>,
@@ -26,8 +31,9 @@ pub struct ToolContext {
     /// Agent ID for this execution
     pub agent_id: Option<String>,
 
-    /// Function call ID for this tool execution
-    pub function_call_id: String,
+    /// Function call ID for the current tool execution.
+    /// Uses RwLock for interior mutability since context is shared via Arc.
+    function_call_id: RwLock<String>,
 
     /// Key-value state storage
     state: RwLock<HashMap<String, Value>>,
@@ -45,7 +51,7 @@ impl Default for ToolContext {
             conversation_id: None,
             available_skills: Vec::new(),
             agent_id: None,
-            function_call_id: String::new(),
+            function_call_id: RwLock::new(String::new()),
             state: RwLock::new(HashMap::new()),
             actions: RwLock::new(EventActions::default()),
             empty_content: Content {
@@ -145,11 +151,70 @@ impl ToolContext {
         }
     }
 
-    /// Set the function call ID
+    /// Set the function call ID (builder pattern for construction)
     #[must_use]
-    pub fn with_function_call_id(mut self, id: String) -> Self {
-        self.function_call_id = id;
+    pub fn with_function_call_id(self, id: String) -> Self {
+        if let Ok(mut fcid) = self.function_call_id.write() {
+            *fcid = id;
+        }
         self
+    }
+
+    /// Set the function call ID for the current tool execution.
+    /// This is called before each tool execution to track which tool call
+    /// is currently being processed.
+    pub fn set_function_call_id(&self, id: String) {
+        if let Ok(mut fcid) = self.function_call_id.write() {
+            *fcid = id;
+        }
+    }
+
+    /// Get the current function call ID
+    pub fn get_function_call_id(&self) -> String {
+        self.function_call_id.read()
+            .map(|id| id.clone())
+            .unwrap_or_default()
+    }
+
+    /// Export state for checkpoint persistence.
+    ///
+    /// This serializes all state (including skill tracking) to JSON for saving
+    /// in a checkpoint. On session resumption, this state can be restored via
+    /// `restore_state()` or by passing to `full_with_state()`.
+    ///
+    /// Includes skill-related state keys like:
+    /// - `skill:graph` - SkillGraph with loaded skills and resources
+    /// - `skill:loaded_skills` - List of currently loaded skill names
+    #[must_use]
+    pub fn export_state(&self) -> Value {
+        self.state.read()
+            .map(|state| serde_json::json!(state.clone()))
+            .unwrap_or(Value::Null)
+    }
+
+    /// Restore state from a checkpoint.
+    ///
+    /// Merges the checkpoint state into the current state, overwriting any
+    /// existing keys. This is typically called after creating a new context
+    /// when resuming an execution.
+    pub fn restore_state(&self, checkpoint_state: &Value) {
+        if let Some(obj) = checkpoint_state.as_object() {
+            if let Ok(mut state) = self.state.write() {
+                for (key, value) in obj {
+                    state.insert(key.clone(), value.clone());
+                }
+            }
+        }
+    }
+
+    /// Get skill-related state for middleware consumption.
+    ///
+    /// Returns the skill graph if available, which contains information about
+    /// loaded skills and their resources. This is useful for middleware that
+    /// needs to make skill-aware decisions.
+    #[must_use]
+    pub fn get_skill_state(&self) -> Option<Value> {
+        CallbackContext::get_state(self, "skill:graph")
     }
 
     /// Get the conversation directory if conversation_id is set
@@ -211,8 +276,8 @@ impl zero_core::CallbackContext for ToolContext {
 }
 
 impl zero_core::ToolContext for ToolContext {
-    fn function_call_id(&self) -> &str {
-        &self.function_call_id
+    fn function_call_id(&self) -> String {
+        self.get_function_call_id()
     }
 
     fn actions(&self) -> EventActions {
@@ -223,5 +288,147 @@ impl zero_core::ToolContext for ToolContext {
         if let Ok(mut a) = self.actions.write() {
             *a = actions;
         }
+    }
+}
+
+impl ToolContext {
+    /// Atomically read and clear actions. Used for parallel tool execution
+    /// to capture each tool's actions without race conditions.
+    pub fn take_actions(&self) -> EventActions {
+        if let Ok(mut a) = self.actions.write() {
+            std::mem::take(&mut *a)
+        } else {
+            EventActions::default()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_export_state() {
+        let ctx = ToolContext::new();
+
+        // Set some state
+        ctx.set_state("key1".to_string(), json!("value1"));
+        ctx.set_state("key2".to_string(), json!(42));
+        ctx.set_state("skill:graph".to_string(), json!({
+            "my-skill": {
+                "tool_call_id": "call_1",
+                "loaded_at": 12345,
+                "resources": []
+            }
+        }));
+
+        // Export state
+        let exported = ctx.export_state();
+
+        // Verify exported state
+        assert!(exported.is_object());
+        let obj = exported.as_object().unwrap();
+        assert_eq!(obj.get("key1").unwrap(), "value1");
+        assert_eq!(obj.get("key2").unwrap(), 42);
+        assert!(obj.contains_key("skill:graph"));
+    }
+
+    #[test]
+    fn test_restore_state() {
+        let ctx = ToolContext::new();
+
+        // Create checkpoint state
+        let checkpoint_state = json!({
+            "skill:graph": {
+                "restored-skill": {
+                    "tool_call_id": "call_restored",
+                    "loaded_at": 99999,
+                    "resources": []
+                }
+            },
+            "skill:loaded_skills": ["restored-skill"],
+            "custom_key": "custom_value"
+        });
+
+        // Restore state
+        ctx.restore_state(&checkpoint_state);
+
+        // Verify state was restored
+        let skill_graph = ctx.get_state("skill:graph");
+        assert!(skill_graph.is_some());
+        let graph = skill_graph.unwrap();
+        assert!(graph.get("restored-skill").is_some());
+
+        let loaded_skills = ctx.get_state("skill:loaded_skills");
+        assert!(loaded_skills.is_some());
+
+        let custom = ctx.get_state("custom_key");
+        assert_eq!(custom, Some(json!("custom_value")));
+    }
+
+    #[test]
+    fn test_restore_state_merges_with_existing() {
+        let ctx = ToolContext::new();
+
+        // Set initial state
+        ctx.set_state("existing_key".to_string(), json!("existing_value"));
+
+        // Restore checkpoint (should merge, not replace)
+        let checkpoint_state = json!({
+            "new_key": "new_value"
+        });
+        ctx.restore_state(&checkpoint_state);
+
+        // Both keys should exist
+        assert_eq!(ctx.get_state("existing_key"), Some(json!("existing_value")));
+        assert_eq!(ctx.get_state("new_key"), Some(json!("new_value")));
+    }
+
+    #[test]
+    fn test_get_skill_state() {
+        let ctx = ToolContext::new();
+
+        // Initially no skill state
+        assert!(ctx.get_skill_state().is_none());
+
+        // Set skill graph
+        ctx.set_state("skill:graph".to_string(), json!({
+            "test-skill": {"tool_call_id": "call_1"}
+        }));
+
+        // Should now return the skill state
+        let skill_state = ctx.get_skill_state();
+        assert!(skill_state.is_some());
+        assert!(skill_state.unwrap().get("test-skill").is_some());
+    }
+
+    #[test]
+    fn test_full_with_state_restores_checkpoint() {
+        // This tests the flow: checkpoint.context_state -> initial_state -> ToolContext
+        let initial_state = {
+            let mut state = std::collections::HashMap::new();
+            state.insert("skill:graph".to_string(), json!({
+                "my-skill": {"tool_call_id": "call_1", "resources": []}
+            }));
+            state.insert("skill:loaded_skills".to_string(), json!(["my-skill"]));
+            state
+        };
+
+        let ctx = ToolContext::full_with_state(
+            "agent-1".to_string(),
+            Some("conv-1".to_string()),
+            vec!["skill-a".to_string()],
+            initial_state,
+        );
+
+        // Verify the skill state was restored
+        let skill_graph = ctx.get_state("skill:graph");
+        assert!(skill_graph.is_some());
+
+        let loaded_skills = ctx.get_state("skill:loaded_skills");
+        assert!(loaded_skills.is_some());
+        let skills: Vec<String> = serde_json::from_value(loaded_skills.unwrap()).unwrap();
+        assert!(skills.contains(&"my-skill".to_string()));
     }
 }

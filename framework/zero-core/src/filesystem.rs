@@ -40,6 +40,30 @@ pub trait FileSystemContext: Send + Sync {
     fn vault_path(&self) -> Option<PathBuf> {
         None
     }
+
+    /// Get the session code directory (where shell runs and code files live)
+    /// Returns `{vault}/code/{session_id}/`
+    fn session_code_dir(&self, session_id: &str) -> Option<PathBuf> {
+        self.vault_path().map(|p| p.join("code").join(session_id))
+    }
+
+    /// Get the session data directory (for attachments, scratchpad, etc.)
+    /// Returns `{vault}/agent_data/{session_id}/`
+    fn session_data_dir(&self, session_id: &str) -> Option<PathBuf> {
+        self.vault_path().map(|p| p.join("agent_data").join(session_id))
+    }
+
+    /// Get the wards root directory.
+    /// Returns `{vault}/wards/`
+    fn wards_root_dir(&self) -> Option<PathBuf> {
+        self.vault_path().map(|p| p.join("wards"))
+    }
+
+    /// Get a specific ward directory.
+    /// Returns `{vault}/wards/{ward_id}/`
+    fn ward_dir(&self, ward_id: &str) -> Option<PathBuf> {
+        self.wards_root_dir().map(|p| p.join(ward_id))
+    }
 }
 
 /// Default file system context that returns None for all paths

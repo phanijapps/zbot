@@ -1,0 +1,49 @@
+# ============================================================================
+# GATEWAY EXECUTION
+# Agent execution engine for the AgentZero gateway
+# ============================================================================
+
+[package]
+name = "gateway-execution"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Agent execution engine for the AgentZero gateway"
+
+[dependencies]
+# Internal crates
+agent-runtime = { path = "../../runtime/agent-runtime" }
+agent-tools = { path = "../../runtime/agent-tools" }
+api-logs = { path = "../../services/api-logs" }
+execution-state = { path = "../../services/execution-state" }
+zero-core = { path = "../../framework/zero-core" }
+gateway-events = { path = "../gateway-events" }
+gateway-database = { path = "../gateway-database" }
+gateway-services = { path = "../gateway-services" }
+gateway-connectors = { path = "../gateway-connectors" }
+gateway-templates = { path = "../gateway-templates" }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"

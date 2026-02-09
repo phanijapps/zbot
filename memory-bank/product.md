@@ -1,17 +1,5 @@
 # Agent Zero — Product Definition
 
-## Vision
-
-Agent Zero is a local-first AI agent platform that puts you in control. Run sophisticated AI assistants on your own machine with full data ownership, multi-provider flexibility, and unlimited extensibility through skills and MCP servers.
-
-## Core Principles
-
-1. **Local-First** — Your data stays on your machine. No cloud lock-in.
-2. **Provider-Agnostic** — Use any LLM: OpenAI, Anthropic, DeepSeek, Ollama, self-hosted.
-3. **Extensible** — Skills and MCP servers let you add any capability.
-4. **Open Standards** — Built on Agent Skills and Model Context Protocol specifications.
-5. **Simple Deployment** — Single daemon binary + static web files.
-
 ## Interfaces
 
 ### Web Dashboard
@@ -19,15 +7,6 @@ Browser-based interface served by the daemon at `http://localhost:18791`. Full-f
 
 ### CLI (zero)
 Command-line interface for scripting, automation, and terminal-based workflows. Connects to the same daemon as the web dashboard.
-
-## Target Users
-
-| User | Use Case |
-|------|----------|
-| **Developers** | Building AI-powered workflows, automation, code assistants |
-| **Power Users** | Creating specialized assistants for research, writing, analysis |
-| **Teams** | Managing multiple agents with different capabilities and contexts |
-| **Privacy-Conscious** | Running AI locally without sending data to third parties |
 
 ## Core Features
 
@@ -88,17 +67,29 @@ Connect to external tools via Model Context Protocol servers. Configure in `mcps
 ```
 
 ### 6. Persistent Memory
-Per-agent key-value storage for facts, preferences, and context:
+Multi-tier key-value storage for facts, preferences, and context:
 
 ```
-memory set user_name "Alice"
+memory set user_name "Alice"           # agent-scoped
 memory get user_name
 memory search preferences
+memory set scope=ward key=purpose ...  # ward-scoped
 ```
 
-Stored in `agents_data/{agent_id}/memory.json`.
+**Tiers**: Global shared → Agent → Ward → Session (ephemeral)
 
-### 7. Operations Dashboard
+### 7. Code Wards
+Agent-managed persistent project directories. The agent autonomously creates, names, and navigates wards — code persists across sessions.
+
+- `ward(action="use", name="stock-tracker")` — switch to a ward
+- `ward(action="list")` — see all wards with descriptions
+- `ward(action="create", name="my-app")` — create a new project
+- Shared Python venv across all wards
+- Per-ward node_modules (Node convention)
+- Ward memory for project context (tech stack, build commands)
+- `scratch` ward for quick one-off tasks
+
+### 8. Operations Dashboard
 Real-time monitoring and management of agent sessions:
 
 **Statistics Panel:**
@@ -118,7 +109,7 @@ Real-time monitoring and management of agent sessions:
 - Cancel running sessions
 - Track subagent delegation in real-time
 
-### 8. Multi-Turn Session Management
+### 9. Multi-Turn Session Management
 Conversations persist across multiple turns within a session:
 
 - **Session Continuity**: Multiple messages share the same session until `/new`
@@ -126,7 +117,7 @@ Conversations persist across multiple turns within a session:
 - **Session Reset**: `/new` command starts fresh session
 - **Source Tracking**: Sessions tagged with origin (web, cli, api, etc.)
 
-### 9. Scheduled Tasks (Planned)
+### 10. Scheduled Tasks (Planned)
 Cron-based scheduling for automated agent invocations. Define recurring tasks that run agents on a schedule.
 
 ## Technology Stack
@@ -136,49 +127,36 @@ Cron-based scheduling for automated agent invocations. Define recurring tasks th
 | Frontend | React 19 + TypeScript + Vite |
 | UI | Tailwind CSS v4 + Radix UI |
 | Backend | Rust (Axum + tokio) |
-| Database | SQLite (rusqlite) |
+| Database | SQLite (rusqlite + r2d2 pool, WAL mode) |
 | API | HTTP REST + WebSocket |
 
-## Data Model
+## Roadmap
 
-### Conversations
-Persisted to SQLite with full message history:
-- Conversation metadata (agent, timestamps)
-- Messages (role, content, tool calls)
-- Automatic context loading (last 50 messages)
-
-### Agent Memory
-JSON-based key-value store per agent:
-- Store facts: `memory set fact_key "value"`
-- Tag-based organization
-- Full-text search across values
-
-### Agent Configuration
-File-based configuration:
-- `config.yaml` — Model, provider, temperature
-- `AGENTS.md` — System instructions (markdown)
-
-## Differentiators
-
-| Feature | Agent Zero | Cloud AI Platforms |
-|---------|------------|-------------------|
-| Data Location | Local machine | Cloud servers |
-| Provider Lock-in | None | Usually locked |
-| Offline Capable | Yes (with Ollama) | No |
-| Cost | API costs only | Subscription + API |
-| Customization | Unlimited | Limited |
-| Privacy | Full control | Varies |
-
-## Roadmap Highlights
-
-1. **v0.1** — Core chat, providers, skills ✓
-2. **v0.2** — Persistent memory, SQLite conversations ✓
-3. **v0.3** — MCP integration, CLI improvements ✓
-4. **v0.4** — Operations Dashboard, Session Management ✓
+### Completed
+1. **v0.1** — Core chat, providers, skills
+2. **v0.2** — Persistent memory, SQLite conversations
+3. **v0.3** — MCP integration, CLI improvements
+4. **v0.4** — Operations Dashboard, Session Management
    - Real-time session monitoring
    - Multi-turn conversation support
    - Trigger source tracking
    - Subagent delegation visibility
-   - Comprehensive test suite (290+ tests)
-5. **v0.5** — Scheduled tasks, multi-agent workflows
-6. **v1.0** — Stable API, documentation, packaging
+5. **v0.5** — Responsive Architecture + Code Wards
+   - Real streaming (no simulated delays)
+   - SQLite WAL mode + r2d2 connection pool
+   - Batch DB writes, RwLock caching
+   - Parallel tool execution + output truncation
+   - Gateway crate decomposition (13 crates)
+   - Code Wards (persistent project directories)
+   - 300+ tests across all crates
+
+### Planned
+6. **v0.6** — Creative Hub + Lifecycle
+   - Code Wards Phase 4: cross-ward code discovery, pattern learning
+   - Skill loading & unloading lifecycle (TTL, LRU, dependencies)
+   - Knowledge Graph / Memory unification (graph-backed memory API)
+7. **v0.7** — Context & Safety
+   - Context window management (auto-compaction, token counting)
+   - Agent sandbox (process isolation)
+   - Concurrent access: SQLite for shared state, inter-agent message queue
+8. **v1.0** — Stable API, documentation, packaging

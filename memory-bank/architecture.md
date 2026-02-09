@@ -66,10 +66,17 @@
 │  │   ├── workspace.json        #   Project paths (auto-injected)        │
 │  │   ├── patterns.json         #   Learned patterns/conventions         │
 │  │   └── session_summaries.json#   Distilled learnings                  │
+│  ├── wards/                    # Code Wards (persistent project dirs)   │
+│  │   ├── .venv/                #   Shared Python venv for all wards     │
+│  │   ├── scratch/              #   Default ward for quick tasks         │
+│  │   └── {ward-name}/          #   Agent-named project directories      │
+│  │       └── .ward_memory.json #     Per-ward context                   │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
 │  ├── providers.json            # LLM provider configurations            │
-│  └── mcps.json                 # MCP server configurations              │
+│  ├── mcps.json                 # MCP server configurations              │
+│  ├── connectors.json           # Connector configurations               │
+│  └── cron_jobs.json            # Scheduled job configurations           │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -83,7 +90,7 @@
 | HTTP Server | Axum | Async HTTP framework |
 | WebSocket | tokio-tungstenite | Real-time streaming |
 | Async Runtime | tokio | Async I/O |
-| Database | SQLite (rusqlite) | Conversation persistence |
+| Database | SQLite (rusqlite + r2d2 pool) | Conversation persistence (WAL mode) |
 | Serialization | serde + serde_json | JSON handling |
 
 ## Crate Structure
@@ -133,26 +140,30 @@ Standalone data services:
 
 ```
 services/
+├── execution-state/     # Session/execution state machine (SQLite)
 ├── api-logs/            # Execution logging (SQLite)
 ├── knowledge-graph/     # Entity extraction
-├── search-index/        # Full-text search (Tantivy)
-├── session-archive/     # Parquet archival
 └── daily-sessions/      # Session management
 ```
 
 ### Gateway (`gateway/`)
 
-Network layer:
+Network layer, decomposed into focused crates:
 
 ```
 gateway/
-├── src/
-│   ├── http/            # REST API routes
-│   ├── websocket/       # WebSocket handler
-│   ├── execution/       # Agent invocation + delegation
-│   ├── database/        # SQLite persistence
-│   └── services/        # Agent, Provider, Skill services
-└── templates/           # System prompt templates
+├── gateway-events/      # EventBus, GatewayEvent, HookContext
+├── gateway-database/    # DatabaseManager, pool, schema, ConversationRepository
+├── gateway-templates/   # Prompt assembly, shard injection
+├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
+├── gateway-services/    # AgentService, ProviderService, McpService, SkillService, SettingsService
+├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter
+├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
+├── gateway-cron/        # CronJobConfig, CronService
+├── gateway-bus/         # GatewayBus trait, SessionRequest, SessionHandle
+├── gateway-ws-protocol/ # ClientMessage, ServerMessage, SubscriptionScope
+├── src/                 # Thin shell: HTTP routes, WebSocket handler, AppState
+└── templates/           # System prompt templates (embedded at compile time)
 ```
 
 ### Apps (`apps/`)
@@ -213,7 +224,38 @@ pub trait LlmClient: Send + Sync {
 
 ## Session Management Architecture
 
-Sessions are the top-level container for user interactions. A session groups multiple agent executions (turns) together, enabling multi-turn conversations with context preservation.
+Sessions are the top-level container for user interactions. Each session has one continuous
+message stream — all tool calls, results, and intermediate context persist across user messages.
+Subagents get isolated context via child sessions.
+
+### Session Tree
+
+```
+ROOT SESSION (parent_session_id = NULL)
+│
+├── messages stream (ALL messages — continuous across user turns)
+│   ├── user: "build me a docx"
+│   ├── assistant: [tool_calls: list_skills]
+│   ├── tool: "16 skills available..."              (tool_call_id: call_001)
+│   ├── assistant: [tool_calls: shell(pip install)]
+│   ├── tool: "installed python-docx"               (tool_call_id: call_002)
+│   ├── assistant: "Done! Created the docx file."
+│   ├── user: "convert to pdf"                       ← 2nd message, SAME session
+│   ├── assistant: [tool_calls: shell(libreoffice)]
+│   ├── tool: "converted to /tmp/out.pdf"            (tool_call_id: call_003)
+│   ├── assistant: "Done! PDF ready."
+│   └── system: "## From Researcher\n..."            ← callback from child
+│
+├── exec-{uuid} (root, REUSED across all user messages)
+│
+└── CHILD SESSION (parent_session_id = root session)
+    ├── messages stream (ISOLATED — only subagent sees these)
+    │   ├── user: "research X for the docx"
+    │   ├── assistant: [tool_calls: web_fetch]
+    │   ├── tool: "fetched data..."
+    │   └── assistant: "Found Y. Here's the summary."
+    └── exec-{uuid} (root of child session)
+```
 
 ### Session Lifecycle
 
@@ -232,14 +274,14 @@ Sessions are the top-level container for user interactions. A session groups mul
 │            │                                                            │
 │            ▼                                                            │
 │   ┌─────────────────┐                                                   │
-│   │ Create Root     │ ──► exec-{uuid} created, parent=null              │
+│   │ Create Root     │ ──► exec-{uuid} created, delegation_type=root     │
 │   │ Execution       │                                                   │
 │   └────────┬────────┘                                                   │
 │            │                                                            │
 │            ▼                                                            │
 │   ┌─────────────────┐                                                   │
-│   │ agent_started   │ ──► Frontend receives session_id                  │
-│   │ event emitted   │     Frontend stores in localStorage               │
+│   │ Stream messages │ ──► user, assistant, tool messages appended        │
+│   │ to session      │     to session stream as they happen              │
 │   └────────┬────────┘                                                   │
 │            │                                                            │
 │            ▼                                                            │
@@ -247,9 +289,18 @@ Sessions are the top-level container for user interactions. A session groups mul
 │        │                                                                │
 │        ▼                                                                │
 │   ┌─────────────────┐                                                   │
-│   │ Lookup existing │ ──► Same session reused                           │
-│   │ Session         │     New execution created under same session      │
-│   └────────┬────────┘                                                   │
+│   │ Reuse root      │ ──► Same session, same root execution             │
+│   │ execution       │     Reactivated if completed/crashed              │
+│   └────────┬────────┘     Full conversation history available           │
+│            │                                                            │
+│            ▼                                                            │
+│   Delegation spawns child session                                       │
+│        │                                                                │
+│        ▼                                                                │
+│   ┌─────────────────┐                                                   │
+│   │ Child session   │ ──► sess-{uuid} with parent_session_id set        │
+│   │ (isolated)      │     Subagent messages go to child stream          │
+│   └────────┬────────┘     Callback result posted to parent stream       │
 │            │                                                            │
 │            ▼                                                            │
 │   User sends /new command                                               │
@@ -267,9 +318,9 @@ Sessions are the top-level container for user interactions. A session groups mul
 
 | Concept | Scope | Purpose |
 |---------|-------|---------|
-| **Session** | User work session | Groups all activity until `/new` command |
-| **Execution** | Single agent turn | One agent processing one request |
-| **Conversation** | Message thread | Persists chat history for context |
+| **Session** (`sess-{uuid}`) | User work session | Groups all messages until `/new`. One continuous stream. |
+| **Execution** (`exec-{uuid}`) | Agent lifetime | Root execution reused across messages. Child executions for subagents. |
+| **Conversation ID** (`web-{uuid}`) | Client-side only | Generated in localStorage for WebSocket event routing. NOT in core DB schema. |
 
 ### Session and Execution States
 
@@ -374,9 +425,10 @@ User Message
 │   Resolution    │
 ├─────────────────┤
 │ if session_id { │
-│   lookup(id)    │ ──► Reuse existing session
+│   lookup(id)    │ ──► Reuse session + root execution
+│   reactivate()  │     (reactivate if completed/crashed)
 │ } else {        │
-│   create_new()  │ ──► New session + execution
+│   create_new()  │ ──► New session + root execution
 │ }               │
 └────────┬────────┘
          │
@@ -386,28 +438,34 @@ User Message
 │   Runner        │
 ├─────────────────┤
 │ 1. Load agent   │
-│ 2. Load history │ ◄── SQLite (by conversation_id)
-│ 3. Create LLM   │
+│ 2. Load history │ ◄── get_session_conversation(session_id, 200)
+│ 3. Create LLM   │     Full conversation with tool calls
 │ 4. Build tools  │
 └────────┬────────┘
          │
          ▼
-┌─────────────────┐
-│   Agent         │
-│   Executor      │
-├─────────────────┤
-│ while !done {   │
-│   llm.call()    │──► Stream tokens ──► WebSocket ──► UI
-│   if tool_call {│
-│     execute()   │──► Stream result ──► WebSocket ──► UI
-│   }             │
-│ }               │
-└────────┬────────┘
+┌──────────────────────────────────────────────────────────┐
+│   Agent Executor (messages streamed via BatchWriter)     │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│  append_message(user, input)        ──► session stream   │
+│                                                          │
+│  while !done {                                           │
+│    llm.call()                       ──► tokens → WS → UI│
+│    append_message(assistant, text+tool_calls)             │
+│    if tool_call {                                        │
+│      execute()                      ──► result → WS → UI│
+│      append_message(tool, result, tool_call_id)          │
+│    }                                                     │
+│  }                                                       │
+│                                                          │
+│  append_message(assistant, final_response)               │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────┐
-│  Save Messages  │ ──► SQLite
-│  Update Session │ ──► Status, timestamps
+│  Update Session │ ──► Status, token aggregation
 └─────────────────┘
 ```
 
@@ -519,49 +577,125 @@ User Message
 
 ## Database Schema
 
-### conversations
+### Entity Relationships
+
+```
+sessions ||--o{ sessions : "parent-child (delegation)"
+sessions ||--o{ agent_executions : contains
+sessions ||--o{ messages : "conversation stream"
+agent_executions ||--o{ agent_executions : "parent-child (delegation)"
+```
+
+### sessions
+Top-level container. Root sessions have `parent_session_id = NULL`.
+Child sessions (for subagents) link back to their parent.
+
 ```sql
-CREATE TABLE conversations (
-    id TEXT PRIMARY KEY,
-    agent_id TEXT NOT NULL,
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,                    -- sess-{uuid}
+    status TEXT NOT NULL,                   -- queued|running|completed|crashed|cancelled
+    source TEXT NOT NULL,                   -- web|cli|api|cron|plugin
+    root_agent_id TEXT NOT NULL,
     title TEXT,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL,
-    metadata TEXT
+    started_at TEXT,
+    completed_at TEXT,
+    error_message TEXT,                     -- null unless crashed
+    total_tokens_in INTEGER DEFAULT 0,
+    total_tokens_out INTEGER DEFAULT 0,
+    metadata TEXT,                          -- JSON
+    pending_delegations INTEGER DEFAULT 0,  -- Count of running subagents
+    continuation_needed INTEGER DEFAULT 0,  -- Flag for continuation after delegates
+    ward_id TEXT,                           -- Active code ward name
+    parent_session_id TEXT                  -- NULL=root, sess-{uuid}=child (subagent)
+);
+```
+
+### agent_executions
+An agent's participation in a session. Root execution is reused across user messages.
+
+```sql
+CREATE TABLE agent_executions (
+    id TEXT PRIMARY KEY,                    -- exec-{uuid}
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    agent_id TEXT NOT NULL,
+    parent_execution_id TEXT REFERENCES agent_executions(id),
+    delegation_type TEXT NOT NULL,          -- root|sequential|parallel
+    task TEXT,                              -- Task description for delegated agents
+    status TEXT NOT NULL,                   -- queued|running|paused|completed|crashed|cancelled
+    started_at TEXT,
+    completed_at TEXT,
+    tokens_in INTEGER DEFAULT 0,
+    tokens_out INTEGER DEFAULT 0,
+    checkpoint TEXT,                        -- JSON for resumption
+    error TEXT,
+    log_path TEXT                           -- Relative path to log file
 );
 ```
 
 ### messages
+Conversation stream linked directly to sessions (not via execution JOIN).
+Messages are streamed in real-time via BatchWriter as they happen.
+
 ```sql
 CREATE TABLE messages (
-    id TEXT PRIMARY KEY,
-    conversation_id TEXT NOT NULL,
-    role TEXT NOT NULL,           -- user, assistant, tool
+    id TEXT PRIMARY KEY,                    -- msg-{uuid}
+    execution_id TEXT,                      -- exec-{uuid}, nullable (audit trail)
+    session_id TEXT,                        -- sess-{uuid}, primary FK for queries
+    role TEXT NOT NULL,                     -- user|assistant|tool|system
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     token_count INTEGER DEFAULT 0,
-    tool_calls TEXT,              -- JSON array
-    tool_results TEXT,            -- JSON array
-    FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    tool_calls TEXT,                        -- JSON array (on assistant messages)
+    tool_results TEXT,                      -- JSON (legacy, unused in new path)
+    tool_call_id TEXT                       -- Links tool results to their tool call
 );
 ```
 
-### execution_logs
+### ID Conventions
+
+| Table | Prefix | Example |
+|-------|--------|---------|
+| sessions | `sess-` | `sess-03782b12-c041-4115-9cc7-c5fcc17775a6` |
+| agent_executions | `exec-` | `exec-f11b1447-9338-405c-a7d6-06f92cb87c84` |
+| messages | `msg-` | `msg-28ba79f2-b386-4a1c-8e5f-1a2b3c4d5e6f` |
+
+### Indexes
+
 ```sql
-CREATE TABLE execution_logs (
-    id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,        -- Groups logs for one agent invocation
-    conversation_id TEXT NOT NULL,
-    agent_id TEXT NOT NULL,
-    parent_session_id TEXT,          -- For delegated agents, links to parent
-    timestamp TEXT NOT NULL,
-    level TEXT NOT NULL,             -- debug, info, warn, error
-    category TEXT NOT NULL,          -- session, tool_call, tool_result, delegation, error
-    message TEXT NOT NULL,
-    metadata TEXT,                   -- JSON with tool args, results, etc.
-    duration_ms INTEGER
-);
+CREATE INDEX idx_sessions_status ON sessions(status);
+CREATE INDEX idx_sessions_created ON sessions(created_at);
+CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
+CREATE INDEX idx_executions_session ON agent_executions(session_id);
+CREATE INDEX idx_executions_parent ON agent_executions(parent_execution_id);
+CREATE INDEX idx_executions_status ON agent_executions(status);
+CREATE INDEX idx_executions_agent ON agent_executions(agent_id);
+CREATE INDEX idx_messages_execution ON messages(execution_id);
+CREATE INDEX idx_messages_created ON messages(created_at);
+CREATE INDEX idx_messages_session ON messages(session_id);
+CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 ```
+
+### Status Semantics
+
+**Session Status:**
+| Status | Description |
+|--------|-------------|
+| `queued` | Created but not yet started |
+| `running` | At least one agent execution is running |
+| `completed` | All executions completed successfully |
+| `crashed` | Root execution crashed |
+| `cancelled` | User cancelled the session |
+
+**Execution Status:**
+| Status | Description |
+|--------|-------------|
+| `queued` | Waiting to start |
+| `running` | Currently executing |
+| `paused` | Paused (session paused or waiting) |
+| `completed` | Finished successfully |
+| `crashed` | Failed with error |
+| `cancelled` | Cancelled by user or parent |
 
 ## Built-in Tools
 
@@ -573,7 +707,8 @@ CREATE TABLE execution_logs (
 | `read` | Read file contents | Safe |
 | `write` | Write content to file | Moderate |
 | `edit` | Edit file contents | Moderate |
-| `memory` | Persistent key-value store (shared/private) | Safe |
+| `memory` | Persistent key-value store (shared/private/ward) | Safe |
+| `ward` | Manage code wards (use, list, create, info) | Safe |
 | `todo` | Task management | Safe |
 | `list_skills` | List available skills | Safe |
 | `load_skill` | Load skill instructions | Safe |
@@ -598,38 +733,6 @@ CREATE TABLE execution_logs (
 | `knowledge_graph` | Entity-relationship storage | Safe |
 | `create_agent` | Create new agents | Moderate |
 | `introspection` | Agent introspection | Safe |
-
-## Design Decisions
-
-### Why No Desktop Wrapper?
-- Browsers are more capable than custom webviews
-- Easier deployment (no native installers)
-- Better developer experience (standard web tools)
-- Cross-platform without platform-specific builds
-
-### Why Single Daemon?
-- Simpler deployment and debugging
-- Shared state without IPC complexity
-- Single port configuration
-- Memory efficiency
-
-### Why SQLite?
-- Zero configuration
-- Portable (single file)
-- ACID transactions
-- Fast for local workloads
-
-### Why Rust?
-- Memory safety without GC
-- Excellent async story (tokio)
-- Great tooling (cargo, clippy)
-- Single binary distribution
-
-### Why Instructions in AGENTS.md?
-- Human-readable and editable
-- Version control friendly
-- Markdown rendering in UI
-- Separates behavior from configuration
 
 ## System Prompt Architecture
 
@@ -788,12 +891,3 @@ The `respond_to` field controls where agent responses are delivered:
 - **Specified**: Response dispatched to listed connectors
 - **Original source NOT automatically included** (explicit routing)
 
-## Data Layer Additions
-
-The following JSON files are added to the data directory:
-
-```
-~/Documents/agentzero/
-├── connectors.json      # Connector configurations
-└── cron_jobs.json       # Scheduled job configurations
-```

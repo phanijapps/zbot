@@ -1,0 +1,19 @@
+# ============================================================================
+# GATEWAY TEMPLATES
+# Embedded templates and system prompt assembly for AgentZero agents
+# ============================================================================
+
+[package]
+name = "gateway-templates"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Embedded templates and system prompt assembly for AgentZero"
+
+[dependencies]
+rust-embed = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"

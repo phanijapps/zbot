@@ -1,0 +1,16 @@
+# ============================================================================
+# GATEWAY-WS-PROTOCOL: WebSocket message types
+# ============================================================================
+
+[package]
+name = "gateway-ws-protocol"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "WebSocket protocol message types for AgentZero gateway"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }

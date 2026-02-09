@@ -1,0 +1,35 @@
+# ============================================================================
+# GATEWAY-CRON: Cron job configuration and service
+# ============================================================================
+
+[package]
+name = "gateway-cron"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Cron job configuration and persistence for AgentZero gateway"
+
+[dependencies]
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Utilities
+chrono = { workspace = true }
+
+# Cron scheduling (for schedule validation)
+tokio-cron-scheduler = "0.13"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"

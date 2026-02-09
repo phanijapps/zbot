@@ -17,6 +17,9 @@ dist-ssr/
 dist-web/
 target/
 src-tauri/target/
+.ref/
+.serena/
+.claude/
 *.wix
 # Tauri specific
 src-tauri/Cargo.lock

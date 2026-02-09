@@ -290,6 +290,14 @@ pub struct Session {
     /// Whether this session needs a continuation turn after delegations complete
     #[serde(default)]
     pub continuation_needed: bool,
+
+    /// Active ward (named project directory) for this session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ward_id: Option<String>,
+
+    /// Parent session ID (None = root session, Some = child/subagent session)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_session_id: Option<String>,
 }
 
 impl Session {
@@ -314,6 +322,8 @@ impl Session {
             metadata: None,
             pending_delegations: 0,
             continuation_needed: false,
+            ward_id: None,
+            parent_session_id: None,
         }
     }
 
@@ -333,6 +343,29 @@ impl Session {
             metadata: None,
             pending_delegations: 0,
             continuation_needed: false,
+            ward_id: None,
+            parent_session_id: None,
+        }
+    }
+
+    /// Create a child session for a subagent (isolated conversation context).
+    pub fn new_child(root_agent_id: impl Into<String>, parent_session_id: impl Into<String>) -> Self {
+        Self {
+            id: format!("sess-{}", uuid::Uuid::new_v4()),
+            status: SessionStatus::Running,
+            source: TriggerSource::Web,
+            root_agent_id: root_agent_id.into(),
+            title: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+            started_at: None,
+            completed_at: None,
+            total_tokens_in: 0,
+            total_tokens_out: 0,
+            metadata: None,
+            pending_delegations: 0,
+            continuation_needed: false,
+            ward_id: None,
+            parent_session_id: Some(parent_session_id.into()),
         }
     }
 

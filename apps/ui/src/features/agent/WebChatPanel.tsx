@@ -90,6 +90,14 @@ export function WebChatPanel() {
   // Delegation tracking - uses SubagentActivity for detailed tracking
   const [subagentActivities, setSubagentActivities] = useState<Map<string, SubagentActivity>>(new Map());
 
+  // Token streaming buffer - prevents garbled text from rapid/duplicate events
+  const streamingBufferRef = useRef<string>("");
+  const rafIdRef = useRef<number | null>(null);
+  const lastSeqRef = useRef<number>(0);
+
+  // Synchronous guard to prevent double-submission (React state is async)
+  const isSubmittingRef = useRef(false);
+
   // Handle ?new=1 param to start a fresh session
   useEffect(() => {
     if (searchParams.get("new") === "1") {
@@ -134,9 +142,57 @@ export function WebChatPanel() {
     loadHistory();
   }, [conversationId]);
 
+  // Flush buffered token deltas to state (called via requestAnimationFrame)
+  const flushTokenBuffer = useCallback(() => {
+    const buffered = streamingBufferRef.current;
+    if (!buffered) return;
+    streamingBufferRef.current = "";
+    rafIdRef.current = null;
+
+    setMessages((prev) => {
+      const last = prev[prev.length - 1];
+      if (last && last.role === "assistant" && last.isStreaming) {
+        return [
+          ...prev.slice(0, -1),
+          { ...last, content: last.content + buffered },
+        ];
+      }
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          content: buffered,
+          timestamp: new Date(),
+          isStreaming: true,
+        },
+      ];
+    });
+  }, []);
+
   // Event handler for stream events - defined before subscription so it's in scope
   const handleStreamEvent = useCallback((event: StreamEvent) => {
+    // Deduplicate events by sequence number (prevents double delivery from
+    // dual-path routing or reconnection races)
+    const seq = event.seq as number | undefined;
+    if (seq !== undefined && seq > 0) {
+      if (seq <= lastSeqRef.current) {
+        return; // Skip duplicate or out-of-order event
+      }
+      lastSeqRef.current = seq;
+    }
+
     switch (event.type) {
+      case "invoke_accepted":
+        // Learn session_id early (before AgentStarted) to reduce subscription transition window
+        if (event.session_id && typeof event.session_id === "string") {
+          setSessionId(event.session_id);
+          setActiveSessionId(event.session_id);
+        }
+        // Reset seq tracking for new session
+        lastSeqRef.current = 0;
+        break;
+
       case "agent_started":
         setIsProcessing(true);
         // Capture session_id from the backend for session continuity AND subscription
@@ -148,25 +204,12 @@ export function WebChatPanel() {
         break;
 
       case "token":
-        setMessages((prev) => {
-          const last = prev[prev.length - 1];
-          if (last && last.role === "assistant" && last.isStreaming) {
-            return [
-              ...prev.slice(0, -1),
-              { ...last, content: last.content + (event.delta as string) },
-            ];
-          }
-          return [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              role: "assistant",
-              content: event.delta as string,
-              timestamp: new Date(),
-              isStreaming: true,
-            },
-          ];
-        });
+        // Buffer tokens and flush on next animation frame to prevent
+        // garbled text from rapid state updates or duplicate events
+        streamingBufferRef.current += event.delta as string;
+        if (rafIdRef.current === null) {
+          rafIdRef.current = requestAnimationFrame(flushTokenBuffer);
+        }
         break;
 
       case "tool_call":
@@ -375,6 +418,13 @@ export function WebChatPanel() {
       case "agent_completed":
       case "turn_complete":
       case "error":
+        // Flush any remaining buffered tokens before finalizing
+        if (rafIdRef.current !== null) {
+          cancelAnimationFrame(rafIdRef.current);
+          rafIdRef.current = null;
+        }
+        flushTokenBuffer();
+
         setIsProcessing(false);
         setMessages((prev) => {
           const last = prev[prev.length - 1];
@@ -388,7 +438,7 @@ export function WebChatPanel() {
       case "session_ended":
         break;
     }
-  }, []); // State setters are stable, no deps needed
+  }, [flushTokenBuffer]);
 
   // Subscribe to events via server-side routing
   // Uses "session" scope for main chat view - filters subagent internal events server-side
@@ -429,6 +479,13 @@ export function WebChatPanel() {
       if (unsubscribe) {
         unsubscribe();
       }
+      // Cancel any pending token buffer flush
+      if (rafIdRef.current !== null) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      streamingBufferRef.current = "";
+      lastSeqRef.current = 0;
     };
   }, [activeSessionId, conversationId, handleStreamEvent]);
 
@@ -461,7 +518,12 @@ export function WebChatPanel() {
   };
 
   const handleSend = async () => {
-    if (!input.trim() || isProcessing) return;
+    // Use ref as synchronous guard — React state (isProcessing) is batched
+    // and won't update between rapid calls (e.g., Enter key repeat).
+    // Without this, multiple Invoke messages can be sent, creating parallel
+    // agent executions whose token streams interleave → garbled text.
+    if (!input.trim() || isProcessing || isSubmittingRef.current) return;
+    isSubmittingRef.current = true;
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
@@ -482,11 +544,13 @@ export function WebChatPanel() {
     } catch (error) {
       console.error("Failed to send message:", error);
       setIsProcessing(false);
+    } finally {
+      isSubmittingRef.current = false;
     }
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey && !e.repeat) {
       e.preventDefault();
       handleSend();
     }

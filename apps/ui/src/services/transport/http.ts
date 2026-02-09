@@ -105,17 +105,19 @@ export class HttpTransport implements Transport {
   private readonly PING_INTERVAL = 15000;
   private readonly PONG_TIMEOUT = 30000;
 
+  // Active execution tracking — enables unlimited reconnect during execution
+  private hasActiveExecution = false;
+
   // Browser event handlers (stored for cleanup)
   private visibilityHandler: (() => void) | null = null;
   private onlineHandler: (() => void) | null = null;
 
-  // Simple deduplication for events delivered via multiple subscription paths.
-  // With server-side scope filtering (#26-#31), this is now primarily a safety net for:
-  // 1. Dual subscriptions (conversation_id + session_id) receiving the same event
-  // 2. Reconnection race conditions
-  // TODO: Can be removed once backend dual-path routing is consolidated (see handler.rs lines 122-167)
+  // Simple deduplication safety net for reconnection race conditions.
+  // Backend dual-path routing (conversation_id + session_id) has been removed;
+  // events now route only by session_id. This dedup is retained as a safety net
+  // for reconnection scenarios and can be simplified/removed in a follow-up.
   private recentEvents = new Set<string>();
-  private readonly MAX_RECENT = 200; // Reduced from 500 - fewer duplicates with server-side filtering
+  private readonly MAX_RECENT = 200;
 
   // =========================================================================
   // Initialization
@@ -952,6 +954,19 @@ export class HttpTransport implements Transport {
       }
     }
     this.pendingSubscriptions.clear();
+
+    // Emit synthetic reconnected event so UI can re-fetch state after reconnect
+    if (this.hasActiveExecution) {
+      for (const [conversationId, state] of this.conversationSubscriptions) {
+        for (const callback of state.callbacks) {
+          try {
+            callback({ type: "reconnected", conversation_id: conversationId } as ConversationEvent);
+          } catch (e) {
+            console.error("[Transport] Reconnected callback error:", e);
+          }
+        }
+      }
+    }
   }
 
   // =========================================================================
@@ -1021,9 +1036,36 @@ export class HttpTransport implements Transport {
         return true;
       }
 
+      case "invoke_accepted": {
+        // InvokeAccepted is sent directly to the WS client (not via event bus routing).
+        // Route it to subscribers of the conversation_id so the frontend learns the session_id.
+        const convId = message.conversation_id as string;
+        if (convId) {
+          const state = this.conversationSubscriptions.get(convId);
+          if (state) {
+            for (const callback of state.callbacks) {
+              try {
+                callback(message as ConversationEvent);
+              } catch (e) {
+                console.error(e);
+              }
+            }
+          }
+        }
+        return true;
+      }
+
       case "pong": {
         this.lastPong = Date.now();
         return true;
+      }
+
+      case "heartbeat": {
+        // Execution alive signal — reset pong timer to prevent timeout
+        this.lastPong = Date.now();
+        this.hasActiveExecution = true;
+        // Route to subscribers so UI can show "thinking..." indicator
+        return this.handleConversationMessage(message);
       }
 
       default:
@@ -1071,6 +1113,12 @@ export class HttpTransport implements Transport {
     if (this.recentEvents.size > this.MAX_RECENT) {
       const first = this.recentEvents.values().next().value;
       if (first) this.recentEvents.delete(first);
+    }
+
+    // Track active execution state for reconnection policy
+    if (message.type === "agent_started") this.hasActiveExecution = true;
+    if (message.type === "agent_completed" || message.type === "agent_stopped" || message.type === "turn_complete") {
+      this.hasActiveExecution = false;
     }
 
     // Route to subscribers
@@ -1125,7 +1173,14 @@ export class HttpTransport implements Transport {
   }
 
   private attemptReconnect(): void {
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+    // During active execution: unlimited retries with capped backoff at 10s.
+    // This prevents the UI from giving up while the daemon is still running.
+    const effectiveMaxAttempts = this.hasActiveExecution
+      ? Infinity
+      : this.maxReconnectAttempts;
+    const maxBackoff = this.hasActiveExecution ? 10_000 : 32_000;
+
+    if (this.reconnectAttempts >= effectiveMaxAttempts) {
       console.log("[HttpTransport] Max reconnect attempts reached");
       this.setConnectionState({
         status: "failed",
@@ -1135,13 +1190,18 @@ export class HttpTransport implements Transport {
     }
 
     this.reconnectAttempts++;
-    const delay = this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1);
-    console.log(`[HttpTransport] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts})`);
+    const delay = Math.min(
+      this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+      maxBackoff
+    );
+    console.log(
+      `[HttpTransport] Reconnecting in ${delay}ms (attempt ${this.reconnectAttempts}${this.hasActiveExecution ? ", active execution" : ""})`
+    );
 
     this.setConnectionState({
       status: "reconnecting",
       attempt: this.reconnectAttempts,
-      maxAttempts: this.maxReconnectAttempts,
+      maxAttempts: this.hasActiveExecution ? undefined : this.maxReconnectAttempts,
     });
 
     setTimeout(() => {

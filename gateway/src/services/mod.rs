@@ -1,19 +1,13 @@
 //! # Services
 //!
 //! Shared services for gateway operations.
+//!
+//! Most services are provided by the `gateway-services` crate.
+//! RuntimeService remains here due to its dependency on execution types.
 
-pub mod agent_registry;
-pub mod agents;
-pub mod mcp;
-pub mod providers;
+// Re-export all services from the gateway-services crate
+pub use gateway_services::*;
+
+// RuntimeService stays in gateway (depends on execution types)
 pub mod runtime;
-pub mod settings;
-pub mod skills;
-
-pub use agent_registry::AgentRegistry;
-pub use agents::AgentService;
-pub use mcp::McpService;
-pub use providers::ProviderService;
 pub use runtime::RuntimeService;
-pub use settings::SettingsService;
-pub use skills::SkillService;

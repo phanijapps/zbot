@@ -13,6 +13,8 @@ use tokio::time::timeout;
 
 use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
+use super::apply_patch;
+
 // ============================================================================
 // SECURITY CONFIGURATION
 // ============================================================================
@@ -21,7 +23,8 @@ use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 const BLOCKED_COMMANDS: &[&str] = &[
     // Disk/partition destruction
     "mkfs",
-    "dd",
+    "dd if=",
+    "dd of=",
     "fdisk",
     "parted",
     "gdisk",
@@ -234,7 +237,7 @@ impl ShellTool {
         }
 
         // Block backtick command substitution with dangerous commands
-        if command.contains('`') && (command.contains("rm ") || command.contains("dd ")) {
+        if command.contains('`') && (command.contains("rm ") || command.contains("dd if=") || command.contains("dd of=")) {
             return Err(ZeroError::Tool(
                 "Command blocked: potential command injection".to_string(),
             ));
@@ -333,6 +336,34 @@ impl Tool for ShellTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        // Check for error markers from truncated/malformed tool calls.
+        // Return a result (not error) with recovery guidance so the agent can retry.
+        if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
+            let original_len = args.get("__original_length__").and_then(|v| v.as_u64()).unwrap_or(0);
+            let guidance = if error_type == "TRUNCATED_ARGUMENTS" {
+                format!(
+                    "Your shell command was too large ({} bytes) and was truncated. \
+                     To fix this:\n\
+                     1. SIMPLIFY: Write shorter, simpler code. Avoid verbose formatting.\n\
+                     2. If using apply_patch: write one file per call, keep files under 200 lines.\n\
+                     3. Do NOT attempt to assemble a large file from many small chunks — this is fragile and error-prone.\n\
+                     4. Keep each shell call under 12,000 bytes of arguments.",
+                    original_len
+                )
+            } else {
+                let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+                format!("Shell command could not be parsed: {}", message)
+            };
+            return Ok(json!({
+                "success": false,
+                "exit_code": -1,
+                "stdout": "",
+                "stderr": guidance,
+                "truncated": false,
+                "shell": "none (arguments were truncated before execution)",
+            }));
+        }
+
         // Check if tool is disabled due to elevated privileges
         if self.disabled {
             return Err(ZeroError::Tool(
@@ -365,6 +396,45 @@ impl Tool for ShellTool {
         // Validate command against security rules
         Self::validate_command(command)?;
 
+        // ---- apply_patch interception ----
+        // If the command is an apply_patch invocation, handle it directly without spawning a shell.
+        // This enables multi-file create/update/delete in a single tool call with zero extra schema.
+        {
+            // Resolve cwd the same way the shell would
+            let patch_cwd = if let Some(dir) = cwd {
+                std::path::PathBuf::from(dir)
+            } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+                let ward_id = ctx
+                    .get_state("ward_id")
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_else(|| "scratch".to_string());
+                doc_dir.join("agentzero").join("wards").join(&ward_id)
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
+            };
+
+            if let Some(result) = apply_patch::intercept_apply_patch(command, &patch_cwd) {
+                return match result {
+                    Ok(output) => Ok(json!({
+                        "success": true,
+                        "exit_code": 0,
+                        "stdout": output,
+                        "stderr": "",
+                        "truncated": false,
+                        "shell": "apply_patch",
+                    })),
+                    Err(e) => Ok(json!({
+                        "success": false,
+                        "exit_code": 1,
+                        "stdout": "",
+                        "stderr": e.to_string(),
+                        "truncated": false,
+                        "shell": "apply_patch",
+                    })),
+                };
+            }
+        }
+
         tracing::debug!(
             "Shell: executing command ({} chars) with {}s timeout",
             command.len(),
@@ -392,11 +462,13 @@ impl Tool for ShellTool {
         cmd.arg(command);
 
         // Set sandboxed Python virtual environment and Node.js modules
-        if let Some(config_dir) = dirs::config_dir() {
-            let agentzero_dir = config_dir.join("agentzero");
+        // Use ~/Documents/agentzero (matching gateway data_dir resolution)
+        if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+            let agentzero_dir = doc_dir.join("agentzero");
+            let wards_dir = agentzero_dir.join("wards");
 
-            // === Python Virtual Environment ===
-            let venv_path = agentzero_dir.join("venv");
+            // === Python Virtual Environment (shared across all wards) ===
+            let venv_path = wards_dir.join(".venv");
 
             // Set VIRTUAL_ENV to activate the venv
             cmd.env("VIRTUAL_ENV", &venv_path);
@@ -407,37 +479,23 @@ impl Tool for ShellTool {
             #[cfg(not(windows))]
             let venv_bin = venv_path.join("bin");
 
-            // === Agent-specific Node.js modules ===
-            // Get agent_id from context (use root_agent_id for subagents to share node_modules)
-            let agent_id = ctx
-                .get_state("app:root_agent_id")
-                .and_then(|v| v.as_str().map(String::from))
-                .or_else(|| {
-                    ctx.get_state("app:agent_id")
-                        .and_then(|v| v.as_str().map(String::from))
-                });
+            // === Shared Node.js environment (shared across all wards) ===
+            let node_env_dir = wards_dir.join(".node_env");
+            let node_modules = node_env_dir.join("node_modules");
 
-            // Build PATH with optional agent node_modules/.bin
+            // Build PATH with venv bin and optional node_modules/.bin
             let mut path_parts: Vec<String> = vec![venv_bin.display().to_string()];
 
-            // Add agent-specific node_modules/.bin to PATH if it exists
-            if let Some(agent_id) = &agent_id {
-                let agents_data_dir = agentzero_dir.join("agents_data").join(agent_id);
-                let node_modules = agents_data_dir.join("node_modules");
+            // Always set NODE_PATH so `npm install` targets the shared location
+            cmd.env("NODE_PATH", node_modules.display().to_string());
 
-                if node_modules.exists() {
-                    // Set NODE_PATH for module resolution
-                    cmd.env("NODE_PATH", node_modules.display().to_string());
-
-                    // Add .bin to PATH for executables
-                    let node_bin = node_modules.join(".bin");
-                    if node_bin.exists() {
-                        path_parts.push(node_bin.display().to_string());
-                    }
-
-                    tracing::debug!("Shell: added agent node_modules for {}", agent_id);
-                }
+            // Add .bin to PATH for executables if it exists
+            let node_bin = node_modules.join(".bin");
+            if node_bin.exists() {
+                path_parts.push(node_bin.display().to_string());
             }
+
+            tracing::debug!("Shell: NODE_PATH set to {}", node_modules.display());
 
             // Build PATH: venv/bin + node_modules/.bin + original PATH
             if let Ok(current_path) = std::env::var("PATH") {
@@ -452,7 +510,7 @@ impl Tool for ShellTool {
             cmd.env_remove("PYTHONHOME");
         }
 
-        // Set working directory if provided
+        // Set working directory: explicit cwd > ward dir > scratch ward > none
         if let Some(dir) = cwd {
             // Validate cwd doesn't contain path traversal
             if dir.contains("..") {
@@ -461,6 +519,25 @@ impl Tool for ShellTool {
                 ));
             }
             cmd.current_dir(dir);
+        } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+            let wards_dir = doc_dir.join("agentzero").join("wards");
+
+            // Use ward_id if set, otherwise fall back to "scratch"
+            let ward_id = ctx
+                .get_state("ward_id")
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_else(|| "scratch".to_string());
+
+            let ward_dir = wards_dir.join(&ward_id);
+            if !ward_dir.exists() {
+                if let Err(e) = std::fs::create_dir_all(&ward_dir) {
+                    tracing::warn!("Failed to create ward dir {}: {}", ward_dir.display(), e);
+                }
+            }
+            if ward_dir.exists() {
+                tracing::debug!("Shell: cwd set to {} (ward: {})", ward_dir.display(), ward_id);
+                cmd.current_dir(&ward_dir);
+            }
         }
 
         // Execute with timeout
@@ -558,6 +635,7 @@ mod tests {
         assert!(ShellTool::validate_command("rm -rf /").is_err());
         assert!(ShellTool::validate_command("mkfs.ext4 /dev/sda1").is_err());
         assert!(ShellTool::validate_command("dd if=/dev/zero of=/dev/sda").is_err());
+        assert!(ShellTool::validate_command("dd of=/dev/sda").is_err());
         assert!(ShellTool::validate_command("format c:").is_err());
         assert!(ShellTool::validate_command("sudo su").is_err());
     }
@@ -569,6 +647,9 @@ mod tests {
         assert!(ShellTool::validate_command("pwd").is_ok());
         assert!(ShellTool::validate_command("cat file.txt").is_ok());
         assert!(ShellTool::validate_command("git status").is_ok());
+        // "dd" as substring should not be blocked
+        assert!(ShellTool::validate_command("git add .").is_ok());
+        assert!(ShellTool::validate_command("npm add express").is_ok());
     }
 
     #[test]

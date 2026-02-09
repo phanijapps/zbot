@@ -45,13 +45,34 @@ impl Tool for ListSkillsTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        // Get list of currently loaded skills from context state
+        let loaded_skills: Vec<String> = ctx.get_state("skill:loaded_skills")
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default();
+
         // Try to read cached skill list from context state first
         if let Some(cached_skills) = ctx.get_state("available_skills") {
             if let Some(skills_array) = cached_skills.as_array() {
+                // Annotate skills with loaded status
+                let annotated_skills: Vec<Value> = skills_array.iter().map(|skill| {
+                    let skill_name = skill.get("name")
+                        .and_then(|n| n.as_str())
+                        .unwrap_or("");
+                    let is_loaded = loaded_skills.contains(&skill_name.to_string());
+                    let mut skill_obj = skill.clone();
+                    if let Some(obj) = skill_obj.as_object_mut() {
+                        obj.insert("loaded".to_string(), json!(is_loaded));
+                    }
+                    skill_obj
+                }).collect();
+
+                let loaded_count = loaded_skills.len();
                 return Ok(json!({
-                    "skills": skills_array,
-                    "count": skills_array.len(),
-                    "usage": "Use load_skill with the skill name to load a skill's instructions"
+                    "skills": annotated_skills,
+                    "count": annotated_skills.len(),
+                    "loaded_count": loaded_count,
+                    "loaded_skills": loaded_skills,
+                    "usage": "Use load_skill with the skill name to load a skill's instructions. Skills marked 'loaded: true' are already in context."
                 }));
             }
         }
@@ -95,18 +116,25 @@ impl Tool for ListSkillsTool {
                         "No SKILL.md found".to_string()
                     };
 
+                    // Check if this skill is currently loaded
+                    let is_loaded = loaded_skills.contains(&skill_name);
+
                     skills.push(json!({
                         "name": skill_name,
                         "description": description,
+                        "loaded": is_loaded,
                     }));
                 }
             }
         }
 
+        let loaded_count = loaded_skills.len();
         Ok(json!({
             "skills": skills,
             "count": skills.len(),
-            "usage": "Use load_skill with the skill name to load a skill's instructions"
+            "loaded_count": loaded_count,
+            "loaded_skills": loaded_skills,
+            "usage": "Use load_skill with the skill name to load a skill's instructions. Skills marked 'loaded: true' are already in context."
         }))
     }
 }

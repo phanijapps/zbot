@@ -148,6 +148,54 @@ pub enum StreamEvent {
         /// Cumulative output tokens (completion tokens)
         tokens_out: u64,
     },
+
+    // ========================================================================
+    // CHECKPOINT EVENTS
+    // ========================================================================
+
+    /// Execution heartbeat — emitted during silent phases (e.g., LLM reasoning)
+    /// to signal the execution is still alive.
+    #[serde(rename = "heartbeat")]
+    Heartbeat {
+        timestamp: u64,
+    },
+
+    /// Execution context state for checkpoint persistence.
+    ///
+    /// Emitted at the end of execution (after Done) to allow the gateway
+    /// to persist the context state for session resumption. Contains skill
+    /// tracking information and other tool context state.
+    #[serde(rename = "context_state")]
+    ContextState {
+        /// Timestamp when state was captured
+        timestamp: u64,
+        /// Serialized tool context state (skill graph, loaded skills, etc.)
+        state: Value,
+    },
+
+    // ========================================================================
+    // WARD EVENTS
+    // ========================================================================
+
+    /// Agent switched to a different ward (project directory).
+    #[serde(rename = "ward_changed")]
+    WardChanged {
+        timestamp: u64,
+        /// The ward the agent switched to
+        ward_id: String,
+    },
+
+    /// Executor auto-extended iterations because the agent is making progress.
+    #[serde(rename = "iterations_extended")]
+    IterationsExtended {
+        timestamp: u64,
+        /// Total iterations used so far
+        iterations_used: u32,
+        /// Additional iterations granted
+        iterations_added: u32,
+        /// Human-readable reason for extension
+        reason: String,
+    },
 }
 
 impl StreamEvent {
@@ -167,7 +215,11 @@ impl StreamEvent {
             | Self::RequestInput { timestamp, .. }
             | Self::ActionRespond { timestamp, .. }
             | Self::ActionDelegate { timestamp, .. }
-            | Self::TokenUpdate { timestamp, .. } => *timestamp,
+            | Self::TokenUpdate { timestamp, .. }
+            | Self::Heartbeat { timestamp, .. }
+            | Self::ContextState { timestamp, .. }
+            | Self::WardChanged { timestamp, .. }
+            | Self::IterationsExtended { timestamp, .. } => *timestamp,
         }
     }
 

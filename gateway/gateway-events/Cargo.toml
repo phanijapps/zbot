@@ -1,0 +1,22 @@
+# ============================================================================
+# GATEWAY EVENTS
+# Event bus and event types for the AgentZero gateway
+# ============================================================================
+
+[package]
+name = "gateway-events"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Event bus and event types for the AgentZero gateway"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"

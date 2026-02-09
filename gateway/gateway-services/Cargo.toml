@@ -1,0 +1,40 @@
+# ============================================================================
+# GATEWAY SERVICES
+# Config-based services for agents, providers, MCP, skills, and settings
+# ============================================================================
+
+[package]
+name = "gateway-services"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Config-based services for the AgentZero gateway"
+
+[dependencies]
+# Internal crates (for shared config types)
+agent-runtime = { path = "../../runtime/agent-runtime" }
+agent-tools = { path = "../../runtime/agent-tools" }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+
+# Async
+tokio = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# HTTP client (for provider health checks)
+reqwest = { version = "0.12", features = ["json"] }
+
+# Utilities
+uuid = { workspace = true }
+chrono = { workspace = true }
+regex = "1"
+
+[dev-dependencies]
+tempfile = "3"
+tokio-test = "0.4"

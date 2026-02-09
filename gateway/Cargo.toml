@@ -23,6 +23,16 @@ agent-runtime = { path = "../runtime/agent-runtime" }
 agent-tools = { path = "../runtime/agent-tools" }
 zero-core = { path = "../framework/zero-core" }
 zero-app = { path = "../framework/zero-app" }
+gateway-events = { path = "gateway-events" }
+gateway-database = { path = "gateway-database" }
+gateway-templates = { path = "gateway-templates" }
+gateway-connectors = { path = "gateway-connectors" }
+gateway-services = { path = "gateway-services" }
+gateway-execution = { path = "gateway-execution" }
+gateway-hooks = { path = "gateway-hooks" }
+gateway-cron = { path = "gateway-cron" }
+gateway-bus = { path = "gateway-bus" }
+gateway-ws-protocol = { path = "gateway-ws-protocol" }
 
 # Web framework
 axum = { version = "0.7", features = ["ws", "macros"] }
@@ -64,6 +74,8 @@ tokio-cron-scheduler = "0.13"
 
 # Database
 rusqlite = { version = "0.32", features = ["bundled"] }
+r2d2 = "0.8"
+r2d2_sqlite = "0.25"
 
 [dev-dependencies]
 tokio-test = "0.4"

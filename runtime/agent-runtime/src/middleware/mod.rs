@@ -41,7 +41,7 @@ pub mod token_counter;
 
 // Re-exports for convenience
 pub use pipeline::MiddlewarePipeline;
-pub use traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext, MiddlewareEffect};
+pub use traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext, MiddlewareEffect, ExecutionState, SkillInfo};
 pub use config::{MiddlewareConfig, TriggerCondition, KeepPolicy, SummarizationConfig, ContextEditingConfig};
 pub use summarization::SummarizationMiddleware;
 pub use context_editing::ContextEditingMiddleware;

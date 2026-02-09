@@ -82,6 +82,9 @@ pub fn get_model_context_window(model: &str) -> usize {
         m if m.contains("llama-3") => 128_000,
         m if m.contains("llama-2") => 4_096,
 
+        // GLM models
+        m if m.contains("glm-4") => 128_000,
+
         // Mistral models
         m if m.contains("mistral-large") => 128_000,
         m if m.contains("mistral-7b") => 32_768,
