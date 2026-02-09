@@ -21,7 +21,6 @@ import {
   Search,
   Terminal,
   Layers,
-  Brain,
   Users,
   Eye,
   LayoutDashboard,
@@ -403,13 +402,6 @@ function WebSettingsPanel() {
       icon: Layers,
       tools: [
         { key: "uiTools" as const, label: "UI Tools", description: "Interactive UI components" },
-      ],
-    },
-    {
-      name: "Knowledge",
-      icon: Brain,
-      tools: [
-        { key: "knowledgeGraph" as const, label: "Knowledge Graph", description: "Graph-based memory" },
       ],
     },
     {

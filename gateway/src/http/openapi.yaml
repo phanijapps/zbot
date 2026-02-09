@@ -2140,8 +2140,6 @@ components:
           type: boolean
         web_fetch_enabled:
           type: boolean
-        knowledge_graph_enabled:
-          type: boolean
         offload_threshold:
           type: integer
 

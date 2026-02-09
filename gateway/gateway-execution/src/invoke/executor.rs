@@ -13,7 +13,7 @@ use agent_tools::{core_tools, optional_tools, ListAgentsTool, ToolSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use zero_core::FileSystemContext;
+use zero_core::{FileSystemContext, MemoryFactStore};
 
 use crate::config::GatewayFileSystem;
 
@@ -37,6 +37,7 @@ pub struct ExecutorBuilder {
     config_dir: PathBuf,
     tool_settings: ToolSettings,
     workspace_cache: Option<WorkspaceCache>,
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
 }
 
 impl ExecutorBuilder {
@@ -46,12 +47,19 @@ impl ExecutorBuilder {
             config_dir,
             tool_settings,
             workspace_cache: None,
+            fact_store: None,
         }
     }
 
     /// Set workspace cache for this builder.
     pub fn with_workspace_cache(mut self, cache: WorkspaceCache) -> Self {
         self.workspace_cache = Some(cache);
+        self
+    }
+
+    /// Set the memory fact store for DB-backed save_fact/recall.
+    pub fn with_fact_store(mut self, fact_store: Arc<dyn MemoryFactStore>) -> Self {
+        self.fact_store = Some(fact_store);
         self
     }
 
@@ -184,8 +192,8 @@ impl ExecutorBuilder {
     fn build_tool_registry(&self, fs_context: Arc<dyn FileSystemContext>) -> Arc<ToolRegistry> {
         let mut tool_registry = ToolRegistry::new();
 
-        // Load core tools (always enabled)
-        tool_registry.register_all(core_tools(fs_context.clone()));
+        // Load core tools (always enabled, with optional DB-backed fact store)
+        tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
 
         // Load optional tools based on settings
         tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));

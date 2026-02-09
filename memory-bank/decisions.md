@@ -40,11 +40,12 @@
 
 ## Architecture Decisions
 
-### Tool Tiers (Core 11, Optional, Action)
-- **Core (11)**: shell, read, write, edit, memory, ward, todo, list_skills, load_skill, grep, glob — always available
+### Tool Tiers (Core 7, Optional, Action) — Shell-First
+- **Core (7)**: shell (w/ apply_patch), memory, ward, update_plan, list_skills, load_skill, grep — always available
 - **Action (3)**: respond, delegate_to_agent, list_agents — always available, drive agent behavior
-- **Optional**: python, web_fetch, ui_tools, knowledge_graph, create_agent, introspection — configurable per agent
-- Tiers prevent agents from accidentally accessing dangerous tools without explicit configuration
+- **Optional**: read, write, edit, glob, todos, python, web_fetch, ui_tools, create_agent, introspection — configurable per agent
+- Shell-first: the agent uses `shell` + `apply_patch` for file operations by default. Separate file tools (read/write/edit/glob) are opt-in.
+- Old standalone knowledge_graph tools (5) removed — replaced by unified `graph` action in memory tool
 
 ### Memory: 4-Tier Hierarchy
 | Tier | Path | Purpose |
@@ -94,6 +95,38 @@ ProviderService, McpService, and SettingsService use RwLock caches (providers.js
 
 ### AGENTS.md as Documentation Standard
 Every crate directory has an AGENTS.md describing what it does, its key files, and what it does NOT handle. These serve as both human documentation and AI context.
+
+### Memory Evolution: Brute-Force Cosine Over sqlite-vec
+**Problem**: Hybrid search needs vector similarity. sqlite-vec requires loading a native extension (.dll/.so) at runtime — platform-specific, tricky distribution.
+**Decision**: Compute cosine similarity in Rust. Load all embeddings from `embedding_cache` for the agent, compute similarity in-memory, take top-K.
+**Rationale**: For <10K facts, brute-force is ~2-5ms. No extension loading, no platform concerns, no ANN index needed. Revisit if facts exceed 100K.
+
+### Memory Evolution: Local Embeddings as Default
+**Problem**: Embedding APIs cost money and require internet. Not all users have API keys configured.
+**Decision**: Default to `fastembed` crate with `all-MiniLM-L6-v2` (384 dimensions, ~100MB ONNX model). Local ONNX inference on CPU — zero API calls, zero cost, works offline.
+**Alternative**: OpenAI-compatible API (configurable per provider). User can switch to Ollama `nomic-embed-text` (768d) or OpenAI `text-embedding-3-small` (1536d) via `EmbeddingConfig`.
+
+### Memory Evolution: Session Distillation Over Manual Memory
+**Problem**: Agents forget to save important facts. Users shouldn't have to remind them.
+**Decision**: After each session (>10 messages), fire-and-forget LLM call extracts durable facts (preferences, decisions, patterns, entities, instructions, corrections) into `memory_facts` with embeddings.
+**Advantage over Clawdbot**: We have full session transcripts (Session Tree). Clawdbot relies on agent manually writing to markdown files. Our distillation is automatic and structured.
+**Safety**: Fire-and-forget (never blocks user), async spawn, only runs on sessions with sufficient signal (>10 messages).
+
+### Memory Evolution: Hybrid Search Scoring
+**Formula**: `(0.7 × vector_cosine + 0.3 × BM25_score) × confidence × recency_decay × mention_boost`
+**Rationale**: Vector search handles semantic similarity ("preferred language" matches "coding in Rust"), FTS5 handles exact keyword matches ("SQLite" matches "SQLite"). 70/30 split inspired by Clawdbot's analysis. Confidence, recency, and mention_count prevent stale or low-quality facts from dominating.
+
+### Memory Evolution: Embedding Cache (Hash-Based Dedup)
+**Problem**: Re-embedding unchanged content wastes API calls or compute time.
+**Decision**: SHA-256 hash of text + model name as composite key in `embedding_cache` table. Before embedding, check cache. Inspired by Clawdbot's pattern.
+
+### Memory Evolution: Pre-Compaction Memory Flush
+**Problem**: When context window is trimmed, the agent loses access to potentially important information.
+**Decision**: Before compaction, inject a `[MEMORY FLUSH]` system message warning the agent. Skip compaction for one turn to give the agent a chance to `save_fact`. On the next trigger, proceed with normal compaction.
+
+### Knowledge Graph: Unified in Memory Tool
+**Problem**: 5 standalone knowledge_graph tools cluttered the tool registry and duplicated the memory concept.
+**Decision**: Remove standalone tools. Add `graph` action to existing memory tool. Entities and relationships are automatically extracted during session distillation — no manual management needed. The `graph` action provides query access when needed.
 
 ## Patterns We Did NOT Adopt
 

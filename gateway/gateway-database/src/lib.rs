@@ -7,7 +7,11 @@
 
 mod connection;
 pub mod repository;
+pub mod memory_repository;
+pub mod memory_fact_store;
 mod schema;
 
 pub use connection::DatabaseManager;
 pub use repository::{ConversationRepository, Message};
+pub use memory_repository::{MemoryRepository, MemoryFact, ScoredFact};
+pub use memory_fact_store::GatewayMemoryFactStore;

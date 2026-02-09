@@ -25,6 +25,8 @@ pub struct Provider {
     pub models: Vec<String>,
     #[serde(rename = "embeddingModels", skip_serializing_if = "Option::is_none")]
     pub embedding_models: Option<Vec<String>>,
+    #[serde(rename = "embeddingDimensions", skip_serializing_if = "Option::is_none")]
+    pub embedding_dimensions: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
     #[serde(rename = "isDefault", default)]

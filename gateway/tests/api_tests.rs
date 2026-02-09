@@ -409,7 +409,6 @@ async fn tool_settings_update() {
         "webFetch": false,
         "loadSkill": true,
         "uiTools": true,
-        "knowledgeGraph": false,
         "createAgent": true,
         "introspection": true,
         "offloadLargeResults": true,

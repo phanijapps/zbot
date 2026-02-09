@@ -8,12 +8,15 @@ use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
-use crate::execution::{new_workspace_cache, DelegationRegistry, WorkspaceCache};
+use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
 use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService};
+use agent_runtime::llm::LocalEmbeddingClient;
+use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
+use gateway_database::MemoryRepository;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -95,7 +98,7 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
 
         // Create state service for execution state management
-        let state_service = Arc::new(StateService::new(db_manager));
+        let state_service = Arc::new(StateService::new(db_manager.clone()));
 
         // Create connector registry
         let connector_service = ConnectorService::new(config_dir.clone());
@@ -103,6 +106,36 @@ impl AppState {
 
         // Create workspace cache (shared between AppState and ExecutionRunner)
         let workspace_cache = new_workspace_cache();
+
+        // Initialize memory evolution services
+        let memory_repo = Arc::new(MemoryRepository::new(db_manager));
+
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
+            Ok(client) => {
+                tracing::info!(
+                    "Local embedding client initialized ({}d)",
+                    client.dimensions()
+                );
+                Some(Arc::new(client))
+            }
+            Err(e) => {
+                tracing::warn!("Local embedding unavailable, FTS5-only recall: {}", e);
+                None
+            }
+        };
+
+        let memory_recall = Arc::new(MemoryRecall::new(
+            embedding_client.clone(),
+            memory_repo.clone(),
+        ));
+
+        let distiller = Arc::new(SessionDistiller::new(
+            provider_service.clone(),
+            embedding_client,
+            conversation_repo.clone(),
+            memory_repo.clone(),
+            None, // graph_storage — wired when knowledge graph is configured
+        ));
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -117,6 +150,9 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
+            Some(memory_repo),
+            Some(distiller),
+            Some(memory_recall),
         ));
 
         // Create hook registry

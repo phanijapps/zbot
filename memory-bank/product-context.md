@@ -14,9 +14,11 @@ Most AI platforms lock you into a cloud provider, take your data off-machine, an
 
 3. **No persistent project context** — Session-based AI assistants start from scratch every time. Agent Zero's Code Wards give agents persistent project directories they create, name, and navigate autonomously. Code survives across sessions.
 
-4. **Provider lock-in** — Most platforms work with one LLM provider. Agent Zero is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API.
+4. **No cross-session learning** — Most AI assistants forget everything between sessions. Agent Zero automatically distills session transcripts into structured facts, then recalls relevant facts at the start of new sessions via hybrid semantic + keyword search. The agent learns without manual effort.
 
-5. **Limited extensibility** — Agent Zero supports Skills (reusable instruction packages) and MCP servers (external tool integration) as first-class concepts.
+5. **Provider lock-in** — Most platforms work with one LLM provider. Agent Zero is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API.
+
+6. **Limited extensibility** — Agent Zero supports Skills (reusable instruction packages) and MCP servers (external tool integration) as first-class concepts.
 
 ## Core Principles
 
@@ -57,3 +59,5 @@ Most AI platforms lock you into a cloud provider, take your data off-machine, an
 | Privacy | Full control | Varies |
 | Multi-Agent | Built-in delegation | Rare |
 | Persistent Code | Code Wards | Session-scoped |
+| Cross-Session Learning | Auto-distillation + hybrid recall | None |
+| Embedding Cost | Local ONNX (zero cost) default | API-only |

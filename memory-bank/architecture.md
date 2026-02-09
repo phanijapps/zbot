@@ -54,7 +54,8 @@
 │                         DATA LAYER                                       │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  ~/Documents/agentzero/                                                  │
-│  ├── conversations.db          # SQLite: conversations, messages        │
+│  ├── conversations.db          # SQLite: conversations, messages,       │
+│  │                              #   memory_facts, embedding_cache       │
 │  ├── INSTRUCTIONS.md           # Custom system prompt (auto-created)    │
 │  ├── agents/{name}/            # Agent configurations                   │
 │  │   ├── config.yaml           #   Model, provider, temperature         │
@@ -90,7 +91,8 @@
 | HTTP Server | Axum | Async HTTP framework |
 | WebSocket | tokio-tungstenite | Real-time streaming |
 | Async Runtime | tokio | Async I/O |
-| Database | SQLite (rusqlite + r2d2 pool) | Conversation persistence (WAL mode) |
+| Database | SQLite (rusqlite + r2d2 pool) | Conversations, memory facts, embeddings (WAL mode) |
+| Embeddings | fastembed (local ONNX) | Default: all-MiniLM-L6-v2 (384d), zero cost |
 | Serialization | serde + serde_json | JSON handling |
 
 ## Crate Structure
@@ -142,7 +144,7 @@ Standalone data services:
 services/
 ├── execution-state/     # Session/execution state machine (SQLite)
 ├── api-logs/            # Execution logging (SQLite)
-├── knowledge-graph/     # Entity extraction
+├── knowledge-graph/     # Entity/relationship storage (used by distillation)
 └── daily-sessions/      # Session management
 ```
 
@@ -157,7 +159,7 @@ gateway/
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
 ├── gateway-services/    # AgentService, ProviderService, McpService, SkillService, SettingsService
-├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter
+├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller, MemoryRecall
 ├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
 ├── gateway-cron/        # CronJobConfig, CronService
 ├── gateway-bus/         # GatewayBus trait, SessionRequest, SessionHandle
@@ -652,6 +654,88 @@ CREATE TABLE messages (
 );
 ```
 
+### memory_facts
+Structured facts extracted from sessions (distillation) or saved manually by the agent.
+Deduplication via UNIQUE(agent_id, scope, key) — repeated saves update content and bump mention_count.
+
+```sql
+CREATE TABLE memory_facts (
+    id TEXT PRIMARY KEY,                         -- fact-{uuid}
+    session_id TEXT,                              -- which session produced this (NULL if manual)
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'agent',          -- shared / agent / ward
+    category TEXT NOT NULL,                       -- preference, decision, pattern, entity, instruction, correction
+    key TEXT NOT NULL,                            -- dedup key: "user.preferred_language"
+    content TEXT NOT NULL,                        -- 1-2 sentence fact
+    confidence REAL NOT NULL DEFAULT 0.8,         -- 0.0-1.0
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    source_summary TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+    expires_at TEXT,                              -- optional TTL
+    UNIQUE(agent_id, scope, key)
+);
+```
+
+FTS5 virtual table `memory_facts_fts` auto-synced via INSERT/UPDATE/DELETE triggers.
+
+### embedding_cache
+Hash-based dedup for embeddings. Prevents re-embedding unchanged content.
+
+```sql
+CREATE TABLE embedding_cache (
+    content_hash TEXT NOT NULL,                   -- SHA-256 of text
+    model TEXT NOT NULL,                          -- which model produced this
+    embedding BLOB NOT NULL,                      -- raw f32 bytes
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (content_hash, model)
+);
+```
+
+### Memory Evolution Architecture
+
+```
+                    ┌─────────────────────────────────┐
+                    │      Embedding Provider          │
+                    │  (local fastembed / OpenAI /     │
+                    │   Ollama / any compatible API)   │
+                    └──────────┬──────────────────────┘
+                               │ vectors
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                     ▼
+┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐
+│ Session Distiller │ │  Memory Indexer  │ │  Smart Recall    │
+│ (post-session)   │ │ (on fact write)  │ │ (session start)  │
+└────────┬─────────┘ └────────┬────────┘ └────────┬─────────┘
+         │                    │                    │
+         ▼                    ▼                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    conversations.db                           │
+│  ┌─────────────┐  ┌──────────────┐  ┌────────────────────┐  │
+│  │ memory_facts │  │ memory_facts │  │ brute-force cosine │  │
+│  │ (structured) │  │ _fts (FTS5)  │  │ (in Rust, <10K)    │  │
+│  └─────────────┘  └──────────────┘  └────────────────────┘  │
+│                                                              │
+│  Hybrid Search: 0.7 * vector_score + 0.3 * bm25_score       │
+│  × confidence × recency_decay × mention_boost                │
+└─────────────────────────────────────────────────────────────┘
+         │
+         ▼
+┌─────────────────────────────────────────────────────────────┐
+│  Knowledge Graph (services/knowledge-graph/)                 │
+│  Entities + relationships extracted during distillation      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Key files**:
+- `runtime/agent-runtime/src/llm/embedding.rs` — EmbeddingClient trait, EmbeddingConfig
+- `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
+- `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
+- `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
+- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (auto-extract facts + entities)
+- `gateway/gateway-execution/src/recall.rs` — MemoryRecall (inject facts at session start)
+- `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
+
 ### ID Conventions
 
 | Table | Prefix | Example |
@@ -699,21 +783,17 @@ CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 
 ## Built-in Tools
 
-### Core Tools (Always Enabled)
+### Core Tools (Shell-First, 7 Tools)
 
 | Tool | Description | Permissions |
 |------|-------------|-------------|
-| `shell` | Run shell command | Dangerous |
-| `read` | Read file contents | Safe |
-| `write` | Write content to file | Moderate |
-| `edit` | Edit file contents | Moderate |
-| `memory` | Persistent key-value store (shared/private/ward) | Safe |
+| `shell` | Primary execution — commands, file I/O, apply_patch interceptor | Dangerous |
+| `memory` | Persistent KV store + save_fact + recall + graph | Safe |
 | `ward` | Manage code wards (use, list, create, info) | Safe |
-| `todo` | Task management | Safe |
+| `update_plan` | Lightweight task checklist | Safe |
 | `list_skills` | List available skills | Safe |
 | `load_skill` | Load skill instructions | Safe |
 | `grep` | Search file contents | Safe |
-| `glob` | Find files by pattern | Safe |
 
 ### Action Tools (Always Enabled)
 
@@ -727,12 +807,16 @@ CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 
 | Tool | Description | Permissions |
 |------|-------------|-------------|
+| `read` | Read file contents | Safe |
+| `write` | Write content to file | Moderate |
+| `edit` | Edit file contents | Moderate |
+| `glob` | Find files by pattern | Safe |
+| `todos` | Heavyweight task persistence (SQLite) | Safe |
 | `python` | Execute Python code | Dangerous |
 | `web_fetch` | Fetch web content | Moderate |
 | `ui_tools` | UI manipulation tools | Moderate |
-| `knowledge_graph` | Entity-relationship storage | Safe |
 | `create_agent` | Create new agents | Moderate |
-| `introspection` | Agent introspection | Safe |
+| `introspection` | Agent introspection (list_tools, list_mcps) | Safe |
 
 ## System Prompt Architecture
 

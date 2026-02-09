@@ -324,6 +324,9 @@ impl AgentExecutor {
         // Track whether we've sent a stuck-loop nudge (max 1)
         let mut stuck_nudge_sent = false;
 
+        // Track whether we've injected a pre-compaction memory flush warning
+        let mut compaction_warned = false;
+
         // Track whether the turn budget nudge has been sent (max 1)
         let mut turn_budget_nudge_sent = false;
 
@@ -414,6 +417,26 @@ impl AgentExecutor {
             if self.config.context_window_tokens > 0 {
                 let threshold = (self.config.context_window_tokens * 80) / 100;
                 if total_tokens_in > threshold {
+                    // Pre-compaction memory flush: inject a nudge to save important facts
+                    // before context is trimmed. The agent can use save_fact on the next
+                    // turn before the old messages disappear.
+                    if !compaction_warned {
+                        current_messages.push(ChatMessage::system(
+                            "[MEMORY FLUSH] Context is approaching limits and will be compacted. \
+                             If there are important facts, decisions, or user preferences from \
+                             this session that should persist, use `memory(save_fact, ...)` now \
+                             before context is trimmed.".to_string()
+                        ));
+                        compaction_warned = true;
+                        tracing::info!(
+                            tokens_in = total_tokens_in,
+                            threshold = threshold,
+                            "Pre-compaction memory flush warning injected"
+                        );
+                        // Skip actual compaction this iteration — give agent one turn to save
+                        continue;
+                    }
+
                     let before = current_messages.len();
                     current_messages = compact_messages(current_messages);
                     tracing::info!(
