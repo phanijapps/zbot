@@ -8,18 +8,24 @@
 
 pub mod config;
 pub mod dispatch;
+pub mod inbound;
 pub mod service;
 
 pub use config::{
-    ConnectorCapability, ConnectorConfig, ConnectorMetadata, ConnectorPayload, ConnectorTransport,
-    ConnectorsStore, CreateConnectorRequest, DispatchContext, UpdateConnectorRequest,
+    ConnectorCapability, ConnectorConfig, ConnectorMetadata, ConnectorPayload, ConnectorResource,
+    ConnectorTransport, ConnectorsStore, CreateConnectorRequest, DispatchContext, ResponseSchema,
+    UpdateConnectorRequest,
 };
 pub use dispatch::{dispatch, DispatchError, DispatchResponse, DispatchResult};
+pub use inbound::{InboundLogEntry, InboundPayload, InboundResult, InboundSender};
 pub use service::{ConnectorResult, ConnectorService, ConnectorServiceError, TestResult};
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, error, info};
+
+/// Maximum number of inbound log entries to keep in the ring buffer.
+const INBOUND_LOG_MAX: usize = 500;
 
 /// Registry for managing and dispatching to connectors.
 ///
@@ -28,6 +34,7 @@ use tracing::{debug, error, info};
 pub struct ConnectorRegistry {
     service: ConnectorService,
     cache: Arc<RwLock<Option<Vec<ConnectorConfig>>>>,
+    inbound_log: Arc<RwLock<Vec<InboundLogEntry>>>,
 }
 
 impl ConnectorRegistry {
@@ -36,7 +43,33 @@ impl ConnectorRegistry {
         Self {
             service,
             cache: Arc::new(RwLock::new(None)),
+            inbound_log: Arc::new(RwLock::new(Vec::new())),
         }
+    }
+
+    /// Log an inbound message. Trims to INBOUND_LOG_MAX entries.
+    pub async fn log_inbound(&self, entry: InboundLogEntry) {
+        let mut log = self.inbound_log.write().await;
+        log.push(entry);
+        if log.len() > INBOUND_LOG_MAX {
+            let excess = log.len() - INBOUND_LOG_MAX;
+            log.drain(0..excess);
+        }
+    }
+
+    /// Get inbound log entries for a connector, most recent first.
+    pub async fn get_inbound_log(
+        &self,
+        connector_id: &str,
+        limit: usize,
+    ) -> Vec<InboundLogEntry> {
+        let log = self.inbound_log.read().await;
+        log.iter()
+            .rev()
+            .filter(|e| e.connector_id == connector_id)
+            .take(limit)
+            .cloned()
+            .collect()
     }
 
     /// Initialize the registry by loading connectors from disk.
@@ -210,6 +243,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: true,
+                inbound_enabled: true,
             })
             .await
             .unwrap();
@@ -226,6 +260,75 @@ mod tests {
         registry.delete("test").await.unwrap();
         let list3 = registry.list().await.unwrap();
         assert!(list3.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_inbound_log_push_and_get() {
+        let (registry, _temp) = test_registry().await;
+
+        // Log some entries
+        for i in 0..5 {
+            registry
+                .log_inbound(InboundLogEntry {
+                    connector_id: "slack".to_string(),
+                    message: format!("msg-{}", i),
+                    sender: None,
+                    thread_id: None,
+                    session_id: format!("sess-{}", i),
+                    received_at: chrono::Utc::now(),
+                })
+                .await;
+        }
+
+        // Add one for a different connector
+        registry
+            .log_inbound(InboundLogEntry {
+                connector_id: "email".to_string(),
+                message: "email-msg".to_string(),
+                sender: None,
+                thread_id: None,
+                session_id: "sess-email".to_string(),
+                received_at: chrono::Utc::now(),
+            })
+            .await;
+
+        // Get all for slack (should be 5, most recent first)
+        let slack_logs = registry.get_inbound_log("slack", 100).await;
+        assert_eq!(slack_logs.len(), 5);
+        assert_eq!(slack_logs[0].message, "msg-4"); // most recent first
+
+        // Get with limit
+        let limited = registry.get_inbound_log("slack", 2).await;
+        assert_eq!(limited.len(), 2);
+
+        // Get for email (should be 1)
+        let email_logs = registry.get_inbound_log("email", 100).await;
+        assert_eq!(email_logs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_inbound_log_ring_buffer_trim() {
+        let (registry, _temp) = test_registry().await;
+
+        // Push more than INBOUND_LOG_MAX entries
+        for i in 0..550 {
+            registry
+                .log_inbound(InboundLogEntry {
+                    connector_id: "test".to_string(),
+                    message: format!("msg-{}", i),
+                    sender: None,
+                    thread_id: None,
+                    session_id: format!("sess-{}", i),
+                    received_at: chrono::Utc::now(),
+                })
+                .await;
+        }
+
+        // Check total size is trimmed
+        let log = registry.inbound_log.read().await;
+        assert!(log.len() <= 500);
+        // Oldest entries should be trimmed — first entry should be msg-50
+        assert_eq!(log[0].message, "msg-50");
     }
 
     #[tokio::test]
@@ -246,6 +349,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: true,
+                inbound_enabled: true,
             })
             .await
             .unwrap();
@@ -264,6 +368,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: false, // Outbound disabled
+                inbound_enabled: true,
             })
             .await
             .unwrap();

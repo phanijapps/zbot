@@ -3,6 +3,7 @@ import type {
   DashboardStats,
   SessionWithExecutions,
   TriggerSource,
+  InboundLogEntry,
 } from '@/services/transport/types';
 
 const API_BASE = 'http://localhost:18791';
@@ -60,9 +61,24 @@ export function createMockStats(): DashboardStats {
       cli: 3,
       cron: 1,
       api: 1,
-      plugin: 1,
+      connector: 1,
     },
   };
+}
+
+export function createMockInboundLog(connectorId: string, count = 3): InboundLogEntry[] {
+  const entries: InboundLogEntry[] = [];
+  for (let i = 0; i < count; i++) {
+    entries.push({
+      connector_id: connectorId,
+      message: `Test message ${i + 1}`,
+      sender: { id: `user-${i}`, name: `User ${i + 1}` },
+      thread_id: i % 2 === 0 ? `thread-${i}` : undefined,
+      session_id: `sess-inbound-${i}`,
+      received_at: new Date(Date.now() - i * 60000).toISOString(),
+    });
+  }
+  return entries;
 }
 
 // Default handlers
@@ -163,5 +179,11 @@ export const handlers = [
         messageCount: 5,
       },
     ]);
+  }),
+
+  // Connector inbound log
+  http.get(`${API_BASE}/api/connectors/:id/inbound-log`, ({ params }) => {
+    const { id } = params;
+    return HttpResponse.json(createMockInboundLog(id as string));
   }),
 ];

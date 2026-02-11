@@ -29,6 +29,7 @@ pub mod handle;
 pub mod invoke;
 pub mod lifecycle;
 pub mod recall;
+pub mod resource_provider;
 pub mod runner;
 
 // Re-export public types
@@ -49,3 +50,4 @@ pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use runner::ExecutionRunner;
 pub use distillation::SessionDistiller;
 pub use recall::{MemoryRecall, format_recalled_facts};
+pub use resource_provider::GatewayResourceProvider;

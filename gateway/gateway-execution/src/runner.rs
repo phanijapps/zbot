@@ -336,6 +336,18 @@ impl ExecutionRunner {
         let session_id = setup.session_id;
         let execution_id = setup.execution_id;
 
+        // Persist routing fields on the session (thread_id, connector_id, respond_to)
+        if config.thread_id.is_some() || config.connector_id.is_some() || config.respond_to.is_some() {
+            if let Err(e) = self.state_service.update_session_routing(
+                &session_id,
+                config.thread_id.as_deref(),
+                config.connector_id.as_deref(),
+                config.respond_to.as_ref(),
+            ) {
+                tracing::warn!("Failed to persist session routing: {}", e);
+            }
+        }
+
         // Start execution and log
         start_execution(
             &self.state_service,
@@ -444,6 +456,7 @@ impl ExecutionRunner {
         let delegation_tx = self.delegation_tx.clone();
         let connector_registry = self.connector_registry.clone();
         let respond_to = config.respond_to.clone();
+        let thread_id = config.thread_id.clone();
         let distiller = self.distiller.clone();
 
         tokio::spawn(async move {
@@ -605,6 +618,7 @@ impl ExecutionRunner {
                         Some(accumulated_response),
                         connector_registry.as_ref(),
                         respond_to.as_ref(),
+                        thread_id.as_deref(),
                     )
                     .await;
 
@@ -867,11 +881,21 @@ impl ExecutionRunner {
                 as Arc<dyn zero_core::MemoryFactStore>
         });
 
+        // Build connector resource provider (if registry available)
+        let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+            self.connector_registry.as_ref().map(|registry| {
+                Arc::new(super::resource_provider::GatewayResourceProvider::new(registry.clone()))
+                    as Arc<dyn zero_core::ConnectorResourceProvider>
+            });
+
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone());
         if let Some(fs) = fact_store {
             builder = builder.with_fact_store(fs);
+        }
+        if let Some(cp) = connector_provider {
+            builder = builder.with_connector_provider(cp);
         }
         builder
             .build(
@@ -1173,6 +1197,7 @@ async fn invoke_continuation(
                     Some(accumulated_response),
                     None,
                     None,
+                    None, // No thread_id for continuation turns
                 )
                 .await;
             }

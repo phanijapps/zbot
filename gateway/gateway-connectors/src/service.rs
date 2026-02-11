@@ -127,6 +127,7 @@ impl ConnectorService {
             metadata: request.metadata,
             enabled: request.enabled,
             outbound_enabled: request.outbound_enabled,
+            inbound_enabled: request.inbound_enabled,
             created_at: Some(now),
             updated_at: Some(now),
         };
@@ -167,6 +168,9 @@ impl ConnectorService {
         }
         if let Some(outbound_enabled) = request.outbound_enabled {
             connector.outbound_enabled = outbound_enabled;
+        }
+        if let Some(inbound_enabled) = request.inbound_enabled {
+            connector.inbound_enabled = inbound_enabled;
         }
         connector.updated_at = Some(chrono::Utc::now());
 
@@ -300,6 +304,7 @@ impl Default for UpdateConnectorRequest {
             metadata: None,
             enabled: None,
             outbound_enabled: None,
+            inbound_enabled: None,
         }
     }
 }
@@ -335,6 +340,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: true,
+                inbound_enabled: true,
             })
             .await
             .unwrap();
@@ -386,6 +392,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: true,
+                inbound_enabled: true,
             })
             .await
             .unwrap();
@@ -403,6 +410,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: true,
+                inbound_enabled: true,
             })
             .await;
 
@@ -426,6 +434,7 @@ mod tests {
                 metadata: Default::default(),
                 enabled: true,
                 outbound_enabled: true,
+                inbound_enabled: true,
             })
             .await;
 

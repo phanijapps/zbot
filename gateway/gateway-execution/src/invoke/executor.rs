@@ -9,11 +9,11 @@ use agent_runtime::{
     AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
     OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
 };
-use agent_tools::{core_tools, optional_tools, ListAgentsTool, ToolSettings};
+use agent_tools::{core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use zero_core::{FileSystemContext, MemoryFactStore};
+use zero_core::{ConnectorResourceProvider, FileSystemContext, MemoryFactStore};
 
 use crate::config::GatewayFileSystem;
 
@@ -38,6 +38,7 @@ pub struct ExecutorBuilder {
     tool_settings: ToolSettings,
     workspace_cache: Option<WorkspaceCache>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
+    connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
 }
 
 impl ExecutorBuilder {
@@ -48,6 +49,7 @@ impl ExecutorBuilder {
             tool_settings,
             workspace_cache: None,
             fact_store: None,
+            connector_provider: None,
         }
     }
 
@@ -60,6 +62,12 @@ impl ExecutorBuilder {
     /// Set the memory fact store for DB-backed save_fact/recall.
     pub fn with_fact_store(mut self, fact_store: Arc<dyn MemoryFactStore>) -> Self {
         self.fact_store = Some(fact_store);
+        self
+    }
+
+    /// Set the connector resource provider for query_resource tool.
+    pub fn with_connector_provider(mut self, provider: Arc<dyn ConnectorResourceProvider>) -> Self {
+        self.connector_provider = Some(provider);
         self
     }
 
@@ -202,6 +210,11 @@ impl ExecutorBuilder {
         tool_registry.register(Arc::new(RespondTool::new()));
         tool_registry.register(Arc::new(DelegateTool::new()));
         tool_registry.register(Arc::new(ListAgentsTool::new()));
+
+        // Register connector resource query tool (if provider available)
+        if let Some(provider) = &self.connector_provider {
+            tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+        }
 
         Arc::new(tool_registry)
     }

@@ -154,6 +154,7 @@ pub async fn complete_execution(
     response: Option<String>,
     connector_registry: Option<&Arc<ConnectorRegistry>>,
     respond_to: Option<&Vec<String>>,
+    thread_id: Option<&str>,
 ) {
     // Update execution status to COMPLETED
     if let Err(e) = state_service.complete_execution(execution_id) {
@@ -221,7 +222,7 @@ pub async fn complete_execution(
             if let Some(response_text) = &response {
                 let context = DispatchContext {
                     session_id: session_id.to_string(),
-                    thread_id: None,
+                    thread_id: thread_id.map(|t| t.to_string()),
                     agent_id: agent_id.to_string(),
                     timestamp: chrono::Utc::now(),
                 };

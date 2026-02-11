@@ -98,6 +98,10 @@ pub struct ExecutionConfig {
     /// - None/empty: response goes to WebSocket subscribers only (default)
     /// - Some([...]): response also dispatched to listed connectors
     pub respond_to: Option<Vec<String>>,
+    /// Thread ID for conversation threading with external connectors.
+    pub thread_id: Option<String>,
+    /// Connector ID that triggered this session.
+    pub connector_id: Option<String>,
 }
 
 impl ExecutionConfig {
@@ -111,6 +115,8 @@ impl ExecutionConfig {
             hook_context: None,
             session_id: None,
             respond_to: None,
+            thread_id: None,
+            connector_id: None,
         }
     }
 
@@ -132,6 +138,20 @@ impl ExecutionConfig {
     #[must_use]
     pub fn with_respond_to(mut self, connector_ids: Vec<String>) -> Self {
         self.respond_to = Some(connector_ids);
+        self
+    }
+
+    /// Set the thread ID for conversation threading.
+    #[must_use]
+    pub fn with_thread_id(mut self, thread_id: String) -> Self {
+        self.thread_id = Some(thread_id);
+        self
+    }
+
+    /// Set the connector ID that triggered this session.
+    #[must_use]
+    pub fn with_connector_id(mut self, connector_id: String) -> Self {
+        self.connector_id = Some(connector_id);
         self
     }
 }

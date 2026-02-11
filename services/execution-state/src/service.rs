@@ -228,6 +228,17 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.update_session_ward(session_id, ward_id)
     }
 
+    /// Update session routing fields (thread_id, connector_id, respond_to).
+    pub fn update_session_routing(
+        &self,
+        session_id: &str,
+        thread_id: Option<&str>,
+        connector_id: Option<&str>,
+        respond_to: Option<&Vec<String>>,
+    ) -> Result<(), String> {
+        self.repo.update_session_routing(session_id, thread_id, connector_id, respond_to)
+    }
+
     /// Delete a session.
     pub fn delete_session(&self, session_id: &str) -> Result<bool, String> {
         self.repo.delete_session(session_id)
@@ -607,7 +618,10 @@ mod tests {
                     pending_delegations INTEGER DEFAULT 0,
                     continuation_needed INTEGER DEFAULT 0,
                     ward_id TEXT,
-                    parent_session_id TEXT
+                    parent_session_id TEXT,
+                    thread_id TEXT,
+                    connector_id TEXT,
+                    respond_to TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (

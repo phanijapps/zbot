@@ -468,7 +468,7 @@ const ACTIVE_SESSION_STATUSES: SessionStateStatus[] = ["running", "paused", "que
 const CLOSED_SESSION_STATUSES: SessionStateStatus[] = ["completed", "crashed"];
 
 // All trigger sources for filtering
-const ALL_SOURCES: TriggerSource[] = ["web", "cli", "cron", "api", "plugin"];
+const ALL_SOURCES: TriggerSource[] = ["web", "cli", "cron", "api", "connector"];
 
 export function WebOpsDashboard() {
   const navigate = useNavigate();

@@ -383,12 +383,12 @@ export type DelegationType = "root" | "sequential" | "parallel";
 
 /** Session - top-level work container (V2 API) */
 /** Trigger source for a session */
-export type TriggerSource = "web" | "cli" | "cron" | "api" | "plugin";
+export type TriggerSource = "web" | "cli" | "cron" | "api" | "connector";
 
 export interface Session {
   id: string;
   status: SessionStateStatus;
-  /** Trigger source (web, cli, cron, api, plugin) */
+  /** Trigger source (web, cli, cron, api, connector) */
   source: TriggerSource;
   root_agent_id: string;
   title?: string;
@@ -420,7 +420,7 @@ export interface AgentExecution {
 export interface SessionWithExecutions {
   id: string;
   status: SessionStateStatus;
-  /** Trigger source (web, cli, cron, api, plugin) */
+  /** Trigger source (web, cli, cron, api, connector) */
   source: TriggerSource;
   root_agent_id: string;
   title?: string;
@@ -467,7 +467,7 @@ export interface DashboardStats {
   executions_cancelled: number;
   today_sessions: number;
   today_tokens: number;
-  /** Sessions count by trigger source (e.g., { web: 5, cron: 2 }) */
+  /** Sessions count by trigger source (e.g., { web: 5, connector: 2 }) */
   sessions_by_source: Record<TriggerSource, number>;
 }
 
@@ -639,11 +639,40 @@ export interface ConnectorCapability {
   schema?: Record<string, unknown>;
 }
 
+/** MCP-like queryable resource definition */
+export interface ConnectorResource {
+  name: string;
+  uri: string;
+  description?: string;
+  method: string;
+  headers: Record<string, string>;
+  response_schema?: Record<string, unknown>;
+}
+
+/** Named outbound payload schema */
+export interface ConnectorResponseSchema {
+  name: string;
+  schema: Record<string, unknown>;
+  description?: string;
+}
+
+/** Inbound message log entry */
+export interface InboundLogEntry {
+  connector_id: string;
+  message: string;
+  sender?: { id: string; name?: string };
+  thread_id?: string;
+  session_id: string;
+  received_at: string;
+}
+
 /** Metadata about a connector */
 export interface ConnectorMetadata {
   capabilities: ConnectorCapability[];
-  contacts?: unknown[];
-  additional_info?: Record<string, unknown>;
+  resources: ConnectorResource[];
+  response_schemas: ConnectorResponseSchema[];
+  context?: string;
+  [key: string]: unknown;
 }
 
 /** Full connector configuration */
@@ -654,6 +683,7 @@ export interface ConnectorResponse {
   metadata: ConnectorMetadata;
   enabled: boolean;
   outbound_enabled: boolean;
+  inbound_enabled: boolean;
   created_at?: string;
   updated_at?: string;
 }
@@ -666,6 +696,7 @@ export interface CreateConnectorRequest {
   metadata?: ConnectorMetadata;
   enabled?: boolean;
   outbound_enabled?: boolean;
+  inbound_enabled?: boolean;
 }
 
 /** Request to update a connector */
@@ -675,6 +706,7 @@ export interface UpdateConnectorRequest {
   metadata?: ConnectorMetadata;
   enabled?: boolean;
   outbound_enabled?: boolean;
+  inbound_enabled?: boolean;
 }
 
 /** Result of testing a connector */

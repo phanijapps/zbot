@@ -334,7 +334,7 @@ paths:
           in: query
           schema:
             type: string
-            enum: [web, cli, api, cron, plugin]
+            enum: [web, cli, api, cron, connector]
       responses:
         '200':
           description: List of sessions
@@ -889,6 +889,64 @@ paths:
         '404':
           description: Connector not found
 
+  /api/connectors/{id}/inbound:
+    post:
+      tags: [Connectors]
+      summary: Send inbound message
+      description: Submit an inbound message to a connector for agent processing
+      operationId: sendInboundMessage
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/InboundPayload'
+      responses:
+        '200':
+          description: Message submitted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InboundResult'
+        '404':
+          description: Connector not found
+        '400':
+          description: Inbound disabled or invalid request
+
+  /api/connectors/{id}/inbound-log:
+    get:
+      tags: [Connectors]
+      summary: Get inbound message log
+      description: Get recent inbound messages received by this connector
+      operationId: getConnectorInboundLog
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+          description: Maximum number of entries to return
+      responses:
+        '200':
+          description: Inbound log entries (newest first)
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/InboundLogEntry'
+
   /api/connectors/{id}/test:
     post:
       tags: [Connectors]
@@ -1314,7 +1372,7 @@ components:
           example: Hello, how can you help me?
         source:
           type: string
-          enum: [web, cli, api, cron, plugin]
+          enum: [web, cli, api, cron, connector]
           default: web
           description: Source of the request
         session_id:
@@ -1504,7 +1562,7 @@ components:
           enum: [queued, running, paused, completed, crashed]
         source:
           type: string
-          enum: [web, cli, api, cron, plugin]
+          enum: [web, cli, api, cron, connector]
         created_at:
           type: string
           format: date-time
@@ -1773,6 +1831,10 @@ components:
           type: boolean
           description: Whether outbound dispatch is enabled
           default: true
+        inbound_enabled:
+          type: boolean
+          description: Whether inbound message reception is enabled
+          default: true
         created_at:
           type: string
           format: date-time
@@ -1887,6 +1949,20 @@ components:
           items:
             $ref: '#/components/schemas/ConnectorCapability'
           description: Available actions/capabilities
+        resources:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectorResource'
+          description: Queryable data endpoints for agents
+        response_schemas:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConnectorResponseSchema'
+          description: Named outbound payload schemas
+        context:
+          type: string
+          nullable: true
+          description: Free-form text injected into agent prompts
       additionalProperties: true
       description: Additional connector-specific data
 
@@ -1904,6 +1980,135 @@ components:
           type: string
           nullable: true
           description: Human-readable description
+
+    ConnectorResource:
+      type: object
+      required:
+        - name
+        - uri
+        - method
+      properties:
+        name:
+          type: string
+          description: Resource name
+          example: contacts
+        uri:
+          type: string
+          description: URI or URI template
+          example: https://api.example.com/contacts/{id}
+        description:
+          type: string
+          nullable: true
+          description: What this resource provides
+        method:
+          type: string
+          description: HTTP method (GET or POST)
+          default: GET
+          example: GET
+        headers:
+          type: object
+          additionalProperties:
+            type: string
+          description: Custom headers for the resource request
+        response_schema:
+          type: object
+          nullable: true
+          description: JSON Schema for the response
+
+    ConnectorResponseSchema:
+      type: object
+      required:
+        - name
+        - schema
+      properties:
+        name:
+          type: string
+          description: Schema name
+          example: send_message
+        schema:
+          type: object
+          description: JSON Schema object
+        description:
+          type: string
+          nullable: true
+          description: What this schema defines
+
+    InboundLogEntry:
+      type: object
+      properties:
+        connector_id:
+          type: string
+          description: ID of the connector that received the message
+        message:
+          type: string
+          description: The inbound message content
+        sender:
+          $ref: '#/components/schemas/InboundSender'
+        thread_id:
+          type: string
+          nullable: true
+          description: Thread ID for conversation threading
+        session_id:
+          type: string
+          description: Session ID created for this inbound message
+        received_at:
+          type: string
+          format: date-time
+          description: When the message was received
+
+    InboundSender:
+      type: object
+      properties:
+        id:
+          type: string
+          description: Sender identifier
+        name:
+          type: string
+          nullable: true
+          description: Sender display name
+
+    InboundPayload:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          description: The inbound message content
+        thread_id:
+          type: string
+          nullable: true
+          description: Thread ID for conversation threading
+        sender:
+          $ref: '#/components/schemas/InboundSender'
+        agent_id:
+          type: string
+          nullable: true
+          description: Override agent ID (defaults to connector config)
+        respond_to:
+          type: array
+          items:
+            type: string
+          nullable: true
+          description: Connector IDs to send response to
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Custom metadata
+
+    InboundResult:
+      type: object
+      properties:
+        session_id:
+          type: string
+          description: Session ID created for this inbound message
+        execution_id:
+          type: string
+          description: Execution ID for tracking
+        message:
+          type: string
+          description: Status message
 
     CreateConnectorRequest:
       type: object
@@ -1928,6 +2133,9 @@ components:
         outbound_enabled:
           type: boolean
           default: true
+        inbound_enabled:
+          type: boolean
+          default: true
 
     UpdateConnectorRequest:
       type: object
@@ -1943,6 +2151,9 @@ components:
           type: boolean
           nullable: true
         outbound_enabled:
+          type: boolean
+          nullable: true
+        inbound_enabled:
           type: boolean
           nullable: true
 

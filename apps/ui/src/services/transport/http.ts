@@ -57,6 +57,7 @@ import type {
   CreateConnectorRequest,
   UpdateConnectorRequest,
   ConnectorTestResult,
+  InboundLogEntry,
   // Cron types
   CronJobResponse,
   CreateCronJobRequest,
@@ -1243,6 +1244,12 @@ export class HttpTransport implements Transport {
 
   async disableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
     return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/disable`, {});
+  }
+
+  async getConnectorInboundLog(id: string, limit = 50): Promise<TransportResult<InboundLogEntry[]>> {
+    return this.get<InboundLogEntry[]>(
+      `/api/connectors/${encodeURIComponent(id)}/inbound-log?limit=${limit}`
+    );
   }
 
   // ─────────────────────────────────────────────────────────────────────────

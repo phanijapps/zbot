@@ -9,10 +9,8 @@ import {
   Plus,
   Trash2,
   Pencil,
-  Play,
   X,
   Loader2,
-  Check,
   Globe,
   Terminal,
   ToggleLeft,
@@ -31,8 +29,8 @@ import type {
   ConnectorResponse,
   CreateConnectorRequest,
   ConnectorTransport,
-  ConnectorTestResult,
 } from "@/services/transport/types";
+import { ConnectorDetail } from "./components/ConnectorDetail";
 
 // ============================================================================
 // Types
@@ -46,6 +44,11 @@ interface HeaderEntry {
   key: string;
   value: string;
 }
+
+// Default API base — same origin during development
+const API_BASE = typeof window !== "undefined"
+  ? `${window.location.protocol}//${window.location.hostname}:18791`
+  : "http://localhost:18791";
 
 // ============================================================================
 // Component
@@ -75,10 +78,7 @@ export function WebConnectorsPanel() {
   const [formArgs, setFormArgs] = useState("");
   const [formEnabled, setFormEnabled] = useState(true);
   const [formOutboundEnabled, setFormOutboundEnabled] = useState(true);
-
-  // Test state
-  const [isTesting, setIsTesting] = useState(false);
-  const [testResult, setTestResult] = useState<ConnectorTestResult | null>(null);
+  const [formInboundEnabled, setFormInboundEnabled] = useState(true);
 
   // ─────────────────────────────────────────────────────────────────────────
   // Data Loading
@@ -131,6 +131,7 @@ export function WebConnectorsPanel() {
     setFormArgs("");
     setFormEnabled(true);
     setFormOutboundEnabled(true);
+    setFormInboundEnabled(true);
     setDialogOpen(true);
   };
 
@@ -143,6 +144,7 @@ export function WebConnectorsPanel() {
     setFormName(selectedConnector.name);
     setFormEnabled(selectedConnector.enabled);
     setFormOutboundEnabled(selectedConnector.outbound_enabled);
+    setFormInboundEnabled(selectedConnector.inbound_enabled);
 
     if (selectedConnector.transport.type === "http") {
       setFormTransportType("http");
@@ -198,6 +200,7 @@ export function WebConnectorsPanel() {
           transport: transportConfig,
           enabled: formEnabled,
           outbound_enabled: formOutboundEnabled,
+          inbound_enabled: formInboundEnabled,
         });
 
         if (result.success) {
@@ -213,6 +216,7 @@ export function WebConnectorsPanel() {
           transport: transportConfig,
           enabled: formEnabled,
           outbound_enabled: formOutboundEnabled,
+          inbound_enabled: formInboundEnabled,
         };
 
         const result = await transport.createConnector(request);
@@ -253,34 +257,6 @@ export function WebConnectorsPanel() {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
-    }
-  };
-
-  const handleTest = async () => {
-    if (!selectedId) return;
-
-    setIsTesting(true);
-    setTestResult(null);
-
-    try {
-      const transport = await getTransport();
-      const result = await transport.testConnector(selectedId);
-
-      if (result.success && result.data) {
-        setTestResult(result.data);
-      } else {
-        setTestResult({
-          success: false,
-          message: result.error || "Test failed",
-        });
-      }
-    } catch (err) {
-      setTestResult({
-        success: false,
-        message: err instanceof Error ? err.message : "Unknown error",
-      });
-    } finally {
-      setIsTesting(false);
     }
   };
 
@@ -325,8 +301,8 @@ export function WebConnectorsPanel() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin" />
+      <div className="loading-spinner">
+        <Loader2 className="loading-spinner__icon animate-spin" />
       </div>
     );
   }
@@ -336,97 +312,103 @@ export function WebConnectorsPanel() {
       <div className="split-panel">
         {/* Left sidebar - Connector list */}
         <div className="split-panel__sidebar">
-          <div className="page-header">
+          <div className="page-header" style={{ padding: "var(--spacing-4)", marginBottom: 0 }}>
             <div>
-              <h2 className="page-title">Connectors</h2>
+              <h2 className="page-title" style={{ fontSize: "var(--text-lg)" }}>Connectors</h2>
               <p className="page-subtitle">External bridges for messaging</p>
             </div>
             <button
               onClick={openCreateDialog}
-              className="bg-[var(--primary)] hover:opacity-90 text-white p-2 rounded-lg"
+              className="btn btn--primary btn--icon"
               title="Add connector"
             >
-              <Plus className="w-5 h-5" />
+              <Plus className="w-4 h-4" />
             </button>
           </div>
 
           {error && (
-            <div className="p-3 bg-red-50 border-b border-red-200 text-red-700 text-sm flex items-center justify-between">
-              <span>{error}</span>
-              <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">
-                <X className="w-4 h-4" />
+            <div className="alert alert--error" style={{ margin: "var(--spacing-2) var(--spacing-3)", borderRadius: "var(--radius-md)" }}>
+              <span className="flex-1 text-xs">{error}</span>
+              <button onClick={() => setError(null)} className="alert__dismiss">
+                <X className="w-3.5 h-3.5" />
               </button>
             </div>
           )}
 
-          <div className="flex-1 overflow-auto">
+          <div className="flex-1 overflow-auto" style={{ padding: "var(--spacing-2) var(--spacing-3)" }}>
             {connectors.length === 0 ? (
-              <div className="p-6 text-center">
-                <div className="w-12 h-12 rounded-xl bg-[var(--primary)]/10 flex items-center justify-center mx-auto mb-3">
-                  <Cable className="w-6 h-6 text-[var(--primary)]" />
+              <div className="empty-state">
+                <div className="empty-state__icon">
+                  <Cable className="w-5 h-5" />
                 </div>
-                <p className="text-[var(--foreground)] font-medium">No connectors</p>
-                <p className="text-sm text-[var(--muted-foreground)] mt-1">
+                <p className="empty-state__title">No connectors</p>
+                <p className="empty-state__description">
                   Create a connector to bridge external systems
                 </p>
               </div>
             ) : (
-              connectors.map((connector) => (
-                <button
-                  key={connector.id}
-                  onClick={() => setSelectedId(connector.id)}
-                  className={`w-full text-left px-4 py-3 border-b border-[var(--border)] hover:bg-[var(--muted)] transition-colors ${
-                    selectedId === connector.id
-                      ? "bg-[var(--accent)] border-l-2 border-l-[var(--primary)]"
-                      : ""
-                  }`}
-                >
-                  <div className="flex items-center gap-3">
-                    <div
-                      className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                        connector.enabled ? "bg-[var(--primary)]/10" : "bg-[var(--muted)]"
-                      }`}
-                    >
-                      {connector.transport.type === "http" ? (
-                        <Globe className={`w-4 h-4 ${connector.enabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`} />
-                      ) : (
-                        <Terminal className={`w-4 h-4 ${connector.enabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`} />
-                      )}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-[var(--foreground)] truncate">
-                        {connector.name}
+              <div className="space-y-1.5">
+                {connectors.map((connector) => (
+                  <button
+                    key={connector.id}
+                    onClick={() => setSelectedId(connector.id)}
+                    className={`w-full text-left p-3 rounded-lg transition-all ${
+                      selectedId === connector.id
+                        ? "bg-[var(--primary)]/10 border border-[var(--primary)]/30"
+                        : "bg-[var(--card)] hover:bg-[var(--muted)] border border-transparent"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                          connector.enabled
+                            ? "bg-[var(--primary-muted)]"
+                            : "bg-[var(--muted)]"
+                        }`}
+                      >
+                        {connector.transport.type === "http" ? (
+                          <Globe className={`w-4 h-4 ${connector.enabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`} />
+                        ) : (
+                          <Terminal className={`w-4 h-4 ${connector.enabled ? "text-[var(--primary)]" : "text-[var(--muted-foreground)]"}`} />
+                        )}
                       </div>
-                      <div className="text-xs text-[var(--muted-foreground)] truncate">
-                        {connector.transport.type === "http"
-                          ? connector.transport.callback_url
-                          : connector.transport.type === "cli"
-                            ? connector.transport.command
-                            : connector.transport.type}
+                      <div className="flex-1 min-w-0">
+                        <div className="list-item__title truncate">
+                          {connector.name}
+                        </div>
+                        <div className="list-item__subtitle">
+                          {connector.transport.type === "http"
+                            ? connector.transport.callback_url
+                            : connector.transport.type === "cli"
+                              ? connector.transport.command
+                              : connector.transport.type}
+                        </div>
                       </div>
+                      <div
+                        className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                          connector.enabled ? "bg-[var(--success)]" : "bg-[var(--muted-foreground)]"
+                        }`}
+                      />
                     </div>
-                    <div
-                      className={`w-2 h-2 rounded-full ${
-                        connector.enabled ? "bg-[var(--success)]" : "bg-[var(--muted-foreground)]"
-                      }`}
-                    />
-                  </div>
-                </button>
-              ))
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         </div>
 
-        {/* Right panel - Detail view */}
+        {/* Right panel - Tab-based detail view */}
         <div className="split-panel__content">
           {selectedConnector ? (
-            <div className="p-6">
+            <div style={{ padding: "var(--spacing-6)" }} className="h-full overflow-auto">
               {/* Header */}
-              <div className="flex items-center justify-between mb-6">
+              <div className="flex items-start justify-between mb-6">
                 <div className="flex items-center gap-4">
                   <div
                     className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                      selectedConnector.enabled ? "bg-[var(--primary)]/10" : "bg-[var(--muted)]"
+                      selectedConnector.enabled
+                        ? "bg-[var(--primary-muted)]"
+                        : "bg-[var(--muted)]"
                     }`}
                   >
                     {selectedConnector.transport.type === "http" ? (
@@ -442,10 +424,10 @@ export function WebConnectorsPanel() {
                     <p className="text-sm text-[var(--muted-foreground)]">{selectedConnector.id}</p>
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1">
                   <button
                     onClick={handleToggleEnabled}
-                    className="p-2 hover:bg-[var(--muted)] rounded-lg"
+                    className="btn btn--icon-ghost"
                     title={selectedConnector.enabled ? "Disable" : "Enable"}
                   >
                     {selectedConnector.enabled ? (
@@ -456,136 +438,37 @@ export function WebConnectorsPanel() {
                   </button>
                   <button
                     onClick={openEditDialog}
-                    className="p-2 hover:bg-[var(--muted)] rounded-lg"
+                    className="btn btn--icon-ghost"
                     title="Edit"
                   >
-                    <Pencil className="w-5 h-5 text-[var(--muted-foreground)]" />
+                    <Pencil className="w-4 h-4" />
                   </button>
                   <button
                     onClick={handleDelete}
-                    className="p-2 hover:bg-red-50 rounded-lg"
+                    className="btn btn--icon-ghost btn--icon-danger"
                     title="Delete"
                   >
-                    <Trash2 className="w-5 h-5 text-[var(--muted-foreground)] hover:text-red-500" />
+                    <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
               </div>
 
-              {/* Status badges */}
-              <div className="flex gap-2 mb-6">
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    selectedConnector.enabled
-                      ? "bg-green-100 text-green-700"
-                      : "bg-gray-100 text-gray-600"
-                  }`}
-                >
-                  {selectedConnector.enabled ? "Enabled" : "Disabled"}
-                </span>
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    selectedConnector.outbound_enabled
-                      ? "bg-blue-100 text-blue-700"
-                      : "bg-gray-100 text-gray-600"
-                  }`}
-                >
-                  {selectedConnector.outbound_enabled ? "Outbound On" : "Outbound Off"}
-                </span>
-                <span className="px-3 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700">
-                  {selectedConnector.transport.type.toUpperCase()}
-                </span>
-              </div>
-
-              {/* Transport details */}
-              <div className="bg-[var(--muted)] rounded-xl p-4 mb-6">
-                <h4 className="font-medium text-[var(--foreground)] mb-3">Transport</h4>
-                {selectedConnector.transport.type === "http" ? (
-                  <div className="space-y-2 text-sm">
-                    <div>
-                      <span className="text-[var(--muted-foreground)]">URL:</span>{" "}
-                      <span className="text-[var(--foreground)] font-mono">
-                        {selectedConnector.transport.callback_url}
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-[var(--muted-foreground)]">Method:</span>{" "}
-                      <span className="text-[var(--foreground)]">
-                        {selectedConnector.transport.method}
-                      </span>
-                    </div>
-                    {Object.keys(selectedConnector.transport.headers || {}).length > 0 && (
-                      <div>
-                        <span className="text-[var(--muted-foreground)]">Headers:</span>
-                        <div className="mt-1 pl-4">
-                          {Object.entries(selectedConnector.transport.headers).map(([key, value]) => (
-                            <div key={key} className="font-mono text-xs">
-                              {key}: {value.length > 20 ? value.slice(0, 20) + "..." : value}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ) : selectedConnector.transport.type === "cli" ? (
-                  <div className="space-y-2 text-sm">
-                    <div>
-                      <span className="text-[var(--muted-foreground)]">Command:</span>{" "}
-                      <span className="text-[var(--foreground)] font-mono">
-                        {selectedConnector.transport.command}
-                      </span>
-                    </div>
-                    {selectedConnector.transport.args?.length > 0 && (
-                      <div>
-                        <span className="text-[var(--muted-foreground)]">Args:</span>{" "}
-                        <span className="text-[var(--foreground)] font-mono">
-                          {selectedConnector.transport.args.join(" ")}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-
-              {/* Test section */}
-              <div className="bg-[var(--muted)] rounded-xl p-4">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-medium text-[var(--foreground)]">Test Connection</h4>
-                  <button
-                    onClick={handleTest}
-                    disabled={isTesting}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-[var(--primary)] text-white rounded-lg text-sm hover:opacity-90 disabled:opacity-50"
-                  >
-                    {isTesting ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Play className="w-4 h-4" />
-                    )}
-                    Test
-                  </button>
-                </div>
-                {testResult && (
-                  <div
-                    className={`p-3 rounded-lg text-sm flex items-start gap-2 ${
-                      testResult.success
-                        ? "bg-green-50 text-green-700"
-                        : "bg-red-50 text-red-700"
-                    }`}
-                  >
-                    {testResult.success ? (
-                      <Check className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                    ) : (
-                      <X className="w-4 h-4 mt-0.5 flex-shrink-0" />
-                    )}
-                    <span>{testResult.message}</span>
-                  </div>
-                )}
-              </div>
+              {/* Tabs */}
+              <ConnectorDetail
+                key={selectedConnector.id}
+                connector={selectedConnector}
+                apiBase={API_BASE}
+                onUpdate={loadConnectors}
+              />
             </div>
           ) : (
-            <div className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <Cable className="w-12 h-12 text-[var(--muted-foreground)] mx-auto mb-3" />
-                <p className="text-[var(--muted-foreground)]">Select a connector to view details</p>
+            <div className="split-panel__empty">
+              <div className="empty-state">
+                <div className="empty-state__icon">
+                  <Cable className="w-6 h-6" />
+                </div>
+                <p className="empty-state__title">Select a connector</p>
+                <p className="empty-state__description">Choose a connector from the sidebar to view details</p>
               </div>
             </div>
           )}
@@ -609,43 +492,37 @@ export function WebConnectorsPanel() {
           <div className="space-y-4 py-4">
             {/* ID (only for create) */}
             {dialogMode === "create" && (
-              <div>
-                <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                  ID
-                </label>
+              <div className="form-group">
+                <label className="form-label">ID</label>
                 <input
                   type="text"
                   value={formId}
                   onChange={(e) => setFormId(e.target.value)}
                   placeholder="my-connector"
-                  className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
+                  className="form-input"
                 />
               </div>
             )}
 
             {/* Name */}
-            <div>
-              <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                Name
-              </label>
+            <div className="form-group">
+              <label className="form-label">Name</label>
               <input
                 type="text"
                 value={formName}
                 onChange={(e) => setFormName(e.target.value)}
                 placeholder="My Connector"
-                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
+                className="form-input"
               />
             </div>
 
             {/* Transport type */}
-            <div>
-              <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                Transport Type
-              </label>
+            <div className="form-group">
+              <label className="form-label">Transport Type</label>
               <select
                 value={formTransportType}
                 onChange={(e) => setFormTransportType(e.target.value as TransportType)}
-                className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
+                className="form-input form-select"
               >
                 <option value="http">HTTP Webhook</option>
                 <option value="cli">CLI Command</option>
@@ -655,40 +532,35 @@ export function WebConnectorsPanel() {
             {/* HTTP transport fields */}
             {formTransportType === "http" && (
               <>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                    Callback URL
-                  </label>
+                <div className="form-group">
+                  <label className="form-label">Callback URL</label>
                   <input
                     type="url"
                     value={formCallbackUrl}
                     onChange={(e) => setFormCallbackUrl(e.target.value)}
                     placeholder="https://example.com/webhook"
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
+                    className="form-input"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                    Method
-                  </label>
+                <div className="form-group">
+                  <label className="form-label">Method</label>
                   <select
                     value={formMethod}
                     onChange={(e) => setFormMethod(e.target.value)}
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)]"
+                    className="form-input form-select"
                   >
                     <option value="POST">POST</option>
                     <option value="PUT">PUT</option>
                   </select>
                 </div>
                 <div>
-                  <div className="flex items-center justify-between mb-1">
-                    <label className="block text-sm font-medium text-[var(--foreground)]">
-                      Headers
-                    </label>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="form-label">Headers</label>
                     <button
                       type="button"
                       onClick={addHeader}
-                      className="text-xs text-[var(--primary)] hover:underline"
+                      className="btn btn--ghost btn--sm"
+                      style={{ padding: "2px 8px" }}
                     >
                       + Add Header
                     </button>
@@ -700,19 +572,21 @@ export function WebConnectorsPanel() {
                         value={header.key}
                         onChange={(e) => updateHeader(header.id, "key", e.target.value)}
                         placeholder="Key"
-                        className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] text-sm"
+                        className="form-input"
+                        style={{ flex: 1, fontSize: "var(--text-sm)" }}
                       />
                       <input
                         type="text"
                         value={header.value}
                         onChange={(e) => updateHeader(header.id, "value", e.target.value)}
                         placeholder="Value"
-                        className="flex-1 px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] text-sm"
+                        className="form-input"
+                        style={{ flex: 1, fontSize: "var(--text-sm)" }}
                       />
                       <button
                         type="button"
                         onClick={() => removeHeader(header.id)}
-                        className="p-2 text-[var(--muted-foreground)] hover:text-red-500"
+                        className="btn btn--icon-ghost btn--icon-danger"
                       >
                         <X className="w-4 h-4" />
                       </button>
@@ -725,41 +599,37 @@ export function WebConnectorsPanel() {
             {/* CLI transport fields */}
             {formTransportType === "cli" && (
               <>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                    Command
-                  </label>
+                <div className="form-group">
+                  <label className="form-label">Command</label>
                   <input
                     type="text"
                     value={formCommand}
                     onChange={(e) => setFormCommand(e.target.value)}
                     placeholder="/usr/local/bin/my-script"
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] font-mono"
+                    className="form-input form-input--mono"
                   />
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-[var(--foreground)] mb-1">
-                    Arguments (comma-separated)
-                  </label>
+                <div className="form-group">
+                  <label className="form-label">Arguments (comma-separated)</label>
                   <input
                     type="text"
                     value={formArgs}
                     onChange={(e) => setFormArgs(e.target.value)}
                     placeholder="--flag, value, --another"
-                    className="w-full px-3 py-2 rounded-lg border border-[var(--border)] bg-[var(--background)] text-[var(--foreground)] font-mono"
+                    className="form-input form-input--mono"
                   />
                 </div>
               </>
             )}
 
             {/* Enabled toggles */}
-            <div className="flex gap-6">
+            <div className="flex gap-5">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={formEnabled}
                   onChange={(e) => setFormEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-[var(--border)]"
+                  className="w-4 h-4 rounded accent-[var(--primary)]"
                 />
                 <span className="text-sm text-[var(--foreground)]">Enabled</span>
               </label>
@@ -768,9 +638,18 @@ export function WebConnectorsPanel() {
                   type="checkbox"
                   checked={formOutboundEnabled}
                   onChange={(e) => setFormOutboundEnabled(e.target.checked)}
-                  className="w-4 h-4 rounded border-[var(--border)]"
+                  className="w-4 h-4 rounded accent-[var(--primary)]"
                 />
-                <span className="text-sm text-[var(--foreground)]">Outbound Enabled</span>
+                <span className="text-sm text-[var(--foreground)]">Outbound</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={formInboundEnabled}
+                  onChange={(e) => setFormInboundEnabled(e.target.checked)}
+                  className="w-4 h-4 rounded accent-[var(--primary)]"
+                />
+                <span className="text-sm text-[var(--foreground)]">Inbound</span>
               </label>
             </div>
           </div>
@@ -778,14 +657,14 @@ export function WebConnectorsPanel() {
           <DialogFooter>
             <button
               onClick={() => setDialogOpen(false)}
-              className="px-4 py-2 rounded-lg border border-[var(--border)] text-[var(--foreground)] hover:bg-[var(--muted)]"
+              className="btn btn--secondary btn--md"
             >
               Cancel
             </button>
             <button
               onClick={handleSave}
               disabled={!formName || (formTransportType === "http" ? !formCallbackUrl : !formCommand)}
-              className="px-4 py-2 rounded-lg bg-[var(--primary)] text-white hover:opacity-90 disabled:opacity-50"
+              className="btn btn--primary btn--md"
             >
               {dialogMode === "create" ? "Create" : "Save"}
             </button>

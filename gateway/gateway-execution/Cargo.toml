@@ -41,6 +41,9 @@ anyhow = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
+# HTTP (for resource queries)
+reqwest = { workspace = true }
+
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }

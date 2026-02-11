@@ -49,6 +49,7 @@ import type {
   CreateConnectorRequest,
   UpdateConnectorRequest,
   ConnectorTestResult,
+  InboundLogEntry,
   // Cron types
   CronJobResponse,
   CreateCronJobRequest,
@@ -329,6 +330,9 @@ export interface Transport {
 
   /** Disable a connector */
   disableConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
+
+  /** Get recent inbound messages for a connector */
+  getConnectorInboundLog(id: string, limit?: number): Promise<TransportResult<InboundLogEntry[]>>;
 
   // =========================================================================
   // Cron Job Operations

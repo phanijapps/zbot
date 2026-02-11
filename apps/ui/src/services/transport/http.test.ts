@@ -181,8 +181,8 @@ describe('Gateway Submit API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         agent_id: 'root',
-        message: 'Hello from plugin!',
-        source: 'plugin',
+        message: 'Hello from connector!',
+        source: 'connector',
       }),
     });
 
@@ -388,6 +388,60 @@ describe('Error Handling', () => {
     const response = await fetch(`${API_BASE}/api/health`);
     const text = await response.text();
     expect(text).toBe('not json');
+  });
+});
+
+// ============================================================================
+// Connector Inbound Log API Tests
+// ============================================================================
+
+describe('Connector Inbound Log API', () => {
+  it('returns inbound log entries', async () => {
+    const response = await fetch(`${API_BASE}/api/connectors/test-connector/inbound-log`);
+    expect(response.ok).toBe(true);
+
+    const entries = await response.json();
+    expect(Array.isArray(entries)).toBe(true);
+    expect(entries.length).toBeGreaterThan(0);
+  });
+
+  it('each entry has required fields', async () => {
+    const response = await fetch(`${API_BASE}/api/connectors/test-connector/inbound-log`);
+    const entries = await response.json();
+
+    entries.forEach((entry: Record<string, unknown>) => {
+      expect(entry).toHaveProperty('connector_id');
+      expect(entry).toHaveProperty('message');
+      expect(entry).toHaveProperty('session_id');
+      expect(entry).toHaveProperty('received_at');
+    });
+  });
+
+  it('entries match requested connector id', async () => {
+    const connectorId = 'my-connector';
+    const response = await fetch(`${API_BASE}/api/connectors/${connectorId}/inbound-log`);
+    const entries = await response.json();
+
+    entries.forEach((entry: Record<string, unknown>) => {
+      expect(entry.connector_id).toBe(connectorId);
+    });
+  });
+
+  it('supports limit parameter', async () => {
+    const response = await fetch(`${API_BASE}/api/connectors/test-connector/inbound-log?limit=10`);
+    expect(response.ok).toBe(true);
+  });
+
+  it('handles empty log', async () => {
+    server.use(
+      http.get(`${API_BASE}/api/connectors/:id/inbound-log`, () => {
+        return HttpResponse.json([]);
+      })
+    );
+
+    const response = await fetch(`${API_BASE}/api/connectors/test-connector/inbound-log`);
+    const entries = await response.json();
+    expect(entries).toEqual([]);
   });
 });
 

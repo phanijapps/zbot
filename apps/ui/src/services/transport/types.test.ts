@@ -17,6 +17,10 @@ import type {
   TransportResult,
   SessionFilter,
   ExecutionFilter,
+  ConnectorResource,
+  ConnectorResponseSchema,
+  InboundLogEntry,
+  ConnectorMetadata,
 } from './types';
 
 // ============================================================================
@@ -176,7 +180,7 @@ describe('SessionWithExecutions Type', () => {
 
 describe('TriggerSource Type', () => {
   it('supports all valid values', () => {
-    const sources: TriggerSource[] = ['web', 'cli', 'cron', 'api', 'plugin'];
+    const sources: TriggerSource[] = ['web', 'cli', 'cron', 'api', 'connector'];
     expect(sources).toHaveLength(5);
 
     // All sources should be strings
@@ -191,7 +195,7 @@ describe('TriggerSource Type', () => {
       cli: 'Command Line',
       cron: 'Scheduled',
       api: 'API Call',
-      plugin: 'Plugin',
+      connector: 'Plugin',
     };
 
     expect(sourceMap.web).toBe('Web UI');
@@ -300,7 +304,7 @@ describe('DashboardStats Type', () => {
         cli: 3,
         cron: 1,
         api: 1,
-        plugin: 1,
+        connector: 1,
       },
     };
 
@@ -328,13 +332,13 @@ describe('DashboardStats Type', () => {
         cli: 2,
         cron: 1,
         api: 1,
-        plugin: 0,
+        connector: 0,
       },
     };
 
     expect(stats.sessions_by_source.web).toBe(10);
     expect(stats.sessions_by_source.cli).toBe(2);
-    expect(stats.sessions_by_source.plugin).toBe(0);
+    expect(stats.sessions_by_source.connector).toBe(0);
 
     // Total should match
     const total = Object.values(stats.sessions_by_source).reduce((a, b) => a + b, 0);
@@ -439,5 +443,122 @@ describe('Filter Types', () => {
       expect(filter.session_id).toBe('sess-123');
       expect(filter.status).toBe('running');
     });
+  });
+});
+
+// ============================================================================
+// Connector Type Tests
+// ============================================================================
+
+describe('ConnectorResource Type', () => {
+  it('has required fields', () => {
+    const resource: ConnectorResource = {
+      name: 'contacts',
+      uri: 'https://api.example.com/contacts/{id}',
+      method: 'GET',
+      headers: {},
+    };
+
+    expect(resource.name).toBe('contacts');
+    expect(resource.uri).toContain('contacts');
+    expect(resource.method).toBe('GET');
+  });
+
+  it('supports optional fields', () => {
+    const resource: ConnectorResource = {
+      name: 'users',
+      uri: 'https://api.example.com/users',
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer token' },
+      description: 'User lookup endpoint',
+      response_schema: { type: 'object', properties: { id: { type: 'string' } } },
+    };
+
+    expect(resource.description).toBe('User lookup endpoint');
+    expect(resource.response_schema).toBeDefined();
+    expect(resource.headers['Authorization']).toBe('Bearer token');
+  });
+});
+
+describe('ConnectorResponseSchema Type', () => {
+  it('has required fields', () => {
+    const schema: ConnectorResponseSchema = {
+      name: 'send_message',
+      schema: { type: 'object', properties: { text: { type: 'string' } } },
+    };
+
+    expect(schema.name).toBe('send_message');
+    expect(schema.schema).toHaveProperty('type');
+  });
+
+  it('supports optional description', () => {
+    const schema: ConnectorResponseSchema = {
+      name: 'create_ticket',
+      schema: { type: 'object' },
+      description: 'Creates a support ticket',
+    };
+
+    expect(schema.description).toBe('Creates a support ticket');
+  });
+});
+
+describe('InboundLogEntry Type', () => {
+  it('has required fields', () => {
+    const entry: InboundLogEntry = {
+      connector_id: 'slack-bridge',
+      message: 'Hello from Slack',
+      session_id: 'sess-abc123',
+      received_at: '2026-01-01T00:00:00Z',
+    };
+
+    expect(entry.connector_id).toBe('slack-bridge');
+    expect(entry.message).toBe('Hello from Slack');
+    expect(entry.session_id).toMatch(/^sess-/);
+  });
+
+  it('supports optional sender and thread_id', () => {
+    const entry: InboundLogEntry = {
+      connector_id: 'slack-bridge',
+      message: 'Threaded reply',
+      sender: { id: 'U123', name: 'John' },
+      thread_id: 'thread-456',
+      session_id: 'sess-xyz',
+      received_at: '2026-01-01T00:00:00Z',
+    };
+
+    expect(entry.sender?.id).toBe('U123');
+    expect(entry.sender?.name).toBe('John');
+    expect(entry.thread_id).toBe('thread-456');
+  });
+});
+
+describe('ConnectorMetadata Type', () => {
+  it('supports new fields alongside capabilities', () => {
+    const metadata: ConnectorMetadata = {
+      capabilities: [{ name: 'send_email', schema: {}, description: 'Send email' }],
+      resources: [
+        { name: 'contacts', uri: 'https://api.example.com/contacts', method: 'GET', headers: {} },
+      ],
+      response_schemas: [
+        { name: 'email_payload', schema: { type: 'object' } },
+      ],
+      context: 'This connector bridges Gmail and agents.',
+    };
+
+    expect(metadata.capabilities).toHaveLength(1);
+    expect(metadata.resources).toHaveLength(1);
+    expect(metadata.response_schemas).toHaveLength(1);
+    expect(metadata.context).toContain('Gmail');
+  });
+
+  it('allows empty arrays for backward compatibility', () => {
+    const metadata: ConnectorMetadata = {
+      capabilities: [],
+      resources: [],
+      response_schemas: [],
+    };
+
+    expect(metadata.resources).toHaveLength(0);
+    expect(metadata.context).toBeUndefined();
   });
 });

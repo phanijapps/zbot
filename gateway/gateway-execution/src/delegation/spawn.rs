@@ -428,6 +428,7 @@ async fn handle_execution_success(
         Some(response.to_string()),
         None,
         None,
+        None, // No thread_id for delegations (internal subagent calls)
     )
     .await;
 

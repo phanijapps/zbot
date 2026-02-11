@@ -323,6 +323,7 @@ mod tests {
             metadata: Default::default(),
             enabled: false,
             outbound_enabled: true,
+            inbound_enabled: true,
             created_at: None,
             updated_at: None,
         };
@@ -352,6 +353,7 @@ mod tests {
             metadata: Default::default(),
             enabled: true,
             outbound_enabled: false,
+            inbound_enabled: true,
             created_at: None,
             updated_at: None,
         };

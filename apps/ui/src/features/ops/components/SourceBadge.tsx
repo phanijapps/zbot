@@ -3,7 +3,7 @@
 // Displays a badge for the trigger source of a session
 // ============================================================================
 
-import { Globe, Terminal, Timer, Zap, Puzzle } from 'lucide-react';
+import { Globe, Terminal, Timer, Zap, Plug } from 'lucide-react';
 import type { TriggerSource } from '../../../services/transport/types';
 
 // Source configuration for badge display
@@ -15,7 +15,7 @@ export const SOURCE_CONFIG: Record<
   cli: { label: 'CLI', icon: <Terminal size={10} />, color: 'var(--muted-foreground)' },
   cron: { label: 'Cron', icon: <Timer size={10} />, color: 'var(--warning)' },
   api: { label: 'API', icon: <Zap size={10} />, color: 'var(--success)' },
-  plugin: { label: 'Plugin', icon: <Puzzle size={10} />, color: 'var(--primary)' },
+  connector: { label: 'Connector', icon: <Plug size={10} />, color: 'var(--primary)' },
 };
 
 export interface SourceBadgeProps {
@@ -33,7 +33,7 @@ export interface SourceBadgeProps {
  * - cli: User initiated from command line
  * - cron: Scheduled/cron job
  * - api: External API call
- * - plugin: Plugin trigger (Python, JS, etc.)
+ * - connector: External connector trigger (HTTP webhook)
  */
 export function SourceBadge({ source, className = '' }: SourceBadgeProps) {
   const config = SOURCE_CONFIG[source] || SOURCE_CONFIG.web;

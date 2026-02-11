@@ -34,6 +34,9 @@ pub fn mock_session(id: &str, agent_id: &str) -> Session {
         continuation_needed: false,
         ward_id: None,
         parent_session_id: None,
+        thread_id: None,
+        connector_id: None,
+        respond_to: None,
     }
 }
 
@@ -55,6 +58,9 @@ pub fn mock_session_with_source(id: &str, agent_id: &str, source: TriggerSource)
         continuation_needed: false,
         ward_id: None,
         parent_session_id: None,
+        thread_id: None,
+        connector_id: None,
+        respond_to: None,
     }
 }
 
@@ -76,6 +82,9 @@ pub fn mock_queued_session(id: &str, agent_id: &str, source: TriggerSource) -> S
         continuation_needed: false,
         ward_id: None,
         parent_session_id: None,
+        thread_id: None,
+        connector_id: None,
+        respond_to: None,
     }
 }
 
