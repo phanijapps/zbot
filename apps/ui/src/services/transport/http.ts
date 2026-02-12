@@ -52,12 +52,8 @@ import type {
   SubscriptionErrorMessage,
   SubscriptionOptions,
   SubscriptionScope,
-  // Connector types
-  ConnectorResponse,
-  CreateConnectorRequest,
-  UpdateConnectorRequest,
-  ConnectorTestResult,
-  InboundLogEntry,
+  // Bridge worker types
+  BridgeWorker,
   // Cron types
   CronJobResponse,
   CreateCronJobRequest,
@@ -1211,45 +1207,11 @@ export class HttpTransport implements Transport {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Connector Operations
+  // Bridge Worker Operations
   // ─────────────────────────────────────────────────────────────────────────
 
-  async listConnectors(): Promise<TransportResult<ConnectorResponse[]>> {
-    return this.get<ConnectorResponse[]>("/api/connectors");
-  }
-
-  async getConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
-    return this.get<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}`);
-  }
-
-  async createConnector(request: CreateConnectorRequest): Promise<TransportResult<ConnectorResponse>> {
-    return this.post<ConnectorResponse>("/api/connectors", request);
-  }
-
-  async updateConnector(id: string, request: UpdateConnectorRequest): Promise<TransportResult<ConnectorResponse>> {
-    return this.put<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}`, request);
-  }
-
-  async deleteConnector(id: string): Promise<TransportResult<void>> {
-    return this.delete(`/api/connectors/${encodeURIComponent(id)}`);
-  }
-
-  async testConnector(id: string): Promise<TransportResult<ConnectorTestResult>> {
-    return this.post<ConnectorTestResult>(`/api/connectors/${encodeURIComponent(id)}/test`, {});
-  }
-
-  async enableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
-    return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/enable`, {});
-  }
-
-  async disableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
-    return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/disable`, {});
-  }
-
-  async getConnectorInboundLog(id: string, limit = 50): Promise<TransportResult<InboundLogEntry[]>> {
-    return this.get<InboundLogEntry[]>(
-      `/api/connectors/${encodeURIComponent(id)}/inbound-log?limit=${limit}`
-    );
+  async listBridgeWorkers(): Promise<TransportResult<BridgeWorker[]>> {
+    return this.get<BridgeWorker[]>("/api/bridge/workers");
   }
 
   // ─────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,47 @@
+# ============================================================================
+# GATEWAY BRIDGE
+# WebSocket worker system for bidirectional agent-worker communication
+# ============================================================================
+
+[package]
+name = "gateway-bridge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "WebSocket bridge for AgentZero worker connections"
+
+[dependencies]
+# Internal crates
+gateway-database = { path = "../gateway-database" }
+gateway-bus = { path = "../gateway-bus" }
+zero-core = { path = "../../framework/zero-core" }
+
+# Web framework
+axum = { version = "0.7", features = ["ws"] }
+
+# Async
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+
+# Database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# Utilities
+chrono = { workspace = true }
+uuid = { workspace = true }
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3"

@@ -75,6 +75,10 @@ pub struct ExecutionRunner {
     state_service: Arc<StateService<DatabaseManager>>,
     /// Connector registry for response routing to external connectors
     connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
+    /// Bridge registry for WebSocket worker connections
+    bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+    /// Bridge outbox for reliable message delivery
+    bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
     /// Memory repository for structured fact storage
@@ -116,6 +120,8 @@ impl ExecutionRunner {
             None,
             None,
             None,
+            None,
+            None,
         )
     }
 
@@ -135,6 +141,8 @@ impl ExecutionRunner {
         memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
         distiller: Option<Arc<super::distillation::SessionDistiller>>,
         memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+        bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+        bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -153,6 +161,8 @@ impl ExecutionRunner {
             log_service,
             state_service,
             connector_registry,
+            bridge_registry,
+            bridge_outbox,
             workspace_cache,
             memory_repo,
             distiller,
@@ -455,6 +465,8 @@ impl ExecutionRunner {
         let state_service = self.state_service.clone();
         let delegation_tx = self.delegation_tx.clone();
         let connector_registry = self.connector_registry.clone();
+        let bridge_registry = self.bridge_registry.clone();
+        let bridge_outbox = self.bridge_outbox.clone();
         let respond_to = config.respond_to.clone();
         let thread_id = config.thread_id.clone();
         let distiller = self.distiller.clone();
@@ -619,6 +631,8 @@ impl ExecutionRunner {
                         connector_registry.as_ref(),
                         respond_to.as_ref(),
                         thread_id.as_deref(),
+                        bridge_registry.as_ref(),
+                        bridge_outbox.as_ref(),
                     )
                     .await;
 
@@ -881,12 +895,26 @@ impl ExecutionRunner {
                 as Arc<dyn zero_core::MemoryFactStore>
         });
 
-        // Build connector resource provider (if registry available)
-        let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+        // Build connector resource provider (HTTP + bridge composite)
+        let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
             self.connector_registry.as_ref().map(|registry| {
                 Arc::new(super::resource_provider::GatewayResourceProvider::new(registry.clone()))
                     as Arc<dyn zero_core::ConnectorResourceProvider>
             });
+        let bridge_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+            self.bridge_registry.as_ref().zip(self.bridge_outbox.as_ref()).map(|(reg, outbox)| {
+                Arc::new(gateway_bridge::BridgeResourceProvider::new(reg.clone(), outbox.clone()))
+                    as Arc<dyn zero_core::ConnectorResourceProvider>
+            });
+        let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+            if http_provider.is_some() || bridge_provider.is_some() {
+                Some(Arc::new(super::composite_provider::CompositeResourceProvider::new(
+                    http_provider,
+                    bridge_provider,
+                )) as Arc<dyn zero_core::ConnectorResourceProvider>)
+            } else {
+                None
+            };
 
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
@@ -1198,6 +1226,8 @@ async fn invoke_continuation(
                     None,
                     None,
                     None, // No thread_id for continuation turns
+                    None, // No bridge dispatch for continuation turns
+                    None,
                 )
                 .await;
             }

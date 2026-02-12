@@ -975,3 +975,34 @@ The `respond_to` field controls where agent responses are delivered:
 - **Specified**: Response dispatched to listed connectors
 - **Original source NOT automatically included** (explicit routing)
 
+## Runtime Memory Profile
+
+Typical daemon (`zerod`) memory usage: **~150 MB** at idle after first request.
+
+### Breakdown
+
+| Component | Approx. Size | Source |
+|-----------|-------------|--------|
+| **fastembed ONNX model** | ~100 MB | `AllMiniLmL6V2` model loaded at startup for local embeddings. Held in `EmbeddingClient` inside `AppState`. |
+| **SQLite connection pool** | ~32–64 MB | r2d2 pool with `max_size(8)` connections, each configured with `PRAGMA cache_size = -8000` (8 MB per connection). |
+| **Service caches** | ~5–10 MB | `AgentCache` (RwLock), `TemplateCache`, `ConnectorRegistry`, `BridgeRegistry` — all in-memory hashmaps. |
+| **Tokio runtime + stacks** | ~2–5 MB | Multi-threaded runtime, green thread stacks, channel buffers. |
+| **Base process** | ~5–10 MB | Executable code, static data, Rust allocator overhead. |
+
+### Key Configuration Points
+
+| Setting | Value | File | Impact |
+|---------|-------|------|--------|
+| SQLite `cache_size` | `-8000` (8 MB) | `gateway/gateway-database/src/pool.rs` | Per-connection page cache. Multiply by pool size. |
+| Pool `max_size` | `8` | `gateway/gateway-database/src/pool.rs` | Number of SQLite connections kept open. |
+| Embedding model | `AllMiniLmL6V2` | `runtime/agent-runtime/src/llm/embedding.rs` | ~100 MB ONNX model. Switch to provider-based embeddings (`EmbeddingConfig::Provider`) to eliminate. |
+| BatchWriter flush | `100ms` | `gateway/gateway-database/src/batch_writer.rs` | Batches inserts; small buffer (~KB). |
+| BridgeRegistry | Unbounded `HashMap` | `gateway/gateway-bridge/src/registry.rs` | Grows with connected workers; negligible at typical scale. |
+
+### Optimization Levers
+
+- **Disable local embeddings**: Set `EmbeddingConfig::Provider` to offload to an API — saves ~100 MB
+- **Reduce pool size**: Lower `max_size` to 4 — saves ~32 MB (trades throughput under load)
+- **Reduce cache_size**: Set `PRAGMA cache_size = -4000` — saves ~4 MB per connection
+- **Lazy model loading**: Defer fastembed init until first `recall`/`save_fact` — saves startup RAM if memory features unused
+

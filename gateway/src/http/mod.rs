@@ -3,6 +3,7 @@
 //! RESTful HTTP API for the gateway.
 
 mod agents;
+mod bridge;
 mod connectors;
 mod conversations;
 mod cron;
@@ -134,6 +135,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .nest_service("/api/executions", execution_state::routes(state.state_service.clone()))
         // Gateway Bus endpoints (for external connectors and API integrations)
         .nest("/api/gateway", gateway_bus::routes())
+        // Bridge endpoints
+        .route("/api/bridge/workers", get(bridge::list_workers))
+        .route("/bridge/ws", get(bridge::ws_upgrade))
         // State
         .with_state(state);
 

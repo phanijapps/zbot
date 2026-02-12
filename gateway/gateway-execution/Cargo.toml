@@ -23,6 +23,7 @@ gateway-database = { path = "../gateway-database" }
 gateway-services = { path = "../gateway-services" }
 gateway-connectors = { path = "../gateway-connectors" }
 gateway-templates = { path = "../gateway-templates" }
+gateway-bridge = { path = "../gateway-bridge" }
 knowledge-graph = { path = "../../services/knowledge-graph" }
 
 # Async

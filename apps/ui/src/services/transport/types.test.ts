@@ -17,10 +17,9 @@ import type {
   TransportResult,
   SessionFilter,
   ExecutionFilter,
-  ConnectorResource,
-  ConnectorResponseSchema,
-  InboundLogEntry,
-  ConnectorMetadata,
+  BridgeWorker,
+  BridgeWorkerCapability,
+  BridgeWorkerResource,
 } from './types';
 
 // ============================================================================
@@ -447,118 +446,78 @@ describe('Filter Types', () => {
 });
 
 // ============================================================================
-// Connector Type Tests
+// Bridge Worker Type Tests
 // ============================================================================
 
-describe('ConnectorResource Type', () => {
+describe('BridgeWorker Type', () => {
   it('has required fields', () => {
-    const resource: ConnectorResource = {
-      name: 'contacts',
-      uri: 'https://api.example.com/contacts/{id}',
-      method: 'GET',
-      headers: {},
+    const worker: BridgeWorker = {
+      adapter_id: 'slack-worker',
+      capabilities: [],
+      resources: [],
+      connected_at: '2026-01-01T00:00:00Z',
     };
 
-    expect(resource.name).toBe('contacts');
-    expect(resource.uri).toContain('contacts');
-    expect(resource.method).toBe('GET');
+    expect(worker.adapter_id).toBe('slack-worker');
+    expect(worker.capabilities).toHaveLength(0);
+    expect(worker.resources).toHaveLength(0);
+    expect(worker.connected_at).toBeDefined();
+  });
+
+  it('supports capabilities and resources', () => {
+    const worker: BridgeWorker = {
+      adapter_id: 'crm-worker',
+      capabilities: [
+        { name: 'send_email', description: 'Send email via CRM' },
+        { name: 'create_ticket', schema: { type: 'object' } },
+      ],
+      resources: [
+        { name: 'contacts', description: 'CRM contacts' },
+      ],
+      connected_at: '2026-01-01T00:00:00Z',
+    };
+
+    expect(worker.capabilities).toHaveLength(2);
+    expect(worker.capabilities[0].name).toBe('send_email');
+    expect(worker.capabilities[0].description).toBe('Send email via CRM');
+    expect(worker.resources).toHaveLength(1);
+    expect(worker.resources[0].name).toBe('contacts');
+  });
+});
+
+describe('BridgeWorkerCapability Type', () => {
+  it('has required name field', () => {
+    const cap: BridgeWorkerCapability = { name: 'send_message' };
+    expect(cap.name).toBe('send_message');
+    expect(cap.description).toBeUndefined();
+    expect(cap.schema).toBeUndefined();
   });
 
   it('supports optional fields', () => {
-    const resource: ConnectorResource = {
-      name: 'users',
-      uri: 'https://api.example.com/users',
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer token' },
-      description: 'User lookup endpoint',
-      response_schema: { type: 'object', properties: { id: { type: 'string' } } },
+    const cap: BridgeWorkerCapability = {
+      name: 'create_ticket',
+      description: 'Create a support ticket',
+      schema: { type: 'object', properties: { title: { type: 'string' } } },
     };
 
-    expect(resource.description).toBe('User lookup endpoint');
-    expect(resource.response_schema).toBeDefined();
-    expect(resource.headers['Authorization']).toBe('Bearer token');
+    expect(cap.description).toBe('Create a support ticket');
+    expect(cap.schema).toBeDefined();
   });
 });
 
-describe('ConnectorResponseSchema Type', () => {
-  it('has required fields', () => {
-    const schema: ConnectorResponseSchema = {
-      name: 'send_message',
-      schema: { type: 'object', properties: { text: { type: 'string' } } },
-    };
-
-    expect(schema.name).toBe('send_message');
-    expect(schema.schema).toHaveProperty('type');
+describe('BridgeWorkerResource Type', () => {
+  it('has required name field', () => {
+    const res: BridgeWorkerResource = { name: 'channels' };
+    expect(res.name).toBe('channels');
+    expect(res.description).toBeUndefined();
   });
 
   it('supports optional description', () => {
-    const schema: ConnectorResponseSchema = {
-      name: 'create_ticket',
-      schema: { type: 'object' },
-      description: 'Creates a support ticket',
+    const res: BridgeWorkerResource = {
+      name: 'contacts',
+      description: 'CRM contact list',
     };
 
-    expect(schema.description).toBe('Creates a support ticket');
-  });
-});
-
-describe('InboundLogEntry Type', () => {
-  it('has required fields', () => {
-    const entry: InboundLogEntry = {
-      connector_id: 'slack-bridge',
-      message: 'Hello from Slack',
-      session_id: 'sess-abc123',
-      received_at: '2026-01-01T00:00:00Z',
-    };
-
-    expect(entry.connector_id).toBe('slack-bridge');
-    expect(entry.message).toBe('Hello from Slack');
-    expect(entry.session_id).toMatch(/^sess-/);
-  });
-
-  it('supports optional sender and thread_id', () => {
-    const entry: InboundLogEntry = {
-      connector_id: 'slack-bridge',
-      message: 'Threaded reply',
-      sender: { id: 'U123', name: 'John' },
-      thread_id: 'thread-456',
-      session_id: 'sess-xyz',
-      received_at: '2026-01-01T00:00:00Z',
-    };
-
-    expect(entry.sender?.id).toBe('U123');
-    expect(entry.sender?.name).toBe('John');
-    expect(entry.thread_id).toBe('thread-456');
-  });
-});
-
-describe('ConnectorMetadata Type', () => {
-  it('supports new fields alongside capabilities', () => {
-    const metadata: ConnectorMetadata = {
-      capabilities: [{ name: 'send_email', schema: {}, description: 'Send email' }],
-      resources: [
-        { name: 'contacts', uri: 'https://api.example.com/contacts', method: 'GET', headers: {} },
-      ],
-      response_schemas: [
-        { name: 'email_payload', schema: { type: 'object' } },
-      ],
-      context: 'This connector bridges Gmail and agents.',
-    };
-
-    expect(metadata.capabilities).toHaveLength(1);
-    expect(metadata.resources).toHaveLength(1);
-    expect(metadata.response_schemas).toHaveLength(1);
-    expect(metadata.context).toContain('Gmail');
-  });
-
-  it('allows empty arrays for backward compatibility', () => {
-    const metadata: ConnectorMetadata = {
-      capabilities: [],
-      resources: [],
-      response_schemas: [],
-    };
-
-    expect(metadata.resources).toHaveLength(0);
-    expect(metadata.context).toBeUndefined();
+    expect(res.description).toBe('CRM contact list');
   });
 });

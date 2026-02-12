@@ -599,121 +599,28 @@ export interface SubscriptionOptions {
 }
 
 // ============================================================================
-// Connector Types
+// Bridge Worker Types
 // ============================================================================
 
-/** Transport configuration for a connector */
-export type ConnectorTransport =
-  | {
-      type: "http";
-      callback_url: string;
-      method: string;
-      headers: Record<string, string>;
-      timeout_ms?: number;
-    }
-  | {
-      type: "cli";
-      command: string;
-      args: string[];
-      env: Record<string, string>;
-    }
-  | {
-      type: "grpc";
-      endpoint: string;
-      service: string;
-      method: string;
-    }
-  | {
-      type: "websocket";
-      url: string;
-    }
-  | {
-      type: "ipc";
-      socket_path: string;
-    };
-
-/** Capability that a connector provides */
-export interface ConnectorCapability {
+/** Capability declared by a bridge worker */
+export interface BridgeWorkerCapability {
   name: string;
   description?: string;
   schema?: Record<string, unknown>;
 }
 
-/** MCP-like queryable resource definition */
-export interface ConnectorResource {
+/** Resource declared by a bridge worker */
+export interface BridgeWorkerResource {
   name: string;
-  uri: string;
-  description?: string;
-  method: string;
-  headers: Record<string, string>;
-  response_schema?: Record<string, unknown>;
-}
-
-/** Named outbound payload schema */
-export interface ConnectorResponseSchema {
-  name: string;
-  schema: Record<string, unknown>;
   description?: string;
 }
 
-/** Inbound message log entry */
-export interface InboundLogEntry {
-  connector_id: string;
-  message: string;
-  sender?: { id: string; name?: string };
-  thread_id?: string;
-  session_id: string;
-  received_at: string;
-}
-
-/** Metadata about a connector */
-export interface ConnectorMetadata {
-  capabilities: ConnectorCapability[];
-  resources: ConnectorResource[];
-  response_schemas: ConnectorResponseSchema[];
-  context?: string;
-  [key: string]: unknown;
-}
-
-/** Full connector configuration */
-export interface ConnectorResponse {
-  id: string;
-  name: string;
-  transport: ConnectorTransport;
-  metadata: ConnectorMetadata;
-  enabled: boolean;
-  outbound_enabled: boolean;
-  inbound_enabled: boolean;
-  created_at?: string;
-  updated_at?: string;
-}
-
-/** Request to create a new connector */
-export interface CreateConnectorRequest {
-  id: string;
-  name: string;
-  transport: ConnectorTransport;
-  metadata?: ConnectorMetadata;
-  enabled?: boolean;
-  outbound_enabled?: boolean;
-  inbound_enabled?: boolean;
-}
-
-/** Request to update a connector */
-export interface UpdateConnectorRequest {
-  name?: string;
-  transport?: ConnectorTransport;
-  metadata?: ConnectorMetadata;
-  enabled?: boolean;
-  outbound_enabled?: boolean;
-  inbound_enabled?: boolean;
-}
-
-/** Result of testing a connector */
-export interface ConnectorTestResult {
-  success: boolean;
-  message: string;
-  latency_ms?: number;
+/** Connected bridge worker (read-only, from GET /api/bridge/workers) */
+export interface BridgeWorker {
+  adapter_id: string;
+  capabilities: BridgeWorkerCapability[];
+  resources: BridgeWorkerResource[];
+  connected_at: string;
 }
 
 // ============================================================================

@@ -44,12 +44,8 @@ import type {
   ConnectionStateCallback,
   GlobalCallback,
   SubscriptionOptions,
-  // Connector types
-  ConnectorResponse,
-  CreateConnectorRequest,
-  UpdateConnectorRequest,
-  ConnectorTestResult,
-  InboundLogEntry,
+  // Bridge worker types
+  BridgeWorker,
   // Cron types
   CronJobResponse,
   CreateCronJobRequest,
@@ -304,35 +300,11 @@ export interface Transport {
   reconnect(): Promise<void>;
 
   // =========================================================================
-  // Connector Operations
+  // Bridge Worker Operations
   // =========================================================================
 
-  /** List all connectors */
-  listConnectors(): Promise<TransportResult<ConnectorResponse[]>>;
-
-  /** Get a connector by ID */
-  getConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
-
-  /** Create a new connector */
-  createConnector(request: CreateConnectorRequest): Promise<TransportResult<ConnectorResponse>>;
-
-  /** Update an existing connector */
-  updateConnector(id: string, request: UpdateConnectorRequest): Promise<TransportResult<ConnectorResponse>>;
-
-  /** Delete a connector */
-  deleteConnector(id: string): Promise<TransportResult<void>>;
-
-  /** Test a connector connection */
-  testConnector(id: string): Promise<TransportResult<ConnectorTestResult>>;
-
-  /** Enable a connector */
-  enableConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
-
-  /** Disable a connector */
-  disableConnector(id: string): Promise<TransportResult<ConnectorResponse>>;
-
-  /** Get recent inbound messages for a connector */
-  getConnectorInboundLog(id: string, limit?: number): Promise<TransportResult<InboundLogEntry[]>>;
+  /** List all connected bridge workers */
+  listBridgeWorkers(): Promise<TransportResult<BridgeWorker[]>>;
 
   // =========================================================================
   // Cron Job Operations

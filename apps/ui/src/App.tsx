@@ -234,7 +234,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Connect",
     items: [
-      { to: "/connectors", label: "Connectors", icon: Plug },
+      { to: "/connectors", label: "Workers", icon: Plug },
       { to: "/hooks", label: "Schedules", icon: Calendar },
       { to: "/providers", label: "Providers", icon: Cable },
       { to: "/mcps", label: "MCPs", icon: Server },

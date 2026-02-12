@@ -78,6 +78,8 @@ impl RuntimeService {
             None,
             None,
             None,
+            None,
+            None,
         )
     }
 
@@ -97,6 +99,8 @@ impl RuntimeService {
         memory_repo: Option<Arc<MemoryRepository>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
+        bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+        bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -113,6 +117,8 @@ impl RuntimeService {
             memory_repo,
             distiller,
             memory_recall,
+            bridge_registry,
+            bridge_outbox,
         ));
         Self {
             event_bus,

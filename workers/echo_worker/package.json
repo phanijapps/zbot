@@ -1,0 +1,13 @@
+{
+  "name": "agentzero-echo-worker",
+  "version": "1.0.0",
+  "description": "Echo bridge worker for AgentZero — demonstrates the WebSocket worker protocol",
+  "main": "worker.js",
+  "scripts": {
+    "start": "node worker.js",
+    "dev": "node --watch worker.js"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}

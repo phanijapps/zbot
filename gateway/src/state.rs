@@ -63,6 +63,15 @@ pub struct AppState {
     /// Connector registry for external bridge management.
     pub connector_registry: Arc<ConnectorRegistry>,
 
+    /// Bridge registry for WebSocket worker connections.
+    pub bridge_registry: Arc<gateway_bridge::BridgeRegistry>,
+
+    /// Bridge outbox for reliable message delivery to workers.
+    pub bridge_outbox: Arc<gateway_bridge::OutboxRepository>,
+
+    /// Gateway bus for bridge inbound message routing (set during server start).
+    pub bridge_bus: Option<Arc<dyn gateway_bus::GatewayBus>>,
+
     /// Cron scheduler for scheduled agent triggers.
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
@@ -106,6 +115,10 @@ impl AppState {
 
         // Create workspace cache (shared between AppState and ExecutionRunner)
         let workspace_cache = new_workspace_cache();
+
+        // Create bridge registry and outbox for WebSocket workers
+        let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
+        let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
 
         // Initialize memory evolution services
         let memory_repo = Arc::new(MemoryRepository::new(db_manager));
@@ -153,6 +166,8 @@ impl AppState {
             Some(memory_repo),
             Some(distiller),
             Some(memory_recall),
+            Some(bridge_registry.clone()),
+            Some(bridge_outbox.clone()),
         ));
 
         // Create hook registry
@@ -178,6 +193,9 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
+            bridge_registry,
+            bridge_outbox,
+            bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             workspace_cache,
             config_dir,
@@ -197,6 +215,7 @@ impl AppState {
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
         let log_service = Arc::new(LogService::new(db_manager.clone()));
+        let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
 
         // Create connector registry
@@ -217,6 +236,9 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
+            bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
+            bridge_outbox,
+            bridge_bus: None,
             cron_scheduler: None,
             workspace_cache: new_workspace_cache(),
             config_dir,
@@ -251,6 +273,15 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
+            bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
+            bridge_outbox: {
+                let db = Arc::new(
+                    DatabaseManager::new(config_dir.clone())
+                        .expect("Failed to initialize database for bridge outbox"),
+                );
+                Arc::new(gateway_bridge::OutboxRepository::new(db))
+            },
+            bridge_bus: None,
             cron_scheduler: None,
             workspace_cache: new_workspace_cache(),
             config_dir,

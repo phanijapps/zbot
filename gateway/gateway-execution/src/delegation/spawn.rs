@@ -429,6 +429,8 @@ async fn handle_execution_success(
         None,
         None,
         None, // No thread_id for delegations (internal subagent calls)
+        None, // No bridge dispatch for delegations
+        None,
     )
     .await;
 
