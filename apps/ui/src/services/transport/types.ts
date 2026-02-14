@@ -293,6 +293,39 @@ export interface ToolSettingsResponse {
   error?: string;
 }
 
+/** Log settings for daemon file logging */
+export interface LogSettings {
+  /** Enable file logging */
+  enabled: boolean;
+  /** Custom log directory (null = default {data_dir}/logs) */
+  directory: string | null;
+  /** Log level: trace, debug, info, warn, error */
+  level: "trace" | "debug" | "info" | "warn" | "error";
+  /** Rotation strategy: daily, hourly, minutely, never */
+  rotation: "daily" | "hourly" | "minutely" | "never";
+  /** Maximum log files to keep (0 = unlimited) */
+  maxFiles: number;
+  /** Suppress stdout output (only log to file) */
+  suppressStdout: boolean;
+}
+
+/** Response from log settings API (includes restart warning) */
+export interface LogSettingsResponse {
+  success: boolean;
+  data?: LogSettings & { restartRequired: boolean };
+  error?: string;
+}
+
+/** Request to update log settings */
+export interface UpdateLogSettingsRequest {
+  enabled?: boolean;
+  directory?: string | null;
+  level?: "trace" | "debug" | "info" | "warn" | "error";
+  rotation?: "daily" | "hourly" | "minutely" | "never";
+  maxFiles?: number;
+  suppressStdout?: boolean;
+}
+
 // ============================================================================
 // Event Types
 // ============================================================================

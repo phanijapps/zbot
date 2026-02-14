@@ -506,10 +506,12 @@ mod tests {
 
     fn create_test_db() -> Arc<DatabaseManager> {
         use tempfile::TempDir;
+        use gateway_services::VaultPaths;
+        
         let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().to_path_buf();
+        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let _ = temp_dir.keep();
-        let db = DatabaseManager::new(path).unwrap();
+        let db = DatabaseManager::new(paths).unwrap();
         Arc::new(db)
     }
 

@@ -275,7 +275,7 @@ impl GatewayClient {
     }
 
     /// Stop an agent execution
-    pub async fn stop(&self, conversation_id: &str) -> Result<()> {
+    pub async fn stop(&self, _conversation_id: &str) -> Result<()> {
         // This would need an active WebSocket connection
         // For now, we'll just note that this needs the WS connection
         tracing::warn!("Stop not implemented for standalone calls - use chat mode");
@@ -283,7 +283,7 @@ impl GatewayClient {
     }
 
     /// Continue an agent execution
-    pub async fn continue_execution(&self, conversation_id: &str, additional_iterations: u32) -> Result<()> {
+    pub async fn continue_execution(&self, _conversation_id: &str, _additional_iterations: u32) -> Result<()> {
         tracing::warn!("Continue not implemented for standalone calls - use chat mode");
         Ok(())
     }

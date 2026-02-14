@@ -7,8 +7,10 @@
 //! - `load_system_prompt()` for loading and assembling the agent system prompt
 //! - Shard injection (tooling, memory) into custom instructions
 
+use gateway_services::VaultPaths;
 use rust_embed::RustEmbed;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Embedded template files.
 #[derive(RustEmbed)]
@@ -19,6 +21,49 @@ pub struct Templates;
 /// These provide core functionality documentation that users shouldn't have to maintain.
 const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning"];
 
+/// Load system prompt using VaultPaths, creating starter if missing.
+///
+/// Behavior:
+/// 1. If `config/INSTRUCTIONS.md` doesn't exist, creates it from starter template
+/// 2. Loads `config/INSTRUCTIONS.md` from data directory
+/// 3. Appends required shards (memory, tools, etc.) automatically
+///
+/// Falls back to embedded default only if file operations fail.
+pub fn load_system_prompt_from_paths(paths: &Arc<VaultPaths>) -> String {
+    let instructions_path = paths.instructions();
+
+    // Create starter INSTRUCTIONS.md if it doesn't exist
+    if !instructions_path.exists() {
+        if let Err(e) = create_starter_instructions(&instructions_path) {
+            tracing::warn!(
+                "Failed to create starter INSTRUCTIONS.md: {}, using embedded default",
+                e
+            );
+            return default_system_prompt();
+        }
+    }
+
+    // Load from filesystem
+    match std::fs::read_to_string(&instructions_path) {
+        Ok(content) if !content.trim().is_empty() => {
+            tracing::info!("Loaded system prompt from {:?}", instructions_path);
+            // Append required shards to custom instructions
+            append_shards(content, paths.vault_dir())
+        }
+        Ok(_) => {
+            tracing::warn!("INSTRUCTIONS.md is empty, using embedded default");
+            default_system_prompt()
+        }
+        Err(e) => {
+            tracing::warn!(
+                "Failed to read INSTRUCTIONS.md: {}, using embedded default",
+                e
+            );
+            default_system_prompt()
+        }
+    }
+}
+
 /// Load system prompt from filesystem, creating starter if missing.
 ///
 /// Behavior:
@@ -27,8 +72,11 @@ const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning"];
 /// 3. Appends required shards (memory, tools, etc.) automatically
 ///
 /// Falls back to embedded default only if file operations fail.
+///
+/// Note: This is the legacy function that uses the old path structure.
+/// Consider using `load_system_prompt_from_paths` instead.
 pub fn load_system_prompt(data_dir: &Path) -> String {
-    let instructions_path = data_dir.join("INSTRUCTIONS.md");
+    let instructions_path = data_dir.join("config").join("INSTRUCTIONS.md");
 
     // Create starter INSTRUCTIONS.md if it doesn't exist
     if !instructions_path.exists() {
@@ -175,7 +223,9 @@ mod tests {
     #[test]
     fn test_load_system_prompt_from_filesystem_appends_shards() {
         let dir = TempDir::new().unwrap();
-        let instructions_path = dir.path().join("INSTRUCTIONS.md");
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let instructions_path = config_dir.join("INSTRUCTIONS.md");
         std::fs::write(&instructions_path, "Custom system prompt content").unwrap();
 
         let prompt = load_system_prompt(dir.path());
@@ -191,7 +241,7 @@ mod tests {
     #[test]
     fn test_load_system_prompt_creates_starter_when_missing() {
         let dir = TempDir::new().unwrap();
-        let instructions_path = dir.path().join("INSTRUCTIONS.md");
+        let instructions_path = dir.path().join("config").join("INSTRUCTIONS.md");
 
         // File should not exist initially
         assert!(!instructions_path.exists());
@@ -210,7 +260,9 @@ mod tests {
     #[test]
     fn test_load_system_prompt_falls_back_when_empty() {
         let dir = TempDir::new().unwrap();
-        let instructions_path = dir.path().join("INSTRUCTIONS.md");
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        let instructions_path = config_dir.join("INSTRUCTIONS.md");
         std::fs::write(&instructions_path, "   \n  ").unwrap(); // whitespace only
 
         let prompt = load_system_prompt(dir.path());

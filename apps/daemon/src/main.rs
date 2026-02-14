@@ -17,19 +17,44 @@
 //! # Start with config file
 //! zerod --config /path/to/daemon.yaml
 //!
+//! # Enable file logging via CLI
+//! zerod --log-dir /var/log/agentzero --log-max-files 14
+//!
 //! # Serve web dashboard from static files
 //! zerod --static-dir /path/to/dashboard/dist
 //!
 //! # Disable web dashboard
 //! zerod --no-dashboard
 //! ```
+//!
+//! ## Logging Configuration
+//!
+//! Logging can be configured via:
+//! 1. `settings.json` in the data directory (persistent)
+//! 2. CLI arguments (override settings.json)
+//!
+//! Example `settings.json`:
+//! ```json
+//! {
+//!   "logs": {
+//!     "enabled": true,
+//!     "level": "info",
+//!     "rotation": "daily",
+//!     "maxFiles": 7,
+//!     "suppressStdout": false
+//!   }
+//! }
+//! ```
 
 use anyhow::Result;
 use clap::Parser;
 use gateway::{GatewayConfig, GatewayServer};
+use gateway_services::{AppSettings, LogSettings};
 use std::path::PathBuf;
+use std::fs;
 use tracing::{info, Level};
-use tracing_appender::rolling::{RollingFileAppender, Rotation};
+use tracing_appender::rolling::RollingFileAppender;
+use tracing_appender::rolling::Rotation;
 use tracing_subscriber::{
     fmt,
     fmt::writer::MakeWriterExt,
@@ -64,22 +89,27 @@ struct Args {
     config: Option<PathBuf>,
 
     /// Log level (trace, debug, info, warn, error)
-    #[arg(long, default_value = "info")]
-    log_level: String,
+    /// Overrides settings.json
+    #[arg(long)]
+    log_level: Option<String>,
 
     /// Directory for log files (enables file logging when set)
+    /// Overrides settings.json
     #[arg(long)]
     log_dir: Option<PathBuf>,
 
     /// Log rotation strategy: daily, hourly, minutely, or never
-    #[arg(long, default_value = "daily")]
-    log_rotation: String,
+    /// Overrides settings.json
+    #[arg(long)]
+    log_rotation: Option<String>,
 
     /// Maximum number of log files to keep (0 = unlimited)
-    #[arg(long, default_value_t = 7)]
-    log_max_files: usize,
+    /// Overrides settings.json
+    #[arg(long)]
+    log_max_files: Option<usize>,
 
     /// Disable logging to stdout (only log to file)
+    /// Overrides settings.json
     #[arg(long)]
     log_no_stdout: bool,
 
@@ -92,34 +122,185 @@ struct Args {
     no_dashboard: bool,
 }
 
+/// Merged logging configuration from settings.json and CLI args.
+///
+/// CLI arguments take precedence over settings.json values.
+#[derive(Debug, Clone)]
+struct LogConfig {
+    /// Enable file logging
+    enabled: bool,
+    /// Log directory (None = default {data_dir}/logs)
+    directory: Option<PathBuf>,
+    /// Log level
+    level: String,
+    /// Rotation strategy
+    rotation: String,
+    /// Max files to keep (0 = unlimited)
+    max_files: usize,
+    /// Suppress stdout output
+    suppress_stdout: bool,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            directory: None,
+            level: "info".to_string(),
+            rotation: "daily".to_string(),
+            max_files: 7,
+            suppress_stdout: false,
+        }
+    }
+}
+
+impl From<LogSettings> for LogConfig {
+    fn from(settings: LogSettings) -> Self {
+        Self {
+            enabled: settings.enabled,
+            directory: settings.directory,
+            level: settings.level,
+            rotation: settings.rotation,
+            max_files: settings.max_files,
+            suppress_stdout: settings.suppress_stdout,
+        }
+    }
+}
+
+/// Load settings.json from the data directory.
+///
+/// Returns default settings if the file doesn't exist or can't be parsed.
+fn load_settings(data_dir: &PathBuf) -> AppSettings {
+    // Try new path first (config/settings.json), fall back to legacy path (settings.json)
+    let new_path = data_dir.join("config").join("settings.json");
+    let legacy_path = data_dir.join("settings.json");
+    
+    let settings_path = if new_path.exists() {
+        new_path
+    } else if legacy_path.exists() {
+        legacy_path
+    } else {
+        return AppSettings::default();
+    };
+
+    match fs::read_to_string(&settings_path) {
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(settings) => {
+                eprintln!("[startup] Loaded settings from {:?}", settings_path);
+                settings
+            }
+            Err(e) => {
+                eprintln!("[startup] Warning: Failed to parse settings.json: {}", e);
+                AppSettings::default()
+            }
+        },
+        Err(e) => {
+            eprintln!("[startup] Warning: Failed to read settings.json: {}", e);
+            AppSettings::default()
+        }
+    }
+}
+
+/// Resolve logging configuration by merging settings.json with CLI args.
+///
+/// Precedence: CLI args > settings.json > defaults
+fn resolve_log_config(args: &Args, data_dir: &PathBuf) -> LogConfig {
+    // Load settings from file
+    let file_settings = load_settings(data_dir);
+    let mut config = LogConfig::from(file_settings.logs);
+
+    // CLI args override file settings
+    if args.log_dir.is_some() {
+        config.directory = args.log_dir.clone();
+        config.enabled = true; // Setting log-dir enables file logging
+    }
+
+    if let Some(ref level) = args.log_level {
+        config.level = level.clone();
+    }
+
+    if let Some(ref rotation) = args.log_rotation {
+        config.rotation = rotation.clone();
+    }
+
+    if let Some(max_files) = args.log_max_files {
+        config.max_files = max_files;
+    }
+
+    if args.log_no_stdout {
+        config.suppress_stdout = true;
+    }
+
+    config
+}
+
+/// Parse rotation string into Rotation enum.
+fn parse_rotation(rotation: &str) -> Rotation {
+    match rotation.to_lowercase().as_str() {
+        "hourly" => Rotation::HOURLY,
+        "minutely" => Rotation::MINUTELY,
+        "never" => Rotation::NEVER,
+        _ => Rotation::DAILY,
+    }
+}
+
+/// Parse log level string into Level enum.
+fn parse_level(level: &str) -> Level {
+    match level.to_lowercase().as_str() {
+        "trace" => Level::TRACE,
+        "debug" => Level::DEBUG,
+        "info" => Level::INFO,
+        "warn" => Level::WARN,
+        "error" => Level::ERROR,
+        _ => Level::INFO,
+    }
+}
+
 /// Setup logging with optional file output.
 ///
 /// Returns a guard that must be held for the lifetime of the program
 /// to ensure log files are properly flushed.
 fn setup_logging(
-    args: &Args,
-    env_filter: EnvFilter,
+    config: &LogConfig,
+    data_dir: &PathBuf,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
-    // Determine rotation strategy
-    let rotation = match args.log_rotation.to_lowercase().as_str() {
-        "hourly" => Rotation::HOURLY,
-        "minutely" => Rotation::MINUTELY,
-        "never" => Rotation::NEVER,
-        _ => Rotation::DAILY,
-    };
+    let level = parse_level(&config.level);
+    let env_filter = EnvFilter::from_default_env()
+        .add_directive(level.into());
 
     // Check if file logging is enabled
-    if let Some(ref log_dir) = args.log_dir {
+    if config.enabled {
+        // Determine log directory (default: {data_dir}/logs)
+        let log_dir = config.directory.clone().unwrap_or_else(|| {
+            data_dir.join("logs")
+        });
+
         // Ensure log directory exists
         if !log_dir.exists() {
-            std::fs::create_dir_all(log_dir)?;
+            fs::create_dir_all(&log_dir)?;
         }
 
-        // Create rolling file appender
-        let file_appender = RollingFileAppender::new(rotation, log_dir, "zerod.log");
+        let rotation = parse_rotation(&config.rotation);
+
+        // Use builder API for max_log_files support
+        let file_appender = if config.max_files > 0 {
+            RollingFileAppender::builder()
+                .rotation(rotation)
+                .filename_prefix("zerod")
+                .filename_suffix("log")
+                .max_log_files(config.max_files)
+                .build(&log_dir)?
+        } else {
+            RollingFileAppender::builder()
+                .rotation(rotation)
+                .filename_prefix("zerod")
+                .filename_suffix("log")
+                .build(&log_dir)?
+        };
+
         let (file_writer, file_guard) = tracing_appender::non_blocking(file_appender);
 
-        if args.log_no_stdout {
+        if config.suppress_stdout {
             // Only file logging
             tracing_subscriber::registry()
                 .with(env_filter)
@@ -151,6 +332,9 @@ fn setup_logging(
                 .init();
         }
 
+        info!("File logging enabled: {:?}", log_dir);
+        info!("Log rotation: {}, max files: {}", config.rotation, config.max_files);
+
         Ok(Some(file_guard))
     } else {
         // Only stdout logging (default behavior)
@@ -173,26 +357,8 @@ fn setup_logging(
 async fn main() -> Result<()> {
     let args = Args::parse();
 
-    // Initialize logging
-    let log_level = match args.log_level.to_lowercase().as_str() {
-        "trace" => Level::TRACE,
-        "debug" => Level::DEBUG,
-        "info" => Level::INFO,
-        "warn" => Level::WARN,
-        "error" => Level::ERROR,
-        _ => Level::INFO,
-    };
-
-    let env_filter = EnvFilter::from_default_env()
-        .add_directive(log_level.into());
-
-    // Setup logging based on configuration
-    let _guard = setup_logging(&args, env_filter)?;
-
-    info!("AgentZero Daemon v{}", env!("CARGO_PKG_VERSION"));
-
-    // Determine data directory (default: ~/Documents/agentzero)
-    let data_dir = args.data_dir.unwrap_or_else(|| {
+    // Determine data directory FIRST (needed to load settings)
+    let data_dir = args.data_dir.clone().unwrap_or_else(|| {
         dirs::document_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."))
@@ -201,16 +367,22 @@ async fn main() -> Result<()> {
 
     // Ensure data directory exists
     if !data_dir.exists() {
-        std::fs::create_dir_all(&data_dir)?;
-        info!("Created data directory: {:?}", data_dir);
+        fs::create_dir_all(&data_dir)?;
     }
 
+    // Resolve logging configuration (merge settings.json + CLI args)
+    let log_config = resolve_log_config(&args, &data_dir);
+
+    // Setup logging based on merged configuration
+    let _guard = setup_logging(&log_config, &data_dir)?;
+
+    info!("AgentZero Daemon v{}", env!("CARGO_PKG_VERSION"));
     info!("Data directory: {:?}", data_dir);
 
     // Load gateway configuration
     let mut gateway_config: GatewayConfig = if let Some(config_path) = args.config {
         info!("Loading configuration from {:?}", config_path);
-        let content = std::fs::read_to_string(&config_path)?;
+        let content = fs::read_to_string(&config_path)?;
         serde_yaml::from_str(&content)?
     } else {
         GatewayConfig {

@@ -107,7 +107,7 @@ impl GatewayServer {
             let bus: Arc<dyn gateway_bus::GatewayBus> = Arc::new(HttpGatewayBus::new(
                 runner.clone(),
                 self.state.state_service.clone(),
-                self.state.config_dir.clone(),
+                self.state.paths.vault_dir().clone(),
             ));
             self.state.bridge_bus = Some(bus);
         }
@@ -241,11 +241,11 @@ impl GatewayServer {
         let gateway_bus = Arc::new(HttpGatewayBus::new(
             runner,
             self.state.state_service.clone(),
-            self.state.config_dir.clone(),
+            self.state.paths.vault_dir().clone(),
         ));
 
         // Create cron service and scheduler
-        let cron_service = CronService::new(self.state.config_dir.clone());
+        let cron_service = CronService::new(self.state.paths.clone());
 
         match CronScheduler::new(cron_service, gateway_bus).await {
             Ok(scheduler) => {

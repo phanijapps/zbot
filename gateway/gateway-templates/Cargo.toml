@@ -12,6 +12,7 @@ license.workspace = true
 description = "Embedded templates and system prompt assembly for AgentZero"
 
 [dependencies]
+gateway-services = { path = "../gateway-services" }
 rust-embed = { workspace = true }
 tracing = { workspace = true }
 

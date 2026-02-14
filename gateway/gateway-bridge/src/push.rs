@@ -129,9 +129,12 @@ mod tests {
     use tokio::sync::mpsc;
 
     fn setup() -> (Arc<OutboxRepository>, Arc<BridgeRegistry>) {
+        use gateway_services::VaultPaths;
+        
         let dir = tempfile::TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
         let db = Arc::new(
-            gateway_database::DatabaseManager::new(dir.path().to_path_buf()).unwrap(),
+            gateway_database::DatabaseManager::new(paths).unwrap(),
         );
         let outbox = Arc::new(OutboxRepository::new(db));
         let registry = Arc::new(BridgeRegistry::new());

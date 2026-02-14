@@ -1,0 +1,267 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g., 0.1.0)'
+        required: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Build frontend once, share with all platform builds
+  build-frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: apps/ui/package-lock.json
+
+      - name: Install dependencies
+        run: cd apps/ui && npm ci
+
+      - name: Build
+        run: cd apps/ui && npm run build
+
+      - name: Upload dist
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/ui/dist/
+
+  # Linux builds
+  build-linux:
+    needs: build-frontend
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            archive: linux-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
+      - name: Download frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/ui/dist/
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p daemon -p cli --target ${{ matrix.target }}
+
+      - name: Prepare release package
+        run: |
+          mkdir -p package
+          cp target/${{ matrix.target }}/release/zerod package/
+          cp target/${{ matrix.target }}/release/zero package/
+          cp README.md package/ 2>/dev/null || echo "README not found"
+          cp LICENSE package/ 2>/dev/null || echo "LICENSE not found"
+          echo "${{ github.event.inputs.version || github.ref_name }}" > package/VERSION
+          chmod +x package/zerod package/zero
+
+      - name: Create archive
+        run: |
+          VERSION=${{ github.event.inputs.version || github.ref_name }}
+          tar -czvf agentzero-${VERSION}-${{ matrix.archive }}.tar.gz -C package .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentzero-${{ matrix.archive }}
+          path: agentzero-*.tar.gz
+
+  # macOS builds (Intel and Apple Silicon)
+  build-macos:
+    needs: build-frontend
+    runs-on: macos-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-apple-darwin
+            archive: macos-x86_64
+          - target: aarch64-apple-darwin
+            archive: macos-aarch64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/ui/dist/
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p daemon -p cli --target ${{ matrix.target }}
+
+      - name: Prepare release package
+        run: |
+          mkdir -p package
+          cp target/${{ matrix.target }}/release/zerod package/
+          cp target/${{ matrix.target }}/release/zero package/
+          cp README.md package/ 2>/dev/null || echo "README not found"
+          cp LICENSE package/ 2>/dev/null || echo "LICENSE not found"
+          echo "${{ github.event.inputs.version || github.ref_name }}" > package/VERSION
+          chmod +x package/zerod package/zero
+
+      - name: Create archive
+        run: |
+          VERSION=${{ github.event.inputs.version || github.ref_name }}
+          tar -czvf agentzero-${VERSION}-${{ matrix.archive }}.tar.gz -C package .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentzero-${{ matrix.archive }}
+          path: agentzero-*.tar.gz
+
+  # Windows build
+  build-windows:
+    needs: build-frontend
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-pc-windows-msvc
+            archive: windows-x86_64
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download frontend
+        uses: actions/download-artifact@v4
+        with:
+          name: frontend-dist
+          path: apps/ui/dist/
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release -p daemon -p cli --target ${{ matrix.target }}
+
+      - name: Prepare release package
+        shell: bash
+        run: |
+          mkdir -p package
+          cp target/${{ matrix.target }}/release/zerod.exe package/
+          cp target/${{ matrix.target }}/release/zero.exe package/
+          cp README.md package/ 2>/dev/null || echo "README not found"
+          cp LICENSE package/ 2>/dev/null || echo "LICENSE not found"
+          echo "${{ github.event.inputs.version || github.ref_name }}" > package/VERSION
+
+      - name: Create archive
+        shell: bash
+        run: |
+          VERSION=${{ github.event.inputs.version || github.ref_name }}
+          cd package && 7z a -tzip ../agentzero-${VERSION}-${{ matrix.archive }}.zip .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agentzero-${{ matrix.archive }}
+          path: agentzero-*.zip
+
+  # Create GitHub Release with all artifacts
+  create-release:
+    needs: [build-linux, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agentzero-linux-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agentzero-macos-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Download Windows artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: agentzero-windows-*
+          path: artifacts/
+          merge-multiple: true
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          sha256sum * > checksums.sha256
+
+      - name: List artifacts
+        run: ls -la artifacts/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: AgentZero ${{ github.event.inputs.version || github.ref_name }}
+          body: |
+            ## AgentZero ${{ github.event.inputs.version || github.ref_name }}
+
+            ### Downloads
+
+            | Platform | Architecture | Download |
+            |----------|-------------|----------|
+            | Linux | x86_64 | `agentzero-*-linux-x86_64.tar.gz` |
+            | macOS | Intel | `agentzero-*-macos-x86_64.tar.gz` |
+            | macOS | Apple Silicon | `agentzero-*-macos-aarch64.tar.gz` |
+            | Windows | x86_64 | `agentzero-*-windows-x86_64.zip` |
+
+            ### Quick Start
+
+            ```bash
+            # Extract and run
+            tar -xzf agentzero-*-linux-x86_64.tar.gz
+            ./zerod
+            # Open http://localhost:18791
+            ```
+
+            See [PUBLISHING.md](docs/PUBLISHING.md) for detailed installation instructions.
+          files: artifacts/*
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

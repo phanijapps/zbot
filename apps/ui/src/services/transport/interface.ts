@@ -28,6 +28,8 @@ import type {
   SessionMessage,
   SessionMessagesQuery,
   ToolSettings,
+  LogSettings,
+  UpdateLogSettingsRequest,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -200,6 +202,12 @@ export interface Transport {
 
   /** Update tool settings */
   updateToolSettings(settings: ToolSettings): Promise<TransportResult<ToolSettings>>;
+
+  /** Get log settings */
+  getLogSettings(): Promise<TransportResult<LogSettings & { restartRequired: boolean }>>;
+
+  /** Update log settings */
+  updateLogSettings(settings: UpdateLogSettingsRequest): Promise<TransportResult<LogSettings & { restartRequired: boolean }>>;
 
   // =========================================================================
   // Execution Log Operations

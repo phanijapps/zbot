@@ -43,5 +43,6 @@ chrono = { workspace = true }
 uuid = { workspace = true }
 
 [dev-dependencies]
+gateway-services = { path = "../gateway-services" }
 tokio-test = "0.4"
 tempfile = "3"

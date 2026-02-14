@@ -44,7 +44,8 @@ impl FileSystemContext for GatewayFileSystem {
     }
 
     fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf> {
-        Some(self.vault_dir.join("agents_data").join(agent_id))
+        // Agent data is stored in wards/{agent_id}/
+        Some(self.vault_dir.join("wards").join(agent_id))
     }
 
     fn python_executable(&self) -> Option<PathBuf> {
@@ -61,7 +62,8 @@ impl FileSystemContext for GatewayFileSystem {
     }
 
     fn session_data_dir(&self, session_id: &str) -> Option<PathBuf> {
-        Some(self.vault_dir.join("agent_data").join(session_id))
+        // Session data is stored in wards/{session_id}/
+        Some(self.vault_dir.join("wards").join(session_id))
     }
 
     fn wards_root_dir(&self) -> Option<PathBuf> {
@@ -70,6 +72,10 @@ impl FileSystemContext for GatewayFileSystem {
 
     fn ward_dir(&self, ward_id: &str) -> Option<PathBuf> {
         Some(self.vault_dir.join("wards").join(ward_id))
+    }
+
+    fn mcps_config(&self) -> Option<PathBuf> {
+        Some(self.vault_dir.join("config").join("mcps.json"))
     }
 }
 

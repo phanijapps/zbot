@@ -38,6 +38,8 @@ export type {
   SessionMessagesQuery,
   ConversationResponse,
   ToolSettings,
+  LogSettings,
+  UpdateLogSettingsRequest,
   LogLevel,
   LogCategory,
   SessionStatus,

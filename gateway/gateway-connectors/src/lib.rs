@@ -218,8 +218,11 @@ mod tests {
     use tempfile::TempDir;
 
     async fn test_registry() -> (ConnectorRegistry, TempDir) {
+        use gateway_services::VaultPaths;
+        
         let temp_dir = TempDir::new().unwrap();
-        let service = ConnectorService::new(temp_dir.path().to_path_buf());
+        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
+        let service = ConnectorService::new(paths);
         let registry = ConnectorRegistry::new(service);
         registry.init().await.unwrap();
         (registry, temp_dir)

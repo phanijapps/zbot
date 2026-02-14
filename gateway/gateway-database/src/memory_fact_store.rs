@@ -154,10 +154,12 @@ mod tests {
     use tempfile::TempDir;
 
     fn create_test_store() -> GatewayMemoryFactStore {
+        use gateway_services::VaultPaths;
+        
         let temp_dir = TempDir::new().unwrap();
-        let path = temp_dir.path().to_path_buf();
+        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let _ = temp_dir.keep();
-        let db = Arc::new(DatabaseManager::new(path).unwrap());
+        let db = Arc::new(DatabaseManager::new(paths).unwrap());
         let repo = Arc::new(MemoryRepository::new(db));
         GatewayMemoryFactStore::new(repo, None) // No embedding client in tests
     }

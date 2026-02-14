@@ -12,11 +12,10 @@ use api_logs::LogService;
 use execution_state::StateService;
 use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
-use gateway_services::{AgentService, McpService, ProviderService};
+use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
@@ -59,8 +58,8 @@ pub struct ExecutionRunner {
     mcp_service: Arc<McpService>,
     /// Skill service for loading skill configs
     skill_service: Arc<gateway_services::SkillService>,
-    /// Configuration directory
-    config_dir: PathBuf,
+    /// Vault paths for accessing configuration and data directories
+    paths: SharedVaultPaths,
     /// Active execution handles
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     /// Conversation repository for SQLite persistence
@@ -98,7 +97,7 @@ impl ExecutionRunner {
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<gateway_services::SkillService>,
@@ -109,7 +108,7 @@ impl ExecutionRunner {
             event_bus,
             agent_service,
             provider_service,
-            config_dir,
+            paths,
             conversation_repo,
             mcp_service,
             skill_service,
@@ -130,7 +129,7 @@ impl ExecutionRunner {
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<gateway_services::SkillService>,
@@ -153,7 +152,7 @@ impl ExecutionRunner {
             provider_service,
             mcp_service,
             skill_service,
-            config_dir,
+            paths,
             handles: Arc::new(RwLock::new(HashMap::new())),
             conversation_repo,
             delegation_registry: Arc::new(DelegationRegistry::new()),
@@ -185,7 +184,7 @@ impl ExecutionRunner {
         let provider_service = self.provider_service.clone();
         let mcp_service = self.mcp_service.clone();
         let skill_service = self.skill_service.clone();
-        let config_dir = self.config_dir.clone();
+        let paths = self.paths.clone();
         let conversation_repo = self.conversation_repo.clone();
         let handles = self.handles.clone();
         let delegation_registry = self.delegation_registry.clone();
@@ -210,7 +209,7 @@ impl ExecutionRunner {
                     provider_service.clone(),
                     mcp_service.clone(),
                     skill_service.clone(),
-                    config_dir.clone(),
+                    paths.clone(),
                     conversation_repo.clone(),
                     handles.clone(),
                     delegation_registry.clone(),
@@ -242,7 +241,7 @@ impl ExecutionRunner {
         let provider_service = self.provider_service.clone();
         let mcp_service = self.mcp_service.clone();
         let skill_service = self.skill_service.clone();
-        let config_dir = self.config_dir.clone();
+        let paths = self.paths.clone();
         let conversation_repo = self.conversation_repo.clone();
         let handles = self.handles.clone();
         let delegation_registry = self.delegation_registry.clone();
@@ -284,7 +283,7 @@ impl ExecutionRunner {
                             provider_service.clone(),
                             mcp_service.clone(),
                             skill_service.clone(),
-                            config_dir.clone(),
+                            paths.clone(),
                             conversation_repo.clone(),
                             handles.clone(),
                             delegation_registry.clone(),
@@ -385,7 +384,7 @@ impl ExecutionRunner {
         .await;
 
         // Load agent configuration (or create default for "root" agent)
-        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.config_dir.clone());
+        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -828,7 +827,7 @@ impl ExecutionRunner {
         let config = ExecutionConfig::new(
             child_agent_id.to_string(),
             child_conversation_id.clone(),
-            self.config_dir.clone(),
+            self.paths.vault_dir().clone(),
         );
 
         // Emit delegation started event
@@ -879,7 +878,7 @@ impl ExecutionRunner {
         let available_skills = collect_skills_summary(&self.skill_service).await;
 
         // Get tool settings
-        let settings_service = gateway_services::SettingsService::new(config.config_dir.clone());
+        let settings_service = gateway_services::SettingsService::new(self.paths.clone());
         let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
         // Build hook context if present
@@ -917,7 +916,7 @@ impl ExecutionRunner {
             };
 
         // Use ExecutorBuilder to create the executor
-        let mut builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
+        let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone());
         if let Some(fs) = fact_store {
             builder = builder.with_fact_store(fs);
@@ -979,7 +978,7 @@ async fn invoke_continuation(
     provider_service: Arc<ProviderService>,
     mcp_service: Arc<McpService>,
     skill_service: Arc<gateway_services::SkillService>,
-    config_dir: PathBuf,
+    paths: SharedVaultPaths,
     conversation_repo: Arc<ConversationRepository>,
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     _delegation_registry: Arc<DelegationRegistry>,
@@ -1027,7 +1026,7 @@ async fn invoke_continuation(
     emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
 
     // Load agent and provider
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service, config_dir.clone());
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
     // Load full session conversation (includes tool calls, results, and callbacks)
@@ -1044,7 +1043,7 @@ async fn invoke_continuation(
     );
 
     // Get tool settings
-    let settings_service = gateway_services::SettingsService::new(config_dir.clone());
+    let settings_service = gateway_services::SettingsService::new(paths.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
     // Collect available agents and skills
@@ -1059,7 +1058,7 @@ async fn invoke_continuation(
         .and_then(|s| s.ward_id);
 
     // Build executor
-    let builder = ExecutorBuilder::new(config_dir, tool_settings)
+    let builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
     let executor = builder
         .build(

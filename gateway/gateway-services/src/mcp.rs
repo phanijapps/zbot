@@ -2,6 +2,7 @@
 //!
 //! Service for managing MCP server configurations.
 
+use crate::paths::SharedVaultPaths;
 use agent_runtime::McpServerConfig;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -10,7 +11,7 @@ use std::sync::RwLock;
 
 /// MCP service for loading and managing MCP server configurations.
 pub struct McpService {
-    config_path: PathBuf,
+    paths: SharedVaultPaths,
     cache: RwLock<Option<Vec<McpServerConfig>>>,
 }
 
@@ -33,19 +34,19 @@ pub struct McpServerSummary {
 impl McpService {
     /// Create a new MCP service.
     ///
-    /// The config_dir should be the agentzero configuration directory
+    /// The paths should contain the agentzero configuration directory
     /// (e.g., ~/Documents/agentzero). The service will look for mcps.json
-    /// in that directory.
-    pub fn new(config_dir: PathBuf) -> Self {
+    /// in the config subdirectory.
+    pub fn new(paths: SharedVaultPaths) -> Self {
         Self {
-            config_path: config_dir.join("mcps.json"),
+            paths,
             cache: RwLock::new(None),
         }
     }
 
     /// Get the config file path.
-    pub fn config_path(&self) -> &PathBuf {
-        &self.config_path
+    pub fn config_path(&self) -> PathBuf {
+        self.paths.mcps()
     }
 
     /// Invalidate the cache, forcing next read to go to disk.
@@ -57,11 +58,11 @@ impl McpService {
 
     /// Read configs from disk (bypasses cache).
     fn list_from_disk(&self) -> Result<Vec<McpServerConfig>, String> {
-        if !self.config_path.exists() {
+        if !self.config_path().exists() {
             return Ok(vec![]);
         }
 
-        let content = fs::read_to_string(&self.config_path)
+        let content = fs::read_to_string(&self.config_path())
             .map_err(|e| format!("Failed to read mcps.json: {}", e))?;
 
         let configs: Vec<McpServerConfig> = serde_json::from_str(&content)
@@ -124,7 +125,7 @@ impl McpService {
     /// Save MCP server configurations to disk and update cache.
     pub fn save(&self, configs: &[McpServerConfig]) -> Result<(), String> {
         // Ensure parent directory exists
-        if let Some(parent) = self.config_path.parent() {
+        if let Some(parent) = self.config_path().parent() {
             fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create config directory: {}", e))?;
         }
@@ -132,7 +133,7 @@ impl McpService {
         let content = serde_json::to_string_pretty(configs)
             .map_err(|e| format!("Failed to serialize mcps.json: {}", e))?;
 
-        fs::write(&self.config_path, content)
+        fs::write(&self.config_path(), content)
             .map_err(|e| format!("Failed to write mcps.json: {}", e))?;
 
         // Update cache with the data we just wrote

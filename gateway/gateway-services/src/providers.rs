@@ -3,6 +3,7 @@
 // LLM provider management for the gateway
 // ============================================================================
 
+use crate::paths::SharedVaultPaths;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -48,25 +49,30 @@ pub struct ProviderTestResult {
 // ============================================================================
 
 pub struct ProviderService {
-    config_path: PathBuf,
+    paths: SharedVaultPaths,
     cache: RwLock<Option<Vec<Provider>>>,
 }
 
 impl ProviderService {
-    pub fn new(config_dir: PathBuf) -> Self {
+    pub fn new(paths: SharedVaultPaths) -> Self {
         Self {
-            config_path: config_dir.join("providers.json"),
+            paths,
             cache: RwLock::new(None),
         }
     }
 
+    /// Get the config file path.
+    fn config_path(&self) -> PathBuf {
+        self.paths.providers()
+    }
+
     /// Read all providers from config file (bypasses cache).
     fn read_providers_from_disk(&self) -> Result<Vec<Provider>, String> {
-        if !self.config_path.exists() {
+        if !self.config_path().exists() {
             return Ok(vec![]);
         }
 
-        let content = fs::read_to_string(&self.config_path)
+        let content = fs::read_to_string(&self.config_path())
             .map_err(|e| format!("Failed to read providers config: {}", e))?;
 
         serde_json::from_str(&content)
@@ -78,7 +84,7 @@ impl ProviderService {
         let content = serde_json::to_string_pretty(providers)
             .map_err(|e| format!("Failed to serialize providers: {}", e))?;
 
-        fs::write(&self.config_path, content)
+        fs::write(&self.config_path(), content)
             .map_err(|e| format!("Failed to write providers config: {}", e))?;
 
         // Update cache with the data we just wrote

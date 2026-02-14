@@ -5,6 +5,7 @@
 use crate::config::{
     ConnectorConfig, ConnectorsStore, CreateConnectorRequest, UpdateConnectorRequest,
 };
+use gateway_services::SharedVaultPaths;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
@@ -35,25 +36,28 @@ pub type ConnectorResult<T> = Result<T, ConnectorServiceError>;
 /// Service for managing connectors with persistence.
 #[derive(Clone)]
 pub struct ConnectorService {
-    config_path: PathBuf,
+    paths: SharedVaultPaths,
 }
 
 impl ConnectorService {
     /// Create a new connector service.
-    pub fn new(config_dir: PathBuf) -> Self {
-        Self {
-            config_path: config_dir.join("connectors.json"),
-        }
+    pub fn new(paths: SharedVaultPaths) -> Self {
+        Self { paths }
+    }
+
+    /// Get the config file path.
+    fn config_path(&self) -> PathBuf {
+        self.paths.connectors()
     }
 
     /// Load connectors from disk.
     async fn load(&self) -> ConnectorResult<ConnectorsStore> {
-        if !self.config_path.exists() {
+        if !self.config_path().exists() {
             debug!("Connectors config not found, returning empty store");
             return Ok(ConnectorsStore::default());
         }
 
-        let content = fs::read_to_string(&self.config_path).await?;
+        let content = fs::read_to_string(&self.config_path()).await?;
         let store: ConnectorsStore = serde_json::from_str(&content)?;
         debug!(count = store.connectors.len(), "Loaded connectors from disk");
         Ok(store)
@@ -62,14 +66,14 @@ impl ConnectorService {
     /// Save connectors to disk.
     async fn save(&self, store: &ConnectorsStore) -> ConnectorResult<()> {
         // Ensure parent directory exists
-        if let Some(parent) = self.config_path.parent() {
+        if let Some(parent) = self.config_path().parent() {
             fs::create_dir_all(parent).await?;
         }
 
         let content = serde_json::to_string_pretty(store)?;
-        fs::write(&self.config_path, content).await?;
+        fs::write(&self.config_path(), content).await?;
         debug!(
-            path = %self.config_path.display(),
+            path = %self.config_path().display(),
             count = store.connectors.len(),
             "Saved connectors to disk"
         );
@@ -314,11 +318,14 @@ mod tests {
     use super::*;
     use crate::config::ConnectorTransport;
     use std::collections::HashMap;
+    use gateway_services::VaultPaths;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     async fn test_service() -> (ConnectorService, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let service = ConnectorService::new(temp_dir.path().to_path_buf());
+        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
+        let service = ConnectorService::new(paths);
         (service, temp_dir)
     }
 

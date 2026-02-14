@@ -31,6 +31,9 @@ import type {
   SessionMessagesQuery,
   ToolSettings,
   ToolSettingsResponse,
+  LogSettings,
+  LogSettingsResponse,
+  UpdateLogSettingsRequest,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -300,6 +303,22 @@ export class HttpTransport implements Transport {
       return { success: true, data: result.data.data };
     }
     return { success: false, error: result.error || result.data?.error || "Failed to update tool settings" };
+  }
+
+  async getLogSettings(): Promise<TransportResult<LogSettings & { restartRequired: boolean }>> {
+    const result = await this.get<LogSettingsResponse>("/api/settings/logs");
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to get log settings" };
+  }
+
+  async updateLogSettings(settings: UpdateLogSettingsRequest): Promise<TransportResult<LogSettings & { restartRequired: boolean }>> {
+    const result = await this.put<LogSettingsResponse>("/api/settings/logs", settings);
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to update log settings" };
   }
 
   // =========================================================================

@@ -297,8 +297,11 @@ mod tests {
     use super::*;
 
     fn setup_db() -> Arc<gateway_database::DatabaseManager> {
+        use gateway_services::VaultPaths;
+        
         let dir = tempfile::TempDir::new().unwrap();
-        Arc::new(gateway_database::DatabaseManager::new(dir.path().to_path_buf()).unwrap())
+        let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
+        Arc::new(gateway_database::DatabaseManager::new(paths).unwrap())
     }
 
     #[test]

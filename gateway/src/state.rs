@@ -10,7 +10,7 @@ use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
-use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService};
+use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
 use agent_runtime::llm::LocalEmbeddingClient;
 use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
@@ -79,7 +79,10 @@ pub struct AppState {
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
 
-    /// Configuration directory path.
+    /// Vault paths for accessing configuration and data directories.
+    pub paths: SharedVaultPaths,
+
+    /// Configuration directory path (legacy, use paths.vault_dir() instead).
     pub config_dir: PathBuf,
 }
 
@@ -88,17 +91,25 @@ impl AppState {
     ///
     /// This creates a fully initialized state with execution runner and SQLite database.
     pub fn new(config_dir: PathBuf) -> Self {
-        let agents_dir = config_dir.join("agents");
-        let skills_dir = config_dir.join("skills");
+        // Create centralized vault paths
+        let paths = Arc::new(VaultPaths::new(config_dir.clone()));
+        
+        // Ensure required directories exist
+        if let Err(e) = paths.ensure_dirs_exist() {
+            tracing::warn!("Failed to create vault directories: {}", e);
+        }
+
+        let agents_dir = paths.agents_dir();
+        let skills_dir = paths.skills_dir();
         let event_bus = Arc::new(EventBus::new());
         let agents = Arc::new(AgentService::new(agents_dir));
         let skills = Arc::new(SkillService::new(skills_dir));
-        let provider_service = Arc::new(ProviderService::new(config_dir.clone()));
-        let mcp_service = Arc::new(McpService::new(config_dir.clone()));
+        let provider_service = Arc::new(ProviderService::new(paths.clone()));
+        let mcp_service = Arc::new(McpService::new(paths.clone()));
 
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
-            DatabaseManager::new(config_dir.clone())
+            DatabaseManager::new(paths.clone())
                 .expect("Failed to initialize conversation database"),
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
@@ -110,7 +121,7 @@ impl AppState {
         let state_service = Arc::new(StateService::new(db_manager.clone()));
 
         // Create connector registry
-        let connector_service = ConnectorService::new(config_dir.clone());
+        let connector_service = ConnectorService::new(paths.clone());
         let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
 
         // Create workspace cache (shared between AppState and ExecutionRunner)
@@ -155,7 +166,7 @@ impl AppState {
             event_bus.clone(),
             agents.clone(),
             provider_service.clone(),
-            config_dir.clone(),
+            paths.clone(),
             conversation_repo.clone(),
             mcp_service.clone(),
             skills.clone(),
@@ -177,7 +188,7 @@ impl AppState {
         let delegation_registry = Arc::new(DelegationRegistry::new());
 
         // Create settings service
-        let settings = Arc::new(SettingsService::new(config_dir.clone()));
+        let settings = Arc::new(SettingsService::new(paths.clone()));
 
         Self {
             agents,
@@ -198,19 +209,21 @@ impl AppState {
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             workspace_cache,
+            paths,
             config_dir,
         }
     }
 
     /// Create a minimal state without execution runner (for testing).
     pub fn minimal(config_dir: PathBuf) -> Self {
-        let agents_dir = config_dir.join("agents");
-        let skills_dir = config_dir.join("skills");
+        let paths = Arc::new(VaultPaths::new(config_dir.clone()));
+        let agents_dir = paths.agents_dir();
+        let skills_dir = paths.skills_dir();
         let event_bus = Arc::new(EventBus::new());
 
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
-            DatabaseManager::new(config_dir.clone())
+            DatabaseManager::new(paths.clone())
                 .expect("Failed to initialize conversation database"),
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
@@ -219,20 +232,20 @@ impl AppState {
         let state_service = Arc::new(StateService::new(db_manager));
 
         // Create connector registry
-        let connector_service = ConnectorService::new(config_dir.clone());
+        let connector_service = ConnectorService::new(paths.clone());
         let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
 
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::new(skills_dir)),
-            provider_service: Arc::new(ProviderService::new(config_dir.clone())),
-            mcp_service: Arc::new(McpService::new(config_dir.clone())),
+            provider_service: Arc::new(ProviderService::new(paths.clone())),
+            mcp_service: Arc::new(McpService::new(paths.clone())),
             runtime: Arc::new(RuntimeService::new(event_bus.clone())),
             event_bus,
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations: conversation_repo,
-            settings: Arc::new(SettingsService::new(config_dir.clone())),
+            settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
             connector_registry,
@@ -241,6 +254,7 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             workspace_cache: new_workspace_cache(),
+            paths,
             config_dir,
         }
     }
@@ -257,8 +271,9 @@ impl AppState {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
         connector_registry: Arc<ConnectorRegistry>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
     ) -> Self {
+        let config_dir = paths.vault_dir().clone();
         Self {
             agents,
             skills,
@@ -269,14 +284,14 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations,
-            settings: Arc::new(SettingsService::new(config_dir.clone())),
+            settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
             connector_registry,
             bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
             bridge_outbox: {
                 let db = Arc::new(
-                    DatabaseManager::new(config_dir.clone())
+                    DatabaseManager::new(paths.clone())
                         .expect("Failed to initialize database for bridge outbox"),
                 );
                 Arc::new(gateway_bridge::OutboxRepository::new(db))
@@ -284,6 +299,7 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             workspace_cache: new_workspace_cache(),
+            paths,
             config_dir,
         }
     }
@@ -359,9 +375,8 @@ impl AppState {
     /// reading from disk on every invocation.
     async fn populate_workspace_cache(&self) {
         let workspace_path = self
-            .config_dir
-            .join("agents_data")
-            .join("shared")
+            .paths
+            .ward_dir("shared")
             .join("workspace.json");
 
         let workspace = match std::fs::read_to_string(&workspace_path) {
@@ -472,9 +487,8 @@ impl AppState {
     /// Uses the same MemoryStore type as the memory tool to avoid format mismatch.
     fn seed_workspace_env_status(&self, venv_ok: bool, node_ok: bool) {
         let workspace_path = self
-            .config_dir
-            .join("agents_data")
-            .join("shared")
+            .paths
+            .ward_dir("shared")
             .join("workspace.json");
 
         // Ensure parent directory exists

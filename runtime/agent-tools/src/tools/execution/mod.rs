@@ -12,7 +12,6 @@ pub mod update_plan;
 pub use shell::ShellTool;
 pub use todos::TodoTool;
 pub use update_plan::UpdatePlanTool;
-pub use skills::{SkillEntry, ResourceEntry, SkillGraph};
 
 use std::sync::Arc;
 
