@@ -1,5 +1,5 @@
 # CLAUDE.md
-This file guides Claude Code (claude.ai/code) when working with code in this repository.
+AgentZero is multipurpose AI Agent, that lives on desktop. It can connect to both any OpenAI Compatible APIs and help with day to day tasks.
 
 ## Project Overview
 Read `AGENTS.md` for overview.
@@ -29,5 +29,10 @@ Check Installation section in `AGENTS.md` at workspace level.
 - Read before write: check existing patterns, avoid duplicating functionality
 - Follow adjacent code patterns for error handling, naming, async
 
-## Code Style
-Review some crates
+
+## Instructions 
+- Before coding, think through the ask.
+- Always ask follow-up questions, if the prompt is vague.
+- Don't start planning without enough context or understanding of the code base or documentation.
+- First Plan > Seek Approval > Code > Unit Test.
+- Ensure existing functionality is intact.

@@ -3,9 +3,8 @@
 //! Provider resolution and agent loading utilities for execution setup.
 
 use gateway_services::providers::Provider;
-use gateway_services::{AgentService, ProviderService, SettingsService};
+use gateway_services::{AgentService, ProviderService, SettingsService, SharedVaultPaths};
 use agent_tools::ToolSettings;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 // ============================================================================
@@ -22,8 +21,8 @@ pub struct SetupContext {
     pub agent_service: Arc<AgentService>,
     /// Provider service for loading provider configurations
     pub provider_service: Arc<ProviderService>,
-    /// Configuration directory
-    pub config_dir: PathBuf,
+    /// Vault paths for accessing configuration and data directories
+    pub paths: SharedVaultPaths,
 }
 
 impl SetupContext {
@@ -31,18 +30,18 @@ impl SetupContext {
     pub fn new(
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
     ) -> Self {
         Self {
             agent_service,
             provider_service,
-            config_dir,
+            paths,
         }
     }
 
     /// Get tool settings from the configuration directory.
     pub fn tool_settings(&self) -> ToolSettings {
-        let settings_service = SettingsService::new(self.config_dir.clone());
+        let settings_service = SettingsService::new(self.paths.clone());
         settings_service.get_tool_settings().unwrap_or_default()
     }
 }
@@ -106,7 +105,7 @@ impl<'a> ProviderResolver<'a> {
 pub struct AgentLoader<'a> {
     agent_service: &'a AgentService,
     provider_resolver: ProviderResolver<'a>,
-    config_dir: PathBuf,
+    paths: SharedVaultPaths,
 }
 
 impl<'a> AgentLoader<'a> {
@@ -114,12 +113,12 @@ impl<'a> AgentLoader<'a> {
     pub fn new(
         agent_service: &'a AgentService,
         provider_service: &'a ProviderService,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
     ) -> Self {
         Self {
             agent_service,
             provider_resolver: ProviderResolver::new(provider_service),
-            config_dir,
+            paths,
         }
     }
 
@@ -175,7 +174,7 @@ impl<'a> AgentLoader<'a> {
                     thinking_enabled: false,
                     voice_recording_enabled: false,
                     system_instruction: None,
-                    instructions: gateway_templates::load_system_prompt(&self.config_dir),
+                    instructions: gateway_templates::load_system_prompt_from_paths(&self.paths),
                     mcps: vec![],
                     skills: vec![],
                     middleware: None,

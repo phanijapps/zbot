@@ -286,7 +286,7 @@ impl Tool for ListMcpsTool {
         }
 
         // Fall back to reading mcps.json from vault
-        let vault_path = match self.fs.vault_path() {
+        let mcps_file = match self.fs.mcps_config() {
             Some(p) => p,
             None => return Ok(json!({
                 "mcps": [],
@@ -294,7 +294,6 @@ impl Tool for ListMcpsTool {
             })),
         };
 
-        let mcps_file = vault_path.join("mcps.json");
         if !mcps_file.exists() {
             return Ok(json!({
                 "mcps": [],

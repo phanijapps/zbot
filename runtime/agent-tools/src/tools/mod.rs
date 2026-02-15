@@ -11,6 +11,7 @@ mod web;
 mod memory;
 mod introspection;
 mod ward;
+mod connectors;
 
 use std::sync::Arc;
 
@@ -32,6 +33,7 @@ pub use web::WebFetchTool;
 pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
 pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
 pub use ward::WardTool;
+pub use connectors::QueryResourceTool;
 
 // ============================================================================
 // TOOL SETTINGS

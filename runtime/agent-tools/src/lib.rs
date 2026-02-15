@@ -11,7 +11,7 @@
 
 mod tools;
 
-pub use tools::{builtin_tools_with_fs, core_tools, optional_tools, ListAgentsTool, MemoryEntry, MemoryStore, ToolSettings};
+pub use tools::{builtin_tools_with_fs, core_tools, optional_tools, ListAgentsTool, MemoryEntry, MemoryStore, QueryResourceTool, ToolSettings};
 
 // Re-export from zero-core
 pub use zero_core::{Tool, FileSystemContext};

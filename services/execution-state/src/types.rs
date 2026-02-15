@@ -78,8 +78,9 @@ pub enum TriggerSource {
     Cron,
     /// Triggered via HTTP API
     Api,
-    /// Triggered by a plugin (Rust or foreign)
-    Plugin,
+    /// Triggered by an external connector
+    #[serde(alias = "plugin")]
+    Connector,
 }
 
 impl TriggerSource {
@@ -89,7 +90,7 @@ impl TriggerSource {
             Self::Cli => "cli",
             Self::Cron => "cron",
             Self::Api => "api",
-            Self::Plugin => "plugin",
+            Self::Connector => "connector",
         }
     }
 
@@ -99,11 +100,11 @@ impl TriggerSource {
     /// CLI, Cron, API, and Plugin sessions auto-complete after execution finishes.
     pub fn should_auto_complete_session(&self) -> bool {
         match self {
-            Self::Web => false, // Keep open for interactive use
-            Self::Cli => true,  // Complete after response
-            Self::Cron => true, // Single execution, auto-complete
-            Self::Api => true,  // Controlled by caller, default to complete
-            Self::Plugin => true,
+            Self::Web => false,      // Keep open for interactive use
+            Self::Cli => true,       // Complete after response
+            Self::Cron => true,      // Single execution, auto-complete
+            Self::Api => true,       // Controlled by caller, default to complete
+            Self::Connector => true, // External connector, auto-complete
         }
     }
 }
@@ -123,7 +124,7 @@ impl std::str::FromStr for TriggerSource {
             "cli" => Ok(Self::Cli),
             "cron" => Ok(Self::Cron),
             "api" => Ok(Self::Api),
-            "plugin" => Ok(Self::Plugin),
+            "connector" | "plugin" => Ok(Self::Connector),
             _ => Err(format!("Invalid trigger source: {}", s)),
         }
     }
@@ -252,7 +253,7 @@ pub struct Session {
     /// Current status
     pub status: SessionStatus,
 
-    /// Trigger source (web, cli, cron, api, plugin)
+    /// Trigger source (web, cli, cron, api, connector)
     pub source: TriggerSource,
 
     /// The root agent for this session
@@ -298,6 +299,18 @@ pub struct Session {
     /// Parent session ID (None = root session, Some = child/subagent session)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parent_session_id: Option<String>,
+
+    /// Thread ID for conversation threading with external connectors.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+
+    /// Connector ID that triggered this session.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub connector_id: Option<String>,
+
+    /// Connector IDs to route the final response to (stored as JSON in DB).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub respond_to: Option<Vec<String>>,
 }
 
 impl Session {
@@ -324,6 +337,9 @@ impl Session {
             continuation_needed: false,
             ward_id: None,
             parent_session_id: None,
+            thread_id: None,
+            connector_id: None,
+            respond_to: None,
         }
     }
 
@@ -345,6 +361,9 @@ impl Session {
             continuation_needed: false,
             ward_id: None,
             parent_session_id: None,
+            thread_id: None,
+            connector_id: None,
+            respond_to: None,
         }
     }
 
@@ -366,7 +385,24 @@ impl Session {
             continuation_needed: false,
             ward_id: None,
             parent_session_id: Some(parent_session_id.into()),
+            thread_id: None,
+            connector_id: None,
+            respond_to: None,
         }
+    }
+
+    /// Set routing fields (thread_id, connector_id, respond_to) for connector sessions.
+    #[must_use]
+    pub fn with_routing(
+        mut self,
+        thread_id: Option<String>,
+        connector_id: Option<String>,
+        respond_to: Option<Vec<String>>,
+    ) -> Self {
+        self.thread_id = thread_id;
+        self.connector_id = connector_id;
+        self.respond_to = respond_to;
+        self
     }
 
     /// Total tokens (in + out).
@@ -636,7 +672,7 @@ pub struct DashboardStats {
     // BREAKDOWN BY SOURCE
     // =========================================================================
 
-    /// Sessions count by trigger source (web, cli, cron, api, plugin)
+    /// Sessions count by trigger source (web, cli, cron, api, connector)
     pub sessions_by_source: std::collections::HashMap<String, u64>,
 }
 
@@ -813,7 +849,7 @@ mod tests {
         assert_eq!(TriggerSource::Cli.as_str(), "cli");
         assert_eq!(TriggerSource::Cron.as_str(), "cron");
         assert_eq!(TriggerSource::Api.as_str(), "api");
-        assert_eq!(TriggerSource::Plugin.as_str(), "plugin");
+        assert_eq!(TriggerSource::Connector.as_str(), "connector");
     }
 
     #[test]
@@ -824,7 +860,7 @@ mod tests {
     #[test]
     fn trigger_source_display() {
         assert_eq!(format!("{}", TriggerSource::Web), "web");
-        assert_eq!(format!("{}", TriggerSource::Plugin), "plugin");
+        assert_eq!(format!("{}", TriggerSource::Connector), "connector");
     }
 
     #[test]
@@ -833,7 +869,8 @@ mod tests {
         assert_eq!("CLI".parse::<TriggerSource>().unwrap(), TriggerSource::Cli);
         assert_eq!("Cron".parse::<TriggerSource>().unwrap(), TriggerSource::Cron);
         assert_eq!("api".parse::<TriggerSource>().unwrap(), TriggerSource::Api);
-        assert_eq!("plugin".parse::<TriggerSource>().unwrap(), TriggerSource::Plugin);
+        assert_eq!("connector".parse::<TriggerSource>().unwrap(), TriggerSource::Connector);
+        assert_eq!("plugin".parse::<TriggerSource>().unwrap(), TriggerSource::Connector); // backward compat
     }
 
     #[test]
@@ -843,7 +880,7 @@ mod tests {
             (TriggerSource::Cli, "\"cli\""),
             (TriggerSource::Cron, "\"cron\""),
             (TriggerSource::Api, "\"api\""),
-            (TriggerSource::Plugin, "\"plugin\""),
+            (TriggerSource::Connector, "\"connector\""),
         ];
 
         for (source, expected) in sources {
@@ -1099,7 +1136,7 @@ mod tests {
 
     #[test]
     fn session_serialization_roundtrip() {
-        let session = Session::new_with_source("agent", TriggerSource::Plugin);
+        let session = Session::new_with_source("agent", TriggerSource::Connector);
         
         let json = serde_json::to_string(&session).unwrap();
         let parsed: Session = serde_json::from_str(&json).unwrap();

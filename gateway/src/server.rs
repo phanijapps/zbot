@@ -22,6 +22,7 @@ pub struct GatewayServer {
     state: AppState,
     ws_handler: Arc<WebSocketHandler>,
     shutdown_tx: Option<broadcast::Sender<()>>,
+    bridge_retry_handle: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl GatewayServer {
@@ -38,6 +39,7 @@ impl GatewayServer {
             state,
             ws_handler,
             shutdown_tx: None,
+            bridge_retry_handle: None,
         }
     }
 
@@ -84,6 +86,11 @@ impl GatewayServer {
         // Mark any RUNNING sessions as CRASHED (daemon was interrupted)
         self.recover_crashed_sessions();
 
+        // Reset any bridge outbox items left inflight from crash
+        if let Err(e) = self.state.bridge_outbox.reset_all_inflight() {
+            warn!("Failed to reset bridge inflight items: {}", e);
+        }
+
         // Seed default agents and other initial data
         self.state.seed_defaults().await;
 
@@ -94,6 +101,22 @@ impl GatewayServer {
 
         // Initialize cron scheduler
         self.init_cron_scheduler().await;
+
+        // Create gateway bus for bridge inbound messages
+        if let Some(runner) = self.state.runtime.runner() {
+            let bus: Arc<dyn gateway_bus::GatewayBus> = Arc::new(HttpGatewayBus::new(
+                runner.clone(),
+                self.state.state_service.clone(),
+                self.state.paths.vault_dir().clone(),
+            ));
+            self.state.bridge_bus = Some(bus);
+        }
+
+        // Spawn bridge outbox retry loop
+        self.bridge_retry_handle = Some(gateway_bridge::spawn_retry_loop(
+            self.state.bridge_registry.clone(),
+            self.state.bridge_outbox.clone(),
+        ));
 
         let (shutdown_tx, _) = broadcast::channel(1);
         self.shutdown_tx = Some(shutdown_tx.clone());
@@ -148,10 +171,16 @@ impl GatewayServer {
     /// Shutdown the gateway server gracefully.
     ///
     /// This pauses all running sessions so they can be resumed on restart,
-    /// then sends the shutdown signal to HTTP and WebSocket servers.
-    pub async fn shutdown(&self) {
+    /// disconnects bridge workers, and sends the shutdown signal.
+    pub async fn shutdown(&mut self) {
         // Pause all running sessions before shutting down
         self.pause_running_sessions();
+
+        // Disconnect all bridge workers and abort retry loop
+        self.state.bridge_registry.disconnect_all().await;
+        if let Some(handle) = self.bridge_retry_handle.take() {
+            handle.abort();
+        }
 
         if let Some(tx) = &self.shutdown_tx {
             let _ = tx.send(());
@@ -212,11 +241,11 @@ impl GatewayServer {
         let gateway_bus = Arc::new(HttpGatewayBus::new(
             runner,
             self.state.state_service.clone(),
-            self.state.config_dir.clone(),
+            self.state.paths.vault_dir().clone(),
         ));
 
         // Create cron service and scheduler
-        let cron_service = CronService::new(self.state.config_dir.clone());
+        let cron_service = CronService::new(self.state.paths.clone());
 
         match CronScheduler::new(cron_service, gateway_bus).await {
             Ok(scheduler) => {

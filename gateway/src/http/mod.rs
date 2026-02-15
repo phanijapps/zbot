@@ -3,6 +3,7 @@
 //! RESTful HTTP API for the gateway.
 
 mod agents;
+mod bridge;
 mod connectors;
 mod conversations;
 mod cron;
@@ -94,6 +95,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/connectors/:id/test", post(connectors::test_connector))
         .route("/api/connectors/:id/enable", post(connectors::enable_connector))
         .route("/api/connectors/:id/disable", post(connectors::disable_connector))
+        .route("/api/connectors/:id/inbound", post(connectors::inbound))
+        .route("/api/connectors/:id/inbound-log", get(connectors::get_inbound_log))
         // Cron job endpoints
         .route("/api/cron", get(cron::list_cron_jobs))
         .route("/api/cron", post(cron::create_cron_job))
@@ -126,12 +129,17 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Settings endpoints
         .route("/api/settings/tools", get(settings::get_tool_settings))
         .route("/api/settings/tools", put(settings::update_tool_settings))
+        .route("/api/settings/logs", get(settings::get_log_settings))
+        .route("/api/settings/logs", put(settings::update_log_settings))
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)
         .nest_service("/api/executions", execution_state::routes(state.state_service.clone()))
-        // Gateway Bus endpoints (for foreign plugins: Python, JS, Go, etc.)
+        // Gateway Bus endpoints (for external connectors and API integrations)
         .nest("/api/gateway", gateway_bus::routes())
+        // Bridge endpoints
+        .route("/api/bridge/workers", get(bridge::list_workers))
+        .route("/bridge/ws", get(bridge::ws_upgrade))
         // State
         .with_state(state);
 

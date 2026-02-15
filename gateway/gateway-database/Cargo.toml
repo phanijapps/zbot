@@ -16,6 +16,7 @@ description = "SQLite connection pool and schema for the AgentZero gateway"
 api-logs = { path = "../../services/api-logs" }
 execution-state = { path = "../../services/execution-state" }
 agent-runtime = { path = "../../runtime/agent-runtime" }
+gateway-services = { path = "../gateway-services" }
 zero-core = { path = "../../framework/zero-core" }
 
 # Database

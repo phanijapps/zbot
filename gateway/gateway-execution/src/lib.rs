@@ -20,6 +20,7 @@
 //! - `lifecycle` - Session and execution state management
 //! - `runner` - Main execution runner
 
+pub mod composite_provider;
 pub mod config;
 pub mod continuation;
 pub mod delegation;
@@ -29,6 +30,7 @@ pub mod handle;
 pub mod invoke;
 pub mod lifecycle;
 pub mod recall;
+pub mod resource_provider;
 pub mod runner;
 
 // Re-export public types
@@ -49,3 +51,5 @@ pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use runner::ExecutionRunner;
 pub use distillation::SessionDistiller;
 pub use recall::{MemoryRecall, format_recalled_facts};
+pub use composite_provider::CompositeResourceProvider;
+pub use resource_provider::GatewayResourceProvider;

@@ -40,6 +40,7 @@ pub mod policy;
 pub mod capability;
 pub mod registry;
 pub mod memory;
+pub mod connectors;
 
 // ============================================================================
 // CONVENIENCE RE-EXPORTS
@@ -70,6 +71,7 @@ pub use registry::{
     UnifiedCapabilityRegistry, SharedUnifiedRegistry, shared_unified_registry,
 };
 pub use memory::MemoryFactStore;
+pub use connectors::{ConnectorResourceProvider, CapabilityInfo};
 
 // ============================================================================
 // STATE PREFIX CONSTANTS

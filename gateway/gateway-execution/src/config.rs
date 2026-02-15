@@ -44,7 +44,8 @@ impl FileSystemContext for GatewayFileSystem {
     }
 
     fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf> {
-        Some(self.vault_dir.join("agents_data").join(agent_id))
+        // Agent data is stored in wards/{agent_id}/
+        Some(self.vault_dir.join("wards").join(agent_id))
     }
 
     fn python_executable(&self) -> Option<PathBuf> {
@@ -61,7 +62,8 @@ impl FileSystemContext for GatewayFileSystem {
     }
 
     fn session_data_dir(&self, session_id: &str) -> Option<PathBuf> {
-        Some(self.vault_dir.join("agent_data").join(session_id))
+        // Session data is stored in wards/{session_id}/
+        Some(self.vault_dir.join("wards").join(session_id))
     }
 
     fn wards_root_dir(&self) -> Option<PathBuf> {
@@ -70,6 +72,10 @@ impl FileSystemContext for GatewayFileSystem {
 
     fn ward_dir(&self, ward_id: &str) -> Option<PathBuf> {
         Some(self.vault_dir.join("wards").join(ward_id))
+    }
+
+    fn mcps_config(&self) -> Option<PathBuf> {
+        Some(self.vault_dir.join("config").join("mcps.json"))
     }
 }
 
@@ -98,6 +104,10 @@ pub struct ExecutionConfig {
     /// - None/empty: response goes to WebSocket subscribers only (default)
     /// - Some([...]): response also dispatched to listed connectors
     pub respond_to: Option<Vec<String>>,
+    /// Thread ID for conversation threading with external connectors.
+    pub thread_id: Option<String>,
+    /// Connector ID that triggered this session.
+    pub connector_id: Option<String>,
 }
 
 impl ExecutionConfig {
@@ -111,6 +121,8 @@ impl ExecutionConfig {
             hook_context: None,
             session_id: None,
             respond_to: None,
+            thread_id: None,
+            connector_id: None,
         }
     }
 
@@ -132,6 +144,20 @@ impl ExecutionConfig {
     #[must_use]
     pub fn with_respond_to(mut self, connector_ids: Vec<String>) -> Self {
         self.respond_to = Some(connector_ids);
+        self
+    }
+
+    /// Set the thread ID for conversation threading.
+    #[must_use]
+    pub fn with_thread_id(mut self, thread_id: String) -> Self {
+        self.thread_id = Some(thread_id);
+        self
+    }
+
+    /// Set the connector ID that triggered this session.
+    #[must_use]
+    pub fn with_connector_id(mut self, connector_id: String) -> Self {
+        self.connector_id = Some(connector_id);
         self
     }
 }

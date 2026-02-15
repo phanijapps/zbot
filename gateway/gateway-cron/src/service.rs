@@ -3,6 +3,7 @@
 //! CRUD operations and persistence for cron jobs.
 
 use crate::config::{CronJobConfig, CronJobsStore, CreateCronJobRequest, UpdateCronJobRequest};
+use gateway_services::SharedVaultPaths;
 use std::path::PathBuf;
 use thiserror::Error;
 use tokio::fs;
@@ -36,25 +37,28 @@ pub type CronResult<T> = Result<T, CronServiceError>;
 /// Service for managing cron jobs with persistence.
 #[derive(Clone)]
 pub struct CronService {
-    config_path: PathBuf,
+    paths: SharedVaultPaths,
 }
 
 impl CronService {
     /// Create a new cron service.
-    pub fn new(config_dir: PathBuf) -> Self {
-        Self {
-            config_path: config_dir.join("cron_jobs.json"),
-        }
+    pub fn new(paths: SharedVaultPaths) -> Self {
+        Self { paths }
+    }
+
+    /// Get the config file path.
+    fn config_path(&self) -> PathBuf {
+        self.paths.cron_jobs()
     }
 
     /// Load cron jobs from disk.
     pub async fn load(&self) -> CronResult<CronJobsStore> {
-        if !self.config_path.exists() {
+        if !self.config_path().exists() {
             debug!("Cron jobs config not found, returning empty store");
             return Ok(CronJobsStore::default());
         }
 
-        let content = fs::read_to_string(&self.config_path).await?;
+        let content = fs::read_to_string(&self.config_path()).await?;
         let store: CronJobsStore = serde_json::from_str(&content)?;
         debug!(count = store.jobs.len(), "Loaded cron jobs from disk");
         Ok(store)
@@ -63,14 +67,14 @@ impl CronService {
     /// Save cron jobs to disk.
     async fn save(&self, store: &CronJobsStore) -> CronResult<()> {
         // Ensure parent directory exists
-        if let Some(parent) = self.config_path.parent() {
+        if let Some(parent) = self.config_path().parent() {
             fs::create_dir_all(parent).await?;
         }
 
         let content = serde_json::to_string_pretty(store)?;
-        fs::write(&self.config_path, content).await?;
+        fs::write(&self.config_path(), content).await?;
         debug!(
-            path = %self.config_path.display(),
+            path = %self.config_path().display(),
             count = store.jobs.len(),
             "Saved cron jobs to disk"
         );
@@ -282,11 +286,14 @@ impl CronService {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gateway_services::VaultPaths;
+    use std::sync::Arc;
     use tempfile::TempDir;
 
     async fn test_service() -> (CronService, TempDir) {
         let temp_dir = TempDir::new().unwrap();
-        let service = CronService::new(temp_dir.path().to_path_buf());
+        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
+        let service = CronService::new(paths);
         (service, temp_dir)
     }
 

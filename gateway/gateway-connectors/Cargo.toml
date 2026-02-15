@@ -12,6 +12,7 @@ license.workspace = true
 description = "External connector management for AgentZero gateway"
 
 [dependencies]
+gateway-services = { path = "../gateway-services" }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

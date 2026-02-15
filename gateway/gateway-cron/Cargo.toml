@@ -11,6 +11,9 @@ license.workspace = true
 description = "Cron job configuration and persistence for AgentZero gateway"
 
 [dependencies]
+# Workspace crates
+gateway-services = { path = "../gateway-services" }
+
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }

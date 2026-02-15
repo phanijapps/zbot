@@ -5,10 +5,10 @@
 
 use api_logs::DbProvider;
 use execution_state::StateDbProvider;
+use gateway_services::SharedVaultPaths;
 use r2d2::Pool;
 use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::schema::initialize_database;
@@ -49,10 +49,10 @@ impl DatabaseManager {
     ///
     /// Opens a pool of up to 8 SQLite connections with WAL mode enabled.
     /// Schema is initialized on the first connection.
-    pub fn new(config_dir: PathBuf) -> Result<Self, String> {
-        let db_path = config_dir.join("conversations.db");
+    pub fn new(paths: SharedVaultPaths) -> Result<Self, String> {
+        let db_path = paths.conversations_db();
 
-        // Ensure the config directory exists
+        // Ensure the data directory exists
         if let Some(parent) = db_path.parent() {
             std::fs::create_dir_all(parent)
                 .map_err(|e| format!("Failed to create database directory: {e}"))?;

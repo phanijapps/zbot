@@ -31,6 +31,9 @@ import type {
   SessionMessagesQuery,
   ToolSettings,
   ToolSettingsResponse,
+  LogSettings,
+  LogSettingsResponse,
+  UpdateLogSettingsRequest,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -52,11 +55,8 @@ import type {
   SubscriptionErrorMessage,
   SubscriptionOptions,
   SubscriptionScope,
-  // Connector types
-  ConnectorResponse,
-  CreateConnectorRequest,
-  UpdateConnectorRequest,
-  ConnectorTestResult,
+  // Bridge worker types
+  BridgeWorker,
   // Cron types
   CronJobResponse,
   CreateCronJobRequest,
@@ -303,6 +303,22 @@ export class HttpTransport implements Transport {
       return { success: true, data: result.data.data };
     }
     return { success: false, error: result.error || result.data?.error || "Failed to update tool settings" };
+  }
+
+  async getLogSettings(): Promise<TransportResult<LogSettings & { restartRequired: boolean }>> {
+    const result = await this.get<LogSettingsResponse>("/api/settings/logs");
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to get log settings" };
+  }
+
+  async updateLogSettings(settings: UpdateLogSettingsRequest): Promise<TransportResult<LogSettings & { restartRequired: boolean }>> {
+    const result = await this.put<LogSettingsResponse>("/api/settings/logs", settings);
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to update log settings" };
   }
 
   // =========================================================================
@@ -1210,39 +1226,11 @@ export class HttpTransport implements Transport {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // Connector Operations
+  // Bridge Worker Operations
   // ─────────────────────────────────────────────────────────────────────────
 
-  async listConnectors(): Promise<TransportResult<ConnectorResponse[]>> {
-    return this.get<ConnectorResponse[]>("/api/connectors");
-  }
-
-  async getConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
-    return this.get<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}`);
-  }
-
-  async createConnector(request: CreateConnectorRequest): Promise<TransportResult<ConnectorResponse>> {
-    return this.post<ConnectorResponse>("/api/connectors", request);
-  }
-
-  async updateConnector(id: string, request: UpdateConnectorRequest): Promise<TransportResult<ConnectorResponse>> {
-    return this.put<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}`, request);
-  }
-
-  async deleteConnector(id: string): Promise<TransportResult<void>> {
-    return this.delete(`/api/connectors/${encodeURIComponent(id)}`);
-  }
-
-  async testConnector(id: string): Promise<TransportResult<ConnectorTestResult>> {
-    return this.post<ConnectorTestResult>(`/api/connectors/${encodeURIComponent(id)}/test`, {});
-  }
-
-  async enableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
-    return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/enable`, {});
-  }
-
-  async disableConnector(id: string): Promise<TransportResult<ConnectorResponse>> {
-    return this.post<ConnectorResponse>(`/api/connectors/${encodeURIComponent(id)}/disable`, {});
+  async listBridgeWorkers(): Promise<TransportResult<BridgeWorker[]>> {
+    return this.get<BridgeWorker[]>("/api/bridge/workers");
   }
 
   // ─────────────────────────────────────────────────────────────────────────

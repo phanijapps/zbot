@@ -96,6 +96,14 @@ impl HttpGatewayBus {
             }
         }
 
+        // Pass through routing fields for connector dispatch
+        if let Some(thread_id) = &request.thread_id {
+            config = config.with_thread_id(thread_id.clone());
+        }
+        if let Some(connector_id) = &request.connector_id {
+            config = config.with_connector_id(connector_id.clone());
+        }
+
         config
     }
 }
@@ -216,7 +224,7 @@ mod tests {
             (TriggerSource::Cli, "cli"),
             (TriggerSource::Cron, "cron"),
             (TriggerSource::Api, "api"),
-            (TriggerSource::Plugin, "plugin"),
+            (TriggerSource::Connector, "connector"),
         ];
 
         for (source, name) in sources {
@@ -253,7 +261,7 @@ mod tests {
         );
 
         let email_request = SessionRequest::new("email-agent", "Process email")
-            .with_source(TriggerSource::Plugin)
+            .with_source(TriggerSource::Connector)
             .with_external_ref("email-msg-id-abc123");
 
         assert_eq!(
@@ -446,10 +454,10 @@ mod tests {
     }
 
     #[test]
-    fn scenario_plugin_email_processor() {
-        // A Python plugin processes an incoming email
+    fn scenario_connector_email_processor() {
+        // An external connector processes an incoming email
         let request = SessionRequest::new("email-assistant", "Process this email")
-            .with_source(TriggerSource::Plugin)
+            .with_source(TriggerSource::Connector)
             .with_external_ref("email:msg-id-abc123")
             .with_metadata(serde_json::json!({
                 "from": "sender@example.com",
@@ -457,7 +465,7 @@ mod tests {
                 "received_at": "2026-02-01T10:30:00Z"
             }));
 
-        assert_eq!(request.source, TriggerSource::Plugin);
+        assert_eq!(request.source, TriggerSource::Connector);
     }
 
     #[test]

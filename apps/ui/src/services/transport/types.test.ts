@@ -17,6 +17,9 @@ import type {
   TransportResult,
   SessionFilter,
   ExecutionFilter,
+  BridgeWorker,
+  BridgeWorkerCapability,
+  BridgeWorkerResource,
 } from './types';
 
 // ============================================================================
@@ -176,7 +179,7 @@ describe('SessionWithExecutions Type', () => {
 
 describe('TriggerSource Type', () => {
   it('supports all valid values', () => {
-    const sources: TriggerSource[] = ['web', 'cli', 'cron', 'api', 'plugin'];
+    const sources: TriggerSource[] = ['web', 'cli', 'cron', 'api', 'connector'];
     expect(sources).toHaveLength(5);
 
     // All sources should be strings
@@ -191,7 +194,7 @@ describe('TriggerSource Type', () => {
       cli: 'Command Line',
       cron: 'Scheduled',
       api: 'API Call',
-      plugin: 'Plugin',
+      connector: 'Plugin',
     };
 
     expect(sourceMap.web).toBe('Web UI');
@@ -300,7 +303,7 @@ describe('DashboardStats Type', () => {
         cli: 3,
         cron: 1,
         api: 1,
-        plugin: 1,
+        connector: 1,
       },
     };
 
@@ -328,13 +331,13 @@ describe('DashboardStats Type', () => {
         cli: 2,
         cron: 1,
         api: 1,
-        plugin: 0,
+        connector: 0,
       },
     };
 
     expect(stats.sessions_by_source.web).toBe(10);
     expect(stats.sessions_by_source.cli).toBe(2);
-    expect(stats.sessions_by_source.plugin).toBe(0);
+    expect(stats.sessions_by_source.connector).toBe(0);
 
     // Total should match
     const total = Object.values(stats.sessions_by_source).reduce((a, b) => a + b, 0);
@@ -439,5 +442,82 @@ describe('Filter Types', () => {
       expect(filter.session_id).toBe('sess-123');
       expect(filter.status).toBe('running');
     });
+  });
+});
+
+// ============================================================================
+// Bridge Worker Type Tests
+// ============================================================================
+
+describe('BridgeWorker Type', () => {
+  it('has required fields', () => {
+    const worker: BridgeWorker = {
+      adapter_id: 'slack-worker',
+      capabilities: [],
+      resources: [],
+      connected_at: '2026-01-01T00:00:00Z',
+    };
+
+    expect(worker.adapter_id).toBe('slack-worker');
+    expect(worker.capabilities).toHaveLength(0);
+    expect(worker.resources).toHaveLength(0);
+    expect(worker.connected_at).toBeDefined();
+  });
+
+  it('supports capabilities and resources', () => {
+    const worker: BridgeWorker = {
+      adapter_id: 'crm-worker',
+      capabilities: [
+        { name: 'send_email', description: 'Send email via CRM' },
+        { name: 'create_ticket', schema: { type: 'object' } },
+      ],
+      resources: [
+        { name: 'contacts', description: 'CRM contacts' },
+      ],
+      connected_at: '2026-01-01T00:00:00Z',
+    };
+
+    expect(worker.capabilities).toHaveLength(2);
+    expect(worker.capabilities[0].name).toBe('send_email');
+    expect(worker.capabilities[0].description).toBe('Send email via CRM');
+    expect(worker.resources).toHaveLength(1);
+    expect(worker.resources[0].name).toBe('contacts');
+  });
+});
+
+describe('BridgeWorkerCapability Type', () => {
+  it('has required name field', () => {
+    const cap: BridgeWorkerCapability = { name: 'send_message' };
+    expect(cap.name).toBe('send_message');
+    expect(cap.description).toBeUndefined();
+    expect(cap.schema).toBeUndefined();
+  });
+
+  it('supports optional fields', () => {
+    const cap: BridgeWorkerCapability = {
+      name: 'create_ticket',
+      description: 'Create a support ticket',
+      schema: { type: 'object', properties: { title: { type: 'string' } } },
+    };
+
+    expect(cap.description).toBe('Create a support ticket');
+    expect(cap.schema).toBeDefined();
+  });
+});
+
+describe('BridgeWorkerResource Type', () => {
+  it('has required name field', () => {
+    const res: BridgeWorkerResource = { name: 'channels' };
+    expect(res.name).toBe('channels');
+    expect(res.description).toBeUndefined();
+  });
+
+  it('supports optional description', () => {
+    const res: BridgeWorkerResource = {
+      name: 'contacts',
+      description: 'CRM contact list',
+    };
+
+    expect(res.description).toBe('CRM contact list');
   });
 });

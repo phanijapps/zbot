@@ -22,8 +22,11 @@ pub trait FileSystemContext: Send + Sync {
     fn agents_dir(&self) -> Option<PathBuf>;
 
     /// Get the agent data directory for a specific agent
-    /// Returns the base directory for agent-specific data (e.g., agents_data/{agent-id}/)
-    fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf>;
+    /// Returns the base directory for agent-specific data (e.g., wards/{agent-id}/)
+    /// Note: Agent data is stored in wards to unify with session and ward storage.
+    fn agent_data_dir(&self, agent_id: &str) -> Option<PathBuf> {
+        self.ward_dir(agent_id)
+    }
 
     /// Get the Python executable path
     fn python_executable(&self) -> Option<PathBuf>;
@@ -48,9 +51,10 @@ pub trait FileSystemContext: Send + Sync {
     }
 
     /// Get the session data directory (for attachments, scratchpad, etc.)
-    /// Returns `{vault}/agent_data/{session_id}/`
+    /// Returns `{vault}/wards/{session_id}/`
+    /// Note: Session data is stored in wards to unify with agent and ward storage.
     fn session_data_dir(&self, session_id: &str) -> Option<PathBuf> {
-        self.vault_path().map(|p| p.join("agent_data").join(session_id))
+        self.ward_dir(session_id)
     }
 
     /// Get the wards root directory.
@@ -63,6 +67,12 @@ pub trait FileSystemContext: Send + Sync {
     /// Returns `{vault}/wards/{ward_id}/`
     fn ward_dir(&self, ward_id: &str) -> Option<PathBuf> {
         self.wards_root_dir().map(|p| p.join(ward_id))
+    }
+
+    /// Get the MCP servers configuration file path.
+    /// Returns `{vault}/config/mcps.json`
+    fn mcps_config(&self) -> Option<PathBuf> {
+        None
     }
 }
 
@@ -88,19 +98,15 @@ impl FileSystemContext for NoFileSystemContext {
         None
     }
 
-    fn agent_data_dir(&self, _agent_id: &str) -> Option<PathBuf> {
-        None
-    }
-
     fn python_executable(&self) -> Option<PathBuf> {
         None
     }
 
-    fn agent_node_modules_dir(&self, _agent_id: &str) -> Option<PathBuf> {
+    fn vault_path(&self) -> Option<PathBuf> {
         None
     }
 
-    fn vault_path(&self) -> Option<PathBuf> {
+    fn wards_root_dir(&self) -> Option<PathBuf> {
         None
     }
 }

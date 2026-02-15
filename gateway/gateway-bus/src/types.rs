@@ -13,7 +13,7 @@ pub struct SessionRequest {
     /// Existing session ID to continue, or None to create a new session.
     pub session_id: Option<String>,
 
-    /// The trigger source for this session (web, cli, cron, api, plugin).
+    /// The trigger source for this session (web, cli, cron, api, connector).
     #[serde(default)]
     pub source: TriggerSource,
 
@@ -248,7 +248,7 @@ mod tests {
     fn session_request_builder_all_fields() {
         let metadata = serde_json::json!({"key": "value", "count": 42});
         let request = SessionRequest::new("agent", "msg")
-            .with_source(TriggerSource::Plugin)
+            .with_source(TriggerSource::Connector)
             .with_session_id("sess-123")
             .with_priority(10)
             .with_external_ref("ext-ref")
@@ -257,7 +257,7 @@ mod tests {
 
         assert_eq!(request.agent_id, "agent");
         assert_eq!(request.message, "msg");
-        assert_eq!(request.source, TriggerSource::Plugin);
+        assert_eq!(request.source, TriggerSource::Connector);
         assert_eq!(request.session_id, Some("sess-123".to_string()));
         assert_eq!(request.priority, Some(10));
         assert_eq!(request.external_ref, Some("ext-ref".to_string()));
@@ -282,7 +282,7 @@ mod tests {
             TriggerSource::Cli,
             TriggerSource::Cron,
             TriggerSource::Api,
-            TriggerSource::Plugin,
+            TriggerSource::Connector,
         ];
 
         for source in sources {
@@ -308,7 +308,7 @@ mod tests {
 
         assert_eq!(req.agent_id, "root");
         assert_eq!(req.message, "Hello!");
-        assert_eq!(req.source, TriggerSource::Plugin);
+        assert_eq!(req.source, TriggerSource::Connector);
         assert_eq!(req.priority, Some(5));
         assert_eq!(req.external_ref, Some("test-ref".to_string()));
         assert_eq!(req.session_id, Some("sess-existing".to_string()));

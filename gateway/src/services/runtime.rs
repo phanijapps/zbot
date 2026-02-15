@@ -1,5 +1,4 @@
 //! # Runtime Service
-//! # Runtime Service
 //!
 //! Service for managing agent execution runtime.
 //!
@@ -13,9 +12,8 @@ use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
 use crate::execution::{new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookContext;
-use crate::services::{AgentService, McpService, ProviderService, SkillService};
+use crate::services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use gateway_database::MemoryRepository;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Execution state for a conversation.
@@ -34,11 +32,11 @@ pub struct RuntimeService {
     /// Event bus for broadcasting events.
     event_bus: Arc<EventBus>,
 
-    /// Execution runner (optional - set when config_dir is known)
+    /// Execution runner (optional - set when paths is known)
     runner: Option<Arc<ExecutionRunner>>,
 
-    /// Configuration directory
-    config_dir: Option<PathBuf>,
+    /// Vault paths
+    paths: Option<SharedVaultPaths>,
 }
 
 impl RuntimeService {
@@ -47,7 +45,7 @@ impl RuntimeService {
         Self {
             event_bus,
             runner: None,
-            config_dir: None,
+            paths: None,
         }
     }
 
@@ -56,7 +54,7 @@ impl RuntimeService {
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<SkillService>,
@@ -67,7 +65,7 @@ impl RuntimeService {
             event_bus,
             agent_service,
             provider_service,
-            config_dir,
+            paths,
             conversation_repo,
             mcp_service,
             skill_service,
@@ -75,6 +73,8 @@ impl RuntimeService {
             state_service,
             None,
             new_workspace_cache(),
+            None,
+            None,
             None,
             None,
             None,
@@ -86,7 +86,7 @@ impl RuntimeService {
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<SkillService>,
@@ -97,12 +97,14 @@ impl RuntimeService {
         memory_repo: Option<Arc<MemoryRepository>>,
         distiller: Option<Arc<SessionDistiller>>,
         memory_recall: Option<Arc<MemoryRecall>>,
+        bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+        bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::with_connector_registry(
             event_bus.clone(),
             agent_service,
             provider_service,
-            config_dir.clone(),
+            paths.clone(),
             conversation_repo,
             mcp_service,
             skill_service,
@@ -113,11 +115,13 @@ impl RuntimeService {
             memory_repo,
             distiller,
             memory_recall,
+            bridge_registry,
+            bridge_outbox,
         ));
         Self {
             event_bus,
             runner: Some(runner),
-            config_dir: Some(config_dir),
+            paths: Some(paths),
         }
     }
 
@@ -159,14 +163,14 @@ impl RuntimeService {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
 
-        let config_dir = self.config_dir.clone().ok_or_else(|| {
-            "Config directory not set".to_string()
+        let paths = self.paths.clone().ok_or_else(|| {
+            "Vault paths not set".to_string()
         })?;
 
         let mut config = ExecutionConfig::new(
             agent_id.to_string(),
             conversation_id.to_string(),
-            config_dir,
+            paths.vault_dir().clone(),
         );
 
         if let Some(sid) = session_id {
@@ -192,14 +196,14 @@ impl RuntimeService {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
 
-        let config_dir = self.config_dir.clone().ok_or_else(|| {
-            "Config directory not set".to_string()
+        let paths = self.paths.clone().ok_or_else(|| {
+            "Vault paths not set".to_string()
         })?;
 
         let mut config = ExecutionConfig::new(
             agent_id.to_string(),
             conversation_id.to_string(),
-            config_dir,
+            paths.vault_dir().clone(),
         ).with_hook_context(hook_context);
 
         if let Some(sid) = session_id {
@@ -345,12 +349,12 @@ pub fn shared_runtime_service_with_runner(
     event_bus: Arc<EventBus>,
     agent_service: Arc<AgentService>,
     provider_service: Arc<ProviderService>,
-    config_dir: PathBuf,
+    paths: SharedVaultPaths,
     conversation_repo: Arc<ConversationRepository>,
     mcp_service: Arc<McpService>,
     skill_service: Arc<SkillService>,
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
 ) -> Arc<RuntimeService> {
-    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, config_dir, conversation_repo, mcp_service, skill_service, log_service, state_service))
+    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, paths, conversation_repo, mcp_service, skill_service, log_service, state_service))
 }

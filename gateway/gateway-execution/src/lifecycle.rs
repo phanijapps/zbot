@@ -5,6 +5,7 @@
 //! This module centralizes all state transitions for sessions and executions,
 //! including creation, completion, error handling, and cancellation.
 
+use gateway_bridge::{BridgeRegistry, OutboxRepository as BridgeOutbox};
 use gateway_connectors::{ConnectorRegistry, DispatchContext};
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
@@ -154,6 +155,9 @@ pub async fn complete_execution(
     response: Option<String>,
     connector_registry: Option<&Arc<ConnectorRegistry>>,
     respond_to: Option<&Vec<String>>,
+    thread_id: Option<&str>,
+    bridge_registry: Option<&Arc<BridgeRegistry>>,
+    bridge_outbox: Option<&Arc<BridgeOutbox>>,
 ) {
     // Update execution status to COMPLETED
     if let Err(e) = state_service.complete_execution(execution_id) {
@@ -221,7 +225,7 @@ pub async fn complete_execution(
             if let Some(response_text) = &response {
                 let context = DispatchContext {
                     session_id: session_id.to_string(),
-                    thread_id: None,
+                    thread_id: thread_id.map(|t| t.to_string()),
                     agent_id: agent_id.to_string(),
                     timestamp: chrono::Utc::now(),
                 };
@@ -258,6 +262,42 @@ pub async fn complete_execution(
                                 "Connector dispatch failed"
                             );
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // Bridge workers: push response via outbox (reliable delivery)
+    if let (Some(bridge), Some(outbox), Some(connector_ids)) =
+        (bridge_registry, bridge_outbox, respond_to)
+    {
+        if let Some(response_text) = &response {
+            let payload = serde_json::json!({
+                "message": response_text,
+                "execution_id": execution_id,
+                "session_id": session_id,
+            });
+
+            for id in connector_ids {
+                if bridge.is_connected(id).await {
+                    if let Err(e) = gateway_bridge::enqueue_and_push(
+                        id,
+                        "respond",
+                        &payload,
+                        Some(session_id),
+                        thread_id,
+                        Some(agent_id),
+                        outbox,
+                        bridge,
+                    )
+                    .await
+                    {
+                        tracing::warn!(
+                            connector_id = %id,
+                            "Bridge dispatch failed: {}",
+                            e
+                        );
                     }
                 }
             }

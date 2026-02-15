@@ -6,10 +6,73 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 8;
+const SCHEMA_VERSION: i32 = 10;
+
+/// Run migrations for existing databases.
+///
+/// Checks the current schema version and applies any needed migrations.
+fn migrate_database(conn: &Connection) -> Result<()> {
+    // Check if schema_version table exists
+    let has_version: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='schema_version'",
+        [],
+        |row| row.get::<_, i64>(0),
+    )? > 0;
+
+    if !has_version {
+        return Ok(()); // Fresh database, no migration needed
+    }
+
+    let version: i32 = conn
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| row.get(0))
+        .unwrap_or(0);
+
+    // v8 → v9: Add routing fields to sessions
+    if version < 9 {
+        // Use try/ignore pattern since columns may already exist on fresh DB
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN thread_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN connector_id TEXT", []);
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN respond_to TEXT", []);
+    }
+
+    // v9 → v10: Add bridge_outbox table
+    if version < 10 {
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS bridge_outbox (
+                id TEXT PRIMARY KEY,
+                adapter_id TEXT NOT NULL,
+                capability TEXT NOT NULL,
+                payload TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'pending',
+                session_id TEXT,
+                thread_id TEXT,
+                agent_id TEXT,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                sent_at TEXT,
+                error TEXT,
+                retry_count INTEGER NOT NULL DEFAULT 0,
+                retry_after TEXT
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outbox_adapter_status ON bridge_outbox(adapter_id, status)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_outbox_created ON bridge_outbox(created_at)",
+            [],
+        );
+    }
+
+    Ok(())
+}
 
 /// Initialize the database with all tables
 pub fn initialize_database(conn: &Connection) -> Result<()> {
+    // Run migrations for existing databases before creating tables
+    migrate_database(conn)?;
+
     // Enable foreign keys
     conn.execute("PRAGMA foreign_keys = ON", [])?;
 
@@ -33,7 +96,10 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             pending_delegations INTEGER DEFAULT 0,
             continuation_needed INTEGER DEFAULT 0,
             ward_id TEXT,
-            parent_session_id TEXT
+            parent_session_id TEXT,
+            thread_id TEXT,
+            connector_id TEXT,
+            respond_to TEXT
         )",
         [],
     )?;
@@ -275,6 +341,39 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             PRIMARY KEY (content_hash, model)
         )",
+        [],
+    )?;
+
+    // =========================================================================
+    // BRIDGE OUTBOX
+    // Reliable delivery queue for outbound messages to bridge workers
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS bridge_outbox (
+            id TEXT PRIMARY KEY,
+            adapter_id TEXT NOT NULL,
+            capability TEXT NOT NULL,
+            payload TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            session_id TEXT,
+            thread_id TEXT,
+            agent_id TEXT,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            sent_at TEXT,
+            error TEXT,
+            retry_count INTEGER NOT NULL DEFAULT 0,
+            retry_after TEXT
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outbox_adapter_status ON bridge_outbox(adapter_id, status)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_outbox_created ON bridge_outbox(created_at)",
         [],
     )?;
 

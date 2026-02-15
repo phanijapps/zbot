@@ -12,11 +12,10 @@ use api_logs::LogService;
 use execution_state::StateService;
 use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
-use gateway_services::{AgentService, McpService, ProviderService};
+use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
 use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
@@ -59,8 +58,8 @@ pub struct ExecutionRunner {
     mcp_service: Arc<McpService>,
     /// Skill service for loading skill configs
     skill_service: Arc<gateway_services::SkillService>,
-    /// Configuration directory
-    config_dir: PathBuf,
+    /// Vault paths for accessing configuration and data directories
+    paths: SharedVaultPaths,
     /// Active execution handles
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     /// Conversation repository for SQLite persistence
@@ -75,6 +74,10 @@ pub struct ExecutionRunner {
     state_service: Arc<StateService<DatabaseManager>>,
     /// Connector registry for response routing to external connectors
     connector_registry: Option<Arc<gateway_connectors::ConnectorRegistry>>,
+    /// Bridge registry for WebSocket worker connections
+    bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+    /// Bridge outbox for reliable message delivery
+    bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     /// Cached workspace context (avoids reading workspace.json per execution)
     workspace_cache: WorkspaceCache,
     /// Memory repository for structured fact storage
@@ -94,7 +97,7 @@ impl ExecutionRunner {
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<gateway_services::SkillService>,
@@ -105,7 +108,7 @@ impl ExecutionRunner {
             event_bus,
             agent_service,
             provider_service,
-            config_dir,
+            paths,
             conversation_repo,
             mcp_service,
             skill_service,
@@ -113,6 +116,8 @@ impl ExecutionRunner {
             state_service,
             None,
             Arc::new(tokio::sync::RwLock::new(None)),
+            None,
+            None,
             None,
             None,
             None,
@@ -124,7 +129,7 @@ impl ExecutionRunner {
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
         provider_service: Arc<ProviderService>,
-        config_dir: PathBuf,
+        paths: SharedVaultPaths,
         conversation_repo: Arc<ConversationRepository>,
         mcp_service: Arc<McpService>,
         skill_service: Arc<gateway_services::SkillService>,
@@ -135,6 +140,8 @@ impl ExecutionRunner {
         memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
         distiller: Option<Arc<super::distillation::SessionDistiller>>,
         memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+        bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
+        bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -145,7 +152,7 @@ impl ExecutionRunner {
             provider_service,
             mcp_service,
             skill_service,
-            config_dir,
+            paths,
             handles: Arc::new(RwLock::new(HashMap::new())),
             conversation_repo,
             delegation_registry: Arc::new(DelegationRegistry::new()),
@@ -153,6 +160,8 @@ impl ExecutionRunner {
             log_service,
             state_service,
             connector_registry,
+            bridge_registry,
+            bridge_outbox,
             workspace_cache,
             memory_repo,
             distiller,
@@ -175,7 +184,7 @@ impl ExecutionRunner {
         let provider_service = self.provider_service.clone();
         let mcp_service = self.mcp_service.clone();
         let skill_service = self.skill_service.clone();
-        let config_dir = self.config_dir.clone();
+        let paths = self.paths.clone();
         let conversation_repo = self.conversation_repo.clone();
         let handles = self.handles.clone();
         let delegation_registry = self.delegation_registry.clone();
@@ -200,7 +209,7 @@ impl ExecutionRunner {
                     provider_service.clone(),
                     mcp_service.clone(),
                     skill_service.clone(),
-                    config_dir.clone(),
+                    paths.clone(),
                     conversation_repo.clone(),
                     handles.clone(),
                     delegation_registry.clone(),
@@ -232,7 +241,7 @@ impl ExecutionRunner {
         let provider_service = self.provider_service.clone();
         let mcp_service = self.mcp_service.clone();
         let skill_service = self.skill_service.clone();
-        let config_dir = self.config_dir.clone();
+        let paths = self.paths.clone();
         let conversation_repo = self.conversation_repo.clone();
         let handles = self.handles.clone();
         let delegation_registry = self.delegation_registry.clone();
@@ -274,7 +283,7 @@ impl ExecutionRunner {
                             provider_service.clone(),
                             mcp_service.clone(),
                             skill_service.clone(),
-                            config_dir.clone(),
+                            paths.clone(),
                             conversation_repo.clone(),
                             handles.clone(),
                             delegation_registry.clone(),
@@ -336,6 +345,18 @@ impl ExecutionRunner {
         let session_id = setup.session_id;
         let execution_id = setup.execution_id;
 
+        // Persist routing fields on the session (thread_id, connector_id, respond_to)
+        if config.thread_id.is_some() || config.connector_id.is_some() || config.respond_to.is_some() {
+            if let Err(e) = self.state_service.update_session_routing(
+                &session_id,
+                config.thread_id.as_deref(),
+                config.connector_id.as_deref(),
+                config.respond_to.as_ref(),
+            ) {
+                tracing::warn!("Failed to persist session routing: {}", e);
+            }
+        }
+
         // Start execution and log
         start_execution(
             &self.state_service,
@@ -363,7 +384,7 @@ impl ExecutionRunner {
         .await;
 
         // Load agent configuration (or create default for "root" agent)
-        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.config_dir.clone());
+        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -443,7 +464,10 @@ impl ExecutionRunner {
         let state_service = self.state_service.clone();
         let delegation_tx = self.delegation_tx.clone();
         let connector_registry = self.connector_registry.clone();
+        let bridge_registry = self.bridge_registry.clone();
+        let bridge_outbox = self.bridge_outbox.clone();
         let respond_to = config.respond_to.clone();
+        let thread_id = config.thread_id.clone();
         let distiller = self.distiller.clone();
 
         tokio::spawn(async move {
@@ -605,6 +629,9 @@ impl ExecutionRunner {
                         Some(accumulated_response),
                         connector_registry.as_ref(),
                         respond_to.as_ref(),
+                        thread_id.as_deref(),
+                        bridge_registry.as_ref(),
+                        bridge_outbox.as_ref(),
                     )
                     .await;
 
@@ -800,7 +827,7 @@ impl ExecutionRunner {
         let config = ExecutionConfig::new(
             child_agent_id.to_string(),
             child_conversation_id.clone(),
-            self.config_dir.clone(),
+            self.paths.vault_dir().clone(),
         );
 
         // Emit delegation started event
@@ -851,7 +878,7 @@ impl ExecutionRunner {
         let available_skills = collect_skills_summary(&self.skill_service).await;
 
         // Get tool settings
-        let settings_service = gateway_services::SettingsService::new(config.config_dir.clone());
+        let settings_service = gateway_services::SettingsService::new(self.paths.clone());
         let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
         // Build hook context if present
@@ -867,11 +894,35 @@ impl ExecutionRunner {
                 as Arc<dyn zero_core::MemoryFactStore>
         });
 
+        // Build connector resource provider (HTTP + bridge composite)
+        let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+            self.connector_registry.as_ref().map(|registry| {
+                Arc::new(super::resource_provider::GatewayResourceProvider::new(registry.clone()))
+                    as Arc<dyn zero_core::ConnectorResourceProvider>
+            });
+        let bridge_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+            self.bridge_registry.as_ref().zip(self.bridge_outbox.as_ref()).map(|(reg, outbox)| {
+                Arc::new(gateway_bridge::BridgeResourceProvider::new(reg.clone(), outbox.clone()))
+                    as Arc<dyn zero_core::ConnectorResourceProvider>
+            });
+        let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
+            if http_provider.is_some() || bridge_provider.is_some() {
+                Some(Arc::new(super::composite_provider::CompositeResourceProvider::new(
+                    http_provider,
+                    bridge_provider,
+                )) as Arc<dyn zero_core::ConnectorResourceProvider>)
+            } else {
+                None
+            };
+
         // Use ExecutorBuilder to create the executor
-        let mut builder = ExecutorBuilder::new(config.config_dir.clone(), tool_settings)
+        let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone());
         if let Some(fs) = fact_store {
             builder = builder.with_fact_store(fs);
+        }
+        if let Some(cp) = connector_provider {
+            builder = builder.with_connector_provider(cp);
         }
         builder
             .build(
@@ -927,7 +978,7 @@ async fn invoke_continuation(
     provider_service: Arc<ProviderService>,
     mcp_service: Arc<McpService>,
     skill_service: Arc<gateway_services::SkillService>,
-    config_dir: PathBuf,
+    paths: SharedVaultPaths,
     conversation_repo: Arc<ConversationRepository>,
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     _delegation_registry: Arc<DelegationRegistry>,
@@ -975,7 +1026,7 @@ async fn invoke_continuation(
     emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
 
     // Load agent and provider
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service, config_dir.clone());
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
     // Load full session conversation (includes tool calls, results, and callbacks)
@@ -992,7 +1043,7 @@ async fn invoke_continuation(
     );
 
     // Get tool settings
-    let settings_service = gateway_services::SettingsService::new(config_dir.clone());
+    let settings_service = gateway_services::SettingsService::new(paths.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
     // Collect available agents and skills
@@ -1007,7 +1058,7 @@ async fn invoke_continuation(
         .and_then(|s| s.ward_id);
 
     // Build executor
-    let builder = ExecutorBuilder::new(config_dir, tool_settings)
+    let builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
     let executor = builder
         .build(
@@ -1172,6 +1223,9 @@ async fn invoke_continuation(
                     &conversation_id,
                     Some(accumulated_response),
                     None,
+                    None,
+                    None, // No thread_id for continuation turns
+                    None, // No bridge dispatch for continuation turns
                     None,
                 )
                 .await;

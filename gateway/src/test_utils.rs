@@ -43,9 +43,9 @@ mod tests {
 
     #[test]
     fn test_mock_session_request_with_source() {
-        let req = mock_session_request_with_source("agent", "Test", TriggerSource::Plugin);
+        let req = mock_session_request_with_source("agent", "Test", TriggerSource::Connector);
         
-        assert_eq!(req.source, TriggerSource::Plugin);
+        assert_eq!(req.source, TriggerSource::Connector);
     }
 
     #[test]

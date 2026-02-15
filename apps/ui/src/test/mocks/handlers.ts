@@ -60,7 +60,7 @@ export function createMockStats(): DashboardStats {
       cli: 3,
       cron: 1,
       api: 1,
-      plugin: 1,
+      connector: 1,
     },
   };
 }
@@ -164,4 +164,5 @@ export const handlers = [
       },
     ]);
   }),
+
 ];

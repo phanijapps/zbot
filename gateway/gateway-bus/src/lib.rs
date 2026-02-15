@@ -3,18 +3,18 @@
 //! Unified intake interface for all session triggers.
 //!
 //! The Gateway Bus provides a single abstraction for creating and managing sessions
-//! regardless of the trigger source (Web, CLI, Cron, API, Plugin).
+//! regardless of the trigger source (Web, CLI, Cron, API, Connector).
 //!
 //! # Architecture
 //!
 //! ```text
 //!                         TRIGGERS (intake)
-//!     ┌───────┬───────┬───────┬──────────────┬─────────────────────────┐
-//!     │  Web  │  CLI  │ Cron  │ Rust Plugins │ Foreign Plugins         │
-//!     │       │       │       │              │ (JS, Python, Go bridge) │
-//!     └───┬───┴───┬───┴───┬───┴───────┬──────┴───────────┬─────────────┘
-//!         │       │       │           │                  │
-//!         └───────┴───────┴───────────┴──────────────────┘
+//!     ┌───────┬───────┬───────┬───────┬────────────────────┐
+//!     │  Web  │  CLI  │ Cron  │  API  │ External Connectors│
+//!     │       │       │       │       │ (HTTP webhooks)    │
+//!     └───┬───┴───┬───┴───┬───┴───┬───┴─────────┬──────────┘
+//!         │       │       │       │              │
+//!         └───────┴───────┴───────┴──────────────┘
 //!                               │
 //!                               ▼
 //!                 ┌───────────────────────────┐

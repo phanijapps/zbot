@@ -293,6 +293,39 @@ export interface ToolSettingsResponse {
   error?: string;
 }
 
+/** Log settings for daemon file logging */
+export interface LogSettings {
+  /** Enable file logging */
+  enabled: boolean;
+  /** Custom log directory (null = default {data_dir}/logs) */
+  directory: string | null;
+  /** Log level: trace, debug, info, warn, error */
+  level: "trace" | "debug" | "info" | "warn" | "error";
+  /** Rotation strategy: daily, hourly, minutely, never */
+  rotation: "daily" | "hourly" | "minutely" | "never";
+  /** Maximum log files to keep (0 = unlimited) */
+  maxFiles: number;
+  /** Suppress stdout output (only log to file) */
+  suppressStdout: boolean;
+}
+
+/** Response from log settings API (includes restart warning) */
+export interface LogSettingsResponse {
+  success: boolean;
+  data?: LogSettings & { restartRequired: boolean };
+  error?: string;
+}
+
+/** Request to update log settings */
+export interface UpdateLogSettingsRequest {
+  enabled?: boolean;
+  directory?: string | null;
+  level?: "trace" | "debug" | "info" | "warn" | "error";
+  rotation?: "daily" | "hourly" | "minutely" | "never";
+  maxFiles?: number;
+  suppressStdout?: boolean;
+}
+
 // ============================================================================
 // Event Types
 // ============================================================================
@@ -383,12 +416,12 @@ export type DelegationType = "root" | "sequential" | "parallel";
 
 /** Session - top-level work container (V2 API) */
 /** Trigger source for a session */
-export type TriggerSource = "web" | "cli" | "cron" | "api" | "plugin";
+export type TriggerSource = "web" | "cli" | "cron" | "api" | "connector";
 
 export interface Session {
   id: string;
   status: SessionStateStatus;
-  /** Trigger source (web, cli, cron, api, plugin) */
+  /** Trigger source (web, cli, cron, api, connector) */
   source: TriggerSource;
   root_agent_id: string;
   title?: string;
@@ -420,7 +453,7 @@ export interface AgentExecution {
 export interface SessionWithExecutions {
   id: string;
   status: SessionStateStatus;
-  /** Trigger source (web, cli, cron, api, plugin) */
+  /** Trigger source (web, cli, cron, api, connector) */
   source: TriggerSource;
   root_agent_id: string;
   title?: string;
@@ -467,7 +500,7 @@ export interface DashboardStats {
   executions_cancelled: number;
   today_sessions: number;
   today_tokens: number;
-  /** Sessions count by trigger source (e.g., { web: 5, cron: 2 }) */
+  /** Sessions count by trigger source (e.g., { web: 5, connector: 2 }) */
   sessions_by_source: Record<TriggerSource, number>;
 }
 
@@ -599,89 +632,28 @@ export interface SubscriptionOptions {
 }
 
 // ============================================================================
-// Connector Types
+// Bridge Worker Types
 // ============================================================================
 
-/** Transport configuration for a connector */
-export type ConnectorTransport =
-  | {
-      type: "http";
-      callback_url: string;
-      method: string;
-      headers: Record<string, string>;
-      timeout_ms?: number;
-    }
-  | {
-      type: "cli";
-      command: string;
-      args: string[];
-      env: Record<string, string>;
-    }
-  | {
-      type: "grpc";
-      endpoint: string;
-      service: string;
-      method: string;
-    }
-  | {
-      type: "websocket";
-      url: string;
-    }
-  | {
-      type: "ipc";
-      socket_path: string;
-    };
-
-/** Capability that a connector provides */
-export interface ConnectorCapability {
+/** Capability declared by a bridge worker */
+export interface BridgeWorkerCapability {
   name: string;
   description?: string;
   schema?: Record<string, unknown>;
 }
 
-/** Metadata about a connector */
-export interface ConnectorMetadata {
-  capabilities: ConnectorCapability[];
-  contacts?: unknown[];
-  additional_info?: Record<string, unknown>;
-}
-
-/** Full connector configuration */
-export interface ConnectorResponse {
-  id: string;
+/** Resource declared by a bridge worker */
+export interface BridgeWorkerResource {
   name: string;
-  transport: ConnectorTransport;
-  metadata: ConnectorMetadata;
-  enabled: boolean;
-  outbound_enabled: boolean;
-  created_at?: string;
-  updated_at?: string;
+  description?: string;
 }
 
-/** Request to create a new connector */
-export interface CreateConnectorRequest {
-  id: string;
-  name: string;
-  transport: ConnectorTransport;
-  metadata?: ConnectorMetadata;
-  enabled?: boolean;
-  outbound_enabled?: boolean;
-}
-
-/** Request to update a connector */
-export interface UpdateConnectorRequest {
-  name?: string;
-  transport?: ConnectorTransport;
-  metadata?: ConnectorMetadata;
-  enabled?: boolean;
-  outbound_enabled?: boolean;
-}
-
-/** Result of testing a connector */
-export interface ConnectorTestResult {
-  success: boolean;
-  message: string;
-  latency_ms?: number;
+/** Connected bridge worker (read-only, from GET /api/bridge/workers) */
+export interface BridgeWorker {
+  adapter_id: string;
+  capabilities: BridgeWorkerCapability[];
+  resources: BridgeWorkerResource[];
+  connected_at: string;
 }
 
 // ============================================================================

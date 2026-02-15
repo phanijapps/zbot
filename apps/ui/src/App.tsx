@@ -26,8 +26,10 @@ import {
   LayoutDashboard,
   Plug,
   Calendar,
+  FileText,
+  AlertTriangle,
 } from "lucide-react";
-import { initializeTransport, getTransport, type ToolSettings } from "@/services/transport";
+import { initializeTransport, getTransport, type ToolSettings, type LogSettings, type UpdateLogSettingsRequest } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
@@ -234,7 +236,7 @@ const navGroups: NavGroup[] = [
   {
     label: "Connect",
     items: [
-      { to: "/connectors", label: "Connectors", icon: Plug },
+      { to: "/connectors", label: "Workers", icon: Plug },
       { to: "/hooks", label: "Schedules", icon: Calendar },
       { to: "/providers", label: "Providers", icon: Cable },
       { to: "/mcps", label: "MCPs", icon: Server },
@@ -336,8 +338,16 @@ function WebSettingsPanel() {
   const [toolsError, setToolsError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
+  // Log settings state
+  const [logSettings, setLogSettings] = useState<LogSettings | null>(null);
+  const [isLoadingLogs, setIsLoadingLogs] = useState(true);
+  const [isSavingLogs, setIsSavingLogs] = useState(false);
+  const [logsError, setLogsError] = useState<string | null>(null);
+  const [logsOpen, setLogsOpen] = useState(false);
+
   useEffect(() => {
     loadToolSettings();
+    loadLogSettings();
   }, []);
 
   const loadToolSettings = async () => {
@@ -355,6 +365,24 @@ function WebSettingsPanel() {
       setToolsError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setIsLoadingTools(false);
+    }
+  };
+
+  const loadLogSettings = async () => {
+    setIsLoadingLogs(true);
+    setLogsError(null);
+    try {
+      const transport = await getTransport();
+      const result = await transport.getLogSettings();
+      if (result.success && result.data) {
+        setLogSettings(result.data);
+      } else {
+        setLogsError(result.error || "Failed to load log settings");
+      }
+    } catch (err) {
+      setLogsError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setIsLoadingLogs(false);
     }
   };
 
@@ -377,6 +405,28 @@ function WebSettingsPanel() {
       setToolSettings(toolSettings);
     } finally {
       setIsSavingTools(false);
+    }
+  };
+
+  const handleLogSettingChange = async (updates: Partial<UpdateLogSettingsRequest>) => {
+    if (!logSettings) return;
+
+    const newSettings = { ...logSettings, ...updates };
+    setLogSettings(newSettings);
+    setIsSavingLogs(true);
+
+    try {
+      const transport = await getTransport();
+      const result = await transport.updateLogSettings(updates);
+      if (!result.success) {
+        setLogsError(result.error || "Failed to save log settings");
+        setLogSettings(logSettings);
+      }
+    } catch (err) {
+      setLogsError(err instanceof Error ? err.message : "Unknown error");
+      setLogSettings(logSettings);
+    } finally {
+      setIsSavingLogs(false);
     }
   };
 
@@ -470,6 +520,197 @@ function WebSettingsPanel() {
             <div className="badge font-mono" style={{ padding: 'var(--spacing-3)' }}>
               ~/Documents/agentzero/
             </div>
+          </div>
+
+          {/* Log Settings */}
+          <div className="card card__padding--lg">
+            <button
+              onClick={() => setLogsOpen(!logsOpen)}
+              className="w-full flex items-center justify-between"
+              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+            >
+              <div className="flex items-center gap-3">
+                <div className="card__icon card__icon--primary">
+                  <FileText style={{ width: 18, height: 18 }} />
+                </div>
+                <div style={{ textAlign: 'left' }}>
+                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--foreground)' }}>Log Settings</h2>
+                  <p className="page-subtitle">File logging and rotation</p>
+                </div>
+              </div>
+              {logsOpen ? (
+                <ChevronDown style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+              ) : (
+                <ChevronRight style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+              )}
+            </button>
+
+            {logsOpen && (
+              <div style={{ marginTop: 'var(--spacing-4)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border)' }}>
+                {logsError && (
+                  <div className="badge" style={{
+                    padding: 'var(--spacing-3)',
+                    marginBottom: 'var(--spacing-4)',
+                    backgroundColor: 'var(--destructive-muted)',
+                    color: 'var(--destructive)'
+                  }}>
+                    {logsError}
+                  </div>
+                )}
+
+                {/* Restart warning */}
+                <div className="badge" style={{
+                  padding: 'var(--spacing-3)',
+                  marginBottom: 'var(--spacing-4)',
+                  backgroundColor: 'var(--warning-muted)',
+                  color: 'var(--warning)'
+                }}>
+                  <AlertTriangle style={{ width: 14, height: 14, marginRight: 'var(--spacing-2)' }} />
+                  Changes require daemon restart to take effect
+                </div>
+
+                {isLoadingLogs ? (
+                  <div className="flex items-center justify-center" style={{ padding: 'var(--spacing-6)' }}>
+                    <Loader2 className="loading-spinner__icon" style={{ width: 24, height: 24 }} />
+                  </div>
+                ) : logSettings ? (
+                  <div className="flex flex-col gap-4">
+                    {/* Enable file logging */}
+                    <label
+                      className="flex items-center gap-3 cursor-pointer"
+                      style={{
+                        padding: 'var(--spacing-3)',
+                        backgroundColor: logSettings.enabled ? 'var(--primary-muted)' : 'var(--muted)',
+                        borderRadius: 'var(--radius-md)',
+                        opacity: isSavingLogs ? 0.7 : 1,
+                        border: logSettings.enabled ? '1px solid var(--primary)' : '1px solid transparent',
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={logSettings.enabled}
+                        onChange={() => handleLogSettingChange({ enabled: !logSettings.enabled })}
+                        disabled={isSavingLogs}
+                        style={{
+                          width: 16,
+                          height: 16,
+                          accentColor: 'var(--primary)',
+                          cursor: isSavingLogs ? 'not-allowed' : 'pointer',
+                        }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
+                          Enable File Logging
+                        </div>
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                          Write logs to files in addition to stdout
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Log level */}
+                    <div>
+                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
+                        Log Level
+                      </label>
+                      <select
+                        value={logSettings.level}
+                        onChange={(e) => handleLogSettingChange({ level: e.target.value as LogSettings['level'] })}
+                        disabled={isSavingLogs}
+                        className="form-select"
+                        style={{ width: '100%' }}
+                      >
+                        <option value="trace">Trace (most verbose)</option>
+                        <option value="debug">Debug</option>
+                        <option value="info">Info (default)</option>
+                        <option value="warn">Warn</option>
+                        <option value="error">Error (least verbose)</option>
+                      </select>
+                    </div>
+
+                    {/* Rotation strategy */}
+                    <div>
+                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
+                        Rotation
+                      </label>
+                      <select
+                        value={logSettings.rotation}
+                        onChange={(e) => handleLogSettingChange({ rotation: e.target.value as LogSettings['rotation'] })}
+                        disabled={isSavingLogs}
+                        className="form-select"
+                        style={{ width: '100%' }}
+                      >
+                        <option value="daily">Daily (default)</option>
+                        <option value="hourly">Hourly</option>
+                        <option value="minutely">Minutely (testing)</option>
+                        <option value="never">Never</option>
+                      </select>
+                    </div>
+
+                    {/* Max files */}
+                    <div>
+                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
+                        Max Files to Keep
+                      </label>
+                      <input
+                        type="number"
+                        value={logSettings.maxFiles}
+                        onChange={(e) => handleLogSettingChange({ maxFiles: parseInt(e.target.value, 10) || 0 })}
+                        disabled={isSavingLogs}
+                        className="form-input"
+                        style={{ width: '100%' }}
+                        min={0}
+                      />
+                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)', marginTop: 'var(--spacing-1)' }}>
+                        Set to 0 for unlimited retention
+                      </p>
+                    </div>
+
+                    {/* Suppress stdout */}
+                    <label
+                      className="flex items-center gap-3 cursor-pointer"
+                      style={{
+                        padding: 'var(--spacing-3)',
+                        backgroundColor: 'var(--muted)',
+                        borderRadius: 'var(--radius-md)',
+                        opacity: isSavingLogs ? 0.7 : 1,
+                      }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={logSettings.suppressStdout}
+                        onChange={() => handleLogSettingChange({ suppressStdout: !logSettings.suppressStdout })}
+                        disabled={isSavingLogs}
+                        style={{
+                          width: 16,
+                          height: 16,
+                          accentColor: 'var(--primary)',
+                          cursor: isSavingLogs ? 'not-allowed' : 'pointer',
+                        }}
+                      />
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
+                          Suppress Stdout
+                        </div>
+                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                          Only log to file (useful for daemon mode)
+                        </div>
+                      </div>
+                    </label>
+
+                    {/* Log directory info */}
+                    {logSettings.enabled && (
+                      <div style={{ padding: 'var(--spacing-3)', backgroundColor: 'var(--muted)', borderRadius: 'var(--radius-md)' }}>
+                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>Log directory:</span>
+                        <code className="font-mono" style={{ fontSize: 'var(--text-xs)', display: 'block', marginTop: 'var(--spacing-1)' }}>
+                          {logSettings.directory || '~/Documents/agentzero/logs/'}
+                        </code>
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </div>
+            )}
           </div>
 
           {/* Advanced Options - Tool Settings */}

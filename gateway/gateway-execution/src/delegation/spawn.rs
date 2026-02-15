@@ -7,12 +7,11 @@ use super::context::{DelegationContext, DelegationRequest};
 use super::registry::DelegationRegistry;
 use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
-use gateway_services::{AgentService, McpService, ProviderService, SkillService};
+use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
 
@@ -46,7 +45,7 @@ pub async fn spawn_delegated_agent(
     provider_service: Arc<ProviderService>,
     mcp_service: Arc<McpService>,
     skill_service: Arc<SkillService>,
-    config_dir: PathBuf,
+    paths: SharedVaultPaths,
     conversation_repo: Arc<ConversationRepository>,
     handles: Arc<RwLock<HashMap<String, ExecutionHandle>>>,
     delegation_registry: Arc<DelegationRegistry>,
@@ -126,7 +125,7 @@ pub async fn spawn_delegated_agent(
     .await;
 
     // Load agent and provider using AgentLoader
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service, config_dir.clone());
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
     let (agent, provider) = match agent_loader.load(&request.child_agent_id).await {
         Ok(result) => result,
         Err(e) => {
@@ -142,7 +141,7 @@ pub async fn spawn_delegated_agent(
     let available_skills = collect_skills_summary(&skill_service).await;
 
     // Get tool settings
-    let settings_service = gateway_services::SettingsService::new(config_dir.clone());
+    let settings_service = gateway_services::SettingsService::new(paths.clone());
     let tool_settings = settings_service.get_tool_settings().unwrap_or_default();
 
     // Look up active ward from parent session
@@ -153,7 +152,7 @@ pub async fn spawn_delegated_agent(
         .and_then(|s| s.ward_id);
 
     // Build executor using ExecutorBuilder
-    let builder = ExecutorBuilder::new(config_dir.clone(), tool_settings)
+    let builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
     let executor = match builder
         .build(
@@ -427,6 +426,9 @@ async fn handle_execution_success(
         conv_id,
         Some(response.to_string()),
         None,
+        None,
+        None, // No thread_id for delegations (internal subagent calls)
+        None, // No bridge dispatch for delegations
         None,
     )
     .await;

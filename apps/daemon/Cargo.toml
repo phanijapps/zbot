@@ -17,6 +17,7 @@ categories = ["command-line-utilities"]
 [dependencies]
 # Internal crates
 gateway = { path = "../../gateway" }
+gateway-services = { path = "../../gateway/gateway-services" }
 zero-app = { path = "../../framework/zero-app" }
 
 # Async runtime
@@ -24,6 +25,7 @@ tokio = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 
 # Error handling

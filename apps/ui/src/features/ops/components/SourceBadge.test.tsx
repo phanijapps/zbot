@@ -9,7 +9,7 @@ import { SourceBadge, SOURCE_CONFIG } from './SourceBadge';
 import type { TriggerSource } from '@/services/transport/types';
 
 // All valid trigger sources
-const ALL_SOURCES: TriggerSource[] = ['web', 'cli', 'cron', 'api', 'plugin'];
+const ALL_SOURCES: TriggerSource[] = ['web', 'cli', 'cron', 'api', 'connector'];
 
 describe('SourceBadge', () => {
   // ==================== Rendering Tests ====================
@@ -43,8 +43,8 @@ describe('SourceBadge', () => {
       render(<SourceBadge source="api" />);
       expect(screen.getByText('API')).toBeInTheDocument();
 
-      render(<SourceBadge source="plugin" />);
-      expect(screen.getByText('Plugin')).toBeInTheDocument();
+      render(<SourceBadge source="connector" />);
+      expect(screen.getByText('Connector')).toBeInTheDocument();
     });
   });
 
@@ -145,9 +145,9 @@ describe('SourceBadge', () => {
     });
 
     it('renders empty className correctly', () => {
-      render(<SourceBadge source="plugin" className="" />);
+      render(<SourceBadge source="connector" className="" />);
 
-      const badge = screen.getByTestId('source-badge-plugin');
+      const badge = screen.getByTestId('source-badge-connector');
       expect(badge).toHaveClass('badge');
     });
   });

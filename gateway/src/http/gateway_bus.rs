@@ -1,7 +1,7 @@
 //! Gateway Bus HTTP endpoints.
 //!
-//! Provides HTTP endpoints for foreign plugins (Python, JavaScript, Go, etc.)
-//! to submit sessions to the gateway.
+//! Provides HTTP endpoints for external connectors to submit sessions
+//! to the gateway.
 //!
 //! # Endpoints
 //!
@@ -268,7 +268,7 @@ mod tests {
         let request: SessionRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.agent_id, "root");
         assert_eq!(request.message, "Hello!");
-        assert_eq!(request.source, TriggerSource::Plugin);
+        assert_eq!(request.source, TriggerSource::Connector);
         assert_eq!(request.external_ref, Some("test-123".to_string()));
     }
 

@@ -56,7 +56,10 @@
 │  ~/Documents/agentzero/                                                  │
 │  ├── conversations.db          # SQLite: conversations, messages,       │
 │  │                              #   memory_facts, embedding_cache       │
+│  ├── settings.json             # Application settings (tools, logs)     │
 │  ├── INSTRUCTIONS.md           # Custom system prompt (auto-created)    │
+│  ├── logs/                     # Daemon log files (when enabled)        │
+│  │   └── zerod.YYYY-MM-DD.log  #   Rolling log files                    │
 │  ├── agents/{name}/            # Agent configurations                   │
 │  │   ├── config.yaml           #   Model, provider, temperature         │
 │  │   └── AGENTS.md             #   System instructions                  │
@@ -94,6 +97,96 @@
 | Database | SQLite (rusqlite + r2d2 pool) | Conversations, memory facts, embeddings (WAL mode) |
 | Embeddings | fastembed (local ONNX) | Default: all-MiniLM-L6-v2 (384d), zero cost |
 | Serialization | serde + serde_json | JSON handling |
+| Logging | tracing + tracing-subscriber + tracing-appender | Structured logging with file rotation |
+
+## Logging Configuration
+
+AgentZero supports configurable file logging with automatic rotation and retention management. Logging can be configured via `settings.json` or CLI arguments.
+
+### Configuration Sources
+
+| Source | Priority | Persistence |
+|--------|----------|-------------|
+| CLI arguments | Highest | Session only |
+| `settings.json` | Medium | Persistent |
+| Defaults | Lowest | N/A |
+
+### LogSettings Structure
+
+```json
+{
+  "logs": {
+    "enabled": false,
+    "directory": null,
+    "level": "info",
+    "rotation": "daily",
+    "maxFiles": 7,
+    "suppressStdout": false
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Enable file logging |
+| `directory` | string\|null | `{data_dir}/logs` | Custom log directory |
+| `level` | string | `"info"` | Log level: `trace`, `debug`, `info`, `warn`, `error` |
+| `rotation` | string | `"daily"` | Rotation: `daily`, `hourly`, `minutely`, `never` |
+| `maxFiles` | number | `7` | Max rotated files to keep (0 = unlimited) |
+| `suppressStdout` | bool | `false` | Only log to file (daemon mode) |
+
+### CLI Arguments
+
+```bash
+# Enable file logging with custom directory
+zerod --log-dir /var/log/agentzero
+
+# Configure rotation and retention
+zerod --log-dir ./logs --log-rotation hourly --log-max-files 24
+
+# Daemon mode (file only, no stdout)
+zerod --log-dir ./logs --log-no-stdout
+
+# Set log level
+zerod --log-level debug
+```
+
+### Log File Location
+
+| Platform | Default Location |
+|----------|-----------------|
+| Windows | `C:\Users\{user}\Documents\agentzero\logs\` |
+| macOS | `/Users/{user}/Documents/agentzero/logs/` |
+| Linux | `/home/{user}/Documents/agentzero/logs/` |
+
+### Log File Naming
+
+```
+{data_dir}/logs/
+├── zerod.2024-02-14.log      # Current (daily rotation)
+├── zerod.2024-02-13.log      # Rotated yesterday
+├── zerod.2024-02-12.log      # Rotated 2 days ago
+└── ...                        # Older logs (deleted when > maxFiles)
+```
+
+### HTTP API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/settings/logs` | Get current log settings |
+| PUT | `/api/settings/logs` | Update log settings (requires restart) |
+
+**Note:** Changes to log settings via the API require a daemon restart to take effect.
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-services/src/logging.rs` | `LogSettings` struct with validation |
+| `gateway/gateway-services/src/settings.rs` | `AppSettings` with `logs` field, CRUD methods |
+| `gateway/src/http/settings.rs` | HTTP endpoints for log settings |
+| `apps/daemon/src/main.rs` | Logging initialization with settings.json + CLI merge |
+| `apps/ui/src/App.tsx` | Web UI settings panel with log configuration |
 
 ## Crate Structure
 
@@ -493,6 +586,11 @@ User Message
 | GET | `/api/logs/sessions` | List execution sessions |
 | GET | `/api/logs/sessions/:id` | Get session with logs |
 | DELETE | `/api/logs/sessions/:id` | Delete session |
+| **Settings** | | |
+| GET | `/api/settings/tools` | Get tool settings |
+| PUT | `/api/settings/tools` | Update tool settings |
+| GET | `/api/settings/logs` | Get log settings |
+| PUT | `/api/settings/logs` | Update log settings (requires restart) |
 | **Operations Dashboard** | | |
 | GET | `/api/executions/stats/counts` | Dashboard statistics |
 | GET | `/api/executions/v2/sessions/full` | Sessions with executions |
@@ -974,4 +1072,35 @@ The `respond_to` field controls where agent responses are delivered:
 - **Empty/null**: Response goes to web UI only (default)
 - **Specified**: Response dispatched to listed connectors
 - **Original source NOT automatically included** (explicit routing)
+
+## Runtime Memory Profile
+
+Typical daemon (`zerod`) memory usage: **~150 MB** at idle after first request.
+
+### Breakdown
+
+| Component | Approx. Size | Source |
+|-----------|-------------|--------|
+| **fastembed ONNX model** | ~100 MB | `AllMiniLmL6V2` model loaded at startup for local embeddings. Held in `EmbeddingClient` inside `AppState`. |
+| **SQLite connection pool** | ~32–64 MB | r2d2 pool with `max_size(8)` connections, each configured with `PRAGMA cache_size = -8000` (8 MB per connection). |
+| **Service caches** | ~5–10 MB | `AgentCache` (RwLock), `TemplateCache`, `ConnectorRegistry`, `BridgeRegistry` — all in-memory hashmaps. |
+| **Tokio runtime + stacks** | ~2–5 MB | Multi-threaded runtime, green thread stacks, channel buffers. |
+| **Base process** | ~5–10 MB | Executable code, static data, Rust allocator overhead. |
+
+### Key Configuration Points
+
+| Setting | Value | File | Impact |
+|---------|-------|------|--------|
+| SQLite `cache_size` | `-8000` (8 MB) | `gateway/gateway-database/src/pool.rs` | Per-connection page cache. Multiply by pool size. |
+| Pool `max_size` | `8` | `gateway/gateway-database/src/pool.rs` | Number of SQLite connections kept open. |
+| Embedding model | `AllMiniLmL6V2` | `runtime/agent-runtime/src/llm/embedding.rs` | ~100 MB ONNX model. Switch to provider-based embeddings (`EmbeddingConfig::Provider`) to eliminate. |
+| BatchWriter flush | `100ms` | `gateway/gateway-database/src/batch_writer.rs` | Batches inserts; small buffer (~KB). |
+| BridgeRegistry | Unbounded `HashMap` | `gateway/gateway-bridge/src/registry.rs` | Grows with connected workers; negligible at typical scale. |
+
+### Optimization Levers
+
+- **Disable local embeddings**: Set `EmbeddingConfig::Provider` to offload to an API — saves ~100 MB
+- **Reduce pool size**: Lower `max_size` to 4 — saves ~32 MB (trades throughput under load)
+- **Reduce cache_size**: Set `PRAGMA cache_size = -4000` — saves ~4 MB per connection
+- **Lazy model loading**: Defer fastembed init until first `recall`/`save_fact` — saves startup RAM if memory features unused
 

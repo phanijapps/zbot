@@ -88,6 +88,20 @@ impl HookContext {
             source_id,
         )
     }
+
+    /// Create a connector hook context.
+    pub fn connector(
+        connector_id: impl Into<String>,
+        source_id: impl Into<String>,
+    ) -> Self {
+        let cid = connector_id.into();
+        Self::new(
+            HookType::Connector {
+                connector_id: cid.clone(),
+            },
+            source_id,
+        )
+    }
 }
 
 /// Type of hook that triggered the agent.
@@ -140,6 +154,13 @@ pub enum HookType {
         /// Webhook endpoint identifier.
         endpoint_id: String,
     },
+
+    /// External connector (HTTP webhook).
+    #[serde(alias = "plugin")]
+    Connector {
+        /// Connector identifier.
+        connector_id: String,
+    },
 }
 
 impl HookType {
@@ -154,6 +175,7 @@ impl HookType {
             HookType::Signal { .. } => "signal",
             HookType::Email { .. } => "email",
             HookType::Webhook { .. } => "webhook",
+            HookType::Connector { .. } => "connector",
         }
     }
 
@@ -191,6 +213,9 @@ impl HookType {
             "webhook" => Some(HookType::Webhook {
                 endpoint_id: hook_id.to_string(),
             }),
+            "connector" | "plugin" => Some(HookType::Connector {
+                connector_id: hook_id.to_string(),
+            }),
             _ => None,
         }
     }
@@ -206,6 +231,7 @@ impl HookType {
             HookType::Signal { .. } => true,
             HookType::Email { .. } => true,
             HookType::Webhook { .. } => true,
+            HookType::Connector { .. } => true,
         }
     }
 }
