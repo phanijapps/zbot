@@ -62,6 +62,10 @@ import type {
   CreateCronJobRequest,
   UpdateCronJobRequest,
   CronTriggerResult,
+  // Memory types
+  MemoryFact,
+  MemoryFilter,
+  MemoryListResponse,
 } from "./types";
 
 // ============================================================================
@@ -1267,6 +1271,68 @@ export class HttpTransport implements Transport {
 
   async disableCronJob(id: string): Promise<TransportResult<CronJobResponse>> {
     return this.post<CronJobResponse>(`/api/cron/${encodeURIComponent(id)}/disable`, {});
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Memory Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listAllMemory(
+    filter?: MemoryFilter
+  ): Promise<TransportResult<MemoryListResponse>> {
+    const params = new URLSearchParams();
+    if (filter?.agent_id) params.set("agent_id", filter.agent_id);
+    if (filter?.category) params.set("category", filter.category);
+    if (filter?.scope) params.set("scope", filter.scope);
+    if (filter?.limit) params.set("limit", filter.limit.toString());
+    if (filter?.offset) params.set("offset", filter.offset.toString());
+
+    const queryString = params.toString();
+    const path = queryString ? `/api/memory?${queryString}` : "/api/memory";
+
+    return this.get<MemoryListResponse>(path);
+  }
+
+  async listMemory(
+    agentId: string,
+    filter?: MemoryFilter
+  ): Promise<TransportResult<MemoryListResponse>> {
+    const params = new URLSearchParams();
+    if (filter?.category) params.set("category", filter.category);
+    if (filter?.scope) params.set("scope", filter.scope);
+    if (filter?.limit) params.set("limit", filter.limit.toString());
+    if (filter?.offset) params.set("offset", filter.offset.toString());
+
+    const queryString = params.toString();
+    const path = queryString
+      ? `/api/memory/${encodeURIComponent(agentId)}?${queryString}`
+      : `/api/memory/${encodeURIComponent(agentId)}`;
+
+    return this.get<MemoryListResponse>(path);
+  }
+
+  async searchMemory(
+    agentId: string,
+    query: string,
+    filter?: MemoryFilter
+  ): Promise<TransportResult<MemoryListResponse>> {
+    const params = new URLSearchParams({ q: query });
+    if (filter?.category) params.set("category", filter.category);
+    if (filter?.limit) params.set("limit", filter.limit.toString());
+
+    return this.get<MemoryListResponse>(
+      `/api/memory/${encodeURIComponent(agentId)}/search?${params.toString()}`
+    );
+  }
+
+  async getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>> {
+    return this.get<MemoryFact>(
+      `/api/memory/${encodeURIComponent(agentId)}/facts/${encodeURIComponent(factId)}`
+    );
+  }
+
+  async deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>> {
+    return this.delete(`/api/memory/${encodeURIComponent(agentId)}/facts/${encodeURIComponent(factId)}`);
   }
 
   // ─────────────────────────────────────────────────────────────────────────

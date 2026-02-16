@@ -10,6 +10,7 @@ mod cron;
 mod events;
 mod gateway_bus;
 mod health;
+mod memory;
 mod mcps;
 mod openapi;
 mod providers;
@@ -131,6 +132,12 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/tools", put(settings::update_tool_settings))
         .route("/api/settings/logs", get(settings::get_log_settings))
         .route("/api/settings/logs", put(settings::update_log_settings))
+        // Memory endpoints
+        .route("/api/memory", get(memory::list_all_memory_facts))
+        .route("/api/memory/:agent_id", get(memory::list_memory_facts))
+        .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
+        .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
+        .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)

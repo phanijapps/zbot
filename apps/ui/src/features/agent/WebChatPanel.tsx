@@ -699,7 +699,9 @@ export function WebChatPanel() {
           <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
             <MessageSquare className="w-5 h-5 text-white" />
           </div>
-          <h1 className="text-lg font-semibold text-[var(--foreground)]">Chat</h1>
+          <h1 className="text-lg font-semibold text-[var(--foreground)]">
+            Chat
+          </h1>
         </div>
         <div className="flex items-center gap-2">
           {(() => {
@@ -744,7 +746,7 @@ export function WebChatPanel() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-6">
-        {isLoadingHistory ? (
+            {isLoadingHistory ? (
           <div className="flex items-center justify-center h-full">
             <div className="text-center">
               <Loader2 className="w-8 h-8 text-[var(--primary)] animate-spin mx-auto mb-4" />

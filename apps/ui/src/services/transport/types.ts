@@ -709,3 +709,50 @@ export interface CronTriggerResult {
   execution_id?: string;
   message: string;
 }
+
+// ============================================================================
+// Memory Types
+// ============================================================================
+
+/** Memory fact scope - determines visibility of the fact */
+export type MemoryScope = "agent" | "shared" | "ward";
+
+/** Memory fact category - type of information stored */
+export type MemoryCategory =
+  | "preference"
+  | "decision"
+  | "pattern"
+  | "entity"
+  | "instruction"
+  | "correction";
+
+/** A memory fact stored in the agent's memory system */
+export interface MemoryFact {
+  id: string;
+  agent_id: string;
+  scope: MemoryScope;
+  category: MemoryCategory;
+  key: string;
+  content: string;
+  confidence: number;
+  mention_count: number;
+  source_summary?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Filter options for listing memory facts */
+export interface MemoryFilter {
+  /** Optional agent filter - when provided, only that agent's memories are returned */
+  agent_id?: string;
+  category?: MemoryCategory;
+  scope?: MemoryScope;
+  limit?: number;
+  offset?: number;
+}
+
+/** Response for memory list operations */
+export interface MemoryListResponse {
+  facts: MemoryFact[];
+  total: number;
+}

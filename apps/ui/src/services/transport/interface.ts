@@ -53,6 +53,10 @@ import type {
   CreateCronJobRequest,
   UpdateCronJobRequest,
   CronTriggerResult,
+  // Memory types
+  MemoryFact,
+  MemoryFilter,
+  MemoryListResponse,
 } from "./types";
 
 // ============================================================================
@@ -341,4 +345,23 @@ export interface Transport {
 
   /** Disable a cron job */
   disableCronJob(id: string): Promise<TransportResult<CronJobResponse>>;
+
+  // =========================================================================
+  // Memory Operations
+  // =========================================================================
+
+  /** List ALL memory facts across all agents (with optional filter) */
+  listAllMemory(filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
+
+  /** List memory facts for an agent */
+  listMemory(agentId: string, filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
+
+  /** Search memory facts for an agent */
+  searchMemory(agentId: string, query: string, filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
+
+  /** Get a single memory fact */
+  getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>>;
+
+  /** Delete a memory fact */
+  deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>>;
 }
