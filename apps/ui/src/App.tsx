@@ -28,6 +28,7 @@ import {
   Calendar,
   FileText,
   AlertTriangle,
+  Brain,
 } from "lucide-react";
 import { initializeTransport, getTransport, type ToolSettings, type LogSettings, type UpdateLogSettingsRequest } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
@@ -39,6 +40,7 @@ import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPan
 import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
+import { WebMemoryPanel } from "./features/memory";
 import { ChatSlider } from "./components/ChatSlider";
 
 // ============================================================================
@@ -184,6 +186,7 @@ function App() {
           <Route path="/" element={<WebOpsDashboard />} />
           <Route path="/chat" element={<WebOpsDashboard />} />
           <Route path="/logs" element={<WebLogsPanel />} />
+          <Route path="/memory" element={<WebMemoryPanel />} />
           <Route path="/agents" element={<WebAgentsPanel />} />
           <Route path="/skills" element={<WebSkillsPanel />} />
           <Route path="/hooks" element={<WebCronPanel />} />
@@ -224,6 +227,7 @@ const navGroups: NavGroup[] = [
     items: [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
+      { to: "/memory", label: "Memory", icon: Brain },
     ],
   },
   {

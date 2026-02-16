@@ -72,6 +72,9 @@ pub struct AppState {
     /// Gateway bus for bridge inbound message routing (set during server start).
     pub bridge_bus: Option<Arc<dyn gateway_bus::GatewayBus>>,
 
+    /// Memory repository for accessing agent memory facts.
+    pub memory_repo: Option<Arc<MemoryRepository>>,
+
     /// Cron scheduler for scheduled agent triggers.
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
@@ -132,7 +135,7 @@ impl AppState {
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
 
         // Initialize memory evolution services
-        let memory_repo = Arc::new(MemoryRepository::new(db_manager));
+        let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
 
         let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
             Ok(client) => {
@@ -174,7 +177,7 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
-            Some(memory_repo),
+            Some(memory_repo.clone()),
             Some(distiller),
             Some(memory_recall),
             Some(bridge_registry.clone()),
@@ -211,6 +214,7 @@ impl AppState {
             workspace_cache,
             paths,
             config_dir,
+            memory_repo: Some(memory_repo),
         }
     }
 
@@ -230,6 +234,10 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
+        let memory_repo = Arc::new(MemoryRepository::new(Arc::new(
+            DatabaseManager::new(paths.clone())
+                .expect("Failed to initialize database for memory"),
+        )));
 
         // Create connector registry
         let connector_service = ConnectorService::new(paths.clone());
@@ -256,6 +264,7 @@ impl AppState {
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
+            memory_repo: Some(memory_repo),
         }
     }
 
@@ -274,6 +283,11 @@ impl AppState {
         paths: SharedVaultPaths,
     ) -> Self {
         let config_dir = paths.vault_dir().clone();
+        let db = Arc::new(
+            DatabaseManager::new(paths.clone())
+                .expect("Failed to initialize database"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(db));
         Self {
             agents,
             skills,
@@ -301,6 +315,7 @@ impl AppState {
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
+            memory_repo: Some(memory_repo),
         }
     }
 
