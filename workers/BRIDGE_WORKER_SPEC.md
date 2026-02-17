@@ -222,6 +222,18 @@ Send a user message to trigger an agent execution. This is how external services
 
 The agent's response will be delivered back to this worker via an `outbox_item` push (if the agent uses `respond` with this connector as a target).
 
+#### Session Tracking
+
+When an `inbound` message triggers an agent execution:
+
+| Field | Value | Purpose |
+|-------|-------|---------|
+| `source` | `"connector"` | Sessions are tagged as connector-triggered (displayed with Connector badge in UI) |
+| `connector_id` | `{adapter_id}` | The worker's `adapter_id` is stored for correlation and logging |
+| `thread_id` | From message | Enables multi-turn conversations; same `thread_id` = same session |
+
+The session appears in the AgentZero dashboard under the "Connector" source filter.
+
 ---
 
 ## 4. Server → Worker Messages
@@ -516,6 +528,54 @@ on close:
 | Language | Location | Description |
 |----------|----------|-------------|
 | Node.js | `workers/echo_worker/` | Echo worker with `echo`, `uppercase` capabilities and `status` resource |
+
+---
+
+## 11. Session Lifecycle
+
+When a worker sends an `inbound` message, the following occurs:
+
+### 11.1 Session Creation Flow
+
+```
+Worker                      AgentZero Gateway                    UI Dashboard
+  │                              │                                     │
+  │── inbound ──────────────────►│                                     │
+  │   {text, thread_id, ...}     │                                     │
+  │                              │                                     │
+  │                              │ Create session                      │
+  │                              │ source = "connector"                │
+  │                              │ connector_id = {adapter_id}         │
+  │                              │ thread_id = {thread_id}             │
+  │                              │                                     │
+  │                              │── broadcast session_created ───────►│
+  │                              │                                     │ Display with
+  │                              │                                     │ Connector badge
+  │◄── outbox_item ──────────────│                                     │
+  │   (agent response)           │                                     │
+```
+
+### 11.2 Multi-turn Conversations
+
+If the same `thread_id` is used across multiple `inbound` messages:
+
+1. **First message**: Creates a new session with `thread_id`
+2. **Subsequent messages**: Continues the existing session (same `thread_id`)
+3. **Session context**: Agent retains conversation history within the session
+
+### 11.3 Source Display in UI
+
+Sessions are categorized by their trigger source:
+
+| Source | Badge | Icon | Triggered By |
+|--------|-------|------|--------------|
+| `web` | Web | 🌐 Globe | Web dashboard chat |
+| `cli` | CLI | ⌨️ Terminal | Command line |
+| `cron` | Cron | ⏱️ Timer | Scheduled jobs |
+| `api` | API | ⚡ Zap | Direct API calls |
+| `connector` | Connector | 🔌 Plug | Workers (this spec) |
+
+Workers always create `connector`-source sessions. The dashboard allows filtering by source.
 
 ---
 

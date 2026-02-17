@@ -364,7 +364,7 @@ ROOT SESSION (parent_session_id = NULL)
 │        ▼                                                                │
 │   ┌─────────────────┐                                                   │
 │   │ Create Session  │ ──► sess-{uuid} created in DB                     │
-│   │ (status=running)│     source = web|cli|api|cron|plugin              │
+│   │ (status=running)│     source = web|cli|api|cron|connector           │
 │   └────────┬────────┘                                                   │
 │            │                                                            │
 │            ▼                                                            │
@@ -493,15 +493,43 @@ localStorage.removeItem(WEB_SESSION_ID_KEY);
 
 ### Trigger Sources
 
-Sessions track their origin for analytics and filtering:
+Sessions track their origin for analytics and UI filtering:
 
-| Source | Description |
-|--------|-------------|
-| `web` | Web dashboard (default) |
-| `cli` | Command-line interface |
-| `api` | External API call |
-| `cron` | Scheduled task |
-| `plugin` | Plugin/extension initiated |
+| Source | Value | Auto-complete | Description |
+|--------|-------|---------------|-------------|
+| Web | `web` | No | Interactive web UI sessions (stays open for follow-up) |
+| CLI | `cli` | Yes | Command line invocations |
+| Cron | `cron` | Yes | Scheduled job triggers |
+| API | `api` | Yes | Direct `POST /api/gateway/submit` calls |
+| Connector | `connector` | Yes | External worker inbound messages (also accepts `plugin` alias) |
+
+**Auto-complete**: Sessions from CLI, Cron, API, and Connector sources automatically complete after execution finishes. Web sessions stay open for interactive multi-turn use.
+
+### Invocation Methods
+
+| Method | Endpoint/Message | Source |
+|--------|------------------|--------|
+| Web chat | WebSocket `invoke` | Defaults to `web` |
+| Connector inbound (HTTP) | `POST /api/connectors/:id/inbound` | Server sets `connector` |
+| Connector inbound (WebSocket) | Worker `inbound` message | Server sets `connector` |
+| Gateway submit | `POST /api/gateway/submit` | Caller specifies in payload |
+| Cron trigger | Internal scheduler | Server sets `cron` |
+
+#### POST /api/gateway/submit
+
+For direct API access, include `source` in the request body:
+
+```json
+{
+  "agent_id": "root",
+  "message": "Hello",
+  "source": "api",
+  "conversation_id": "optional-conv-id",
+  "session_id": "optional-existing-session"
+}
+```
+
+The `source` field is optional and defaults to `web`. Valid values: `web`, `cli`, `cron`, `api`, `connector`.
 
 ## Execution Flow
 
@@ -694,7 +722,7 @@ Child sessions (for subagents) link back to their parent.
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,                    -- sess-{uuid}
     status TEXT NOT NULL,                   -- queued|running|completed|crashed|cancelled
-    source TEXT NOT NULL,                   -- web|cli|api|cron|plugin
+    source TEXT NOT NULL,                   -- web|cli|api|cron|connector
     root_agent_id TEXT NOT NULL,
     title TEXT,
     created_at TEXT NOT NULL,
