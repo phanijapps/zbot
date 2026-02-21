@@ -1,6 +1,6 @@
 # Plan: Activate Knowledge Graph
 
-**Status**: In Progress (Phase 1 Complete)
+**Status**: In Progress (Phase 1 & 2 Complete)
 **Priority**: High
 **Goal**: Transform the knowledge graph from write-only storage to an active, queryable system
 
@@ -555,3 +555,22 @@ Phase 4 (UI) ──► Phase 5 (Recall Integration)
 - `EntityWithConnections` struct (entity, outgoing, incoming)
 
 **Tests:** 6 new tests added, all 22 tests passing
+
+### Phase 2: Graph Service Layer ✅ COMPLETE
+
+**Implemented in:** `services/knowledge-graph/src/service.rs`, `services/knowledge-graph/src/types.rs`
+
+**New GraphService methods:**
+- `get_stats(agent_id)` - Get graph statistics (entity/relationship counts, type distributions, most connected entities)
+- `get_entity_with_connections(agent_id, entity_name)` - Get entity with incoming/outgoing connections
+- `search_entities(agent_id, query, limit)` - Fuzzy search entities by name
+- `get_subgraph(agent_id, center_entity_id, max_hops)` - BFS traversal to get subgraph within N hops
+- `get_entity_by_id(agent_id, entity_id)` - Get entity by ID
+- `list_entities(agent_id, entity_type, limit, offset)` - List entities with filters
+- `list_relationships(agent_id, relationship_type, limit, offset)` - List relationships with filters
+
+**New types added:**
+- `GraphStats` struct - Statistics about the knowledge graph
+- `Subgraph` struct - Entities and relationships within N hops
+
+**Tests:** 6 new service tests added, all 28 tests passing
