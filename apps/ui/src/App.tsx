@@ -42,6 +42,7 @@ import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { WebMemoryPanel } from "./features/memory";
 import { ChatSlider } from "./components/ChatSlider";
+import { ThemeToggle } from "./components/ThemeToggle";
 
 // ============================================================================
 // Types
@@ -287,6 +288,7 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
         </div>
 
         <div className="sidebar__footer">
+          <ThemeToggle />
           <div className="connection-status">
             <div className={`connection-status__dot ${
               connectionStatus.connected
