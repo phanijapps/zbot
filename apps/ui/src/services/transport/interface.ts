@@ -57,6 +57,16 @@ import type {
   MemoryFact,
   MemoryFilter,
   MemoryListResponse,
+  // Graph types
+  GraphStatsResponse,
+  GraphEntityListResponse,
+  GraphRelationshipListResponse,
+  GraphEntityFilter,
+  GraphRelationshipFilter,
+  GraphNeighborResponse,
+  GraphSubgraphResponse,
+  GraphNeighborOptions,
+  GraphSubgraphOptions,
 } from "./types";
 
 // ============================================================================
@@ -364,4 +374,44 @@ export interface Transport {
 
   /** Delete a memory fact */
   deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>>;
+
+  // =========================================================================
+  // Knowledge Graph Operations
+  // =========================================================================
+
+  /** Get graph statistics for an agent */
+  getGraphStats(agentId: string): Promise<TransportResult<GraphStatsResponse>>;
+
+  /** List entities for an agent with optional filter */
+  getGraphEntities(
+    agentId: string,
+    filter?: GraphEntityFilter
+  ): Promise<TransportResult<GraphEntityListResponse>>;
+
+  /** List relationships for an agent with optional filter */
+  getGraphRelationships(
+    agentId: string,
+    filter?: GraphRelationshipFilter
+  ): Promise<TransportResult<GraphRelationshipListResponse>>;
+
+  /** Search entities by name */
+  searchGraphEntities(
+    agentId: string,
+    query: string,
+    limit?: number
+  ): Promise<TransportResult<GraphEntityListResponse>>;
+
+  /** Get neighbors of an entity */
+  getEntityNeighbors(
+    agentId: string,
+    entityId: string,
+    options?: GraphNeighborOptions
+  ): Promise<TransportResult<GraphNeighborResponse>>;
+
+  /** Get subgraph around an entity */
+  getEntitySubgraph(
+    agentId: string,
+    entityId: string,
+    options?: GraphSubgraphOptions
+  ): Promise<TransportResult<GraphSubgraphResponse>>;
 }

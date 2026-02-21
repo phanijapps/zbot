@@ -756,3 +756,94 @@ export interface MemoryListResponse {
   facts: MemoryFact[];
   total: number;
 }
+
+// ============================================================================
+// Knowledge Graph Types
+// ============================================================================
+
+/** Graph statistics response */
+export interface GraphStatsResponse {
+  entity_count: number;
+  relationship_count: number;
+  entity_types: Record<string, number>;
+  relationship_types: Record<string, number>;
+  most_connected_entities: Array<[string, number]>;
+}
+
+/** Graph entity */
+export interface GraphEntity {
+  id: string;
+  agent_id: string;
+  entity_type: string;
+  name: string;
+  properties: Record<string, unknown>;
+  mention_count: number;
+}
+
+/** Graph relationship */
+export interface GraphRelationship {
+  id: string;
+  agent_id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relationship_type: string;
+  mention_count: number;
+}
+
+/** Entity list response */
+export interface GraphEntityListResponse {
+  entities: GraphEntity[];
+  total: number;
+}
+
+/** Relationship list response */
+export interface GraphRelationshipListResponse {
+  relationships: GraphRelationship[];
+  total: number;
+}
+
+/** Filter for entity queries */
+export interface GraphEntityFilter {
+  entity_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Filter for relationship queries */
+export interface GraphRelationshipFilter {
+  relationship_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Neighbor entry in neighbor response */
+export interface GraphNeighborEntry {
+  entity: GraphEntity;
+  relationship: GraphRelationship;
+  direction: "incoming" | "outgoing";
+}
+
+/** Neighbor response */
+export interface GraphNeighborResponse {
+  entity_id: string;
+  neighbors: GraphNeighborEntry[];
+}
+
+/** Subgraph response */
+export interface GraphSubgraphResponse {
+  entities: GraphEntity[];
+  relationships: GraphRelationship[];
+  center: string;
+  max_hops: number;
+}
+
+/** Options for neighbor queries */
+export interface GraphNeighborOptions {
+  direction?: "incoming" | "outgoing" | "both";
+  limit?: number;
+}
+
+/** Options for subgraph queries */
+export interface GraphSubgraphOptions {
+  max_hops?: number;
+}

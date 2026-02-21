@@ -1,6 +1,6 @@
 # Plan: Activate Knowledge Graph
 
-**Status**: In Progress (Phase 1, 2 & 3 Complete)
+**Status**: In Progress (Phase 1, 2, 3 & 6 Complete)
 **Priority**: High
 **Goal**: Transform the knowledge graph from write-only storage to an active, queryable system
 
@@ -593,3 +593,28 @@ Phase 4 (UI) ──► Phase 5 (Recall Integration)
 
 **VaultPaths changes:**
 - Added `knowledge_graph_db()` method returning `data/knowledge_graph.db`
+
+### Phase 6: Transport Layer Updates ✅ COMPLETE
+
+**Implemented in:** `apps/ui/src/services/transport/types.ts`, `apps/ui/src/services/transport/interface.ts`, `apps/ui/src/services/transport/http.ts`
+
+**New types (types.ts):**
+- `GraphStatsResponse` - Graph statistics (counts, type distributions, most connected)
+- `GraphEntity` - Entity data structure
+- `GraphRelationship` - Relationship data structure
+- `GraphEntityListResponse` - Entity list with total
+- `GraphRelationshipListResponse` - Relationship list with total
+- `GraphEntityFilter` - Filter options for entity queries
+- `GraphRelationshipFilter` - Filter options for relationship queries
+- `GraphNeighborResponse` - Neighbor query response
+- `GraphSubgraphResponse` - Subgraph response
+- `GraphNeighborOptions` - Options for neighbor queries
+- `GraphSubgraphOptions` - Options for subgraph queries
+
+**New transport methods (interface.ts + http.ts):**
+- `getGraphStats(agentId)` - Get graph statistics
+- `getGraphEntities(agentId, filter)` - List entities with filters
+- `getGraphRelationships(agentId, filter)` - List relationships with filters
+- `searchGraphEntities(agentId, query, limit)` - Search entities by name
+- `getEntityNeighbors(agentId, entityId, options)` - Get 1-hop neighbors
+- `getEntitySubgraph(agentId, entityId, options)` - Get subgraph within N hops

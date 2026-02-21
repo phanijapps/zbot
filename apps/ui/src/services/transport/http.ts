@@ -66,6 +66,16 @@ import type {
   MemoryFact,
   MemoryFilter,
   MemoryListResponse,
+  // Graph types
+  GraphStatsResponse,
+  GraphEntityListResponse,
+  GraphRelationshipListResponse,
+  GraphEntityFilter,
+  GraphRelationshipFilter,
+  GraphNeighborResponse,
+  GraphSubgraphResponse,
+  GraphNeighborOptions,
+  GraphSubgraphOptions,
 } from "./types";
 
 // ============================================================================
@@ -1333,6 +1343,96 @@ export class HttpTransport implements Transport {
 
   async deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>> {
     return this.delete(`/api/memory/${encodeURIComponent(agentId)}/facts/${encodeURIComponent(factId)}`);
+  }
+
+  // =========================================================================
+  // Knowledge Graph Operations
+  // =========================================================================
+
+  async getGraphStats(agentId: string): Promise<TransportResult<GraphStatsResponse>> {
+    return this.get<GraphStatsResponse>(
+      `/api/graph/${encodeURIComponent(agentId)}/stats`
+    );
+  }
+
+  async getGraphEntities(
+    agentId: string,
+    filter?: GraphEntityFilter
+  ): Promise<TransportResult<GraphEntityListResponse>> {
+    const params = new URLSearchParams();
+    if (filter?.entity_type) params.set("entity_type", filter.entity_type);
+    if (filter?.limit) params.set("limit", filter.limit.toString());
+    if (filter?.offset) params.set("offset", filter.offset.toString());
+
+    const queryString = params.toString();
+    const path = queryString
+      ? `/api/graph/${encodeURIComponent(agentId)}/entities?${queryString}`
+      : `/api/graph/${encodeURIComponent(agentId)}/entities`;
+
+    return this.get<GraphEntityListResponse>(path);
+  }
+
+  async getGraphRelationships(
+    agentId: string,
+    filter?: GraphRelationshipFilter
+  ): Promise<TransportResult<GraphRelationshipListResponse>> {
+    const params = new URLSearchParams();
+    if (filter?.relationship_type) params.set("relationship_type", filter.relationship_type);
+    if (filter?.limit) params.set("limit", filter.limit.toString());
+    if (filter?.offset) params.set("offset", filter.offset.toString());
+
+    const queryString = params.toString();
+    const path = queryString
+      ? `/api/graph/${encodeURIComponent(agentId)}/relationships?${queryString}`
+      : `/api/graph/${encodeURIComponent(agentId)}/relationships`;
+
+    return this.get<GraphRelationshipListResponse>(path);
+  }
+
+  async searchGraphEntities(
+    agentId: string,
+    query: string,
+    limit?: number
+  ): Promise<TransportResult<GraphEntityListResponse>> {
+    const params = new URLSearchParams({ q: query });
+    if (limit) params.set("limit", limit.toString());
+
+    return this.get<GraphEntityListResponse>(
+      `/api/graph/${encodeURIComponent(agentId)}/search?${params.toString()}`
+    );
+  }
+
+  async getEntityNeighbors(
+    agentId: string,
+    entityId: string,
+    options?: GraphNeighborOptions
+  ): Promise<TransportResult<GraphNeighborResponse>> {
+    const params = new URLSearchParams();
+    if (options?.direction) params.set("direction", options.direction);
+    if (options?.limit) params.set("limit", options.limit.toString());
+
+    const queryString = params.toString();
+    const path = queryString
+      ? `/api/graph/${encodeURIComponent(agentId)}/entities/${encodeURIComponent(entityId)}/neighbors?${queryString}`
+      : `/api/graph/${encodeURIComponent(agentId)}/entities/${encodeURIComponent(entityId)}/neighbors`;
+
+    return this.get<GraphNeighborResponse>(path);
+  }
+
+  async getEntitySubgraph(
+    agentId: string,
+    entityId: string,
+    options?: GraphSubgraphOptions
+  ): Promise<TransportResult<GraphSubgraphResponse>> {
+    const params = new URLSearchParams();
+    if (options?.max_hops) params.set("max_hops", options.max_hops.toString());
+
+    const queryString = params.toString();
+    const path = queryString
+      ? `/api/graph/${encodeURIComponent(agentId)}/entities/${encodeURIComponent(entityId)}/subgraph?${queryString}`
+      : `/api/graph/${encodeURIComponent(agentId)}/entities/${encodeURIComponent(entityId)}/subgraph`;
+
+    return this.get<GraphSubgraphResponse>(path);
   }
 
   // ─────────────────────────────────────────────────────────────────────────
