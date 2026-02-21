@@ -14,19 +14,40 @@
 //! 2. Run hybrid search (vector + FTS5) against memory_facts
 //! 3. Also fetch all high-confidence facts (>= 0.9) — always relevant
 //! 4. Merge, dedup by key, take top-K
-//! 5. Format as a "Recalled Memory" system message
+//! 5. (Optional) Enrich with knowledge graph context
+//! 6. Format as a "Recalled Memory" system message
 
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
 use gateway_database::{MemoryRepository, ScoredFact};
+use knowledge_graph::{GraphService, EntityWithConnections};
 #[cfg(test)]
 use gateway_database::MemoryFact;
+
+/// Result of a memory recall operation, optionally including graph context.
+#[derive(Debug, Clone)]
+pub struct RecallResult {
+    /// Scored facts from memory search
+    pub facts: Vec<ScoredFact>,
+    /// Graph context for entities mentioned in facts (if graph service available)
+    pub graph_context: Option<GraphContext>,
+    /// Pre-formatted output string
+    pub formatted: String,
+}
+
+/// Graph context gathered from entities mentioned in facts.
+#[derive(Debug, Clone)]
+pub struct GraphContext {
+    /// Entities with their connections
+    pub entities: Vec<EntityWithConnections>,
+}
 
 /// Retrieves relevant memory facts for injection at session start.
 pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     memory_repo: Arc<MemoryRepository>,
+    graph_service: Option<Arc<GraphService>>,
 }
 
 impl MemoryRecall {
@@ -38,7 +59,26 @@ impl MemoryRecall {
         Self {
             embedding_client,
             memory_repo,
+            graph_service: None,
         }
+    }
+
+    /// Create a new memory recall service with graph support.
+    pub fn with_graph(
+        embedding_client: Option<Arc<dyn EmbeddingClient>>,
+        memory_repo: Arc<MemoryRepository>,
+        graph_service: Arc<GraphService>,
+    ) -> Self {
+        Self {
+            embedding_client,
+            memory_repo,
+            graph_service: Some(graph_service),
+        }
+    }
+
+    /// Set the graph service for enriched recall.
+    pub fn set_graph_service(&mut self, service: Arc<GraphService>) {
+        self.graph_service = Some(service);
     }
 
     /// Recall relevant facts for a given agent and user message.
@@ -96,6 +136,43 @@ impl MemoryRecall {
         Ok(results)
     }
 
+    /// Recall relevant facts enriched with knowledge graph context.
+    ///
+    /// This method extends the basic recall with related entities from the
+    /// knowledge graph, providing richer context for the agent.
+    pub async fn recall_with_graph(
+        &self,
+        agent_id: &str,
+        user_message: &str,
+        limit: usize,
+    ) -> Result<RecallResult, String> {
+        // 1. Standard fact search
+        let facts = self.recall(agent_id, user_message, limit).await?;
+
+        // 2. Extract potential entity names from facts
+        let entity_names = extract_entity_names_from_facts(&facts);
+
+        // 3. Get graph context for those entities (if service available)
+        let graph_context = if let Some(ref graph_service) = self.graph_service {
+            if !entity_names.is_empty() {
+                get_graph_context_for_entities(graph_service, agent_id, &entity_names).await?
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // 4. Format combined result
+        let formatted = format_combined_recall(&facts, &graph_context);
+
+        Ok(RecallResult {
+            facts,
+            graph_context,
+            formatted,
+        })
+    }
+
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
@@ -128,6 +205,155 @@ pub fn format_recalled_facts(facts: &[ScoredFact]) -> String {
     }
 
     lines.join("\n")
+}
+
+/// Format facts with optional graph context as a combined system message.
+pub fn format_combined_recall(facts: &[ScoredFact], graph_context: &Option<GraphContext>) -> String {
+    if facts.is_empty() && graph_context.is_none() {
+        return String::new();
+    }
+
+    let mut output = String::new();
+
+    // Facts section
+    if !facts.is_empty() {
+        output.push_str("## Recalled Memory\n");
+        for sf in facts {
+            output.push_str(&format!(
+                "- [{}] {} (confidence: {:.2})\n",
+                sf.fact.category, sf.fact.content, sf.fact.confidence
+            ));
+        }
+    }
+
+    // Graph context section
+    if let Some(ref ctx) = graph_context {
+        if !ctx.entities.is_empty() {
+            if !output.is_empty() {
+                output.push('\n');
+            }
+            output.push_str("## Related Entities\n");
+
+            for entity_conn in &ctx.entities {
+                // Show the entity
+                output.push_str(&format!(
+                    "- **{}** ({})",
+                    entity_conn.entity.name,
+                    entity_conn.entity.entity_type.as_str()
+                ));
+
+                // Show outgoing relationships
+                if !entity_conn.outgoing.is_empty() {
+                    let rels: Vec<String> = entity_conn.outgoing.iter()
+                        .map(|(rel, target)| {
+                            format!("{} → {}", rel.relationship_type.as_str(), target.name)
+                        })
+                        .collect();
+                    output.push_str(&format!(": {}", rels.join(", ")));
+                }
+
+                output.push('\n');
+            }
+        }
+    }
+
+    output
+}
+
+/// Extract potential entity names from fact content.
+///
+/// Uses simple heuristics to identify capitalized words and quoted strings
+/// that might represent entities in the knowledge graph.
+fn extract_entity_names_from_facts(facts: &[ScoredFact]) -> Vec<String> {
+    let mut names = std::collections::HashSet::new();
+
+    for sf in facts {
+        let content = &sf.fact.content;
+
+        // Extract capitalized words (potential proper nouns)
+        for word in content.split_whitespace() {
+            // Clean up the word (remove punctuation)
+            let clean_word = word.trim_matches(|c: char| !c.is_alphanumeric());
+
+            // Check if it starts with uppercase and has more than one character
+            if clean_word.len() > 1 {
+                if let Some(first_char) = clean_word.chars().next() {
+                    if first_char.is_uppercase() {
+                        names.insert(clean_word.to_string());
+                    }
+                }
+            }
+        }
+
+        // Extract quoted strings (often represent entity names)
+        let mut in_quotes = false;
+        let mut current_quote = String::new();
+        let mut quote_char = ' ';
+
+        for ch in content.chars() {
+            if ch == '"' || ch == '\'' {
+                if in_quotes && ch == quote_char {
+                    // End of quoted string
+                    if current_quote.len() > 1 {
+                        names.insert(current_quote.clone());
+                    }
+                    current_quote.clear();
+                    in_quotes = false;
+                } else if !in_quotes {
+                    // Start of quoted string
+                    in_quotes = true;
+                    quote_char = ch;
+                }
+            } else if in_quotes {
+                current_quote.push(ch);
+            }
+        }
+    }
+
+    // Filter out common words that are likely not entities
+    let common_words = [
+        "The", "This", "That", "These", "Those", "What", "Which", "When",
+        "Where", "Why", "How", "If", "Then", "And", "But", "Or", "Not",
+        "User", "Project", "System", "Code", "File", "Data",
+    ];
+
+    names.into_iter()
+        .filter(|name| !common_words.contains(&name.as_str()))
+        .collect()
+}
+
+/// Get graph context for a list of entity names.
+async fn get_graph_context_for_entities(
+    graph_service: &GraphService,
+    agent_id: &str,
+    entity_names: &[String],
+) -> Result<Option<GraphContext>, String> {
+    let mut entities_with_connections = Vec::new();
+
+    for name in entity_names {
+        match graph_service.get_entity_with_connections(agent_id, name).await {
+            Ok(Some(connections)) => {
+                // Only include entities that have connections
+                if !connections.outgoing.is_empty() || !connections.incoming.is_empty() {
+                    entities_with_connections.push(connections);
+                }
+            }
+            Ok(None) => {
+                // Entity not found in graph, skip
+            }
+            Err(e) => {
+                tracing::warn!("Failed to get entity connections for '{}': {}", name, e);
+            }
+        }
+    }
+
+    if entities_with_connections.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(GraphContext {
+            entities: entities_with_connections,
+        }))
+    }
 }
 
 // ============================================================================
@@ -193,5 +419,159 @@ mod tests {
         assert!(formatted.contains("User prefers Rust"));
         assert!(formatted.contains("[decision]"));
         assert!(formatted.contains("SQLite"));
+    }
+
+    #[test]
+    fn test_extract_entity_names_from_facts() {
+        let facts = vec![
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "fact-1".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "preference".to_string(),
+                    key: "tool.preferred".to_string(),
+                    content: "Alice prefers VSCode for development".to_string(),
+                    confidence: 0.95,
+                    mention_count: 3,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 0.85,
+            },
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "fact-2".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "fact".to_string(),
+                    key: "org.info".to_string(),
+                    content: "Bob works at Acme Corporation".to_string(),
+                    confidence: 0.90,
+                    mention_count: 2,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 0.70,
+            },
+        ];
+
+        let names = extract_entity_names_from_facts(&facts);
+
+        // Should extract capitalized words
+        assert!(names.contains(&"Alice".to_string()));
+        assert!(names.contains(&"VSCode".to_string()));
+        assert!(names.contains(&"Bob".to_string()));
+        assert!(names.contains(&"Acme".to_string()));
+        assert!(names.contains(&"Corporation".to_string()));
+
+        // Should filter out common words
+        assert!(!names.contains(&"The".to_string()));
+        assert!(!names.contains(&"This".to_string()));
+    }
+
+    #[test]
+    fn test_extract_entity_names_quoted_strings() {
+        let facts = vec![
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "fact-1".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "info".to_string(),
+                    key: "tool.name".to_string(),
+                    content: "The tool is called 'my_awesome_tool' and it helps".to_string(),
+                    confidence: 0.95,
+                    mention_count: 1,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 0.85,
+            },
+        ];
+
+        let names = extract_entity_names_from_facts(&facts);
+
+        // Should extract quoted strings
+        assert!(names.contains(&"my_awesome_tool".to_string()));
+    }
+
+    #[test]
+    fn test_format_combined_recall_empty() {
+        let result = format_combined_recall(&[], &None);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_combined_recall_facts_only() {
+        let facts = vec![
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "fact-1".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "preference".to_string(),
+                    key: "lang".to_string(),
+                    content: "Prefers Rust".to_string(),
+                    confidence: 0.95,
+                    mention_count: 1,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 0.85,
+            },
+        ];
+
+        let formatted = format_combined_recall(&facts, &None);
+        assert!(formatted.contains("## Recalled Memory"));
+        assert!(formatted.contains("Prefers Rust"));
+        assert!(!formatted.contains("## Related Entities"));
+    }
+
+    #[test]
+    fn test_format_combined_recall_with_empty_graph() {
+        let facts = vec![
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "fact-1".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "preference".to_string(),
+                    key: "lang".to_string(),
+                    content: "Prefers Rust".to_string(),
+                    confidence: 0.95,
+                    mention_count: 1,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 0.85,
+            },
+        ];
+
+        // Empty graph context
+        let graph_ctx = Some(GraphContext { entities: vec![] });
+        let formatted = format_combined_recall(&facts, &graph_ctx);
+        assert!(formatted.contains("## Recalled Memory"));
+        assert!(!formatted.contains("## Related Entities"));
     }
 }

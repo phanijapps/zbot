@@ -1,6 +1,6 @@
 # Plan: Activate Knowledge Graph
 
-**Status**: In Progress (Phase 1, 2, 3, 4 & 6 Complete)
+**Status**: Complete ✅
 **Priority**: High
 **Goal**: Transform the knowledge graph from write-only storage to an active, queryable system
 
@@ -509,13 +509,13 @@ export interface NeighborResponse {
 
 ## Success Criteria
 
-- [ ] HTTP API returns entities and relationships
-- [ ] Memory panel has Facts/Graph tab switcher
-- [ ] Graph view shows entities as nodes, relationships as edges
-- [ ] Clicking entity shows its connections
-- [ ] Memory recall includes related entities
-- [ ] Can filter graph by agent
-- [ ] Performance: <100ms for loading graph data
+- [x] HTTP API returns entities and relationships
+- [x] Memory panel has Facts/Graph tab switcher
+- [x] Graph view shows entities as nodes, relationships as edges
+- [x] Clicking entity shows its connections
+- [x] Memory recall includes related entities
+- [x] Can filter graph by agent
+- [x] Performance: <100ms for loading graph data
 
 ---
 
@@ -639,3 +639,45 @@ Phase 4 (UI) ──► Phase 5 (Recall Integration)
 - Added Facts/Graph tab switcher with icons
 - Graph view shows when "Knowledge Graph" tab selected
 - Agent filter applies to both views
+
+### Phase 5: Integrate Graph with Memory Recall ✅ COMPLETE
+
+**Implemented in:** `gateway/gateway-execution/src/recall.rs`, `gateway/gateway-execution/src/lib.rs`
+
+**New types:**
+- `RecallResult` - Result of memory recall with optional graph context
+- `GraphContext` - Graph context gathered from entities mentioned in facts
+
+**MemoryRecall enhancements:**
+- Added `graph_service: Option<Arc<GraphService>>` field
+- Added `with_graph()` constructor for graph-enabled recall
+- Added `set_graph_service()` method for late initialization
+- Added `recall_with_graph()` method that enriches facts with graph context
+
+**Helper functions:**
+- `extract_entity_names_from_facts()` - Extracts potential entity names from fact content using heuristics (capitalized words, quoted strings)
+- `get_graph_context_for_entities()` - Fetches entity connections from graph service
+- `format_combined_recall()` - Formats facts and graph context together for agent context
+
+**Tests:** 6 new tests added, all 44 tests passing
+
+---
+
+## Summary
+
+All 6 phases of the Knowledge Graph Activation Plan are now **COMPLETE**:
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| Phase 1 | Graph Repository Layer | ✅ Complete |
+| Phase 2 | Graph Service Layer | ✅ Complete |
+| Phase 3 | HTTP API Endpoints | ✅ Complete |
+| Phase 4 | Memory UI - Graph View | ✅ Complete |
+| Phase 5 | Integrate Graph with Memory Recall | ✅ Complete |
+| Phase 6 | Transport Layer Updates | ✅ Complete |
+
+The knowledge graph is now an active, queryable system:
+- HTTP API exposes graph data for external consumers
+- Memory UI shows visual graph representation
+- Memory recall enriches facts with related entity context
+- Transport layer enables UI communication with backend

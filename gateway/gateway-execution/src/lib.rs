@@ -50,6 +50,6 @@ pub use lifecycle::{
 pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use runner::ExecutionRunner;
 pub use distillation::SessionDistiller;
-pub use recall::{MemoryRecall, format_recalled_facts};
+pub use recall::{MemoryRecall, RecallResult, GraphContext, format_recalled_facts, format_combined_recall};
 pub use composite_provider::CompositeResourceProvider;
 pub use resource_provider::GatewayResourceProvider;
