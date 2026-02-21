@@ -4,6 +4,7 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
+use knowledge_graph::{GraphStorage, GraphService};
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
@@ -75,6 +76,9 @@ pub struct AppState {
     /// Memory repository for accessing agent memory facts.
     pub memory_repo: Option<Arc<MemoryRepository>>,
 
+    /// Graph service for knowledge graph operations.
+    pub graph_service: Option<Arc<GraphService>>,
+
     /// Cron scheduler for scheduled agent triggers.
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
@@ -136,6 +140,19 @@ impl AppState {
 
         // Initialize memory evolution services
         let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
+
+        // Initialize knowledge graph service
+        let graph_service = match GraphStorage::new(paths.knowledge_graph_db()) {
+            Ok(storage) => {
+                let service = Arc::new(GraphService::new(Arc::new(storage)));
+                tracing::info!("Knowledge graph service initialized");
+                Some(service)
+            }
+            Err(e) => {
+                tracing::warn!("Knowledge graph initialization failed: {}", e);
+                None
+            }
+        };
 
         let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
             Ok(client) => {
@@ -215,6 +232,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            graph_service,
         }
     }
 
@@ -265,6 +283,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            graph_service: None,
         }
     }
 
@@ -316,6 +335,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            graph_service: None,
         }
     }
 

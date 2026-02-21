@@ -211,6 +211,17 @@ impl GraphService {
     ) -> GraphResult<Vec<crate::types::Relationship>> {
         self.storage.list_relationships(agent_id, relationship_type, limit, offset).await
     }
+
+    /// Get neighbors of an entity (1-hop)
+    pub async fn get_neighbors(
+        &self,
+        agent_id: &str,
+        entity_id: &str,
+        direction: Direction,
+        limit: usize,
+    ) -> GraphResult<Vec<crate::types::NeighborInfo>> {
+        self.storage.get_neighbors(agent_id, entity_id, direction, limit).await
+    }
 }
 
 // ============================================================================

@@ -1,6 +1,6 @@
 # Plan: Activate Knowledge Graph
 
-**Status**: In Progress (Phase 1 & 2 Complete)
+**Status**: In Progress (Phase 1, 2 & 3 Complete)
 **Priority**: High
 **Goal**: Transform the knowledge graph from write-only storage to an active, queryable system
 
@@ -574,3 +574,22 @@ Phase 4 (UI) ──► Phase 5 (Recall Integration)
 - `Subgraph` struct - Entities and relationships within N hops
 
 **Tests:** 6 new service tests added, all 28 tests passing
+
+### Phase 3: HTTP API Endpoints ✅ COMPLETE
+
+**Implemented in:** `gateway/src/http/graph.rs`, `gateway/src/http/mod.rs`, `gateway/src/state.rs`, `gateway/Cargo.toml`, `gateway/gateway-services/src/paths.rs`
+
+**New HTTP endpoints:**
+- `GET /api/graph/:agent_id/stats` - Get graph statistics
+- `GET /api/graph/:agent_id/entities` - List entities with optional type filter
+- `GET /api/graph/:agent_id/relationships` - List relationships with optional type filter
+- `GET /api/graph/:agent_id/search` - Search entities by name
+- `GET /api/graph/:agent_id/entities/:entity_id/neighbors` - Get 1-hop neighbors
+- `GET /api/graph/:agent_id/entities/:entity_id/subgraph` - Get subgraph within N hops
+
+**AppState changes:**
+- Added `graph_service: Option<Arc<GraphService>>` field
+- Graph service initialized in `AppState::new()` with database at `data/knowledge_graph.db`
+
+**VaultPaths changes:**
+- Added `knowledge_graph_db()` method returning `data/knowledge_graph.db`
