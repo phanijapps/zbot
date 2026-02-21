@@ -8,7 +8,8 @@ import type {
   AgentResponse,
 } from "@/services/transport/types";
 import { MemoryFactCard } from "./MemoryFactCard";
-import { Loader2, Database } from "lucide-react";
+import { GraphView } from "./GraphView";
+import { Loader2, Database, FileText, Network } from "lucide-react";
 
 const CATEGORIES: MemoryCategory[] = [
   "preference",
@@ -22,6 +23,7 @@ const CATEGORIES: MemoryCategory[] = [
 const SCOPES: MemoryScope[] = ["agent", "shared", "ward"];
 
 export function WebMemoryPanel() {
+  const [activeView, setActiveView] = useState<"facts" | "graph">("facts");
   const [agents, setAgents] = useState<AgentResponse[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [facts, setFacts] = useState<MemoryFact[]>([]);
@@ -166,6 +168,66 @@ export function WebMemoryPanel() {
           </div>
         </div>
 
+        {/* Tab switcher */}
+        <div
+          style={{
+            display: "flex",
+            gap: "var(--spacing-1)",
+            marginBottom: "var(--spacing-4)",
+            padding: "var(--spacing-1)",
+            backgroundColor: "var(--muted)",
+            borderRadius: "var(--radius-md)",
+            width: "fit-content",
+          }}
+        >
+          <button
+            onClick={() => setActiveView("facts")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--spacing-2)",
+              padding: "var(--spacing-2) var(--spacing-4)",
+              backgroundColor: activeView === "facts" ? "var(--background)" : "transparent",
+              border: "none",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "var(--text-sm)",
+              fontWeight: activeView === "facts" ? 500 : 400,
+              color: activeView === "facts" ? "var(--foreground)" : "var(--muted-foreground)",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <FileText style={{ width: 16, height: 16 }} />
+            Facts
+          </button>
+          <button
+            onClick={() => setActiveView("graph")}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "var(--spacing-2)",
+              padding: "var(--spacing-2) var(--spacing-4)",
+              backgroundColor: activeView === "graph" ? "var(--background)" : "transparent",
+              border: "none",
+              borderRadius: "var(--radius-sm)",
+              cursor: "pointer",
+              fontSize: "var(--text-sm)",
+              fontWeight: activeView === "graph" ? 500 : 400,
+              color: activeView === "graph" ? "var(--foreground)" : "var(--muted-foreground)",
+              transition: "all 0.15s ease",
+            }}
+          >
+            <Network style={{ width: 16, height: 16 }} />
+            Knowledge Graph
+          </button>
+        </div>
+
+        {/* Graph View */}
+        {activeView === "graph" && <GraphView agentId={selectedAgentId} />}
+
+        {/* Facts View */}
+        {activeView === "facts" && (
+          <>
         {/* Agent selector and stats */}
         <div
           style={{
@@ -432,6 +494,8 @@ export function WebMemoryPanel() {
               Next
             </button>
           </div>
+        )}
+          </>
         )}
       </div>
     </div>

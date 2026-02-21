@@ -1,6 +1,6 @@
 # Plan: Activate Knowledge Graph
 
-**Status**: In Progress (Phase 1, 2, 3 & 6 Complete)
+**Status**: In Progress (Phase 1, 2, 3, 4 & 6 Complete)
 **Priority**: High
 **Goal**: Transform the knowledge graph from write-only storage to an active, queryable system
 
@@ -618,3 +618,24 @@ Phase 4 (UI) ──► Phase 5 (Recall Integration)
 - `searchGraphEntities(agentId, query, limit)` - Search entities by name
 - `getEntityNeighbors(agentId, entityId, options)` - Get 1-hop neighbors
 - `getEntitySubgraph(agentId, entityId, options)` - Get subgraph within N hops
+
+### Phase 4: Memory UI - Graph View ✅ COMPLETE
+
+**Implemented in:** `apps/ui/src/features/memory/GraphView.tsx`, `apps/ui/src/features/memory/WebMemoryPanel.tsx`, `apps/ui/src/features/memory/index.ts`
+
+**New GraphView component features:**
+- Canvas-based force-directed graph visualization
+- Nodes colored by entity type (person, tool, project, concept, etc.)
+- Edge labels showing relationship types
+- Interactive: hover to highlight, click to select and show details
+- Zoom in/out with mouse wheel
+- Pan by dragging
+- Reset view button
+- Stats bar showing entity/relationship counts and type distribution
+- Selected node details panel showing connected entities
+- Legend showing entity type colors
+
+**WebMemoryPanel updates:**
+- Added Facts/Graph tab switcher with icons
+- Graph view shows when "Knowledge Graph" tab selected
+- Agent filter applies to both views
