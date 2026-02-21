@@ -14,6 +14,6 @@ pub mod extractor;
 pub mod storage;
 
 pub use error::{GraphError, GraphResult};
-pub use types::{Entity, Relationship, EntityType, RelationshipType};
+pub use types::{Entity, Relationship, EntityType, RelationshipType, Direction, NeighborInfo, EntityWithConnections, ExtractedKnowledge};
 pub use extractor::EntityExtractor;
 pub use storage::GraphStorage;

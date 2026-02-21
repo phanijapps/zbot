@@ -268,6 +268,46 @@ pub struct ExtractedKnowledge {
     pub relationships: Vec<Relationship>,
 }
 
+/// Direction for neighbor queries
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    /// Entity → Other (outgoing edges)
+    Outgoing,
+    /// Other → Entity (incoming edges)
+    Incoming,
+    /// Either direction
+    Both,
+}
+
+impl Default for Direction {
+    fn default() -> Self {
+        Direction::Both
+    }
+}
+
+/// Information about a neighboring entity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborInfo {
+    /// The neighboring entity
+    pub entity: Entity,
+    /// The relationship connecting to the neighbor
+    pub relationship: Relationship,
+    /// Direction of the relationship from the source entity's perspective
+    pub direction: Direction,
+}
+
+/// Entity with its connections (incoming and outgoing)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityWithConnections {
+    /// The central entity
+    pub entity: Entity,
+    /// Outgoing relationships: Entity → Other
+    pub outgoing: Vec<(Relationship, Entity)>,
+    /// Incoming relationships: Other → Entity
+    pub incoming: Vec<(Relationship, Entity)>,
+}
+
 // ============================================================================
 // UNIT TESTS
 // ============================================================================

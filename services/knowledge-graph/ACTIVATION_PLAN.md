@@ -1,6 +1,6 @@
 # Plan: Activate Knowledge Graph
 
-**Status**: Ready for Implementation
+**Status**: In Progress (Phase 1 Complete)
 **Priority**: High
 **Goal**: Transform the knowledge graph from write-only storage to an active, queryable system
 
@@ -532,3 +532,26 @@ Phase 4 (UI) ──► Phase 5 (Recall Integration)
 ```
 
 **Recommended start:** Phase 1 (Repository) - foundation for everything else
+
+---
+
+## Progress
+
+### Phase 1: Graph Repository Layer ✅ COMPLETE
+
+**Implemented in:** `services/knowledge-graph/src/storage.rs`, `services/knowledge-graph/src/types.rs`
+
+**New methods added to GraphStorage:**
+- `list_entities(agent_id, entity_type, limit, offset)` - List entities with pagination and type filter
+- `list_relationships(agent_id, relationship_type, limit, offset)` - List relationships with pagination and type filter
+- `get_entity_by_name(agent_id, name)` - Get entity by name (case-insensitive)
+- `get_neighbors(agent_id, entity_id, direction, limit)` - Get 1-hop neighbors with direction
+- `count_entities(agent_id)` - Count entities for an agent
+- `count_relationships(agent_id)` - Count relationships for an agent
+
+**New types added:**
+- `Direction` enum (Outgoing, Incoming, Both)
+- `NeighborInfo` struct (entity, relationship, direction)
+- `EntityWithConnections` struct (entity, outgoing, incoming)
+
+**Tests:** 6 new tests added, all 22 tests passing
