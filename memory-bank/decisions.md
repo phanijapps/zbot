@@ -128,6 +128,18 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Problem**: 5 standalone knowledge_graph tools cluttered the tool registry and duplicated the memory concept.
 **Decision**: Remove standalone tools. Add `graph` action to existing memory tool. Entities and relationships are automatically extracted during session distillation — no manual management needed. The `graph` action provides query access when needed.
 
+### Memory UI: Cross-Agent View by Default
+**Problem**: Memory UI required selecting an agent first, showing "No memories found" even when memories existed.
+**Decision**: Add `/api/memory` endpoint that lists ALL memories across all agents. UI shows all memories by default with optional agent filter. Stats computed from all memories. Agent badge shown when viewing across all agents.
+
+### TriggerSource: Unified Session Origin Tracking
+**Problem**: Sessions tracked their source (`web`, `cli`, `api`, `cron`, `connector`) but this wasn't documented for integration developers.
+**Decision**: Document all invocation methods and their source values in architecture.md. Web sessions stay open for interactive use; CLI/Cron/API/Connector sessions auto-complete after execution. Source displayed in UI with badges and icons.
+
+### Bridge Workers: STDIO Transport (Planned)
+**Problem**: Bridge workers only support WebSocket transport. Some integration scenarios (embedded, local) benefit from subprocess STDIO communication.
+**Decision**: Add STDIO transport following MCP server pattern. Gateway spawns worker processes configured in `bridge_workers.json`, communicates via newline-delimited JSON over stdin/stdout. Same protocol as WebSocket, different framing. Cross-platform (Windows, Linux, macOS).
+
 ## Patterns We Did NOT Adopt
 
 These were considered during the Codex gap analysis and explicitly rejected:
