@@ -18,6 +18,7 @@ pub mod paths;
 pub mod providers;
 pub mod settings;
 pub mod skills;
+pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
 pub use agents::AgentService;
@@ -27,3 +28,4 @@ pub use paths::{SharedVaultPaths, VaultPaths};
 pub use providers::ProviderService;
 pub use settings::{AppSettings, SettingsService};
 pub use skills::SkillService;
+pub use watcher::{FileWatcher, WatchConfig};

@@ -11,6 +11,7 @@ use crate::http::create_http_router;
 use crate::services::{AgentService, RuntimeService};
 use crate::state::AppState;
 use crate::websocket::WebSocketHandler;
+use gateway_services::{FileWatcher, WatchConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
@@ -23,6 +24,8 @@ pub struct GatewayServer {
     ws_handler: Arc<WebSocketHandler>,
     shutdown_tx: Option<broadcast::Sender<()>>,
     bridge_retry_handle: Option<tokio::task::JoinHandle<()>>,
+    skills_watcher: Option<FileWatcher>,
+    agents_watcher: Option<FileWatcher>,
 }
 
 impl GatewayServer {
@@ -40,6 +43,8 @@ impl GatewayServer {
             ws_handler,
             shutdown_tx: None,
             bridge_retry_handle: None,
+            skills_watcher: None,
+            agents_watcher: None,
         }
     }
 
@@ -98,6 +103,9 @@ impl GatewayServer {
         if let Err(e) = self.state.connector_registry.init().await {
             warn!("Failed to initialize connector registry: {}", e);
         }
+
+        // Start file watchers for hot-reload
+        self.start_file_watchers();
 
         // Initialize cron scheduler
         self.init_cron_scheduler().await;
@@ -176,6 +184,14 @@ impl GatewayServer {
         // Pause all running sessions before shutting down
         self.pause_running_sessions();
 
+        // Stop file watchers
+        if let Some(ref mut w) = self.skills_watcher {
+            w.stop();
+        }
+        if let Some(ref mut w) = self.agents_watcher {
+            w.stop();
+        }
+
         // Disconnect all bridge workers and abort retry loop
         self.state.bridge_registry.disconnect_all().await;
         if let Some(handle) = self.bridge_retry_handle.take() {
@@ -224,6 +240,41 @@ impl GatewayServer {
                 warn!("Failed to recover crashed sessions: {}", e);
             }
         }
+    }
+
+    /// Start file watchers for hot-reloading skills and agents.
+    fn start_file_watchers(&mut self) {
+        // Skills watcher
+        let skills = self.state.skills.clone();
+        let mut watcher = FileWatcher::new(WatchConfig {
+            path: self.state.paths.skills_dir(),
+            debounce_ms: 500,
+            name: "skills".to_string(),
+        });
+        watcher.start(move |path| {
+            tracing::info!("Skills changed: {:?}, invalidating cache", path);
+            let skills = skills.clone();
+            tokio::spawn(async move {
+                skills.invalidate_cache().await;
+            });
+        });
+        self.skills_watcher = Some(watcher);
+
+        // Agents watcher
+        let agents = self.state.agents.clone();
+        let mut watcher = FileWatcher::new(WatchConfig {
+            path: self.state.paths.agents_dir(),
+            debounce_ms: 500,
+            name: "agents".to_string(),
+        });
+        watcher.start(move |path| {
+            tracing::info!("Agents changed: {:?}, invalidating cache", path);
+            let agents = agents.clone();
+            tokio::spawn(async move {
+                agents.invalidate_cache().await;
+            });
+        });
+        self.agents_watcher = Some(watcher);
     }
 
     /// Initialize the cron scheduler.
