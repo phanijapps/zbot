@@ -141,18 +141,20 @@ impl AppState {
         // Initialize memory evolution services
         let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
 
-        // Initialize knowledge graph service
-        let graph_service = match GraphStorage::new(paths.knowledge_graph_db()) {
-            Ok(storage) => {
-                let service = Arc::new(GraphService::new(Arc::new(storage)));
-                tracing::info!("Knowledge graph service initialized");
-                Some(service)
-            }
-            Err(e) => {
-                tracing::warn!("Knowledge graph initialization failed: {}", e);
-                None
-            }
-        };
+        // Initialize knowledge graph service and storage
+        let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
+            match GraphStorage::new(paths.knowledge_graph_db()) {
+                Ok(storage) => {
+                    let storage = Arc::new(storage);
+                    let service = Arc::new(GraphService::new(storage.clone()));
+                    tracing::info!("Knowledge graph service initialized");
+                    (Some(service), Some(storage))
+                }
+                Err(e) => {
+                    tracing::warn!("Knowledge graph initialization failed: {}", e);
+                    (None, None)
+                }
+            };
 
         let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
             Ok(client) => {
@@ -168,17 +170,29 @@ impl AppState {
             }
         };
 
-        let memory_recall = Arc::new(MemoryRecall::new(
-            embedding_client.clone(),
-            memory_repo.clone(),
-        ));
+        // Create memory recall with optional graph enrichment
+        let memory_recall = match &graph_service {
+            Some(gs) => {
+                Arc::new(MemoryRecall::with_graph(
+                    embedding_client.clone(),
+                    memory_repo.clone(),
+                    gs.clone(),
+                ))
+            }
+            None => {
+                Arc::new(MemoryRecall::new(
+                    embedding_client.clone(),
+                    memory_repo.clone(),
+                ))
+            }
+        };
 
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
             embedding_client,
             conversation_repo.clone(),
             memory_repo.clone(),
-            None, // graph_storage — wired when knowledge graph is configured
+            graph_storage, // Wire knowledge graph storage to distiller
         ));
 
         // Create runtime with execution runner and connector registry
