@@ -192,7 +192,8 @@ impl AppState {
             embedding_client,
             conversation_repo.clone(),
             memory_repo.clone(),
-            graph_storage, // Wire knowledge graph storage to distiller
+            graph_storage,
+            paths.clone(), // For loading distillation_prompt.md
         ));
 
         // Create runtime with execution runner and connector registry
