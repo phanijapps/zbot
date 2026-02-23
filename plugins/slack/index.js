@@ -10,6 +10,9 @@
  * - SLACK_BOT_TOKEN: Slack bot user OAuth token (xoxb-...)
  * - SLACK_APP_TOKEN: Slack app-level token for Socket Mode (xapp-...)
  *
+ * Optional Environment Variables:
+ * - SLACK_PLUGIN_DEBUG: Set to 'true' or '1' to enable debug logging (default: off)
+ *
  * Setup:
  * 1. Create a Slack App at https://api.slack.com/apps
  * 2. Enable Socket Mode (for secure connection without public endpoint)
@@ -29,24 +32,27 @@ const { SocketModeClient } = require('@slack/socket-mode');
 const PLUGIN_ID = 'slack';
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const APP_TOKEN = process.env.SLACK_APP_TOKEN;
+const LOGGING_ENABLED = process.env.SLACK_PLUGIN_DEBUG === 'true' || process.env.SLACK_PLUGIN_DEBUG === '1';
 
-// Rolling log configuration
+// Rolling log configuration (only used if logging is enabled)
 const LOG_DIR = __dirname;
 const LOG_FILE = path.join(LOG_DIR, 'plugin.log');
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_LOG_FILES = 3;
 
 /**
- * Rolling file logger
+ * Rolling file logger (no-op when logging is disabled)
  */
 class Logger {
-  constructor(file, maxSize, maxFiles) {
+  constructor(file, maxSize, maxFiles, enabled) {
     this.file = file;
     this.maxSize = maxSize;
     this.maxFiles = maxFiles;
+    this.enabled = enabled;
   }
 
   _rotate() {
+    if (!this.enabled) return;
     try {
       // Delete oldest log
       const oldest = `${this.file}.${this.maxFiles}`;
@@ -73,6 +79,7 @@ class Logger {
   }
 
   _checkRotate() {
+    if (!this.enabled) return;
     try {
       const stats = fs.statSync(this.file);
       if (stats.size >= this.maxSize) {
@@ -84,6 +91,8 @@ class Logger {
   }
 
   log(level, ...args) {
+    if (!this.enabled) return;
+
     this._checkRotate();
 
     const timestamp = new Date().toISOString();
@@ -117,15 +126,15 @@ class Logger {
   debug(...args) { this.log('DEBUG', ...args); }
 }
 
-const logger = new Logger(LOG_FILE, MAX_LOG_SIZE, MAX_LOG_FILES);
+const logger = new Logger(LOG_FILE, MAX_LOG_SIZE, MAX_LOG_FILES, LOGGING_ENABLED);
 
 // Validate required tokens
 if (!BOT_TOKEN) {
-  logger.error('SLACK_BOT_TOKEN is required');
+  console.error('ERROR: SLACK_BOT_TOKEN is required');
   process.exit(1);
 }
 if (!APP_TOKEN) {
-  logger.error('SLACK_APP_TOKEN is required');
+  console.error('ERROR: SLACK_APP_TOKEN is required');
   process.exit(1);
 }
 
@@ -748,8 +757,12 @@ async function handleMessage(msg) {
  * Main entry point.
  */
 async function main() {
-  logger.info('Starting Slack plugin...');
-  logger.info('Log file:', LOG_FILE);
+  // Always log startup to stderr (not to file)
+  console.error(`Starting Slack plugin... (logging: ${LOGGING_ENABLED ? 'enabled' : 'disabled'})`);
+  if (LOGGING_ENABLED) {
+    logger.info('Starting Slack plugin...');
+    logger.info('Log file:', LOG_FILE);
+  }
 
   // Set up readline interface for stdin (AgentZero gateway)
   const rl = readline.createInterface({
@@ -773,6 +786,7 @@ async function main() {
 
   // Handle stdin close (gateway disconnected)
   rl.on('close', () => {
+    console.error('Gateway disconnected, exiting...');
     logger.info('Gateway disconnected, exiting...');
     isRunning = false;
     if (socketClient) {
@@ -787,10 +801,12 @@ async function main() {
   // Send hello to register with gateway
   sendHello();
 
+  console.error('Slack plugin ready, listening for messages...');
   logger.info('Slack plugin ready, listening for messages...');
 
   // Handle graceful shutdown
   process.on('SIGTERM', async () => {
+    console.error('Received SIGTERM, shutting down...');
     logger.info('Received SIGTERM, shutting down...');
     if (socketClient) {
       await socketClient.disconnect();
@@ -799,6 +815,7 @@ async function main() {
   });
 
   process.on('SIGINT', async () => {
+    console.error('Received SIGINT, shutting down...');
     logger.info('Received SIGINT, shutting down...');
     if (socketClient) {
       await socketClient.disconnect();
