@@ -2,7 +2,9 @@
 //!
 //! Configuration types for agent execution.
 
+use execution_state::TriggerSource;
 use gateway_events::HookContext;
+use serde_json::Value;
 use std::path::PathBuf;
 use zero_core::FileSystemContext;
 
@@ -108,6 +110,10 @@ pub struct ExecutionConfig {
     pub thread_id: Option<String>,
     /// Connector ID that triggered this session.
     pub connector_id: Option<String>,
+    /// Trigger source for this execution (web, cli, connector, etc.)
+    pub source: TriggerSource,
+    /// Metadata from the request (e.g., plugin context, sender info)
+    pub metadata: Option<Value>,
 }
 
 impl ExecutionConfig {
@@ -123,6 +129,8 @@ impl ExecutionConfig {
             respond_to: None,
             thread_id: None,
             connector_id: None,
+            source: TriggerSource::default(),
+            metadata: None,
         }
     }
 
@@ -159,5 +167,93 @@ impl ExecutionConfig {
     pub fn with_connector_id(mut self, connector_id: String) -> Self {
         self.connector_id = Some(connector_id);
         self
+    }
+
+    /// Set the trigger source for this execution.
+    #[must_use]
+    pub fn with_source(mut self, source: TriggerSource) -> Self {
+        self.source = source;
+        self
+    }
+
+    /// Set the metadata from the request.
+    #[must_use]
+    pub fn with_metadata(mut self, metadata: Value) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn execution_config_new_defaults() {
+        let config = ExecutionConfig::new(
+            "root".to_string(),
+            "conv-123".to_string(),
+            PathBuf::from("/tmp"),
+        );
+
+        assert_eq!(config.agent_id, "root");
+        assert_eq!(config.conversation_id, "conv-123");
+        assert_eq!(config.source, TriggerSource::Web); // default
+        assert!(config.metadata.is_none());
+        assert!(config.session_id.is_none());
+        assert!(config.respond_to.is_none());
+    }
+
+    #[test]
+    fn execution_config_with_source() {
+        let config = ExecutionConfig::new(
+            "root".to_string(),
+            "conv-123".to_string(),
+            PathBuf::from("/tmp"),
+        )
+        .with_source(TriggerSource::Connector);
+
+        assert_eq!(config.source, TriggerSource::Connector);
+    }
+
+    #[test]
+    fn execution_config_with_metadata() {
+        let metadata = serde_json::json!({
+            "thread_id": "C123:1234567890.123456",
+            "sender": "U12345",
+        });
+
+        let config = ExecutionConfig::new(
+            "root".to_string(),
+            "conv-123".to_string(),
+            PathBuf::from("/tmp"),
+        )
+        .with_metadata(metadata.clone());
+
+        assert_eq!(config.metadata, Some(metadata));
+    }
+
+    #[test]
+    fn execution_config_builder_chain() {
+        let metadata = serde_json::json!({"key": "value"});
+        let config = ExecutionConfig::new(
+            "root".to_string(),
+            "conv-123".to_string(),
+            PathBuf::from("/tmp"),
+        )
+        .with_source(TriggerSource::Connector)
+        .with_metadata(metadata.clone())
+        .with_session_id("sess-456".to_string())
+        .with_thread_id("thread-789".to_string())
+        .with_connector_id("slack".to_string())
+        .with_respond_to(vec!["slack".to_string()]);
+
+        assert_eq!(config.source, TriggerSource::Connector);
+        assert_eq!(config.metadata, Some(metadata));
+        assert_eq!(config.session_id, Some("sess-456".to_string()));
+        assert_eq!(config.thread_id, Some("thread-789".to_string()));
+        assert_eq!(config.connector_id, Some("slack".to_string()));
+        assert_eq!(config.respond_to, Some(vec!["slack".to_string()]));
     }
 }

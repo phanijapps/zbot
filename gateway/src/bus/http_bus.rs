@@ -82,7 +82,8 @@ impl HttpGatewayBus {
             request.agent_id.clone(),
             conversation_id,
             self.config_dir.clone(),
-        );
+        )
+        .with_source(request.source);
 
         // Set session ID if continuing an existing session
         if let Some(session_id) = &request.session_id {
@@ -102,6 +103,11 @@ impl HttpGatewayBus {
         }
         if let Some(connector_id) = &request.connector_id {
             config = config.with_connector_id(connector_id.clone());
+        }
+
+        // Copy metadata from request
+        if let Some(metadata) = &request.metadata {
+            config = config.with_metadata(metadata.clone());
         }
 
         config
