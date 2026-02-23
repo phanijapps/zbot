@@ -9,12 +9,14 @@
 //! - Skill configurations
 //! - Application settings (tools, logging)
 //! - Agent registry (delegation permissions)
+//! - Plugin configurations
 
 pub mod agent_registry;
 pub mod agents;
 pub mod logging;
 pub mod mcp;
 pub mod paths;
+pub mod plugin_service;
 pub mod providers;
 pub mod settings;
 pub mod skills;
@@ -25,6 +27,7 @@ pub use agents::AgentService;
 pub use logging::LogSettings;
 pub use mcp::McpService;
 pub use paths::{SharedVaultPaths, VaultPaths};
+pub use plugin_service::PluginService;
 pub use providers::ProviderService;
 pub use settings::{AppSettings, SettingsService};
 pub use skills::SkillService;

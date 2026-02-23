@@ -83,6 +83,9 @@ pub struct AppState {
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
 
+    /// Plugin manager for STDIO plugin lifecycle.
+    pub plugin_manager: Arc<gateway_bridge::PluginManager>,
+
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
 
@@ -225,6 +228,14 @@ impl AppState {
         // Create settings service
         let settings = Arc::new(SettingsService::new(paths.clone()));
 
+        // Create plugin manager
+        let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
+            paths.plugins_dir(),
+            bridge_registry.clone(),
+            bridge_outbox.clone(),
+            None, // bus is set later by server.start()
+        ));
+
         Self {
             agents,
             skills,
@@ -243,6 +254,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
+            plugin_manager,
             workspace_cache,
             paths,
             config_dir,
@@ -276,6 +288,17 @@ impl AppState {
         let connector_service = ConnectorService::new(paths.clone());
         let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
 
+        // Create bridge registry
+        let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
+
+        // Create plugin manager
+        let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
+            paths.plugins_dir(),
+            bridge_registry.clone(),
+            bridge_outbox.clone(),
+            None, // bus is set later by server.start()
+        ));
+
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
             skills: Arc::new(SkillService::new(skills_dir)),
@@ -290,10 +313,11 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
-            bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
+            bridge_registry,
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
@@ -322,6 +346,25 @@ impl AppState {
                 .expect("Failed to initialize database"),
         );
         let memory_repo = Arc::new(MemoryRepository::new(db));
+
+        // Create bridge registry and outbox
+        let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
+        let bridge_outbox = {
+            let db = Arc::new(
+                DatabaseManager::new(paths.clone())
+                    .expect("Failed to initialize database for bridge outbox"),
+            );
+            Arc::new(gateway_bridge::OutboxRepository::new(db))
+        };
+
+        // Create plugin manager
+        let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
+            paths.plugins_dir(),
+            bridge_registry.clone(),
+            bridge_outbox.clone(),
+            None, // bus is set later by server.start()
+        ));
+
         Self {
             agents,
             skills,
@@ -336,16 +379,11 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
-            bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
-            bridge_outbox: {
-                let db = Arc::new(
-                    DatabaseManager::new(paths.clone())
-                        .expect("Failed to initialize database for bridge outbox"),
-                );
-                Arc::new(gateway_bridge::OutboxRepository::new(db))
-            },
+            bridge_registry,
+            bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
@@ -391,6 +429,30 @@ impl AppState {
 
         // Create Python venv and Node env if missing, then seed workspace memory
         self.ensure_runtime_environments().await;
+
+        // Discover and start plugins
+        self.discover_and_start_plugins().await;
+    }
+
+    /// Discover and start all enabled plugins.
+    async fn discover_and_start_plugins(&self) {
+        tracing::info!("Discovering plugins...");
+
+        match self.plugin_manager.discover().await {
+            Ok(discovered) => {
+                if discovered.is_empty() {
+                    tracing::info!("No plugins discovered");
+                } else {
+                    tracing::info!("Discovered {} plugin(s): {:?}", discovered.len(), discovered);
+
+                    // Start all enabled plugins
+                    self.plugin_manager.start_all().await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to discover plugins: {}", e);
+            }
+        }
     }
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.

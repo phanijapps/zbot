@@ -140,6 +140,26 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Problem**: Bridge workers only support WebSocket transport. Some integration scenarios (embedded, local) benefit from subprocess STDIO communication.
 **Decision**: Add STDIO transport following MCP server pattern. Gateway spawns worker processes configured in `bridge_workers.json`, communicates via newline-delimited JSON over stdin/stdout. Same protocol as WebSocket, different framing. Cross-platform (Windows, Linux, macOS).
 
+### Plugins: STDIO with Bridge Protocol Reuse
+**Problem**: Users want custom integrations (Slack, Discord, Strava) without modifying core codebase.
+**Decision**: Node.js plugins in `~/Documents/agentzero/plugins/`, spawned as child processes with STDIO transport. Reuse Bridge Protocol (hello/handshake, ping/pong, capability_invoke, inbound) — plugins appear as bridge workers to agents.
+**Rationale**: Single protocol for all external integrations. Plugins can trigger agents via `inbound` messages and respond via `capability_invoke`. npm install on first start handles dependencies automatically.
+
+### Plugins: Self-Contained Manifests
+**Problem**: Configuration scattered across multiple files complicates plugin distribution.
+**Decision**: Each plugin is a self-contained directory with `plugin.json` manifest (id, name, entry, env, auto_restart), `package.json` for npm dependencies, and `index.js` entry point.
+**Rationale**: Drop-in deployment — copy directory, restart daemon, plugin auto-discovered and started. No central registry file to edit.
+
+### Plugins: Per-Plugin User Configuration
+**Problem**: Secrets (API tokens) shouldn't be in plugin manifests (checked into version control). Also, config orphaned when plugin deleted.
+**Decision**: User config stored in `plugins/{plugin_id}/.config.json` — self-contained with plugin. Contains `settings` (non-sensitive) and `secrets` (masked in API responses, 0600 file permissions on Unix). Auto-created on discovery, deleted with plugin directory.
+**Rationale**: Plugin authors ship `plugin.json` with env var references (`${SLACK_TOKEN}`); users set secrets via API. Dot-prefix (`config.json`) clearly separates user data from plugin code. Drop-in deployment — delete directory = clean uninstall.
+
+### Plugins: Auto-Restart with Backoff
+**Problem**: External services (Slack, Discord) have transient connection issues; plugins shouldn't require manual intervention.
+**Decision**: `auto_restart: true` (default) with configurable `restart_delay_ms` (default 5000). Failed plugins restart automatically after delay.
+**Rationale**: Hands-off operation. For intentional stops, auto_restart is skipped. Log messages indicate restart reason.
+
 ## Patterns We Did NOT Adopt
 
 These were considered during the Codex gap analysis and explicitly rejected:

@@ -96,7 +96,20 @@ impl GatewayServer {
             warn!("Failed to reset bridge inflight items: {}", e);
         }
 
-        // Seed default agents and other initial data
+        // Create gateway bus for bridge inbound messages (MUST be before seed_defaults
+        // which starts plugins, so plugins have the bus available for inbound messages)
+        if let Some(runner) = self.state.runtime.runner() {
+            let bus: Arc<dyn gateway_bus::GatewayBus> = Arc::new(HttpGatewayBus::new(
+                runner.clone(),
+                self.state.state_service.clone(),
+                self.state.paths.vault_dir().clone(),
+            ));
+            // Set bus on plugin manager so plugins can trigger agent sessions
+            self.state.plugin_manager.set_bus(bus.clone()).await;
+            self.state.bridge_bus = Some(bus);
+        }
+
+        // Seed default agents and other initial data (starts plugins)
         self.state.seed_defaults().await;
 
         // Initialize connector registry
@@ -109,16 +122,6 @@ impl GatewayServer {
 
         // Initialize cron scheduler
         self.init_cron_scheduler().await;
-
-        // Create gateway bus for bridge inbound messages
-        if let Some(runner) = self.state.runtime.runner() {
-            let bus: Arc<dyn gateway_bus::GatewayBus> = Arc::new(HttpGatewayBus::new(
-                runner.clone(),
-                self.state.state_service.clone(),
-                self.state.paths.vault_dir().clone(),
-            ));
-            self.state.bridge_bus = Some(bus);
-        }
 
         // Spawn bridge outbox retry loop
         self.bridge_retry_handle = Some(gateway_bridge::spawn_retry_loop(

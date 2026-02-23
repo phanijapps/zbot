@@ -80,7 +80,16 @@
 │  ├── providers.json            # LLM provider configurations            │
 │  ├── mcps.json                 # MCP server configurations              │
 │  ├── connectors.json           # Connector configurations               │
-│  └── cron_jobs.json            # Scheduled job configurations           │
+│  ├── cron_jobs.json            # Scheduled job configurations           │
+│  ├── plugins/                  # Node.js plugin directories             │
+│  │   ├── .example/             #   Reference plugin implementation      │
+│  │   ├── slack/                #   Slack Socket Mode integration        │
+│  │   └── {plugin-name}/        #   Custom plugins                       │
+│  │       ├── plugin.json       #     Plugin manifest                    │
+│  │       ├── package.json      #     Node.js dependencies               │
+│  │       ├── index.js          #     Entry point                        │
+│  │       ├── .config.json      #     User config + secrets (auto-created)│
+│  │       └── node_modules/     #     Auto-installed dependencies        │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1052,6 +1061,173 @@ When dispatching to connectors, Gateway sends:
 | POST | `/api/connectors/:id/test` | Test connector |
 | POST | `/api/connectors/:id/enable` | Enable connector |
 | POST | `/api/connectors/:id/disable` | Disable connector |
+
+## Plugins
+
+Plugins are Node.js integrations that extend AgentZero with custom capabilities. They run as child processes communicating via STDIO transport using the Bridge Protocol.
+
+### Plugin Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           GATEWAY                                        │
+├─────────────────────────────────────────────────────────────────────────┤
+│  ┌─────────────────┐                                                    │
+│  │ PluginManager   │ ◄── Discovers, starts, stops plugins              │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │                      STDIO PLUGIN PROCESS                        │   │
+│  │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐              │   │
+│  │  │  Node.js    │  │  plugin.json│  │  index.js   │              │   │
+│  │  │  Runtime    │  │  (manifest) │  │  (entry)    │              │   │
+│  │  └─────────────┘  └─────────────┘  └──────┬──────┘              │   │
+│  │                                           │                      │   │
+│  │                     STDIO (newline-delimited JSON)               │   │
+│  │                     stdin ◄──────────────► stdout                │   │
+│  └──────────────────────────────────────────┬──────────────────────┘   │
+│                                             │                          │
+│           ┌─────────────────────────────────┼──────────────────────┐   │
+│           │                                 │                      │   │
+│           ▼                                 ▼                      ▼   │
+│  ┌─────────────┐  ┌─────────────────────────────────────────────┐      │
+│  │BridgeRegistry│  │        Bridge Protocol Messages             │      │
+│  │(as worker)   │  │  hello, ping, outbox_item, capability_invoke│      │
+│  └─────────────┘  └─────────────────────────────────────────────┘      │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Plugin Lifecycle
+
+```
+┌─────────────────┐
+│   Discovered    │ ◄── Plugin directory scanned, plugin.json parsed
+└────────┬────────┘
+         │
+         ▼
+┌─────────────────┐
+│   Installing    │ ◄── npm install --production (if node_modules missing)
+└────────┬────────┘     120s timeout
+         │
+         ▼
+┌─────────────────┐
+│    Starting     │ ◄── Spawn node process, wait for hello handshake
+└────────┬────────┘     10s timeout
+         │
+         ▼
+┌─────────────────┐
+│     Running     │ ◄── Heartbeat every 30s, processes messages
+└────────┬────────┘
+         │
+         ├──────────────────┐
+         │                  │
+         ▼                  ▼
+┌─────────────────┐  ┌─────────────────┐
+│     Stopped     │  │     Failed      │
+└─────────────────┘  └─────────────────┘
+         │                  │
+         │                  │ (if auto_restart)
+         │                  ▼
+         │          ┌─────────────────┐
+         └─────────►│ restart_delay_ms│
+                    └────────┬────────┘
+                             │
+                             ▼
+                    ┌─────────────────┐
+                    │    Starting     │
+                    └─────────────────┘
+```
+
+### Plugin Manifest (plugin.json)
+
+```json
+{
+  "id": "slackbot",
+  "name": "Slack Bot",
+  "version": "1.0.0",
+  "description": "Slack integration plugin",
+  "entry": "index.js",
+  "enabled": true,
+  "env": {
+    "SLACK_TOKEN": "${SLACK_BOT_TOKEN}"
+  },
+  "auto_restart": true,
+  "restart_delay_ms": 5000
+}
+```
+
+### Plugin User Configuration
+
+Stored in `plugins/{plugin_id}/.config.json` (self-contained with plugin):
+
+```json
+{
+  "enabled": true,
+  "settings": {
+    "default_channel": "#general"
+  },
+  "secrets": {
+    "bot_token": "xoxb-..."
+  }
+}
+```
+
+- Auto-created when plugin is discovered
+- 0600 file permissions on Unix (owner-only)
+- Deleted when plugin directory is removed
+
+### Plugin Protocol (Bridge Protocol)
+
+Plugins use the same protocol as Bridge Workers:
+
+**From Plugin (stdout):**
+| Message | Description |
+|---------|-------------|
+| `hello` | Register with adapter_id, capabilities, resources |
+| `pong` | Heartbeat response |
+| `ack/fail` | Outbox delivery confirmation |
+| `resource_response` | Query response |
+| `capability_response` | Invocation result |
+| `inbound` | Send message to trigger agent |
+
+**To Plugin (stdin):**
+| Message | Description |
+|---------|-------------|
+| `hello_ack` | Registration confirmed |
+| `ping` | Heartbeat check |
+| `outbox_item` | Push message for delivery |
+| `resource_query` | Query a resource |
+| `capability_invoke` | Invoke a capability |
+
+### Plugin HTTP API
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/plugins` | List all plugins with status |
+| GET | `/api/plugins/:id` | Get plugin details |
+| POST | `/api/plugins/:id/start` | Start a plugin |
+| POST | `/api/plugins/:id/stop` | Stop a plugin |
+| POST | `/api/plugins/:id/restart` | Restart a plugin |
+| POST | `/api/plugins/discover` | Re-scan plugins directory |
+| **Configuration** | | |
+| GET | `/api/plugins/:id/config` | Get plugin configuration |
+| PUT | `/api/plugins/:id/config` | Update plugin configuration |
+| GET | `/api/plugins/:id/secrets` | List secret keys |
+| PUT | `/api/plugins/:id/secrets/:key` | Set a secret value |
+| DELETE | `/api/plugins/:id/secrets/:key` | Delete a secret |
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `gateway-bridge/src/plugin_config.rs` | PluginConfig, PluginError, PluginState, PluginSummary |
+| `gateway-bridge/src/stdio_plugin.rs` | Process spawn, npm install, message framing |
+| `gateway-bridge/src/plugin_manager.rs` | Discovery, lifecycle management |
+| `gateway-services/src/plugin_service.rs` | Config loading, settings/secrets |
+| `gateway/src/http/plugins.rs` | HTTP API endpoints |
+| `plugins/.example/` | Reference plugin implementation |
+| `plugins/slack/` | Slack Socket Mode integration |
 
 ## Cron Scheduler
 

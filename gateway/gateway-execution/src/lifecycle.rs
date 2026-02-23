@@ -277,6 +277,7 @@ pub async fn complete_execution(
                 "message": response_text,
                 "execution_id": execution_id,
                 "session_id": session_id,
+                "thread_id": thread_id,
             });
 
             for id in connector_ids {

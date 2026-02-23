@@ -1,0 +1,10 @@
+{
+  "id": "example-plugin",
+  "name": "Example Plugin",
+  "version": "1.0.0",
+  "description": "Reference implementation demonstrating the AgentZero plugin bridge protocol",
+  "entry": "index.js",
+  "enabled": true,
+  "auto_restart": true,
+  "restart_delay_ms": 5000
+}

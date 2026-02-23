@@ -1,0 +1,8 @@
+{
+  "name": "example-plugin",
+  "version": "1.0.0",
+  "description": "Reference implementation demonstrating the AgentZero plugin bridge protocol",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {}
+}
