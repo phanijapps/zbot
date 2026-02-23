@@ -700,6 +700,10 @@ pub struct SessionFilter {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
+
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
 }
 
 /// Filter criteria for querying executions.

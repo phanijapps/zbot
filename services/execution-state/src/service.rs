@@ -112,6 +112,19 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.list_sessions_with_executions(filter)
     }
 
+    /// Find a session by its thread_id.
+    ///
+    /// Returns the session if found, regardless of its status.
+    /// Used by plugin handlers to continue existing sessions for follow-up messages.
+    pub fn find_session_by_thread_id(&self, thread_id: &str) -> Result<Option<Session>, String> {
+        let sessions = self.repo.list_sessions(&SessionFilter {
+            thread_id: Some(thread_id.to_string()),
+            limit: Some(1),
+            ..Default::default()
+        })?;
+        Ok(sessions.into_iter().next())
+    }
+
     /// Pause a session.
     pub fn pause_session(&self, session_id: &str) -> Result<(), String> {
         let session = self.repo.get_session(session_id)?
