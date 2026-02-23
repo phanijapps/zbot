@@ -434,8 +434,20 @@ async function handleSlackMessage(event, isMention = false) {
       return;
     }
 
+    // Determine if we should respond
+    // - Always respond to mentions and DMs
+    // - In channels, only respond if mentioned or in a thread we're participating in
+    const isDirectMessage = event.channel_type === 'im' || event.channel.startsWith('D');
+    const threadId = `${event.channel}:${event.thread_ts || event.ts}`;
+
+    if (!isMention && !isDirectMessage && !pendingResponses.has(threadId)) {
+      // Not a message we should respond to
+      logger.debug('Skipping non-mention/non-DM without pending response');
+      return;
+    }
+
     // Deduplicate: Slack sends both 'message' and 'app_mention' for @mentions
-    // Skip if we've already processed this message timestamp recently
+    // Only check dedup AFTER we know we want to respond
     const msgKey = `${event.channel}:${event.ts}`;
     const now = Date.now();
     if (recentlyProcessed.has(msgKey)) {
@@ -449,18 +461,6 @@ async function handleSlackMessage(event, isMention = false) {
       if (now - timestamp > 10000) {
         recentlyProcessed.delete(key);
       }
-    }
-
-    // Determine if we should respond
-    // - Always respond to mentions and DMs
-    // - In channels, only respond if mentioned or in a thread we're participating in
-    const isDirectMessage = event.channel_type === 'im' || event.channel.startsWith('D');
-    const threadId = `${event.channel}:${event.thread_ts || event.ts}`;
-
-    if (!isMention && !isDirectMessage && !pendingResponses.has(threadId)) {
-      // Not a message we should respond to
-      logger.debug('Skipping non-mention/non-DM without pending response');
-      return;
     }
 
     messageCount++;

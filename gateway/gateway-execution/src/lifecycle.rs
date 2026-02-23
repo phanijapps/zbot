@@ -220,47 +220,60 @@ pub async fn complete_execution(
         .await;
 
     // Dispatch response to connectors if respond_to is specified
-    if let (Some(registry), Some(connector_ids)) = (connector_registry, respond_to) {
+    // Only dispatch to ConnectorRegistry for connectors NOT in BridgeRegistry
+    if let (Some(registry), Some(connector_ids), Some(bridge)) =
+        (connector_registry, respond_to, bridge_registry)
+    {
         if !connector_ids.is_empty() {
             if let Some(response_text) = &response {
-                let context = DispatchContext {
-                    session_id: session_id.to_string(),
-                    thread_id: thread_id.map(|t| t.to_string()),
-                    agent_id: agent_id.to_string(),
-                    timestamp: chrono::Utc::now(),
-                };
+                // Filter out bridge workers (plugins) - they'll be handled below
+                let mut connector_only_ids: Vec<String> = Vec::new();
+                for id in connector_ids {
+                    if !bridge.is_connected(id).await {
+                        connector_only_ids.push(id.clone());
+                    }
+                }
 
-                let payload = serde_json::json!({
-                    "message": response_text,
-                    "execution_id": execution_id,
-                    "conversation_id": conversation_id,
-                });
+                if !connector_only_ids.is_empty() {
+                    let context = DispatchContext {
+                        session_id: session_id.to_string(),
+                        thread_id: thread_id.map(|t| t.to_string()),
+                        agent_id: agent_id.to_string(),
+                        timestamp: chrono::Utc::now(),
+                    };
 
-                tracing::info!(
-                    session_id = %session_id,
-                    connectors = ?connector_ids,
-                    "Dispatching response to connectors"
-                );
+                    let payload = serde_json::json!({
+                        "message": response_text,
+                        "execution_id": execution_id,
+                        "conversation_id": conversation_id,
+                    });
 
-                let results = registry
-                    .dispatch_to_many(connector_ids, "respond", payload, &context)
-                    .await;
+                    tracing::info!(
+                        session_id = %session_id,
+                        connectors = ?connector_only_ids,
+                        "Dispatching response to connectors"
+                    );
 
-                for (connector_id, result) in results {
-                    match result {
-                        Ok(resp) => {
-                            tracing::info!(
-                                connector_id = %connector_id,
-                                success = resp.success,
-                                "Connector dispatch completed"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                connector_id = %connector_id,
-                                error = %e,
-                                "Connector dispatch failed"
-                            );
+                    let results = registry
+                        .dispatch_to_many(&connector_only_ids, "respond", payload, &context)
+                        .await;
+
+                    for (connector_id, result) in results {
+                        match result {
+                            Ok(resp) => {
+                                tracing::info!(
+                                    connector_id = %connector_id,
+                                    success = resp.success,
+                                    "Connector dispatch completed"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    connector_id = %connector_id,
+                                    error = %e,
+                                    "Connector dispatch failed"
+                                );
+                            }
                         }
                     }
                 }
