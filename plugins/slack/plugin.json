@@ -1,0 +1,15 @@
+{
+  "id": "slack",
+  "name": "Slack Integration",
+  "version": "1.0.0",
+  "description": "Slack bot integration - receive messages from channels and respond via AgentZero",
+  "entry": "index.js",
+  "enabled": true,
+  "env": {
+    "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+    "SLACK_APP_TOKEN": "${SLACK_APP_TOKEN}",
+    "SLACK_SIGNING_SECRET": "${SLACK_SIGNING_SECRET}"
+  },
+  "auto_restart": true,
+  "restart_delay_ms": 5000
+}

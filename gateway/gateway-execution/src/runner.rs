@@ -341,6 +341,7 @@ impl ExecutionRunner {
             &self.state_service,
             &config.agent_id,
             config.session_id.as_deref(),
+            config.source,
         );
         let session_id = setup.session_id;
         let execution_id = setup.execution_id;

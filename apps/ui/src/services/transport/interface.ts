@@ -53,6 +53,20 @@ import type {
   CreateCronJobRequest,
   UpdateCronJobRequest,
   CronTriggerResult,
+  // Memory types
+  MemoryFact,
+  MemoryFilter,
+  MemoryListResponse,
+  // Graph types
+  GraphStatsResponse,
+  GraphEntityListResponse,
+  GraphRelationshipListResponse,
+  GraphEntityFilter,
+  GraphRelationshipFilter,
+  GraphNeighborResponse,
+  GraphSubgraphResponse,
+  GraphNeighborOptions,
+  GraphSubgraphOptions,
 } from "./types";
 
 // ============================================================================
@@ -341,4 +355,63 @@ export interface Transport {
 
   /** Disable a cron job */
   disableCronJob(id: string): Promise<TransportResult<CronJobResponse>>;
+
+  // =========================================================================
+  // Memory Operations
+  // =========================================================================
+
+  /** List ALL memory facts across all agents (with optional filter) */
+  listAllMemory(filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
+
+  /** List memory facts for an agent */
+  listMemory(agentId: string, filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
+
+  /** Search memory facts for an agent */
+  searchMemory(agentId: string, query: string, filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
+
+  /** Get a single memory fact */
+  getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>>;
+
+  /** Delete a memory fact */
+  deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>>;
+
+  // =========================================================================
+  // Knowledge Graph Operations
+  // =========================================================================
+
+  /** Get graph statistics for an agent */
+  getGraphStats(agentId: string): Promise<TransportResult<GraphStatsResponse>>;
+
+  /** List entities for an agent with optional filter */
+  getGraphEntities(
+    agentId: string,
+    filter?: GraphEntityFilter
+  ): Promise<TransportResult<GraphEntityListResponse>>;
+
+  /** List relationships for an agent with optional filter */
+  getGraphRelationships(
+    agentId: string,
+    filter?: GraphRelationshipFilter
+  ): Promise<TransportResult<GraphRelationshipListResponse>>;
+
+  /** Search entities by name */
+  searchGraphEntities(
+    agentId: string,
+    query: string,
+    limit?: number
+  ): Promise<TransportResult<GraphEntityListResponse>>;
+
+  /** Get neighbors of an entity */
+  getEntityNeighbors(
+    agentId: string,
+    entityId: string,
+    options?: GraphNeighborOptions
+  ): Promise<TransportResult<GraphNeighborResponse>>;
+
+  /** Get subgraph around an entity */
+  getEntitySubgraph(
+    agentId: string,
+    entityId: string,
+    options?: GraphSubgraphOptions
+  ): Promise<TransportResult<GraphSubgraphResponse>>;
 }

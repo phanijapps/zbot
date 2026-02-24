@@ -65,6 +65,11 @@ impl VaultPaths {
         self.vault_dir.join("config").join("INSTRUCTIONS.md")
     }
 
+    /// Path to `config/distillation_prompt.md`
+    pub fn distillation_prompt(&self) -> PathBuf {
+        self.vault_dir.join("config").join("distillation_prompt.md")
+    }
+
     /// Path to the config directory
     pub fn config_dir(&self) -> PathBuf {
         self.vault_dir.join("config")
@@ -77,6 +82,11 @@ impl VaultPaths {
     /// Path to `data/conversations.db`
     pub fn conversations_db(&self) -> PathBuf {
         self.vault_dir.join("data").join("conversations.db")
+    }
+
+    /// Path to `data/knowledge_graph.db`
+    pub fn knowledge_graph_db(&self) -> PathBuf {
+        self.vault_dir.join("data").join("knowledge_graph.db")
     }
 
     /// Path to the data directory
@@ -108,6 +118,11 @@ impl VaultPaths {
         self.vault_dir.join("wards")
     }
 
+    /// Path to plugins directory (contains STDIO plugins)
+    pub fn plugins_dir(&self) -> PathBuf {
+        self.vault_dir.join("plugins")
+    }
+
     /// Path to a specific ward (also used for agent data and session data).
     /// Returns `wards/{ward_id}/`
     pub fn ward_dir(&self, ward_id: &str) -> PathBuf {
@@ -131,6 +146,7 @@ impl VaultPaths {
     /// - logs/
     /// - agents/
     /// - skills/
+    /// - plugins/
     /// - wards/ (with scratch subdirectory)
     pub fn ensure_dirs_exist(&self) -> io::Result<()> {
         let dirs = [
@@ -139,6 +155,7 @@ impl VaultPaths {
             self.logs_dir(),
             self.agents_dir(),
             self.skills_dir(),
+            self.plugins_dir(),
             self.wards_dir(),
         ];
 
@@ -198,6 +215,7 @@ mod tests {
         assert_eq!(paths.agents_dir(), dir.path().join("agents"));
         assert_eq!(paths.skills_dir(), dir.path().join("skills"));
         assert_eq!(paths.wards_dir(), dir.path().join("wards"));
+        assert_eq!(paths.plugins_dir(), dir.path().join("plugins"));
     }
 
     #[test]
@@ -221,6 +239,7 @@ mod tests {
         assert!(dir.path().join("logs").exists());
         assert!(dir.path().join("agents").exists());
         assert!(dir.path().join("skills").exists());
+        assert!(dir.path().join("plugins").exists());
         assert!(dir.path().join("wards").exists());
         assert!(dir.path().join("wards").join("scratch").exists());
     }

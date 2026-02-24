@@ -709,3 +709,141 @@ export interface CronTriggerResult {
   execution_id?: string;
   message: string;
 }
+
+// ============================================================================
+// Memory Types
+// ============================================================================
+
+/** Memory fact scope - determines visibility of the fact */
+export type MemoryScope = "agent" | "shared" | "ward";
+
+/** Memory fact category - type of information stored */
+export type MemoryCategory =
+  | "preference"
+  | "decision"
+  | "pattern"
+  | "entity"
+  | "instruction"
+  | "correction";
+
+/** A memory fact stored in the agent's memory system */
+export interface MemoryFact {
+  id: string;
+  agent_id: string;
+  scope: MemoryScope;
+  category: MemoryCategory;
+  key: string;
+  content: string;
+  confidence: number;
+  mention_count: number;
+  source_summary?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Filter options for listing memory facts */
+export interface MemoryFilter {
+  /** Optional agent filter - when provided, only that agent's memories are returned */
+  agent_id?: string;
+  category?: MemoryCategory;
+  scope?: MemoryScope;
+  limit?: number;
+  offset?: number;
+}
+
+/** Response for memory list operations */
+export interface MemoryListResponse {
+  facts: MemoryFact[];
+  total: number;
+}
+
+// ============================================================================
+// Knowledge Graph Types
+// ============================================================================
+
+/** Graph statistics response */
+export interface GraphStatsResponse {
+  entity_count: number;
+  relationship_count: number;
+  entity_types: Record<string, number>;
+  relationship_types: Record<string, number>;
+  most_connected_entities: Array<[string, number]>;
+}
+
+/** Graph entity */
+export interface GraphEntity {
+  id: string;
+  agent_id: string;
+  entity_type: string;
+  name: string;
+  properties: Record<string, unknown>;
+  mention_count: number;
+}
+
+/** Graph relationship */
+export interface GraphRelationship {
+  id: string;
+  agent_id: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  relationship_type: string;
+  mention_count: number;
+}
+
+/** Entity list response */
+export interface GraphEntityListResponse {
+  entities: GraphEntity[];
+  total: number;
+}
+
+/** Relationship list response */
+export interface GraphRelationshipListResponse {
+  relationships: GraphRelationship[];
+  total: number;
+}
+
+/** Filter for entity queries */
+export interface GraphEntityFilter {
+  entity_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Filter for relationship queries */
+export interface GraphRelationshipFilter {
+  relationship_type?: string;
+  limit?: number;
+  offset?: number;
+}
+
+/** Neighbor entry in neighbor response */
+export interface GraphNeighborEntry {
+  entity: GraphEntity;
+  relationship: GraphRelationship;
+  direction: "incoming" | "outgoing";
+}
+
+/** Neighbor response */
+export interface GraphNeighborResponse {
+  entity_id: string;
+  neighbors: GraphNeighborEntry[];
+}
+
+/** Subgraph response */
+export interface GraphSubgraphResponse {
+  entities: GraphEntity[];
+  relationships: GraphRelationship[];
+  center: string;
+  max_hops: number;
+}
+
+/** Options for neighbor queries */
+export interface GraphNeighborOptions {
+  direction?: "incoming" | "outgoing" | "both";
+  limit?: number;
+}
+
+/** Options for subgraph queries */
+export interface GraphSubgraphOptions {
+  max_hops?: number;
+}

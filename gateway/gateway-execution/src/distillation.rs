@@ -25,7 +25,7 @@ use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
 use gateway_database::{ConversationRepository, MemoryFact, MemoryRepository};
-use gateway_services::ProviderService;
+use gateway_services::{ProviderService, VaultPaths};
 use knowledge_graph::{GraphStorage, Entity, EntityType, Relationship, RelationshipType};
 use serde::Deserialize;
 
@@ -36,6 +36,7 @@ pub struct SessionDistiller {
     conversation_repo: Arc<ConversationRepository>,
     memory_repo: Arc<MemoryRepository>,
     graph_storage: Option<Arc<GraphStorage>>,
+    paths: Arc<VaultPaths>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -98,6 +99,7 @@ impl SessionDistiller {
         conversation_repo: Arc<ConversationRepository>,
         memory_repo: Arc<MemoryRepository>,
         graph_storage: Option<Arc<GraphStorage>>,
+        paths: Arc<VaultPaths>,
     ) -> Self {
         Self {
             provider_service,
@@ -105,6 +107,30 @@ impl SessionDistiller {
             conversation_repo,
             memory_repo,
             graph_storage,
+            paths,
+        }
+    }
+
+    /// Load the distillation prompt from filesystem or use embedded default.
+    ///
+    /// Checks for `config/distillation_prompt.md` in the vault directory.
+    /// Falls back to the embedded DEFAULT_DISTILLATION_PROMPT if not found.
+    fn load_distillation_prompt(&self) -> String {
+        let prompt_path = self.paths.distillation_prompt();
+
+        match std::fs::read_to_string(&prompt_path) {
+            Ok(content) if !content.trim().is_empty() => {
+                tracing::info!("Loaded distillation prompt from {:?}", prompt_path);
+                content
+            }
+            Ok(_) => {
+                tracing::debug!("Distillation prompt file is empty, using default");
+                DEFAULT_DISTILLATION_PROMPT.to_string()
+            }
+            Err(_) => {
+                // File doesn't exist, use embedded default (no log spam)
+                DEFAULT_DISTILLATION_PROMPT.to_string()
+            }
         }
     }
 
@@ -285,7 +311,8 @@ impl SessionDistiller {
     async fn extract_all(&self, transcript: &str) -> Result<DistillationResponse, String> {
         let llm_client = self.create_llm_client()?;
 
-        let system = DISTILLATION_PROMPT.to_string();
+        // Load prompt from filesystem or use embedded default
+        let system = self.load_distillation_prompt();
         let user = format!(
             "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, and relationships as JSON.",
             transcript
@@ -439,7 +466,9 @@ fn extract_json_from_content(content: &str) -> String {
 }
 
 /// The distillation prompt sent as a system message.
-const DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze this conversation and extract durable facts, entities, and relationships worth remembering for future sessions.
+/// The default distillation prompt (embedded fallback).
+/// Can be overridden by creating `config/distillation_prompt.md` in the vault.
+const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze this conversation and extract durable facts, entities, and relationships worth remembering for future sessions.
 
 Return a JSON object with three arrays:
 

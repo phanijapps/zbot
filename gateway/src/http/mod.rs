@@ -9,9 +9,12 @@ mod conversations;
 mod cron;
 mod events;
 mod gateway_bus;
+mod graph;
 mod health;
+mod memory;
 mod mcps;
 mod openapi;
+mod plugins;
 mod providers;
 mod settings;
 mod skills;
@@ -131,6 +134,19 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/tools", put(settings::update_tool_settings))
         .route("/api/settings/logs", get(settings::get_log_settings))
         .route("/api/settings/logs", put(settings::update_log_settings))
+        // Memory endpoints
+        .route("/api/memory", get(memory::list_all_memory_facts))
+        .route("/api/memory/:agent_id", get(memory::list_memory_facts))
+        .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
+        .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
+        .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
+        // Knowledge Graph endpoints
+        .route("/api/graph/:agent_id/stats", get(graph::get_graph_stats))
+        .route("/api/graph/:agent_id/entities", get(graph::list_entities))
+        .route("/api/graph/:agent_id/relationships", get(graph::list_relationships))
+        .route("/api/graph/:agent_id/search", get(graph::search_entities))
+        .route("/api/graph/:agent_id/entities/:entity_id/neighbors", get(graph::get_entity_neighbors))
+        .route("/api/graph/:agent_id/entities/:entity_id/subgraph", get(graph::get_entity_subgraph))
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)
@@ -140,6 +156,18 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Bridge endpoints
         .route("/api/bridge/workers", get(bridge::list_workers))
         .route("/bridge/ws", get(bridge::ws_upgrade))
+        // Plugin endpoints
+        .route("/api/plugins", get(plugins::list_plugins))
+        .route("/api/plugins/:id", get(plugins::get_plugin))
+        .route("/api/plugins/:id/start", post(plugins::start_plugin))
+        .route("/api/plugins/:id/stop", post(plugins::stop_plugin))
+        .route("/api/plugins/:id/restart", post(plugins::restart_plugin))
+        .route("/api/plugins/:id/config", get(plugins::get_plugin_config))
+        .route("/api/plugins/:id/config", put(plugins::update_plugin_config))
+        .route("/api/plugins/:id/secrets", get(plugins::list_plugin_secrets))
+        .route("/api/plugins/:id/secrets/:key", put(plugins::set_plugin_secret))
+        .route("/api/plugins/:id/secrets/:key", delete(plugins::delete_plugin_secret))
+        .route("/api/plugins/discover", post(plugins::discover_plugins))
         // State
         .with_state(state);
 

@@ -153,6 +153,104 @@ impl MemoryRepository {
         })
     }
 
+    /// Get a single memory fact by ID.
+    pub fn get_memory_fact_by_id(&self, id: &str) -> Result<Option<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                        mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                 FROM memory_facts
+                 WHERE id = ?1"
+            )?;
+
+            let result = stmt.query_row(params![id], |row| row_to_memory_fact(row));
+
+            match result {
+                Ok(fact) => Ok(Some(fact)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    /// List memory facts with optional filters (category, scope) and pagination.
+    pub fn list_memory_facts(
+        &self,
+        agent_id: &str,
+        category: Option<&str>,
+        scope: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                match (category, scope) {
+                    (Some(cat), Some(scp)) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1 AND category = ?2 AND scope = ?3
+                         ORDER BY updated_at DESC
+                         LIMIT ?4 OFFSET ?5".to_string(),
+                        vec![
+                            Box::new(agent_id.to_string()),
+                            Box::new(cat.to_string()),
+                            Box::new(scp.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (Some(cat), None) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1 AND category = ?2
+                         ORDER BY updated_at DESC
+                         LIMIT ?3 OFFSET ?4".to_string(),
+                        vec![
+                            Box::new(agent_id.to_string()),
+                            Box::new(cat.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (None, Some(scp)) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1 AND scope = ?2
+                         ORDER BY updated_at DESC
+                         LIMIT ?3 OFFSET ?4".to_string(),
+                        vec![
+                            Box::new(agent_id.to_string()),
+                            Box::new(scp.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (None, None) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1
+                         ORDER BY updated_at DESC
+                         LIMIT ?2 OFFSET ?3".to_string(),
+                        vec![
+                            Box::new(agent_id.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                };
+
+            let mut stmt = conn.prepare(&sql)?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Decay confidence of stale facts.
     ///
     /// Facts not updated in `older_than_days` have their confidence multiplied
@@ -426,6 +524,155 @@ impl MemoryRepository {
                 params![agent_id],
                 |row| row.get(0),
             )?;
+            Ok(count as usize)
+        })
+    }
+
+    /// List all memory facts across all agents with optional filters and pagination.
+    pub fn list_all_memory_facts(
+        &self,
+        agent_id: Option<&str>,
+        category: Option<&str>,
+        scope: Option<&str>,
+        limit: usize,
+        offset: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
+                match (agent_id, category, scope) {
+                    (Some(aid), Some(cat), Some(scp)) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1 AND category = ?2 AND scope = ?3
+                         ORDER BY updated_at DESC
+                         LIMIT ?4 OFFSET ?5".to_string(),
+                        vec![
+                            Box::new(aid.to_string()),
+                            Box::new(cat.to_string()),
+                            Box::new(scp.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (Some(aid), Some(cat), None) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1 AND category = ?2
+                         ORDER BY updated_at DESC
+                         LIMIT ?3 OFFSET ?4".to_string(),
+                        vec![
+                            Box::new(aid.to_string()),
+                            Box::new(cat.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (Some(aid), None, Some(scp)) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1 AND scope = ?2
+                         ORDER BY updated_at DESC
+                         LIMIT ?3 OFFSET ?4".to_string(),
+                        vec![
+                            Box::new(aid.to_string()),
+                            Box::new(scp.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (Some(aid), None, None) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE agent_id = ?1
+                         ORDER BY updated_at DESC
+                         LIMIT ?2 OFFSET ?3".to_string(),
+                        vec![
+                            Box::new(aid.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (None, Some(cat), Some(scp)) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE category = ?1 AND scope = ?2
+                         ORDER BY updated_at DESC
+                         LIMIT ?3 OFFSET ?4".to_string(),
+                        vec![
+                            Box::new(cat.to_string()),
+                            Box::new(scp.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (None, Some(cat), None) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE category = ?1
+                         ORDER BY updated_at DESC
+                         LIMIT ?2 OFFSET ?3".to_string(),
+                        vec![
+                            Box::new(cat.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (None, None, Some(scp)) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         WHERE scope = ?1
+                         ORDER BY updated_at DESC
+                         LIMIT ?2 OFFSET ?3".to_string(),
+                        vec![
+                            Box::new(scp.to_string()),
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                    (None, None, None) => (
+                        "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                         FROM memory_facts
+                         ORDER BY updated_at DESC
+                         LIMIT ?1 OFFSET ?2".to_string(),
+                        vec![
+                            Box::new(limit as i64),
+                            Box::new(offset as i64),
+                        ],
+                    ),
+                };
+
+            let mut stmt = conn.prepare(&sql)?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> =
+                params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
+    /// Count all memory facts across all agents.
+    pub fn count_all_memory_facts(&self, agent_id: Option<&str>) -> Result<usize, String> {
+        self.db.with_connection(|conn| {
+            let count: i64 = if let Some(aid) = agent_id {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM memory_facts WHERE agent_id = ?1",
+                    params![aid],
+                    |row| row.get(0),
+                )?
+            } else {
+                conn.query_row(
+                    "SELECT COUNT(*) FROM memory_facts",
+                    [],
+                    |row| row.get(0),
+                )?
+            };
             Ok(count as usize)
         })
     }

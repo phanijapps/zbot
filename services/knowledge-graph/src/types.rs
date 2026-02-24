@@ -268,6 +268,74 @@ pub struct ExtractedKnowledge {
     pub relationships: Vec<Relationship>,
 }
 
+/// Direction for neighbor queries
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Direction {
+    /// Entity → Other (outgoing edges)
+    Outgoing,
+    /// Other → Entity (incoming edges)
+    Incoming,
+    /// Either direction
+    Both,
+}
+
+impl Default for Direction {
+    fn default() -> Self {
+        Direction::Both
+    }
+}
+
+/// Information about a neighboring entity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NeighborInfo {
+    /// The neighboring entity
+    pub entity: Entity,
+    /// The relationship connecting to the neighbor
+    pub relationship: Relationship,
+    /// Direction of the relationship from the source entity's perspective
+    pub direction: Direction,
+}
+
+/// Entity with its connections (incoming and outgoing)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityWithConnections {
+    /// The central entity
+    pub entity: Entity,
+    /// Outgoing relationships: Entity → Other
+    pub outgoing: Vec<(Relationship, Entity)>,
+    /// Incoming relationships: Other → Entity
+    pub incoming: Vec<(Relationship, Entity)>,
+}
+
+/// Graph statistics for an agent
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphStats {
+    /// Total number of entities
+    pub entity_count: usize,
+    /// Total number of relationships
+    pub relationship_count: usize,
+    /// Entity counts by type
+    pub entity_types: std::collections::HashMap<String, usize>,
+    /// Relationship counts by type
+    pub relationship_types: std::collections::HashMap<String, usize>,
+    /// Top entities by connection count (entity_name, connection_count)
+    pub most_connected_entities: Vec<(String, usize)>,
+}
+
+/// Subgraph extracted around a center entity
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Subgraph {
+    /// All entities in the subgraph
+    pub entities: Vec<Entity>,
+    /// All relationships in the subgraph
+    pub relationships: Vec<Relationship>,
+    /// ID of the center entity
+    pub center: String,
+    /// Maximum hops from center
+    pub max_hops: usize,
+}
+
 // ============================================================================
 // UNIT TESTS
 // ============================================================================

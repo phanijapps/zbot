@@ -10,7 +10,7 @@ use gateway_connectors::{ConnectorRegistry, DispatchContext};
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
 use api_logs::{LogService, SessionStatus};
-use execution_state::{AgentExecution, Session, StateService};
+use execution_state::{AgentExecution, Session, StateService, TriggerSource};
 use std::sync::Arc;
 
 // ============================================================================
@@ -34,10 +34,13 @@ pub struct SessionSetup {
 ///
 /// If the existing session was in a terminal state (completed/crashed), it will
 /// be reactivated to running status.
+///
+/// The `source` parameter determines the trigger source for new sessions.
 pub fn get_or_create_session(
     state_service: &StateService<DatabaseManager>,
     agent_id: &str,
     existing_session_id: Option<&str>,
+    source: TriggerSource,
 ) -> SessionSetup {
     if let Some(session_id) = existing_session_id {
         // Try to continue existing session
@@ -82,12 +85,12 @@ pub fn get_or_create_session(
         }
     }
 
-    // Create new session
+    // Create new session with source
     let (session, execution) = state_service
-        .create_session(agent_id)
+        .create_session_with_source(agent_id, source)
         .unwrap_or_else(|e| {
             tracing::warn!("Failed to create session: {}", e);
-            let s = Session::new(agent_id);
+            let s = Session::new_with_source(agent_id, source);
             let e = AgentExecution::new_root(&s.id, agent_id);
             (s, e)
         });
@@ -220,47 +223,60 @@ pub async fn complete_execution(
         .await;
 
     // Dispatch response to connectors if respond_to is specified
-    if let (Some(registry), Some(connector_ids)) = (connector_registry, respond_to) {
+    // Only dispatch to ConnectorRegistry for connectors NOT in BridgeRegistry
+    if let (Some(registry), Some(connector_ids), Some(bridge)) =
+        (connector_registry, respond_to, bridge_registry)
+    {
         if !connector_ids.is_empty() {
             if let Some(response_text) = &response {
-                let context = DispatchContext {
-                    session_id: session_id.to_string(),
-                    thread_id: thread_id.map(|t| t.to_string()),
-                    agent_id: agent_id.to_string(),
-                    timestamp: chrono::Utc::now(),
-                };
+                // Filter out bridge workers (plugins) - they'll be handled below
+                let mut connector_only_ids: Vec<String> = Vec::new();
+                for id in connector_ids {
+                    if !bridge.is_connected(id).await {
+                        connector_only_ids.push(id.clone());
+                    }
+                }
 
-                let payload = serde_json::json!({
-                    "message": response_text,
-                    "execution_id": execution_id,
-                    "conversation_id": conversation_id,
-                });
+                if !connector_only_ids.is_empty() {
+                    let context = DispatchContext {
+                        session_id: session_id.to_string(),
+                        thread_id: thread_id.map(|t| t.to_string()),
+                        agent_id: agent_id.to_string(),
+                        timestamp: chrono::Utc::now(),
+                    };
 
-                tracing::info!(
-                    session_id = %session_id,
-                    connectors = ?connector_ids,
-                    "Dispatching response to connectors"
-                );
+                    let payload = serde_json::json!({
+                        "message": response_text,
+                        "execution_id": execution_id,
+                        "conversation_id": conversation_id,
+                    });
 
-                let results = registry
-                    .dispatch_to_many(connector_ids, "respond", payload, &context)
-                    .await;
+                    tracing::info!(
+                        session_id = %session_id,
+                        connectors = ?connector_only_ids,
+                        "Dispatching response to connectors"
+                    );
 
-                for (connector_id, result) in results {
-                    match result {
-                        Ok(resp) => {
-                            tracing::info!(
-                                connector_id = %connector_id,
-                                success = resp.success,
-                                "Connector dispatch completed"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                connector_id = %connector_id,
-                                error = %e,
-                                "Connector dispatch failed"
-                            );
+                    let results = registry
+                        .dispatch_to_many(&connector_only_ids, "respond", payload, &context)
+                        .await;
+
+                    for (connector_id, result) in results {
+                        match result {
+                            Ok(resp) => {
+                                tracing::info!(
+                                    connector_id = %connector_id,
+                                    success = resp.success,
+                                    "Connector dispatch completed"
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    connector_id = %connector_id,
+                                    error = %e,
+                                    "Connector dispatch failed"
+                                );
+                            }
                         }
                     }
                 }
@@ -277,6 +293,7 @@ pub async fn complete_execution(
                 "message": response_text,
                 "execution_id": execution_id,
                 "session_id": session_id,
+                "thread_id": thread_id,
             });
 
             for id in connector_ids {

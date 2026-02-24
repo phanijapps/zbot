@@ -82,7 +82,8 @@ impl HttpGatewayBus {
             request.agent_id.clone(),
             conversation_id,
             self.config_dir.clone(),
-        );
+        )
+        .with_source(request.source);
 
         // Set session ID if continuing an existing session
         if let Some(session_id) = &request.session_id {
@@ -104,13 +105,32 @@ impl HttpGatewayBus {
             config = config.with_connector_id(connector_id.clone());
         }
 
+        // Copy metadata from request
+        if let Some(metadata) = &request.metadata {
+            config = config.with_metadata(metadata.clone());
+        }
+
         config
     }
 }
 
 #[async_trait]
 impl GatewayBus for HttpGatewayBus {
-    async fn submit(&self, request: SessionRequest) -> Result<SessionHandle, BusError> {
+    async fn submit(&self, mut request: SessionRequest) -> Result<SessionHandle, BusError> {
+        // If thread_id provided but no session_id, try to find existing session
+        if request.thread_id.is_some() && request.session_id.is_none() {
+            if let Some(thread_id) = &request.thread_id {
+                if let Ok(Some(existing)) = self.state_service.find_session_by_thread_id(thread_id) {
+                    tracing::info!(
+                        thread_id = %thread_id,
+                        session_id = %existing.id,
+                        "Continuing existing session for thread"
+                    );
+                    request = request.with_session_id(existing.id);
+                }
+            }
+        }
+
         let config = self.to_execution_config(&request);
         let conversation_id = config.conversation_id.clone();
 

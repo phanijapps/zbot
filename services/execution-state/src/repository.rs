@@ -129,6 +129,11 @@ impl<D: StateDbProvider> StateRepository<D> {
                 params_vec.push(Box::new(to_time.clone()));
             }
 
+            if let Some(thread_id) = &filter.thread_id {
+                sql.push_str(" AND thread_id = ?");
+                params_vec.push(Box::new(thread_id.clone()));
+            }
+
             sql.push_str(" ORDER BY created_at DESC");
 
             if let Some(limit) = filter.limit {

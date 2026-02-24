@@ -18,7 +18,7 @@ Most AI platforms lock you into a cloud provider, take your data off-machine, an
 
 5. **Provider lock-in** — Most platforms work with one LLM provider. Agent Zero is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API.
 
-6. **Limited extensibility** — Agent Zero supports Skills (reusable instruction packages) and MCP servers (external tool integration) as first-class concepts.
+6. **Limited extensibility** — Agent Zero supports Skills (reusable instruction packages), MCP servers (external tool integration), and Bridge Workers (bidirectional connectors to external services like Slack, Discord, CRMs) as first-class concepts.
 
 ## Core Principles
 
@@ -58,6 +58,7 @@ Most AI platforms lock you into a cloud provider, take your data off-machine, an
 | Customization | Unlimited | Limited |
 | Privacy | Full control | Varies |
 | Multi-Agent | Built-in delegation | Rare |
+| External Connectors | Bridge Workers (WebSocket + STDIO) | Limited/None |
 | Persistent Code | Code Wards | Session-scoped |
 | Cross-Session Learning | Auto-distillation + hybrid recall | None |
 | Embedding Cost | Local ONNX (zero cost) default | API-only |

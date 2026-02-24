@@ -4,6 +4,7 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
+use knowledge_graph::{GraphStorage, GraphService};
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
@@ -72,9 +73,18 @@ pub struct AppState {
     /// Gateway bus for bridge inbound message routing (set during server start).
     pub bridge_bus: Option<Arc<dyn gateway_bus::GatewayBus>>,
 
+    /// Memory repository for accessing agent memory facts.
+    pub memory_repo: Option<Arc<MemoryRepository>>,
+
+    /// Graph service for knowledge graph operations.
+    pub graph_service: Option<Arc<GraphService>>,
+
     /// Cron scheduler for scheduled agent triggers.
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
+
+    /// Plugin manager for STDIO plugin lifecycle.
+    pub plugin_manager: Arc<gateway_bridge::PluginManager>,
 
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
@@ -132,7 +142,22 @@ impl AppState {
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
 
         // Initialize memory evolution services
-        let memory_repo = Arc::new(MemoryRepository::new(db_manager));
+        let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
+
+        // Initialize knowledge graph service and storage
+        let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
+            match GraphStorage::new(paths.knowledge_graph_db()) {
+                Ok(storage) => {
+                    let storage = Arc::new(storage);
+                    let service = Arc::new(GraphService::new(storage.clone()));
+                    tracing::info!("Knowledge graph service initialized");
+                    (Some(service), Some(storage))
+                }
+                Err(e) => {
+                    tracing::warn!("Knowledge graph initialization failed: {}", e);
+                    (None, None)
+                }
+            };
 
         let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
             Ok(client) => {
@@ -148,17 +173,30 @@ impl AppState {
             }
         };
 
-        let memory_recall = Arc::new(MemoryRecall::new(
-            embedding_client.clone(),
-            memory_repo.clone(),
-        ));
+        // Create memory recall with optional graph enrichment
+        let memory_recall = match &graph_service {
+            Some(gs) => {
+                Arc::new(MemoryRecall::with_graph(
+                    embedding_client.clone(),
+                    memory_repo.clone(),
+                    gs.clone(),
+                ))
+            }
+            None => {
+                Arc::new(MemoryRecall::new(
+                    embedding_client.clone(),
+                    memory_repo.clone(),
+                ))
+            }
+        };
 
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
             embedding_client,
             conversation_repo.clone(),
             memory_repo.clone(),
-            None, // graph_storage — wired when knowledge graph is configured
+            graph_storage,
+            paths.clone(), // For loading distillation_prompt.md
         ));
 
         // Create runtime with execution runner and connector registry
@@ -174,7 +212,7 @@ impl AppState {
             state_service.clone(),
             Some(connector_registry.clone()),
             workspace_cache.clone(),
-            Some(memory_repo),
+            Some(memory_repo.clone()),
             Some(distiller),
             Some(memory_recall),
             Some(bridge_registry.clone()),
@@ -189,6 +227,14 @@ impl AppState {
 
         // Create settings service
         let settings = Arc::new(SettingsService::new(paths.clone()));
+
+        // Create plugin manager
+        let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
+            paths.plugins_dir(),
+            bridge_registry.clone(),
+            bridge_outbox.clone(),
+            None, // bus is set later by server.start()
+        ));
 
         Self {
             agents,
@@ -208,9 +254,12 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
+            plugin_manager,
             workspace_cache,
             paths,
             config_dir,
+            memory_repo: Some(memory_repo),
+            graph_service,
         }
     }
 
@@ -230,10 +279,25 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
+        let memory_repo = Arc::new(MemoryRepository::new(Arc::new(
+            DatabaseManager::new(paths.clone())
+                .expect("Failed to initialize database for memory"),
+        )));
 
         // Create connector registry
         let connector_service = ConnectorService::new(paths.clone());
         let connector_registry = Arc::new(ConnectorRegistry::new(connector_service));
+
+        // Create bridge registry
+        let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
+
+        // Create plugin manager
+        let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
+            paths.plugins_dir(),
+            bridge_registry.clone(),
+            bridge_outbox.clone(),
+            None, // bus is set later by server.start()
+        ));
 
         Self {
             agents: Arc::new(AgentService::new(agents_dir)),
@@ -249,13 +313,16 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
-            bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
+            bridge_registry,
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
+            memory_repo: Some(memory_repo),
+            graph_service: None,
         }
     }
 
@@ -274,6 +341,30 @@ impl AppState {
         paths: SharedVaultPaths,
     ) -> Self {
         let config_dir = paths.vault_dir().clone();
+        let db = Arc::new(
+            DatabaseManager::new(paths.clone())
+                .expect("Failed to initialize database"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(db));
+
+        // Create bridge registry and outbox
+        let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
+        let bridge_outbox = {
+            let db = Arc::new(
+                DatabaseManager::new(paths.clone())
+                    .expect("Failed to initialize database for bridge outbox"),
+            );
+            Arc::new(gateway_bridge::OutboxRepository::new(db))
+        };
+
+        // Create plugin manager
+        let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
+            paths.plugins_dir(),
+            bridge_registry.clone(),
+            bridge_outbox.clone(),
+            None, // bus is set later by server.start()
+        ));
+
         Self {
             agents,
             skills,
@@ -288,19 +379,16 @@ impl AppState {
             log_service,
             state_service,
             connector_registry,
-            bridge_registry: Arc::new(gateway_bridge::BridgeRegistry::new()),
-            bridge_outbox: {
-                let db = Arc::new(
-                    DatabaseManager::new(paths.clone())
-                        .expect("Failed to initialize database for bridge outbox"),
-                );
-                Arc::new(gateway_bridge::OutboxRepository::new(db))
-            },
+            bridge_registry,
+            bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
+            memory_repo: Some(memory_repo),
+            graph_service: None,
         }
     }
 
@@ -341,6 +429,30 @@ impl AppState {
 
         // Create Python venv and Node env if missing, then seed workspace memory
         self.ensure_runtime_environments().await;
+
+        // Discover and start plugins
+        self.discover_and_start_plugins().await;
+    }
+
+    /// Discover and start all enabled plugins.
+    async fn discover_and_start_plugins(&self) {
+        tracing::info!("Discovering plugins...");
+
+        match self.plugin_manager.discover().await {
+            Ok(discovered) => {
+                if discovered.is_empty() {
+                    tracing::info!("No plugins discovered");
+                } else {
+                    tracing::info!("Discovered {} plugin(s): {:?}", discovered.len(), discovered);
+
+                    // Start all enabled plugins
+                    self.plugin_manager.start_all().await;
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to discover plugins: {}", e);
+            }
+        }
     }
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.

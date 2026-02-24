@@ -1,0 +1,11 @@
+{
+  "name": "slack-plugin",
+  "version": "1.0.0",
+  "description": "Slack bot integration for AgentZero",
+  "main": "index.js",
+  "license": "MIT",
+  "dependencies": {
+    "@slack/web-api": "^7.0.0",
+    "@slack/socket-mode": "^1.1.0"
+  }
+}
