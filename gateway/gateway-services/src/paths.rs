@@ -1,6 +1,6 @@
 //! # Vault Paths
 //!
-//! Centralized path management for the AgentZero vault.
+//! Centralized path management for the z-Bot vault.
 //!
 //! Provides XDG-inspired directory structure:
 //! - Config files go in `config/` subdirectory
@@ -12,7 +12,7 @@ use std::io;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// Centralized path management for the AgentZero vault.
+/// Centralized path management for the z-Bot vault.
 ///
 /// Provides a consistent interface for accessing all vault paths,
 /// following XDG-inspired conventions:
@@ -21,7 +21,7 @@ use std::sync::Arc;
 /// - Agent/session data → `wards/{id}/` subdirectory
 #[derive(Debug, Clone)]
 pub struct VaultPaths {
-    /// Base vault directory (e.g., ~/Documents/agentzero)
+    /// Base vault directory (e.g., ~/Documents/zbot)
     vault_dir: PathBuf,
 }
 

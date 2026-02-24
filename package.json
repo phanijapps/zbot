@@ -1,5 +1,5 @@
 {
-  "name": "agentzero-workspace",
+  "name": "z-bot-workspace",
   "private": true,
   "description": "AI agent platform with Web dashboard and CLI",
   "scripts": {

@@ -50,11 +50,11 @@ impl GatewayServer {
 
     /// Create with default configuration and default data directory.
     pub fn with_defaults() -> Self {
-        // Use ~/Documents/agentzero as the default data directory
+        // Use ~/Documents/zbot as the default data directory
         let data_dir = dirs::document_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("agentzero");
+            .join("zbot");
         Self::new(GatewayConfig::default(), data_dir)
     }
 

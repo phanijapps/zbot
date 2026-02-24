@@ -1,4 +1,4 @@
-# Agent Zero — Technical Architecture
+# z-Bot — Technical Architecture
 
 ## System Overview
 
@@ -53,7 +53,7 @@
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         DATA LAYER                                       │
 ├─────────────────────────────────────────────────────────────────────────┤
-│  ~/Documents/agentzero/                                                  │
+│  ~/Documents/zbot/                                                       │
 │  ├── conversations.db          # SQLite: conversations, messages,       │
 │  │                              #   memory_facts, embedding_cache       │
 │  ├── settings.json             # Application settings (tools, logs)     │
@@ -110,7 +110,7 @@
 
 ## Logging Configuration
 
-AgentZero supports configurable file logging with automatic rotation and retention management. Logging can be configured via `settings.json` or CLI arguments.
+z-Bot supports configurable file logging with automatic rotation and retention management. Logging can be configured via `settings.json` or CLI arguments.
 
 ### Configuration Sources
 
@@ -148,7 +148,7 @@ AgentZero supports configurable file logging with automatic rotation and retenti
 
 ```bash
 # Enable file logging with custom directory
-zerod --log-dir /var/log/agentzero
+zerod --log-dir /var/log/zbot
 
 # Configure rotation and retention
 zerod --log-dir ./logs --log-rotation hourly --log-max-files 24
@@ -164,9 +164,9 @@ zerod --log-level debug
 
 | Platform | Default Location |
 |----------|-----------------|
-| Windows | `C:\Users\{user}\Documents\agentzero\logs\` |
-| macOS | `/Users/{user}/Documents/agentzero/logs/` |
-| Linux | `/home/{user}/Documents/agentzero/logs/` |
+| Windows | `C:\Users\{user}\Documents\zbot\logs\` |
+| macOS | `/Users/{user}/Documents\zbot/logs/` |
+| Linux | `/home/{user}/Documents/zbot/logs/` |
 
 ### Log File Naming
 
@@ -202,7 +202,7 @@ zerod --log-level debug
 ### Layer Overview
 
 ```
-agentzero/
+zbot/
 ├── framework/      # Core abstractions (publishable)
 ├── runtime/        # Execution engine
 ├── services/       # Standalone data services
@@ -487,8 +487,8 @@ The frontend stores session state in localStorage:
 
 ```typescript
 // Keys used for session persistence
-const WEB_SESSION_ID_KEY = 'agentzero_web_session_id';
-const WEB_CONV_ID_KEY = 'agentzero_web_conv_id';
+const WEB_SESSION_ID_KEY = 'zbot_web_session_id';
+const WEB_CONV_ID_KEY = 'zbot_web_conv_id';
 
 // On agent_started event, store session_id
 localStorage.setItem(WEB_SESSION_ID_KEY, event.session_id);
@@ -1003,13 +1003,13 @@ This ensures the agent uses correct shell commands for the platform.
 
 ## Connectors
 
-Connectors are external services that receive agent responses. When an agent execution completes, AgentZero can dispatch the response to one or more configured connectors.
+Connectors are external services that receive agent responses. When an agent execution completes, z-Bot can dispatch the response to one or more configured connectors.
 
 ### Connector Flow
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Trigger       │────▶│   AgentZero     │────▶│   Connector     │
+│   Trigger       │────▶│   z-Bot         │────▶│   Connector     │
 │ (Cron/API/Web)  │     │   Gateway       │     │   (Your Service)│
 └─────────────────┘     └─────────────────┘     └─────────────────┘
                               │
@@ -1064,7 +1064,7 @@ When dispatching to connectors, Gateway sends:
 
 ## Plugins
 
-Plugins are Node.js integrations that extend AgentZero with custom capabilities. They run as child processes communicating via STDIO transport using the Bridge Protocol.
+Plugins are Node.js integrations that extend z-Bot with custom capabilities. They run as child processes communicating via STDIO transport using the Bridge Protocol.
 
 ### Plugin Architecture
 

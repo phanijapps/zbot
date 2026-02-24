@@ -8,7 +8,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let session_id = args.get(1).map(|s| s.as_str()).unwrap_or("sess-9fa1604d-a82b-48e1-a47e-176d594a3b7b");
 
-    let db_path = r"C:\Users\rampi\Documents\agentzero\conversations.db";
+    let db_path = r"C:\Users\rampi\Documents\zbot\conversations.db";
     let conn = Connection::open(db_path)?;
 
     println!("\n=== SESSION: {} ===\n", session_id);

@@ -1,4 +1,4 @@
-# Agent Zero — Decisions
+# z-Bot — Decisions
 
 ## Technology Choices
 
@@ -142,7 +142,7 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 
 ### Plugins: STDIO with Bridge Protocol Reuse
 **Problem**: Users want custom integrations (Slack, Discord, Strava) without modifying core codebase.
-**Decision**: Node.js plugins in `~/Documents/agentzero/plugins/`, spawned as child processes with STDIO transport. Reuse Bridge Protocol (hello/handshake, ping/pong, capability_invoke, inbound) — plugins appear as bridge workers to agents.
+**Decision**: Node.js plugins in `~/Documents/zbot/plugins/`, spawned as child processes with STDIO transport. Reuse Bridge Protocol (hello/handshake, ping/pong, capability_invoke, inbound) — plugins appear as bridge workers to agents.
 **Rationale**: Single protocol for all external integrations. Plugins can trigger agents via `inbound` messages and respond via `capability_invoke`. npm install on first start handles dependencies automatically.
 
 ### Plugins: Self-Contained Manifests
@@ -166,9 +166,9 @@ These were considered during the Codex gap analysis and explicitly rejected:
 
 | Pattern | Why Skipped |
 |---------|-------------|
-| Platform-native sandboxing | AZ is a web platform, not a CLI. Users explicitly configure agent tools. Different threat model. |
-| Interactive approval (exec policy) | Would require WebSocket round-trips + UI modals. AZ agents run in background. Tool tiers are sufficient. |
-| TOML config hierarchy (7 layers) | AZ has a single config directory per installation. JSON/YAML is simpler and sufficient. |
+| Platform-native sandboxing | z-Bot is a web platform, not a CLI. Users explicitly configure agent tools. Different threat model. |
+| Interactive approval (exec policy) | Would require WebSocket round-trips + UI modals. z-Bot agents run in background. Tool tiers are sufficient. |
+| TOML config hierarchy (7 layers) | z-Bot has a single config directory per installation. JSON/YAML is simpler and sufficient. |
 | OpenTelemetry | `tracing` crate is sufficient. OTEL adds infrastructure requirements not needed at current scale. |
 | Git ghost commits (undo) | Different UX for web platform vs interactive CLI. Not critical path. |
 | Starlark policy language | Over-engineered. Simple JSON allowlists are sufficient. |
@@ -176,7 +176,7 @@ These were considered during the Codex gap analysis and explicitly rejected:
 
 ## Development Workflow
 
-Distilled patterns from building AgentZero:
+Distilled patterns from building z-Bot:
 
 1. **Plans with concrete data models** — Show actual schemas/types, not prose. File-level specificity. Phase grouping by architectural layer.
 2. **Right level of detail** — Specify what to create, not how. File paths guide but don't micromanage. Assumes competence on implementation details.

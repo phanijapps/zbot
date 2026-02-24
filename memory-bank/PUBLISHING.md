@@ -1,10 +1,10 @@
-# Publishing AgentZero
+# Publishing z-Bot
 
-This document describes how to build and publish AgentZero for Windows, macOS, and Linux.
+This document describes how to build and publish z-Bot for Windows, macOS, and Linux.
 
 ## Overview
 
-AgentZero consists of two distributable components:
+z-Bot consists of two distributable components:
 
 | Component | Binary Name | Description |
 |-----------|-------------|-------------|
@@ -123,11 +123,11 @@ For MSVC builds (recommended), you must build on Windows.
 
 ```
 dist/
-├── agentzero-{version}-linux-x86_64.tar.gz
-├── agentzero-{version}-linux-aarch64.tar.gz
-├── agentzero-{version}-macos-x86_64.tar.gz
-├── agentzero-{version}-macos-aarch64.tar.gz
-├── agentzero-{version}-windows-x86_64.zip
+├── zbot-{version}-linux-x86_64.tar.gz
+├── zbot-{version}-linux-aarch64.tar.gz
+├── zbot-{version}-macos-x86_64.tar.gz
+├── zbot-{version}-macos-aarch64.tar.gz
+├── zbot-{version}-windows-x86_64.zip
 └── checksums.sha256
 ```
 
@@ -135,7 +135,7 @@ dist/
 
 Each archive contains:
 ```
-agentzero-{version}/
+zbot-{version}/
 ├── zerod              # Daemon binary
 ├── zero               # CLI binary
 ├── README.md
@@ -157,7 +157,7 @@ mkdir -p "$DIST_DIR"
 build_package() {
     local target=$1
     local ext=$2
-    local archive_name="agentzero-${VERSION}-${target}"
+    local archive_name="zbot-${VERSION}-${target}"
 
     mkdir -p "$DIST_DIR/$archive_name"
 
@@ -375,20 +375,20 @@ jobs:
           mkdir -p release
 
           # Linux x86_64
-          tar -czvf release/agentzero-${VERSION}-linux-x86_64.tar.gz \
+          tar -czvf release/zbot-${VERSION}-linux-x86_64.tar.gz \
             -C artifacts/linux-x86_64-unknown-linux-gnu .
 
           # macOS x86_64
-          tar -czvf release/agentzero-${VERSION}-macos-x86_64.tar.gz \
+          tar -czvf release/zbot-${VERSION}-macos-x86_64.tar.gz \
             -C artifacts/macos-x86_64-apple-darwin .
 
           # macOS ARM64
-          tar -czvf release/agentzero-${VERSION}-macos-aarch64.tar.gz \
+          tar -czvf release/zbot-${VERSION}-macos-aarch64.tar.gz \
             -C artifacts/macos-aarch64-apple-darwin .
 
           # Windows
           cd artifacts/windows-x86_64-pc-windows-msvc
-          zip -r ../../release/agentzero-${VERSION}-windows-x86_64.zip .
+          zip -r ../../release/zbot-${VERSION}-windows-x86_64.zip .
 
           # Checksums
           cd release && sha256sum * > checksums.sha256
@@ -396,7 +396,7 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
-          name: AgentZero ${{ github.event.inputs.version || github.ref_name }}
+          name: z-Bot ${{ github.event.inputs.version || github.ref_name }}
           files: release/*
           generate_release_notes: true
 ```
@@ -415,14 +415,14 @@ codesign --sign "Developer ID Application: Your Name" \
   release/zerod release/zero
 
 # Notarize
-xcrun notarytool submit release/agentzero-*.zip \
+xcrun notarytool submit release/zbot-*.zip \
   --apple-id "your@email.com" \
   --password "@keychain:AC_PASSWORD" \
   --team-id "TEAM_ID" \
   --wait
 
 # Staple
-xcrun stapler staple release/agentzero-*.zip
+xcrun stapler staple release/zbot-*.zip
 ```
 
 ### Windows
@@ -446,8 +446,8 @@ Users download the archive for their platform, extract, and run:
 
 ```bash
 # Linux/macOS
-tar -xzf agentzero-0.1.0-linux-x86_64.tar.gz
-cd agentzero-0.1.0
+tar -xzf zbot-0.1.0-linux-x86_64.tar.gz
+cd zbot-0.1.0
 ./zerod --static-dir ./dist
 ```
 
@@ -456,19 +456,19 @@ cd agentzero-0.1.0
 Create a Homebrew formula:
 
 ```ruby
-# Formula/agentzero.rb
-class Agentzero < Formula
+# Formula/zbot.rb
+class Zbot < Formula
   desc "Local-first AI agent platform"
-  homepage "https://github.com/yourorg/agentzero"
+  homepage "https://github.com/yourorg/zbot"
   version "0.1.0"
   sha256 "..." # Calculate from archive
 
   on_macos do
     on_intel do
-      url "https://github.com/yourorg/agentzero/releases/download/v#{version}/agentzero-#{version}-macos-x86_64.tar.gz"
+      url "https://github.com/yourorg/zbot/releases/download/v#{version}/zbot-#{version}-macos-x86_64.tar.gz"
     end
     on_arm do
-      url "https://github.com/yourorg/agentzero/releases/download/v#{version}/agentzero-#{version}-macos-aarch64.tar.gz"
+      url "https://github.com/yourorg/zbot/releases/download/v#{version}/zbot-#{version}-macos-aarch64.tar.gz"
     end
   end
 
@@ -478,7 +478,7 @@ class Agentzero < Formula
   end
 
   test do
-    assert_match "AgentZero", shell_output("#{bin}/zerod --version")
+    assert_match "z-Bot", shell_output("#{bin}/zerod --version")
   end
 end
 ```
@@ -489,16 +489,16 @@ Create PKGBUILD:
 
 ```bash
 # Maintainer: Your Name <email>
-pkgname=agentzero-bin
+pkgname=zbot-bin
 pkgver=0.1.0
 pkgrel=1
 pkgdesc="Local-first AI agent platform"
 arch=('x86_64' 'aarch64')
-url="https://github.com/yourorg/agentzero"
+url="https://github.com/yourorg/zbot"
 license=('MIT')
 
-source_x86_64=("${url}/releases/download/v${pkgver}/agentzero-${pkgver}-linux-x86_64.tar.gz")
-source_aarch64=("${url}/releases/download/v${pkgver}/agentzero-${pkgver}-linux-aarch64.tar.gz")
+source_x86_64=("${url}/releases/download/v${pkgver}/zbot-${pkgver}-linux-x86_64.tar.gz")
+source_aarch64=("${url}/releases/download/v${pkgver}/zbot-${pkgver}-linux-aarch64.tar.gz")
 
 package() {
     install -Dm755 zerod "$pkgdir/usr/bin/zerod"
@@ -535,10 +535,10 @@ CMD ["zerod"]
 ```
 
 ```bash
-docker build -t agentzero:latest .
+docker build -t zbot:latest .
 docker run -p 18791:18791 -p 18790:18790 \
-  -v ~/Documents/agentzero:/root/Documents/agentzero \
-  agentzero:latest
+  -v ~/Documents/zbot:/root/Documents/zbot \
+  zbot:latest
 ```
 
 ---
@@ -569,7 +569,7 @@ docker run -p 18791:18791 -p 18790:18790 \
 
 - [ ] Update Homebrew formula (if applicable)
 - [ ] Update AUR package (if applicable)
-- [ ] Update Docker image: `docker build -t agentzero:0.1.0 .`
+- [ ] Update Docker image: `docker build -t zbot:0.1.0 .`
 - [ ] Announce release (Discord, Twitter, etc.)
 - [ ] Update documentation site (if applicable)
 

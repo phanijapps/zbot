@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="apps/ui/public/logo.svg" alt="Agent Zero" width="280" />
+  <img src="apps/ui/public/logo.svg" alt="z-Bot" width="280" />
 </p>
 
 <p align="center">
@@ -16,9 +16,9 @@
 
 ---
 
-## Why Agent Zero?
+## Why z-Bot?
 
-Most AI platforms lock you into their cloud, their pricing, and their rules. Agent Zero is different:
+Most AI platforms lock you into their cloud, their pricing, and their rules. z-Bot is different:
 
 - **Your data stays local** — Conversations, memory, and configs live on your machine
 - **Any LLM provider** — OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API
@@ -102,7 +102,7 @@ cargo run -p daemon --release -- --static-dir ./dist
                            │
 ┌──────────────────────────┴──────────────────────────────┐
 │                      DATA LAYER                         │
-│  ~/Documents/agentzero/                                 │
+│  ~/Documents/zbot/                                      │
 │  ├── conversations.db     # SQLite database             │
 │  ├── agents/{name}/       # Agent configurations        │
 │  ├── skills/{name}/       # Skill definitions           │

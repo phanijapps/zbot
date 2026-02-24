@@ -247,7 +247,7 @@ impl zero_core::ReadonlyContext for ToolContext {
     }
 
     fn app_name(&self) -> &str {
-        "agentzero"
+        "zbot"
     }
 
     fn session_id(&self) -> &str {

@@ -1,24 +1,24 @@
-# Agent Zero — Product Context
+# z-Bot — Product Context
 
-## Why Agent Zero Exists
+## Why z-Bot Exists
 
-Agent Zero is a local-first AI agent platform that puts you in control. It's a creative hub where agents self-improve through persistent code, shared environments, and cross-session learning.
+z-Bot is a local-first AI agent platform that puts you in control. It's a creative hub where agents self-improve through persistent code, shared environments, and cross-session learning.
 
-Most AI platforms lock you into a cloud provider, take your data off-machine, and give you no way to extend the system. Agent Zero exists to solve this: run sophisticated AI assistants on your own machine with full data ownership, multi-provider flexibility, and unlimited extensibility.
+Most AI platforms lock you into a cloud provider, take your data off-machine, and give you no way to extend the system. z-Bot exists to solve this: run sophisticated AI assistants on your own machine with full data ownership, multi-provider flexibility, and unlimited extensibility.
 
 ## Problems It Solves
 
-1. **Data sovereignty** — Cloud AI platforms store your conversations, code, and context on their servers. Agent Zero keeps everything on your machine in plain files and SQLite.
+1. **Data sovereignty** — Cloud AI platforms store your conversations, code, and context on their servers. z-Bot keeps everything on your machine in plain files and SQLite.
 
-2. **No unified local platform** — Running local AI today means cobbling together CLI tools, model servers, and shell scripts. Agent Zero provides a single daemon with web UI, CLI, sessions, tools, skills, and multi-agent delegation.
+2. **No unified local platform** — Running local AI today means cobbling together CLI tools, model servers, and shell scripts. z-Bot provides a single daemon with web UI, CLI, sessions, tools, skills, and multi-agent delegation.
 
-3. **No persistent project context** — Session-based AI assistants start from scratch every time. Agent Zero's Code Wards give agents persistent project directories they create, name, and navigate autonomously. Code survives across sessions.
+3. **No persistent project context** — Session-based AI assistants start from scratch every time. z-Bot's Code Wards give agents persistent project directories they create, name, and navigate autonomously. Code survives across sessions.
 
-4. **No cross-session learning** — Most AI assistants forget everything between sessions. Agent Zero automatically distills session transcripts into structured facts, then recalls relevant facts at the start of new sessions via hybrid semantic + keyword search. The agent learns without manual effort.
+4. **No cross-session learning** — Most AI assistants forget everything between sessions. z-Bot automatically distills session transcripts into structured facts, then recalls relevant facts at the start of new sessions via hybrid semantic + keyword search. The agent learns without manual effort.
 
-5. **Provider lock-in** — Most platforms work with one LLM provider. Agent Zero is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API.
+5. **Provider lock-in** — Most platforms work with one LLM provider. z-Bot is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API.
 
-6. **Limited extensibility** — Agent Zero supports Skills (reusable instruction packages), MCP servers (external tool integration), and Bridge Workers (bidirectional connectors to external services like Slack, Discord, CRMs) as first-class concepts.
+6. **Limited extensibility** — z-Bot supports Skills (reusable instruction packages), MCP servers (external tool integration), and Bridge Workers (bidirectional connectors to external services like Slack, Discord, CRMs) as first-class concepts.
 
 ## Core Principles
 
@@ -49,8 +49,8 @@ Most AI platforms lock you into a cloud provider, take your data off-machine, an
 
 ## Differentiators
 
-| Feature | Agent Zero | Cloud AI Platforms |
-|---------|------------|-------------------|
+| Feature | z-Bot | Cloud AI Platforms |
+|---------|-------|-------------------|
 | Data Location | Local machine | Cloud servers |
 | Provider Lock-in | None | Usually locked |
 | Offline Capable | Yes (with Ollama) | No |

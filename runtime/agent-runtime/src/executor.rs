@@ -1025,9 +1025,9 @@ impl AgentExecutor {
         let offload_dir = match &self.config.offload_dir {
             Some(dir) => dir.clone(),
             None => {
-                // Default to ~/Documents/agentzero/temp
+                // Default to ~/Documents/zbot/temp
                 if let Some(home) = dirs::home_dir() {
-                    home.join("Documents").join("agentzero").join("temp")
+                    home.join("Documents").join("zbot").join("temp")
                 } else {
                     tracing::warn!("Could not determine home directory for offload");
                     return result;

@@ -408,7 +408,7 @@ impl Tool for ShellTool {
                     .get_state("ward_id")
                     .and_then(|v| v.as_str().map(String::from))
                     .unwrap_or_else(|| "scratch".to_string());
-                doc_dir.join("agentzero").join("wards").join(&ward_id)
+                doc_dir.join("zbot").join("wards").join(&ward_id)
             } else {
                 std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
             };
@@ -462,10 +462,10 @@ impl Tool for ShellTool {
         cmd.arg(command);
 
         // Set sandboxed Python virtual environment and Node.js modules
-        // Use ~/Documents/agentzero (matching gateway data_dir resolution)
+        // Use ~/Documents/zbot (matching gateway data_dir resolution)
         if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
-            let agentzero_dir = doc_dir.join("agentzero");
-            let wards_dir = agentzero_dir.join("wards");
+            let zbot_dir = doc_dir.join("zbot");
+            let wards_dir = zbot_dir.join("wards");
 
             // === Python Virtual Environment (shared across all wards) ===
             let venv_path = wards_dir.join(".venv");
@@ -520,7 +520,7 @@ impl Tool for ShellTool {
             }
             cmd.current_dir(dir);
         } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
-            let wards_dir = doc_dir.join("agentzero").join("wards");
+            let wards_dir = doc_dir.join("zbot").join("wards");
 
             // Use ward_id if set, otherwise fall back to "scratch"
             let ward_id = ctx
