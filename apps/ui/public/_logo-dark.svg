@@ -13,8 +13,8 @@
   <circle cx="60" cy="98" r="4" fill="#f472b6" opacity="0.8"/>
   <circle cx="22" cy="60" r="4" fill="#fbbf24" opacity="0.8"/>
   
-  <!-- Text: z-Bot -->
-  <text x="125" y="80" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="60" font-weight="700" fill="#e0e0e0" letter-spacing="-1">z-Bot</text>
+  <!-- Text -->
+  <text x="130" y="80" font-family="system-ui, -apple-system, 'Segoe UI', sans-serif" font-size="64" font-weight="700" fill="#e0e0e0" letter-spacing="-2">Zero</text>
   
   <defs>
     <linearGradient id="grad1Logo" x1="0%" y1="0%" x2="100%" y2="100%">
