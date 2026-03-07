@@ -130,7 +130,7 @@ function App() {
 
   if (isInitializing) {
     return (
-      <div className="loading-spinner" style={{ minHeight: '100vh' }}>
+      <div className="loading-spinner">
         <div className="text-center">
           <Loader2 className="loading-spinner__icon" />
           <p className="page-subtitle">Connecting to gateway...</p>
@@ -141,17 +141,17 @@ function App() {
 
   if (error && !connectionStatus.connected) {
     return (
-      <div className="loading-spinner" style={{ minHeight: '100vh' }}>
-        <div className="card card__padding--lg" style={{ maxWidth: '28rem', textAlign: 'center' }}>
-          <div className="empty-state__icon" style={{ backgroundColor: 'var(--destructive-muted)' }}>
-            <AlertCircle style={{ width: 24, height: 24, color: 'var(--destructive)' }} />
+      <div className="loading-spinner">
+        <div className="card card__padding--lg page-container--narrow text-center">
+          <div className="card__icon card__icon--destructive empty-state__icon">
+            <AlertCircle style={{ width: 24, height: 24 }} />
           </div>
           <h2 className="empty-state__title">Connection Failed</h2>
           <p className="empty-state__description">{error}</p>
-          <p className="page-subtitle" style={{ marginBottom: 'var(--spacing-6)' }}>
+          <p className="page-subtitle mb-section">
             Make sure the z-Bot daemon is running:
             <br />
-            <code className="badge" style={{ marginTop: 'var(--spacing-2)', display: 'inline-block' }}>
+            <code className="badge mt-inline">
               zerod
             </code>
           </p>
@@ -171,7 +171,7 @@ function App() {
     <BrowserRouter>
       <Toaster
         position="bottom-right"
-        theme="light"
+        theme="system"
         toastOptions={{
           style: {
             fontWeight: 500,
@@ -494,19 +494,19 @@ function WebSettingsPanel() {
                   <Server style={{ width: 18, height: 18 }} />
                 </div>
                 <div>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Gateway Connection</h2>
+                  <h2 className="settings-section-header">Gateway Connection</h2>
                   <p className="page-subtitle">HTTP and WebSocket endpoints</p>
                 </div>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="badge" style={{ padding: 'var(--spacing-3)', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>HTTP API</span>
-                <code className="font-mono" style={{ marginTop: 'var(--spacing-1)' }}>http://localhost:18791</code>
+              <div className="settings-info-card">
+                <span className="settings-info-card__label">HTTP API</span>
+                <code className="settings-info-card__value">http://localhost:18791</code>
               </div>
-              <div className="badge" style={{ padding: 'var(--spacing-3)', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>WebSocket</span>
-                <code className="font-mono" style={{ marginTop: 'var(--spacing-1)' }}>ws://localhost:18790</code>
+              <div className="settings-info-card">
+                <span className="settings-info-card__label">WebSocket</span>
+                <code className="settings-info-card__value">ws://localhost:18790</code>
               </div>
             </div>
           </div>
@@ -518,13 +518,13 @@ function WebSettingsPanel() {
                   <Settings style={{ width: 18, height: 18 }} />
                 </div>
                 <div>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Data Location</h2>
+                  <h2 className="settings-section-header">Data Location</h2>
                   <p className="page-subtitle">Where your configurations are stored</p>
                 </div>
               </div>
             </div>
-            <div className="badge font-mono" style={{ padding: 'var(--spacing-3)' }}>
-              ~/Documents/zbot/
+            <div className="settings-info-card">
+              <code className="settings-info-card__value">~/Documents/zbot/</code>
             </div>
           </div>
 
@@ -532,83 +532,61 @@ function WebSettingsPanel() {
           <div className="card card__padding--lg">
             <button
               onClick={() => setLogsOpen(!logsOpen)}
-              className="w-full flex items-center justify-between"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              className="settings-toggle-btn"
             >
               <div className="flex items-center gap-3">
                 <div className="card__icon card__icon--primary">
                   <FileText style={{ width: 18, height: 18 }} />
                 </div>
-                <div style={{ textAlign: 'left' }}>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--foreground)' }}>Log Settings</h2>
+                <div>
+                  <h2 className="settings-section-header">Log Settings</h2>
                   <p className="page-subtitle">File logging and rotation</p>
                 </div>
               </div>
               {logsOpen ? (
-                <ChevronDown style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+                <ChevronDown className="settings-chevron" />
               ) : (
-                <ChevronRight style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+                <ChevronRight className="settings-chevron" />
               )}
             </button>
 
             {logsOpen && (
-              <div style={{ marginTop: 'var(--spacing-4)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border)' }}>
+              <div className="settings-expandable">
                 {logsError && (
-                  <div className="badge" style={{
-                    padding: 'var(--spacing-3)',
-                    marginBottom: 'var(--spacing-4)',
-                    backgroundColor: 'var(--destructive-muted)',
-                    color: 'var(--destructive)'
-                  }}>
+                  <div className="settings-alert settings-alert--error">
                     {logsError}
                   </div>
                 )}
 
                 {/* Restart warning */}
-                <div className="badge" style={{
-                  padding: 'var(--spacing-3)',
-                  marginBottom: 'var(--spacing-4)',
-                  backgroundColor: 'var(--warning-muted)',
-                  color: 'var(--warning)'
-                }}>
-                  <AlertTriangle style={{ width: 14, height: 14, marginRight: 'var(--spacing-2)' }} />
+                <div className="settings-alert settings-alert--warning">
+                  <AlertTriangle className="settings-alert__icon" />
                   Changes require daemon restart to take effect
                 </div>
 
                 {isLoadingLogs ? (
-                  <div className="flex items-center justify-center" style={{ padding: 'var(--spacing-6)' }}>
-                    <Loader2 className="loading-spinner__icon" style={{ width: 24, height: 24 }} />
+                  <div className="settings-loading">
+                    <Loader2 className="loading-spinner__icon" />
                   </div>
                 ) : logSettings ? (
                   <div className="flex flex-col gap-4">
                     {/* Enable file logging */}
                     <label
-                      className="flex items-center gap-3 cursor-pointer"
-                      style={{
-                        padding: 'var(--spacing-3)',
-                        backgroundColor: logSettings.enabled ? 'var(--primary-muted)' : 'var(--muted)',
-                        borderRadius: 'var(--radius-md)',
-                        opacity: isSavingLogs ? 0.7 : 1,
-                        border: logSettings.enabled ? '1px solid var(--primary)' : '1px solid transparent',
-                      }}
+                      className={`settings-toggle-option ${logSettings.enabled ? 'settings-toggle-option--active' : ''}`}
+                      style={{ opacity: isSavingLogs ? 0.7 : 1 }}
                     >
                       <input
                         type="checkbox"
                         checked={logSettings.enabled}
                         onChange={() => handleLogSettingChange({ enabled: !logSettings.enabled })}
                         disabled={isSavingLogs}
-                        style={{
-                          width: 16,
-                          height: 16,
-                          accentColor: 'var(--primary)',
-                          cursor: isSavingLogs ? 'not-allowed' : 'pointer',
-                        }}
+                        className="settings-toggle-option__checkbox"
                       />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
+                      <div className="flex-1">
+                        <div className="settings-toggle-option__title">
                           Enable File Logging
                         </div>
-                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                        <div className="settings-toggle-option__description">
                           Write logs to files in addition to stdout
                         </div>
                       </div>
@@ -616,15 +594,14 @@ function WebSettingsPanel() {
 
                     {/* Log level */}
                     <div>
-                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
+                      <label className="settings-field-label">
                         Log Level
                       </label>
                       <select
                         value={logSettings.level}
                         onChange={(e) => handleLogSettingChange({ level: e.target.value as LogSettings['level'] })}
                         disabled={isSavingLogs}
-                        className="form-select"
-                        style={{ width: '100%' }}
+                        className="form-select form-input"
                       >
                         <option value="trace">Trace (most verbose)</option>
                         <option value="debug">Debug</option>
@@ -636,15 +613,14 @@ function WebSettingsPanel() {
 
                     {/* Rotation strategy */}
                     <div>
-                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
+                      <label className="settings-field-label">
                         Rotation
                       </label>
                       <select
                         value={logSettings.rotation}
                         onChange={(e) => handleLogSettingChange({ rotation: e.target.value as LogSettings['rotation'] })}
                         disabled={isSavingLogs}
-                        className="form-select"
-                        style={{ width: '100%' }}
+                        className="form-select form-input"
                       >
                         <option value="daily">Daily (default)</option>
                         <option value="hourly">Hourly</option>
@@ -655,7 +631,7 @@ function WebSettingsPanel() {
 
                     {/* Max files */}
                     <div>
-                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
+                      <label className="settings-field-label">
                         Max Files to Keep
                       </label>
                       <input
@@ -664,41 +640,30 @@ function WebSettingsPanel() {
                         onChange={(e) => handleLogSettingChange({ maxFiles: parseInt(e.target.value, 10) || 0 })}
                         disabled={isSavingLogs}
                         className="form-input"
-                        style={{ width: '100%' }}
                         min={0}
                       />
-                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)', marginTop: 'var(--spacing-1)' }}>
+                      <p className="settings-hint">
                         Set to 0 for unlimited retention
                       </p>
                     </div>
 
                     {/* Suppress stdout */}
                     <label
-                      className="flex items-center gap-3 cursor-pointer"
-                      style={{
-                        padding: 'var(--spacing-3)',
-                        backgroundColor: 'var(--muted)',
-                        borderRadius: 'var(--radius-md)',
-                        opacity: isSavingLogs ? 0.7 : 1,
-                      }}
+                      className="settings-toggle-option"
+                      style={{ opacity: isSavingLogs ? 0.7 : 1 }}
                     >
                       <input
                         type="checkbox"
                         checked={logSettings.suppressStdout}
                         onChange={() => handleLogSettingChange({ suppressStdout: !logSettings.suppressStdout })}
                         disabled={isSavingLogs}
-                        style={{
-                          width: 16,
-                          height: 16,
-                          accentColor: 'var(--primary)',
-                          cursor: isSavingLogs ? 'not-allowed' : 'pointer',
-                        }}
+                        className="settings-toggle-option__checkbox"
                       />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
+                      <div className="flex-1">
+                        <div className="settings-toggle-option__title">
                           Suppress Stdout
                         </div>
-                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                        <div className="settings-toggle-option__description">
                           Only log to file (useful for daemon mode)
                         </div>
                       </div>
@@ -706,9 +671,9 @@ function WebSettingsPanel() {
 
                     {/* Log directory info */}
                     {logSettings.enabled && (
-                      <div style={{ padding: 'var(--spacing-3)', backgroundColor: 'var(--muted)', borderRadius: 'var(--radius-md)' }}>
-                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>Log directory:</span>
-                        <code className="font-mono" style={{ fontSize: 'var(--text-xs)', display: 'block', marginTop: 'var(--spacing-1)' }}>
+                      <div className="settings-info-card">
+                        <span className="settings-info-card__label">Log directory:</span>
+                        <code className="settings-info-card__value">
                           {logSettings.directory || '~/Documents/zbot/logs/'}
                         </code>
                       </div>
@@ -723,53 +688,47 @@ function WebSettingsPanel() {
           <div className="card card__padding--lg">
             <button
               onClick={() => setAdvancedOpen(!advancedOpen)}
-              className="w-full flex items-center justify-between"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
+              className="settings-toggle-btn"
             >
               <div className="flex items-center gap-3">
-                <div className="card__icon" style={{ backgroundColor: 'var(--warning-muted)' }}>
-                  <Wrench style={{ width: 18, height: 18, color: 'var(--warning)' }} />
+                <div className="card__icon card__icon--warning">
+                  <Wrench style={{ width: 18, height: 18 }} />
                 </div>
-                <div style={{ textAlign: 'left' }}>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--foreground)' }}>Advanced Options</h2>
+                <div>
+                  <h2 className="settings-section-header">Advanced Options</h2>
                   <p className="page-subtitle">Configure optional agent tools</p>
                 </div>
               </div>
               {advancedOpen ? (
-                <ChevronDown style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+                <ChevronDown className="settings-chevron" />
               ) : (
-                <ChevronRight style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
+                <ChevronRight className="settings-chevron" />
               )}
             </button>
 
             {advancedOpen && (
-              <div style={{ marginTop: 'var(--spacing-4)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border)' }}>
+              <div className="settings-expandable">
                 {toolsError && (
-                  <div className="badge" style={{
-                    padding: 'var(--spacing-3)',
-                    marginBottom: 'var(--spacing-4)',
-                    backgroundColor: 'var(--destructive-muted)',
-                    color: 'var(--destructive)'
-                  }}>
+                  <div className="settings-alert settings-alert--error">
                     {toolsError}
                   </div>
                 )}
 
                 {isLoadingTools ? (
-                  <div className="flex items-center justify-center" style={{ padding: 'var(--spacing-6)' }}>
-                    <Loader2 className="loading-spinner__icon" style={{ width: 24, height: 24 }} />
+                  <div className="settings-loading">
+                    <Loader2 className="loading-spinner__icon" />
                   </div>
                 ) : toolSettings ? (
                   <div className="flex flex-col gap-4">
-                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--muted-foreground)' }}>
+                    <p className="settings-toggle-option__description">
                       Enable or disable optional tools. Core tools (shell, read, write, edit, memory, web_fetch, todo) are always available.
                     </p>
 
                     {toolGroups.map((group) => (
                       <div key={group.name}>
-                        <div className="flex items-center gap-2" style={{ marginBottom: 'var(--spacing-2)' }}>
-                          <group.icon style={{ width: 14, height: 14, color: 'var(--muted-foreground)' }} />
-                          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                        <div className="settings-group-header">
+                          <group.icon className="settings-group-header__icon" />
+                          <span className="settings-group-header__label">
                             {group.name}
                           </span>
                         </div>
@@ -777,31 +736,21 @@ function WebSettingsPanel() {
                           {group.tools.map((tool) => (
                             <label
                               key={tool.key}
-                              className="flex items-center gap-3 cursor-pointer"
-                              style={{
-                                padding: 'var(--spacing-3)',
-                                backgroundColor: 'var(--muted)',
-                                borderRadius: 'var(--radius-md)',
-                                opacity: isSavingTools ? 0.7 : 1,
-                              }}
+                              className="settings-toggle-option"
+                              style={{ opacity: isSavingTools ? 0.7 : 1 }}
                             >
                               <input
                                 type="checkbox"
                                 checked={toolSettings[tool.key]}
                                 onChange={() => handleToolToggle(tool.key)}
                                 disabled={isSavingTools}
-                                style={{
-                                  width: 16,
-                                  height: 16,
-                                  accentColor: 'var(--primary)',
-                                  cursor: isSavingTools ? 'not-allowed' : 'pointer',
-                                }}
+                                className="settings-toggle-option__checkbox"
                               />
-                              <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
+                              <div className="flex-1">
+                                <div className="settings-toggle-option__title">
                                   {tool.label}
                                 </div>
-                                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                                <div className="settings-toggle-option__description">
                                   {tool.description}
                                 </div>
                               </div>
