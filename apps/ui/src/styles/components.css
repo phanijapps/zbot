@@ -184,6 +184,41 @@
   color: var(--sidebar-muted);
 }
 
+.connection-status--connecting {
+  background-color: var(--warning-muted);
+  color: var(--warning);
+}
+
+.connection-status--disconnected {
+  background-color: var(--muted);
+  color: var(--muted-foreground);
+}
+
+.connection-status--failed {
+  background-color: var(--destructive-muted);
+  color: var(--destructive);
+}
+
+.connection-status__action {
+  text-decoration: underline;
+  margin-left: var(--spacing-1);
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: inherit;
+}
+
+.connection-status__action:hover {
+  opacity: 0.8;
+}
+
+.connection-status__spinner {
+  width: 16px;
+  height: 16px;
+  animation: spin 1s linear infinite;
+}
+
 /* Theme Toggle */
 .theme-toggle {
   display: flex;
