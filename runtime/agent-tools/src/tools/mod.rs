@@ -22,6 +22,7 @@ use zero_core::MemoryFactStore;
 
 pub use file::{ReadTool, WriteTool, EditTool};
 pub use search::{GrepTool, GlobTool};
+pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
 pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
@@ -138,6 +139,8 @@ pub fn core_tools(
         Arc::new(WardTool::new(fs.clone())),
         // Lightweight plan tracking
         Arc::new(UpdatePlanTool::new()),
+        // DAG workflow engine for multi-step orchestration
+        Arc::new(ExecutionGraphTool::new()),
         // Skill discovery (high priority - encourages delegation)
         Arc::new(ListSkillsTool::new(fs.clone())),
         Arc::new(LoadSkillTool::new(fs.clone())),

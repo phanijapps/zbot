@@ -60,3 +60,48 @@ build commands, tech stack, and conventions.
 For complex multi-part tasks, delegate to specialized agents:
 - `list_agents()` to discover available agents
 - `delegate_to_agent(agent_id="...", task="...")` to spawn a subagent
+
+## Execution Graphs (Workflow DAGs)
+For complex multi-step workflows with dependencies, conditions, and branching, use `execution_graph`.
+
+### When to use
+- Deep research requiring multiple parallel searches then synthesis
+- Multi-step analysis with conditional branches (if positive → expand, if negative → pivot)
+- Report generation with research → analysis → writing pipeline
+- Any task needing 3+ delegation waves with data flowing between them
+
+### Workflow pattern
+1. **Create** a graph with nodes (each node = one agent delegation):
+   ```
+   execution_graph(action="create", nodes=[
+     {"id": "research", "agent": "research-agent", "task": "Research X"},
+     {"id": "analyze", "agent": "analyst", "task": "Analyze {data}", "depends_on": ["research"],
+      "inputs": {"data": {"from": "research", "field": "result"}}},
+     {"id": "report", "agent": "writer", "task": "Write report on {analysis}",
+      "depends_on": ["analyze"],
+      "inputs": {"analysis": {"from": "analyze", "field": "result"}}}
+   ])
+   ```
+2. **Dispatch** ready nodes using `delegate_to_agent` for each
+3. When delegations complete (continuation fires), **advance** the graph:
+   ```
+   execution_graph(action="execute_next", graph_id="...", completed=[
+     {"id": "research", "result": "findings..."}
+   ])
+   ```
+4. Repeat steps 2-3 until graph completes
+
+### Node options
+- `depends_on` — upstream nodes that must finish first
+- `depend_mode` — `all` (default), `any_completed`, `any_one`
+- `when` — conditional: `{"ref": "node_id", "operator": "contains", "value": "positive"}`
+  - Operators: `contains`, `not_contains`, `equals`, `gt`, `lt`, `regex`, `llm_eval`
+- `inputs` — route upstream results into task text via `{param}` placeholders
+- `retry` — `{"max": 3}` to retry failed nodes
+- `timeout_seconds` / `on_timeout` — skip or fail on timeout
+
+### Actions
+- `create` — build a graph from node definitions
+- `execute_next` — report completed nodes and get next ready wave
+- `status` — check progress of all nodes
+- `add_node` — inject a new node mid-execution
