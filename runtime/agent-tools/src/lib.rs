@@ -1,10 +1,10 @@
 // ============================================================================
-// APP-TOOLS - Built-in Tools for agentzero Application
+// APP-TOOLS - Built-in Tools for z-Bot Application
 // ============================================================================
 
 //! # App Tools
 //!
-//! Built-in tool implementations for the agentzero application.
+//! Built-in tool implementations for the z-Bot application.
 //!
 //! This crate provides concrete tool implementations that use
 //! the abstractions defined in zero-core.

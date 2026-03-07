@@ -120,7 +120,7 @@ impl PluginService {
     /// Create a new plugin service.
     ///
     /// # Arguments
-    /// * `plugins_dir` - Path to the plugins directory (e.g., ~/Documents/agentzero/plugins)
+    /// * `plugins_dir` - Path to the plugins directory (e.g., ~/Documents/zbot/plugins)
     pub fn new(plugins_dir: PathBuf) -> Self {
         Self { plugins_dir }
     }

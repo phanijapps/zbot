@@ -1,4 +1,4 @@
-# Agent Zero — Product Definition
+# z-Bot — Product Definition
 
 ## Interfaces
 
@@ -50,7 +50,7 @@ When reviewing code:
 ...
 ```
 
-Skills are stored in `~/Documents/agentzero/skills/{name}/SKILL.md`.
+Skills are stored in `~/Documents/zbot/skills/{name}/SKILL.md`.
 
 ### 5. MCP Server Integration
 Connect to external tools via Model Context Protocol servers. Configure in `mcps.json`:
@@ -82,7 +82,7 @@ memory set scope=ward key=purpose ...  # ward-scoped
 ```
 memory save_fact category=preference key=user.language content="User prefers Rust"
 memory recall query="language preferences" limit=5
-memory graph query="agentzero"         # knowledge graph entities
+memory graph query="zbot"              # knowledge graph entities
 ```
 
 **Tiers**: Global shared → Agent → Ward → Session (ephemeral)

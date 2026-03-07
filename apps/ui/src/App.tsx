@@ -149,7 +149,7 @@ function App() {
           <h2 className="empty-state__title">Connection Failed</h2>
           <p className="empty-state__description">{error}</p>
           <p className="page-subtitle" style={{ marginBottom: 'var(--spacing-6)' }}>
-            Make sure the AgentZero daemon is running:
+            Make sure the z-Bot daemon is running:
             <br />
             <code className="badge" style={{ marginTop: 'var(--spacing-2)', display: 'inline-block' }}>
               zerod
@@ -270,7 +270,7 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
       <nav className="sidebar">
         <div className="sidebar__header">
           <div className="sidebar__logo">
-            <img src="/logo-dark.svg" alt="AgentZero" className="sidebar__logo-img" />
+            <img src="/logo-dark.svg" alt="z-Bot" className="sidebar__logo-img" />
           </div>
         </div>
 
@@ -482,7 +482,7 @@ function WebSettingsPanel() {
         <div className="page-header">
           <div className="page-header__content">
             <h1 className="page-title">Settings</h1>
-            <p className="page-subtitle">Configure your AgentZero environment</p>
+            <p className="page-subtitle">Configure your z-Bot environment</p>
           </div>
         </div>
 
@@ -524,7 +524,7 @@ function WebSettingsPanel() {
               </div>
             </div>
             <div className="badge font-mono" style={{ padding: 'var(--spacing-3)' }}>
-              ~/Documents/agentzero/
+              ~/Documents/zbot/
             </div>
           </div>
 
@@ -709,7 +709,7 @@ function WebSettingsPanel() {
                       <div style={{ padding: 'var(--spacing-3)', backgroundColor: 'var(--muted)', borderRadius: 'var(--radius-md)' }}>
                         <span style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>Log directory:</span>
                         <code className="font-mono" style={{ fontSize: 'var(--text-xs)', display: 'block', marginTop: 'var(--spacing-1)' }}>
-                          {logSettings.directory || '~/Documents/agentzero/logs/'}
+                          {logSettings.directory || '~/Documents/zbot/logs/'}
                         </code>
                       </div>
                     )}

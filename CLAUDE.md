@@ -1,5 +1,5 @@
 # CLAUDE.md
-AgentZero is multipurpose AI Agent, that lives on desktop. It can connect to both any OpenAI Compatible APIs and help with day to day tasks.
+z-Bot is multipurpose AI Agent, that lives on desktop. It can connect to both any OpenAI Compatible APIs and help with day to day tasks.
 
 ## Project Overview
 Read `AGENTS.md` for overview.

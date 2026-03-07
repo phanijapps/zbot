@@ -52,7 +52,7 @@ impl ReadonlyContext for ToolContextImpl {
     }
 
     fn app_name(&self) -> &str {
-        "agentzero"
+        "zbot"
     }
 
     fn session_id(&self) -> &str {

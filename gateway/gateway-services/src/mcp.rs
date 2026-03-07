@@ -34,8 +34,8 @@ pub struct McpServerSummary {
 impl McpService {
     /// Create a new MCP service.
     ///
-    /// The paths should contain the agentzero configuration directory
-    /// (e.g., ~/Documents/agentzero). The service will look for mcps.json
+    /// The paths should contain the z-Bot configuration directory
+    /// (e.g., ~/Documents/zbot). The service will look for mcps.json
     /// in the config subdirectory.
     pub fn new(paths: SharedVaultPaths) -> Self {
         Self {

@@ -494,7 +494,7 @@ Fact categories:
 
 Rules:
 - Only facts useful in FUTURE sessions. Skip ephemeral details.
-- Key must be globally unique dot-notation (e.g., "user.preferred_language", "project.agentzero.build_tool")
+- Key must be globally unique dot-notation (e.g., "user.preferred_language", "project.zbot.build_tool")
 - If a fact updates something already known, use the SAME key so it overwrites.
 - Maximum 10 facts, 10 entities, 10 relationships per session.
 - Confidence guide: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred

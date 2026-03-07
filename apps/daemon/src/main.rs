@@ -1,4 +1,4 @@
-//! # AgentZero Daemon
+//! # z-Bot Daemon
 //!
 //! Standalone server for the agent runtime.
 //!
@@ -12,13 +12,13 @@
 //! zerod --ws-port 19000 --http-port 19001
 //!
 //! # Start with custom data directory
-//! zerod --data-dir /path/to/agentzero
+//! zerod --data-dir /path/to/zbot
 //!
 //! # Start with config file
 //! zerod --config /path/to/daemon.yaml
 //!
 //! # Enable file logging via CLI
-//! zerod --log-dir /var/log/agentzero --log-max-files 14
+//! zerod --log-dir /var/log/zbot --log-max-files 14
 //!
 //! # Serve web dashboard from static files
 //! zerod --static-dir /path/to/dashboard/dist
@@ -63,7 +63,7 @@ use tracing_subscriber::{
     EnvFilter,
 };
 
-/// AgentZero Daemon - AI agent runtime server
+/// z-Bot Daemon - AI agent runtime server
 #[derive(Parser, Debug)]
 #[command(name = "zerod")]
 #[command(author, version, about, long_about = None)]
@@ -80,7 +80,7 @@ struct Args {
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
 
-    /// Path to AgentZero data directory (default: ~/Documents/agentzero)
+    /// Path to z-Bot data directory (default: ~/Documents/zbot)
     #[arg(long)]
     data_dir: Option<PathBuf>,
 
@@ -362,7 +362,7 @@ async fn main() -> Result<()> {
         dirs::document_dir()
             .or_else(dirs::home_dir)
             .unwrap_or_else(|| PathBuf::from("."))
-            .join("agentzero")
+            .join("zbot")
     });
 
     // Ensure data directory exists
@@ -376,7 +376,7 @@ async fn main() -> Result<()> {
     // Setup logging based on merged configuration
     let _guard = setup_logging(&log_config, &data_dir)?;
 
-    info!("AgentZero Daemon v{}", env!("CARGO_PKG_VERSION"));
+    info!("z-Bot Daemon v{}", env!("CARGO_PKG_VERSION"));
     info!("Data directory: {:?}", data_dir);
 
     // Load gateway configuration
