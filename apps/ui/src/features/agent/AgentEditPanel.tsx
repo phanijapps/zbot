@@ -183,7 +183,7 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
             <button
               onClick={handleSave}
               disabled={isSaving}
-              className="inline-flex items-center gap-1.5 bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
+              className="inline-flex items-center gap-1.5 bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-[var(--primary-foreground)] px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
             >
               {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
               Save

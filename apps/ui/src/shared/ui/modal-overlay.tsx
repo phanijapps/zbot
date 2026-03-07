@@ -119,17 +119,17 @@ export const ModalOverlay = memo(({
         {showHeader && (
           <div className="flex items-center justify-between px-6 py-4 border-b border-white/10 shrink-0">
             <div>
-              <h2 id="modal-title" className="text-lg font-semibold text-white">
+              <h2 id="modal-title" className="text-lg font-semibold text-[var(--foreground)]">
                 {title}
               </h2>
               {subtitle && (
-                <p className="text-sm text-gray-400 mt-0.5">{subtitle}</p>
+                <p className="text-sm text-[var(--muted-foreground)] mt-0.5">{subtitle}</p>
               )}
             </div>
             {showCloseButton && (
               <button
                 onClick={onClose}
-                className="p-2 text-gray-400 hover:text-white transition-colors rounded-lg hover:bg-white/10"
+                className="p-2 text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors rounded-lg hover:bg-[var(--muted)]"
                 aria-label="Close"
               >
                 <XIcon />

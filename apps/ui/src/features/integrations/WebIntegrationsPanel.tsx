@@ -169,7 +169,7 @@ export function WebIntegrationsPanel() {
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-white px-2.5 py-1.5 rounded-lg text-xs transition-colors font-medium"
+            className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-[var(--primary-foreground)] px-2.5 py-1.5 rounded-lg text-xs transition-colors font-medium"
           >
             <Plus className="w-3.5 h-3.5" />
             New
@@ -222,7 +222,7 @@ export function WebIntegrationsPanel() {
                 <div className="flex items-center justify-between">
                   <div className="text-sm font-medium text-[var(--foreground)]">{provider.name}</div>
                   {provider.id === defaultProviderId && (
-                    <span className="text-[10px] bg-[var(--primary)] text-white px-1.5 py-0.5 rounded font-medium">
+                    <span className="text-[10px] bg-[var(--primary)] text-[var(--primary-foreground)] px-1.5 py-0.5 rounded font-medium">
                       Active
                     </span>
                   )}
@@ -311,7 +311,7 @@ export function WebIntegrationsPanel() {
                 <button
                   onClick={handleCreateProvider}
                   disabled={!newProvider.name || !newProvider.apiKey || !newProvider.baseUrl}
-                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-[var(--primary-foreground)] px-4 py-2 rounded-lg transition-colors text-sm font-medium"
                 >
                   Add Provider
                 </button>
@@ -334,7 +334,7 @@ export function WebIntegrationsPanel() {
                 {selectedProvider.id !== defaultProviderId && (
                   <button
                     onClick={() => handleSetDefault(selectedProvider.id!)}
-                    className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-white px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
+                    className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-[var(--primary-foreground)] px-2.5 py-1.5 rounded-lg text-xs font-medium transition-colors"
                   >
                     <Check className="w-3.5 h-3.5" />
                     Set Active

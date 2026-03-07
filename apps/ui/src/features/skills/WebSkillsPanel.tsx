@@ -125,7 +125,7 @@ export function WebSkillsPanel() {
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-white px-2.5 py-1.5 rounded-lg text-xs transition-colors font-medium"
+            className="inline-flex items-center gap-1 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-[var(--primary-foreground)] px-2.5 py-1.5 rounded-lg text-xs transition-colors font-medium"
           >
             <Plus className="w-3.5 h-3.5" />
             New
@@ -257,7 +257,7 @@ export function WebSkillsPanel() {
                 <button
                   onClick={handleCreateSkill}
                   disabled={!newSkill.name}
-                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-[var(--primary-foreground)] px-4 py-2 rounded-lg transition-colors text-sm font-medium"
                 >
                   Create Skill
                 </button>

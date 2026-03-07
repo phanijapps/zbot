@@ -149,7 +149,7 @@ export function WebAgentsPanel() {
           </div>
           <button
             onClick={() => setIsCreating(true)}
-            className="inline-flex items-center gap-2 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+            className="inline-flex items-center gap-2 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-[var(--primary-foreground)] px-4 py-2 rounded-lg transition-colors text-sm font-medium"
           >
             <Plus className="w-4 h-4" />
             Create Agent
@@ -266,7 +266,7 @@ export function WebAgentsPanel() {
                 <button
                   onClick={handleCreateAgent}
                   disabled={!newAgent.name || !newAgent.providerId || !newAgent.model}
-                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+                  className="bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-[var(--primary-foreground)] px-4 py-2 rounded-lg transition-colors text-sm font-medium"
                 >
                   Create
                 </button>
@@ -285,7 +285,7 @@ export function WebAgentsPanel() {
             <p className="text-[var(--muted-foreground)] text-sm mb-5">Create your first agent to get started</p>
             <button
               onClick={() => setIsCreating(true)}
-              className="inline-flex items-center gap-2 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-white px-4 py-2 rounded-lg transition-colors text-sm font-medium"
+              className="inline-flex items-center gap-2 bg-[var(--primary)] hover:bg-[var(--primary)]/90 text-[var(--primary-foreground)] px-4 py-2 rounded-lg transition-colors text-sm font-medium"
             >
               <Plus className="w-4 h-4" />
               Create Agent

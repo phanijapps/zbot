@@ -275,7 +275,7 @@ export function WebMcpsPanel() {
           </div>
           <button
             onClick={openCreateDialog}
-            className="inline-flex items-center gap-1.5 bg-[var(--primary)] hover:opacity-90 text-white px-3 py-1.5 rounded-lg text-sm transition-all font-medium"
+            className="inline-flex items-center gap-1.5 bg-[var(--primary)] hover:opacity-90 text-[var(--primary-foreground)] px-3 py-1.5 rounded-lg text-sm transition-all font-medium"
           >
             <Plus className="w-4 h-4" />
             New
@@ -713,7 +713,7 @@ export function WebMcpsPanel() {
             <button
               onClick={handleSave}
               disabled={!formData.name || (formData.type === "stdio" ? !formData.command : !formData.url)}
-              className="bg-[var(--primary)] hover:opacity-90 disabled:opacity-50 text-white px-5 py-2 rounded-xl transition-all font-medium"
+              className="bg-[var(--primary)] hover:opacity-90 disabled:opacity-50 text-[var(--primary-foreground)] px-5 py-2 rounded-xl transition-all font-medium"
             >
               {dialogMode === "create" ? "Add Server" : "Save Changes"}
             </button>
