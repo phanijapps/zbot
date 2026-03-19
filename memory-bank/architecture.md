@@ -995,7 +995,7 @@ index_resources called (or first discovery)
 └─────────────────────────────────────────┘
 ```
 
-### Discovery Flow (analyze_intent, list_skills)
+### Discovery Flow (intent enrichment, list_skills)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -1016,12 +1016,12 @@ index_resources called (or first discovery)
 | Trigger | Behavior |
 |---------|----------|
 | `index_resources()` tool called | Full reindex (or force=true for stale) |
-| First `analyze_intent()` call | Uses disk scan fallback if no index |
+| First intent enrichment run | Uses disk scan fallback if no index |
 | File modification detected | Staleness check during next indexing |
 
 ### Semantic Search Integration
 
-The `analyze_intent` tool uses semantic search when MemoryFactStore is available:
+The intent enrichment module uses semantic search when MemoryFactStore is available:
 
 1. **Semantic query**: `recall_facts()` returns facts matching the message semantically
 2. **Category filter**: Only skills/agents with matching category
@@ -1036,16 +1036,19 @@ When `load_skill` or agent loading fails:
 
 ## Intent Analysis System
 
-The `analyze_intent` tool is a **pure analysis** tool that discovers hidden intents and recommends resources (skills, agents, wards). See `memory-bank/intent-analysis.md` for full documentation.
+Intent analysis is a **pre-execution enrichment** step — not a tool agents call. The runner invokes it automatically before constructing the root agent executor, then injects the result as a `## Intent Analysis` section into the system prompt. See `memory-bank/intent-analysis.md` for full documentation.
 
-### Architecture Principle: LLM-First, Pure Analysis
+Implementation: `gateway/gateway-execution/src/middleware/intent_analysis.rs`
+
+### Architecture Principle: Pre-Execution Enrichment
 
 | Aspect | Design |
 |--------|--------|
-| **Primary Analyzer** | LLM (receives ALL available resources) |
-| **Fallback** | Heuristic keyword matching (only when LLM unavailable/failed) |
-| **Side Effects** | None — returns recommendations only |
-| **Auto-Loading** | Removed — agent explicitly calls `load_skill` |
+| **Trigger** | Runner layer, before root executor construction |
+| **Scope** | Root agent only — sub-agents do not re-trigger analysis |
+| **Primary Analyzer** | LLM (receives all available resources) |
+| **Side Effects** | None — injects guidance text, does not load skills or delegate |
+| **Agent Visibility** | Sees `## Intent Analysis` section in system prompt from turn one |
 
 ### Flow
 
@@ -1054,35 +1057,36 @@ User Message
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 1. DISCOVERY: Get ALL skills, agents, wards                 │
-│    - Skills/Agents: cached index (auto-index if stale)      │
-│    - Wards: direct disk scan                                │
+│ Runner: gateway/gateway-execution                           │
+│  analyze_intent() LLM call                                  │
+│  Input: message + available skills + available agents        │
+│  Output: IntentAnalysis { primary_intent,                   │
+│          hidden_intents (actionable), recommended_skills,   │
+│          recommended_agents, execution_strategy/graph,      │
+│          rewritten_prompt }                                  │
+└─────────────────────────────────────────────────────────────┘
+     │
+     (parse failed? skip enrichment, continue with base prompt)
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ inject_intent_context()                                     │
+│  Appends "## Intent Analysis" section to system prompt      │
 └─────────────────────────────────────────────────────────────┘
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ 2. LLM ANALYSIS (PRIMARY)                                   │
-│    Input: message + ALL resources                           │
-│    Output: hidden_intents, recommended_skills/agents,       │
-│            suggested_ward, execution_strategy               │
-└─────────────────────────────────────────────────────────────┘
-     │
-     (LLM failed? Fallback to heuristics)
-     ▼
-┌─────────────────────────────────────────────────────────────┐
-│ 3. RETURN recommendations (NO auto-loading)                 │
-│    - Agent calls load_skill() explicitly                    │
-│    - Agent delegates to recommended agents                   │
-│    - Agent creates suggested ward if needed                 │
+│ Executor starts with enriched system prompt                 │
+│  - No conditional dispatch code in runner                   │
+│  - LLM reads the section and decides how to proceed         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Behavioral Contract
 
-- `analyze_intent` returns recommendations — the agent DECIDES whether to act
-- If `analyze_intent` recommends agents → Agent MUST delegate
-- If `analyze_intent` recommends skills → Agent calls `load_skill` explicitly
-- If `analyze_intent` says use execution_graph → Agent MUST use it
+- Enrichment is automatic and transparent — agents do not call `analyze_intent`
+- Hidden intents are actionable instructions, not category labels
+- Runner contains no conditional logic based on analysis output — LLM decides
+- Recommended skills/agents are guidance; agent retains full autonomy
 
 ## System Prompt Architecture
 

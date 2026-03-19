@@ -2,180 +2,185 @@
 
 ## Overview
 
-The `analyze_intent` tool is a **pure analysis** tool that discovers hidden intents and recommends resources (skills, agents, wards). It does NOT auto-load or inject content — the calling agent decides whether to act on recommendations.
+Intent analysis is a **pre-execution enrichment** step that runs transparently from the runner layer before a root agent executor is constructed. It makes a single LLM call to discover hidden intents, recommend resources, and design an execution graph — then injects the result as a `## Intent Analysis` section into the system prompt. Agents never call it; it happens automatically.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         analyze_intent Flow                                  │
+│                     Pre-Execution Enrichment Flow                            │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│   User Message ─────────────────────────────────────────────────────────────►│
+│   User Message ──────────────────────────────────────────────────────────►  │
 │                                                                              │
-│   ┌─────────────────────────────────────────────────────────────────────┐    │
-│   │                    Discovery Phase                                   │    │
-│   │  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐               │    │
-│   │  │   Skills     │  │   Agents     │  │    Wards     │               │    │
-│   │  │  (cached)    │  │  (cached)    │  │  (disk scan) │               │    │
-│   │  └──────────────┘  └──────────────┘  └──────────────┘               │    │
-│   └─────────────────────────────────────────────────────────────────────┘    │
-│                              │                                               │
-│                              ▼                                               │
-│   ┌─────────────────────────────────────────────────────────────────────┐    │
-│   │                    LLM Analysis (PRIMARY)                            │    │
-│   │                                                                      │    │
-│   │   Input: message + ALL skills + ALL agents                          │    │
-│   │   Output: LlmIntentAnalysis {                                       │    │
-│   │     primary_intent, hidden_intents,                                 │    │
-│   │     recommended_skills, recommended_agents,                         │    │
-│   │     suggested_ward, execution_strategy,                             │    │
-│   │     use_execution_graph, rewritten_prompt                           │    │
-│   │   }                                                                  │    │
-│   └─────────────────────────────────────────────────────────────────────┘    │
-│                              │                                               │
-│                     (LLM failed? Fallback)                                   │
-│                              │                                               │
-│                              ▼                                               │
-│   ┌─────────────────────────────────────────────────────────────────────┐    │
-│   │                    Heuristic Analysis (FALLBACK)                     │    │
-│   │                                                                      │    │
-│   │   Keyword matching + semantic search (if fact_store available)      │    │
-│   └─────────────────────────────────────────────────────────────────────┘    │
-│                              │                                               │
-│                              ▼                                               │
-│   ┌─────────────────────────────────────────────────────────────────────┐    │
-│   │                    Response (Pure Analysis)                          │    │
-│   │                                                                      │    │
-│   │   Returns:                                                           │    │
-│   │   - primary_intent / hidden_intents                                 │    │
-│   │   - discovered_resources (skills, agents, wards)                    │    │
-│   │   - ward_recommendation                                             │    │
-│   │   - execution_plan (strategy, steps, required_first_action)         │    │
-│   │   - NO AUTO-LOADING — agent must call load_skill explicitly         │    │
-│   └─────────────────────────────────────────────────────────────────────┘    │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    Runner Layer                                       │   │
+│   │  (gateway/gateway-execution — root agent only, before executor)      │   │
+│   └────────────────────────────────┬────────────────────────────────────┘   │
+│                                    │                                         │
+│                                    ▼                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    LLM Analysis                                       │   │
+│   │                                                                       │   │
+│   │   Input: user message + available skills + available agents          │   │
+│   │   Output: IntentAnalysis {                                           │   │
+│   │     primary_intent, hidden_intents (actionable instructions),        │   │
+│   │     recommended_skills, recommended_agents,                          │   │
+│   │     execution_strategy { approach, graph, explanation }              │   │
+│   │     rewritten_prompt                                                  │   │
+│   │   }                                                                   │   │
+│   └────────────────────────────────┬────────────────────────────────────┘   │
+│                                    │                                         │
+│                          (parse failed? skip enrichment)                     │
+│                                    │                                         │
+│                                    ▼                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │              Inject into System Prompt                                │   │
+│   │                                                                       │   │
+│   │   Appends "## Intent Analysis" section to the base system prompt:   │   │
+│   │   - Primary Intent                                                    │   │
+│   │   - Hidden Intents (as numbered actionable instructions)             │   │
+│   │   - Recommended Skills / Agents                                       │   │
+│   │   - Execution Graph (mermaid, orchestration note, max cycles)        │   │
+│   │   - Rewritten Request                                                 │   │
+│   └────────────────────────────────┬────────────────────────────────────┘   │
+│                                    │                                         │
+│                                    ▼                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │              Executor Starts with Enriched Prompt                     │   │
+│   │                                                                       │   │
+│   │   Root agent sees the full context from turn one — no tool call      │   │
+│   │   needed, no conditional dispatch, LLM decides how to proceed        │   │
+│   └─────────────────────────────────────────────────────────────────────┘   │
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Key Design Principles
 
-### 1. LLM is Primary
-- When `llm_client` is available, LLM analysis is ALWAYS used
-- LLM receives ALL available resources, not pre-filtered subset
-- LLM identifies hidden intents that keyword matching would miss
-- Fallback to heuristics only if LLM fails or is unavailable
+### 1. Pre-Execution, Not a Tool
+- Runs from the runner layer before the executor is constructed
+- Agents never call it — enrichment is transparent and automatic
+- Root-agent only: sub-agents spawned during execution do not trigger re-analysis
 
-### 2. Pure Analysis (No Side Effects)
-- `analyze_intent` returns recommendations only
-- Does NOT auto-load skills
-- Does NOT inject content into context
-- Agent explicitly calls `load_skill` when needed
+### 2. LLM Decides, No Conditional Logic
+- The system prompt injection presents recommendations without branching code
+- No `if recommended_skills then load_skill` wiring in the runner
+- The agent reads the `## Intent Analysis` section and uses its own judgment
 
-### 3. Resource Discovery
-- Skills: Cached from `index_resources`, auto-index if stale
-- Agents: Cached from `index_resources`, auto-index if stale
-- Wards: Direct disk scan (fast enough for small counts)
+### 3. Recommend, Don't Inject
+- The enrichment adds guidance (skill names, agent names, a graph shape), not loaded content
+- Skills are not auto-loaded; agents are not auto-delegated
+- The agent retains full autonomy to follow, modify, or override recommendations
 
 ### 4. Execution Strategy
-LLM determines strategy:
-- **Simple**: Direct tool execution
-- **Medium**: Use `update_plan` for progress tracking
-- **High**: Use `execution_graph` for parallel/sequential orchestration
+LLM determines strategy via the `approach` field:
+- **simple**: Direct execution, no graph needed (greetings, quick questions)
+- **tracked**: Use `update_plan` for progress tracking on medium-complexity tasks
+- **graph**: Use `execution_graph` for parallel/sequential orchestration with conditional edges
 
 ## LLM Prompt Structure
 
 ```markdown
 ## System Prompt (INTENT_ANALYSIS_PROMPT)
-You are an intent analyzer. Given a user request and available resources,
-identify hidden intents and recommend the best execution strategy.
+You are an intent analyzer for an AI agent platform.
+Given a user request and the platform's available resources, your job is to:
+1. Identify the primary intent behind the request
+2. Discover hidden/implicit intents the user hasn't stated but would expect
+3. Recommend which skills and agents would help
+4. Design an execution graph showing how to orchestrate the work
+
+Rules:
+- Hidden intents must be actionable instructions, not labels
+- Every non-trivial execution must end with a quality verification node
+- Use conditional edges when outcomes determine next steps
+- Recommend only skills and agents from the provided lists
+- If the request is simple, use approach "simple" with no graph
 
 ## User Prompt
 ### User Request
 {message}
 
-### ALL Available Skills
+### Available Skills
 - skill_name: description
-- skill_name [CONFIGURED]: description  (already in agent's context)
 
-### ALL Available Agents
-- agent_id: description
-
-## Response Format (JSON)
-{
-  "primary_intent": "...",
-  "hidden_intents": ["..."],
-  "recommended_skills": ["skill1", "skill2"],
-  "recommended_agents": ["agent1"],
-  "suggested_ward": "generic-ward-name",
-  "execution_strategy": "simple|medium|high",
-  "use_execution_graph": true|false,
-  ...
-}
+### Available Agents
+- agent_name: description
 ```
 
 ## Response Schema
 
 ```typescript
-interface AnalyzeIntentResponse {
+interface IntentAnalysis {
   primary_intent: string;
+  // Actionable instructions, not labels — e.g. "Write unit tests for every public function"
   hidden_intents: string[];
-  domain: string;
-  explicit_goals: string[];
-  implicit_goals: string[];
-  rewritten_prompt: string;
+  recommended_skills: string[];   // names from the available skills list
+  recommended_agents: string[];   // names from the available agents list
+  execution_strategy: ExecutionStrategy;
+  rewritten_prompt: string;       // user message with all implicit intent made explicit
+}
 
-  discovered_resources: {
-    skills: Skill[];
-    agents: Agent[];
-    wards: Ward[];
+interface ExecutionStrategy {
+  approach: "simple" | "tracked" | "graph";
+  // Only present when approach === "graph"
+  graph?: {
+    nodes: Array<{
+      id: string;
+      task: string;
+      agent: string;         // agent name or "root"
+      skills: string[];
+    }>;
+    edges: Array<
+      | { from: string; to: string }                                  // Direct
+      | { from: string; conditions: Array<{ when: string; to: string }> }  // Conditional
+    >;
+    mermaid: string;         // Mermaid diagram string for the graph
+    max_cycles?: number;     // Default 2 when omitted
   };
-
-  ward_recommendation: {
-    action: "create_generic" | "use_scratch" | "use_existing";
-    ward_name: string;
-    reason: string;
-  };
-
-  execution_plan: {
-    strategy: "simple" | "medium" | "high";
-    use_execution_graph: boolean;
-    required_first_action?: string;  // "delegate" | "load_skill" | "create_ward"
-    execution_steps: ExecutionStep[];
-    complexity: string;
-  };
-
-  analysis_source: "llm" | "heuristic";
+  explanation: string;       // Why this orchestration shape
 }
 ```
 
-## Usage in System Prompt
+## Injected System Prompt Section
 
-From `instructions_starter.md`:
+`inject_intent_context` appends the following markdown to the base system prompt:
 
 ```markdown
-## AUTONOMOUS BEHAVIOR PROTOCOL
+## Intent Analysis
 
-1. **Discover & Auto-Load Resources**: Call `analyze_intent(message, auto_load=true)`
-   - This discovers relevant skills, agents, and wards
-   - **Automatically loads** high-relevance skills into your context
-   - Returns execution strategy recommendation
-   - Review the loaded skill instructions that appear in the result
+**Primary Intent**: {primary_intent}
 
-2. **MANDATORY: Follow analyze_intent Recommendations**:
-   - If `analyze_intent` recommends agents: **YOU MUST delegate to them**
-   - If `analyze_intent` recommends skills: **YOU MUST use them**
-   - If `analyze_intent` says use execution_graph: **YOU MUST use it**
+**Hidden Intents** (address ALL of these):
+1. {hidden_intent_1}
+2. {hidden_intent_2}
+
+**Recommended Skills** (load when needed, unload when done):
+- {skill_name}
+
+**Recommended Agents** (delegate to these):
+- {agent_name}
+
+**Execution Graph**:
+```mermaid
+{mermaid diagram}
+```
+
+**Orchestration**: {explanation}
+
+**Max cycles**: {max_cycles}
+
+**Rewritten request**: {rewritten_prompt}
 ```
 
 ## File Locations
 
 | Component | Path |
 |-----------|------|
-| Tool Implementation | `runtime/agent-tools/src/tools/intent.rs` |
+| Enrichment Module | `gateway/gateway-execution/src/middleware/intent_analysis.rs` |
 | Skill Indexer | `runtime/agent-tools/src/tools/indexer/skill.rs` |
 | Agent Indexer | `runtime/agent-tools/src/tools/indexer/agent.rs` |
-| System Prompt | `gateway/templates/instructions_starter.md` |
+| System Prompt Template | `gateway/templates/instructions_starter.md` |
 | Executor Integration | `gateway/gateway-execution/src/invoke/executor.rs` |
 
 ## Evolution History
@@ -190,9 +195,20 @@ From `instructions_starter.md`:
 - Auto-loaded skills via `auto_load` parameter
 - Injected skill content into context
 
-### v3 (Current): Pure LLM Analysis
+### v3: Pure LLM Analysis (Tool-Based)
 - LLM is primary analyzer
 - Removed `auto_load` parameter
 - Returns recommendations only
 - Agent explicitly calls `load_skill`
 - Cleaner separation of concerns
+- Implementation: `runtime/agent-tools/src/tools/intent.rs` (2,070 lines)
+- Issue: tool was never registered; agents were told to call it but couldn't
+
+### v4 (Current): Pre-Execution Enrichment
+- Moved out of the tool registry entirely
+- ~250-line module at `gateway/gateway-execution/src/middleware/intent_analysis.rs`
+- Runs from the runner before root agent executor construction
+- Injects `## Intent Analysis` section into system prompt — no tool call by agent
+- No conditional branching in runner code — LLM reads the section and decides
+- Hidden intents are actionable instructions, not labels
+- Execution strategy includes graph/conditional edges for complex orchestration
