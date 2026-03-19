@@ -19,6 +19,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock};
 
+use crate::middleware::intent_analysis::{analyze_intent, inject_intent_context};
+
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
 use super::delegation::{
@@ -423,7 +425,7 @@ impl ExecutionRunner {
         }
 
         // Create executor (restore ward_id from existing session if available)
-        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref()).await {
+        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message)).await {
             Ok(e) => e,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
@@ -873,6 +875,8 @@ impl ExecutionRunner {
         config: &ExecutionConfig,
         session_id: &str,
         ward_id: Option<&str>,
+        is_root: bool,
+        user_message: Option<&str>,
     ) -> Result<AgentExecutor, String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
@@ -925,9 +929,67 @@ impl ExecutionRunner {
         if let Some(cp) = connector_provider {
             builder = builder.with_connector_provider(cp);
         }
+
+        // Intent analysis enrichment (root agent first turn only)
+        let enriched_agent = if is_root {
+            if let Some(msg) = user_message {
+                let llm_config = agent_runtime::LlmConfig::new(
+                    provider.base_url.clone(),
+                    provider.api_key.clone(),
+                    agent.model.clone(),
+                    provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+                );
+                match agent_runtime::OpenAiClient::new(llm_config) {
+                    Ok(raw_client) => {
+                        let llm_client: std::sync::Arc<dyn agent_runtime::LlmClient> =
+                            std::sync::Arc::new(raw_client);
+                        match analyze_intent(
+                            llm_client.as_ref(),
+                            msg,
+                            &available_skills,
+                            &available_agents,
+                        )
+                        .await
+                        {
+                            Ok(analysis) => {
+                                let mut enriched = agent.clone();
+                                inject_intent_context(&mut enriched.instructions, &analysis);
+                                tracing::info!(
+                                    primary_intent = %analysis.primary_intent,
+                                    hidden_intents = analysis.hidden_intents.len(),
+                                    "Intent analysis enrichment complete"
+                                );
+                                Some(enriched)
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Intent analysis failed, proceeding without enrichment: {}",
+                                    e
+                                );
+                                None
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "Failed to create LLM client for intent analysis: {}",
+                            e
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let agent_for_build = enriched_agent.as_ref().unwrap_or(agent);
+
         builder
             .build(
-                agent,
+                agent_for_build,
                 provider,
                 &config.conversation_id,
                 session_id,
