@@ -67,7 +67,7 @@ pub use types::{
 };
 
 pub use llm::{
-    LlmClient, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
+    LlmClient, LlmError, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
     ToolCallChunk, ChatResponse, TokenUsage,
     RetryingLlmClient, RetryPolicy,
     EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError,

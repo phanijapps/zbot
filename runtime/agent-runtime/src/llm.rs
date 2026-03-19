@@ -25,7 +25,7 @@ pub mod openai_embedding;
 pub mod local_embedding;
 
 pub use client::{
-    LlmClient, ChatResponse, StreamChunk, StreamCallback, ToolCallChunk, TokenUsage
+    LlmClient, LlmError, ChatResponse, StreamChunk, StreamCallback, ToolCallChunk, TokenUsage
 };
 pub use config::LlmConfig;
 pub use openai::OpenAiClient;

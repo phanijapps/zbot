@@ -1,3 +1,4 @@
+use agent_runtime::{ChatMessage, LlmClient};
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -191,6 +192,52 @@ pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalys
     ));
 
     system_prompt.push_str(&section);
+}
+
+// ---------------------------------------------------------------------------
+// analyze_intent
+// ---------------------------------------------------------------------------
+
+/// Call the LLM to produce an `IntentAnalysis` for a user message.
+pub async fn analyze_intent(
+    llm_client: &dyn LlmClient,
+    user_message: &str,
+    available_skills: &[Value],
+    available_agents: &[Value],
+) -> Result<IntentAnalysis, String> {
+    let messages = vec![
+        ChatMessage::system(INTENT_ANALYSIS_PROMPT.to_string()),
+        ChatMessage::user(format_user_template(
+            user_message,
+            available_skills,
+            available_agents,
+        )),
+    ];
+
+    let response = llm_client
+        .chat(messages, None)
+        .await
+        .map_err(|e| format!("Intent analysis LLM call failed: {}", e))?;
+
+    let content = strip_markdown_fences(&response.content);
+
+    serde_json::from_str::<IntentAnalysis>(&content)
+        .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))
+}
+
+/// Strip optional markdown code-fences that LLMs sometimes wrap around JSON.
+fn strip_markdown_fences(content: &str) -> String {
+    let trimmed = content.trim();
+    if trimmed.starts_with("```") {
+        let without_start = trimmed
+            .trim_start_matches("```json")
+            .trim_start_matches("```JSON")
+            .trim_start_matches("```");
+        if let Some(end) = without_start.rfind("```") {
+            return without_start[..end].trim().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 // ---------------------------------------------------------------------------
@@ -396,5 +443,161 @@ mod tests {
         assert!(prompt.contains("**Orchestration**: Generate then done"));
         assert!(prompt.contains("**Max cycles**: 5"));
         assert!(prompt.contains("**Rewritten request**: Generate code with tests and error handling"));
+    }
+
+    // -----------------------------------------------------------------------
+    // MockLlmClient & async tests for analyze_intent
+    // -----------------------------------------------------------------------
+
+    use agent_runtime::{ChatResponse, LlmError, StreamCallback};
+    use async_trait::async_trait;
+
+    struct MockLlmClient {
+        response: String,
+    }
+
+    #[async_trait]
+    impl LlmClient for MockLlmClient {
+        fn model(&self) -> &str {
+            "mock"
+        }
+        fn provider(&self) -> &str {
+            "mock"
+        }
+        async fn chat(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+        ) -> Result<ChatResponse, LlmError> {
+            Ok(ChatResponse {
+                content: self.response.clone(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+        async fn chat_stream(
+            &self,
+            _messages: Vec<ChatMessage>,
+            _tools: Option<Value>,
+            _callback: StreamCallback,
+        ) -> Result<ChatResponse, LlmError> {
+            Ok(ChatResponse {
+                content: self.response.clone(),
+                tool_calls: None,
+                reasoning: None,
+                usage: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn test_analyze_intent_simple() {
+        let mock = MockLlmClient {
+            response: r#"{
+                "primary_intent": "greeting",
+                "hidden_intents": [],
+                "recommended_skills": [],
+                "recommended_agents": [],
+                "execution_strategy": {
+                    "approach": "simple",
+                    "explanation": "Simple greeting"
+                },
+                "rewritten_prompt": "Hello!"
+            }"#
+            .to_string(),
+        };
+
+        let result = analyze_intent(&mock, "Hi", &[], &[]).await;
+        let analysis = result.expect("should parse simple intent");
+        assert_eq!(analysis.primary_intent, "greeting");
+        assert_eq!(analysis.execution_strategy.approach, "simple");
+        assert!(analysis.execution_strategy.graph.is_none());
+        assert_eq!(analysis.rewritten_prompt, "Hello!");
+    }
+
+    #[tokio::test]
+    async fn test_analyze_intent_graph() {
+        let mock = MockLlmClient {
+            response: r#"{
+                "primary_intent": "code_generation",
+                "hidden_intents": ["Write unit tests"],
+                "recommended_skills": ["code-gen"],
+                "recommended_agents": ["coder"],
+                "execution_strategy": {
+                    "approach": "graph",
+                    "graph": {
+                        "nodes": [
+                            {"id": "A", "task": "Generate code", "agent": "coder", "skills": ["code-gen"]}
+                        ],
+                        "edges": [
+                            {"from": "A", "to": "END"}
+                        ],
+                        "mermaid": "graph TD\nA-->END",
+                        "max_cycles": 2
+                    },
+                    "explanation": "Generate then done"
+                },
+                "rewritten_prompt": "Generate code with tests"
+            }"#
+            .to_string(),
+        };
+
+        let skills = vec![json!({"name": "code-gen", "description": "Generates code"})];
+        let agents = vec![json!({"name": "coder", "description": "Writes code"})];
+
+        let result = analyze_intent(&mock, "Write code", &skills, &agents).await;
+        let analysis = result.expect("should parse graph intent");
+        assert_eq!(analysis.primary_intent, "code_generation");
+        assert_eq!(analysis.recommended_skills, vec!["code-gen"]);
+        assert_eq!(analysis.recommended_agents, vec!["coder"]);
+        let graph = analysis
+            .execution_strategy
+            .graph
+            .expect("graph should be present");
+        assert_eq!(graph.nodes.len(), 1);
+        assert_eq!(graph.nodes[0].id, "A");
+        assert_eq!(graph.max_cycles, Some(2));
+    }
+
+    #[tokio::test]
+    async fn test_analyze_intent_malformed_json() {
+        let mock = MockLlmClient {
+            response: "This is not valid JSON at all.".to_string(),
+        };
+
+        let result = analyze_intent(&mock, "Hello", &[], &[]).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("Failed to parse intent analysis JSON"),
+            "unexpected error: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_analyze_intent_strips_markdown_fences() {
+        let mock = MockLlmClient {
+            response: r#"```json
+{
+    "primary_intent": "greeting",
+    "hidden_intents": [],
+    "recommended_skills": [],
+    "recommended_agents": [],
+    "execution_strategy": {
+        "approach": "simple",
+        "explanation": "Simple greeting"
+    },
+    "rewritten_prompt": "Hello!"
+}
+```"#
+            .to_string(),
+        };
+
+        let result = analyze_intent(&mock, "Hi", &[], &[]).await;
+        let analysis = result.expect("should strip fences and parse");
+        assert_eq!(analysis.primary_intent, "greeting");
+        assert_eq!(analysis.rewritten_prompt, "Hello!");
     }
 }
