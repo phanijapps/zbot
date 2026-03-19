@@ -32,6 +32,7 @@ pub mod lifecycle;
 pub mod recall;
 pub mod resource_provider;
 pub mod runner;
+pub mod middleware;
 
 // Re-export public types
 pub use config::{ExecutionConfig, GatewayFileSystem};
