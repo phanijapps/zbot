@@ -89,8 +89,8 @@ impl ExecutorBuilder {
         provider: &Provider,
         conversation_id: &str,
         session_id: &str,
-        available_agents: Vec<serde_json::Value>,
-        available_skills: Vec<serde_json::Value>,
+        available_agents: &[serde_json::Value],
+        available_skills: &[serde_json::Value],
         hook_context: Option<&serde_json::Value>,
         mcp_service: &McpService,
         ward_id: Option<&str>,
@@ -110,13 +110,13 @@ impl ExecutorBuilder {
         // Cache available agents for list_agents tool
         if !available_agents.is_empty() {
             executor_config = executor_config
-                .with_initial_state("available_agents", serde_json::Value::Array(available_agents));
+                .with_initial_state("available_agents", serde_json::Value::Array(available_agents.to_vec()));
         }
 
         // Cache available skills for list_skills tool
         if !available_skills.is_empty() {
             executor_config = executor_config
-                .with_initial_state("available_skills", serde_json::Value::Array(available_skills));
+                .with_initial_state("available_skills", serde_json::Value::Array(available_skills.to_vec()));
         }
 
         // Load workspace context (from cache if available, otherwise disk)
