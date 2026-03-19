@@ -953,6 +953,137 @@ CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 | `create_agent` | Create new agents | Moderate |
 | `introspection` | Agent introspection (list_tools, list_mcps) | Safe |
 
+## Resource Indexing System
+
+Skills and agents are indexed for semantic search and relationship tracking. The system uses a **lazy indexing** approach — indexing happens on-demand, not at startup.
+
+### Index Storage
+
+| Storage | Purpose | Persistence |
+|---------|---------|-------------|
+| **Memory Fact Store** | Semantic search (BM25 + vector embeddings) | SQLite + FTS5 + embeddings |
+| **Knowledge Graph** | Entity/relationship storage | SQLite via GraphStorage |
+| **Context State Cache** | Fast lookup during session | Per-session (index:skills, index:agents) |
+
+### Indexing Flow
+
+```
+index_resources called (or first discovery)
+     │
+     ▼
+┌─────────────────────────────────────────┐
+│ 1. Scan skills_dir/ for SKILL.md files  │
+│    → Parse frontmatter                  │
+│    → Build SkillMetadata                │
+│                                         │
+│ 2. Scan agents_dir/ for config.yaml     │
+│    → Parse YAML                         │
+│    → Build AgentMetadata                │
+│                                         │
+│ 3. Store in Memory Fact Store           │
+│    → Category: "skill" or "agent"       │
+│    → Key: "skill:{name}" or "agent:{name}"  │
+│    → Content: name + description + keywords   │
+│                                         │
+│ 4. Store in Knowledge Graph             │
+│    → Entity type: "skill" or "agent"    │
+│    → Properties: description, tools, etc.│
+│                                         │
+│ 5. Cache mtimes in context state        │
+│    → index:skills_mtimes                │
+│    → index:agents_mtimes                │
+└─────────────────────────────────────────┘
+```
+
+### Discovery Flow (analyze_intent, list_skills)
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Try semantic search via MemoryFactStore (if available)      │
+│    → recall_facts("default", message, 10)                       │
+│    → Filter by category (skill/agent)                           │
+│                                                                 │
+│ 2. Try cached index from context state                          │
+│    → index:skills, index:agents                                 │
+│                                                                 │
+│ 3. Fall back to disk scan                                       │
+│    → Parse SKILL.md/config.yaml on-demand                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### When Indexing Happens
+
+| Trigger | Behavior |
+|---------|----------|
+| `index_resources()` tool called | Full reindex (or force=true for stale) |
+| First `analyze_intent()` call | Uses disk scan fallback if no index |
+| File modification detected | Staleness check during next indexing |
+
+### Semantic Search Integration
+
+The `analyze_intent` tool uses semantic search when MemoryFactStore is available:
+
+1. **Semantic query**: `recall_facts()` returns facts matching the message semantically
+2. **Category filter**: Only skills/agents with matching category
+3. **Merge with keyword**: Semantic results merged with keyword-matched results
+4. **Deduplication**: Skills found via both methods appear once with highest score
+
+### Error Recovery
+
+When `load_skill` or agent loading fails:
+1. File not found → Remove from index automatically
+2. Corrupted file → Suggest `index_resources(force=true)`
+
+## Intent Analysis System
+
+The `analyze_intent` tool is a **pure analysis** tool that discovers hidden intents and recommends resources (skills, agents, wards). See `memory-bank/intent-analysis.md` for full documentation.
+
+### Architecture Principle: LLM-First, Pure Analysis
+
+| Aspect | Design |
+|--------|--------|
+| **Primary Analyzer** | LLM (receives ALL available resources) |
+| **Fallback** | Heuristic keyword matching (only when LLM unavailable/failed) |
+| **Side Effects** | None — returns recommendations only |
+| **Auto-Loading** | Removed — agent explicitly calls `load_skill` |
+
+### Flow
+
+```
+User Message
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 1. DISCOVERY: Get ALL skills, agents, wards                 │
+│    - Skills/Agents: cached index (auto-index if stale)      │
+│    - Wards: direct disk scan                                │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. LLM ANALYSIS (PRIMARY)                                   │
+│    Input: message + ALL resources                           │
+│    Output: hidden_intents, recommended_skills/agents,       │
+│            suggested_ward, execution_strategy               │
+└─────────────────────────────────────────────────────────────┘
+     │
+     (LLM failed? Fallback to heuristics)
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. RETURN recommendations (NO auto-loading)                 │
+│    - Agent calls load_skill() explicitly                    │
+│    - Agent delegates to recommended agents                   │
+│    - Agent creates suggested ward if needed                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Behavioral Contract
+
+- `analyze_intent` returns recommendations — the agent DECIDES whether to act
+- If `analyze_intent` recommends agents → Agent MUST delegate
+- If `analyze_intent` recommends skills → Agent calls `load_skill` explicitly
+- If `analyze_intent` says use execution_graph → Agent MUST use it
+
 ## System Prompt Architecture
 
 The system prompt is composed of a base template plus automatically injected shards:

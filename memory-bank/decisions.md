@@ -160,6 +160,30 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Decision**: `auto_restart: true` (default) with configurable `restart_delay_ms` (default 5000). Failed plugins restart automatically after delay.
 **Rationale**: Hands-off operation. For intentional stops, auto_restart is skipped. Log messages indicate restart reason.
 
+### Resource Indexing: Lazy On-Demand
+**Problem**: Skills and agents need semantic search, but scanning directories at startup is wasteful.
+**Decision**: Indexing happens on-demand when `index_resources` tool is called. First discovery falls back to disk scan if no index exists.
+**Rationale**: Avoids startup overhead. Users/agents explicitly trigger reindex when they know files have changed. Mtime tracking enables staleness detection without full reindex.
+
+### Resource Indexing: Dual Storage (Memory + Graph)
+**Problem**: Semantic search needs text embeddings, but relationship queries need structured graph data.
+**Decision**: Store skills/agents in both MemoryFactStore (for semantic search via BM25 + embeddings) and KnowledgeGraphStore (for entity relationships).
+**Rationale**: Each storage is optimized for its access pattern. Memory provides hybrid search. Graph provides relationship traversal. Storing in both enables rich discovery without sacrificing performance.
+
+### Semantic Search: Merge Strategy
+**Problem**: Semantic search might miss exact keyword matches; keyword search can't find semantically similar terms.
+**Decision**: `analyze_intent` tries semantic search first, then merges with keyword matching results, deduplicating by name.
+**Rationale**: Best of both worlds. Semantic finds "web scraping" when user says "extract data from websites". Keyword ensures exact matches aren't missed. Highest relevance score wins on duplicates.
+
+### Intent Analysis: LLM-First, Pure Analysis
+**Problem**: Heuristic keyword matching misses hidden intents; auto-loading skills pollutes context; injection breaks tool boundaries.
+**Decision**: `analyze_intent` is a **pure analysis** tool:
+- LLM is PRIMARY analyzer (receives ALL resources, returns intelligent recommendations)
+- Heuristics only as FALLBACK (LLM failed or unavailable)
+- NO auto-loading — returns recommendations only
+- Agent explicitly calls `load_skill` when needed
+**Rationale**: Clean separation of concerns. LLM provides intelligent analysis (hidden intents, execution strategy, ward suggestions). Agent retains control over what to load. No surprise context injection. See `memory-bank/intent-analysis.md` for full documentation.
+
 ## Patterns We Did NOT Adopt
 
 These were considered during the Codex gap analysis and explicitly rejected:
