@@ -38,6 +38,10 @@ pub struct Provider {
     /// Set lower for rate-limited providers (e.g., 1 for free tiers).
     #[serde(rename = "maxConcurrentRequests", skip_serializing_if = "Option::is_none")]
     pub max_concurrent_requests: Option<u32>,
+    /// Context window size in tokens. Overrides the hardcoded model lookup.
+    /// Set this when using models not in the built-in lookup table.
+    #[serde(rename = "contextWindow", skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
