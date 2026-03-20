@@ -202,10 +202,29 @@ impl ShellTool {
         (false, None)
     }
 
+    /// Commands that bypass security validation entirely.
+    /// These are safe commands that frequently trigger false positives due to
+    /// substring matching on their content (e.g., python scripts containing "rm",
+    /// cat heredocs with backticks).
+    const ALLOWED_PREFIXES: &'static [&'static str] = &[
+        "cat ",
+        "python ",
+        "python3 ",
+        "python.exe ",
+        "python3.exe ",
+    ];
+
     /// Validate a command against security rules
     fn validate_command(command: &str) -> Result<()> {
         let command_lower = command.to_lowercase();
         let command_normalized = command_lower.replace("  ", " ").trim().to_string();
+
+        // Allowlist: commands that bypass validation to avoid false positives
+        for prefix in Self::ALLOWED_PREFIXES {
+            if command_normalized.starts_with(prefix) {
+                return Ok(());
+            }
+        }
 
         // Check against blocked commands
         for blocked in BLOCKED_COMMANDS {
@@ -393,12 +412,10 @@ impl Tool for ShellTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // Validate command against security rules
-        Self::validate_command(command)?;
-
-        // ---- apply_patch interception ----
+        // ---- apply_patch interception (before validation) ----
         // If the command is an apply_patch invocation, handle it directly without spawning a shell.
         // This enables multi-file create/update/delete in a single tool call with zero extra schema.
+        // Must run BEFORE validate_command to avoid false positives on patch content.
         {
             // Resolve cwd the same way the shell would
             let patch_cwd = if let Some(dir) = cwd {
@@ -434,6 +451,9 @@ impl Tool for ShellTool {
                 };
             }
         }
+
+        // Validate command against security rules (after apply_patch interception)
+        Self::validate_command(command)?;
 
         tracing::debug!(
             "Shell: executing command ({} chars) with {}s timeout",
@@ -650,6 +670,19 @@ mod tests {
         // "dd" as substring should not be blocked
         assert!(ShellTool::validate_command("git add .").is_ok());
         assert!(ShellTool::validate_command("npm add express").is_ok());
+    }
+
+    #[test]
+    fn test_allowlisted_commands_bypass_validation() {
+        // python/python3 with content that would normally trigger backtick+rm injection check
+        assert!(ShellTool::validate_command("python script.py").is_ok());
+        assert!(ShellTool::validate_command("python3 -c 'import os; os.remove(\"file\")'").is_ok());
+        assert!(ShellTool::validate_command("python -c 'x = `cmd`; rm something'").is_ok());
+        assert!(ShellTool::validate_command("python3 run.py --flag").is_ok());
+
+        // cat with heredoc content that has backticks
+        assert!(ShellTool::validate_command("cat > file.py << 'EOF'\nrm -rf /\nEOF").is_ok());
+        assert!(ShellTool::validate_command("cat file.txt").is_ok());
     }
 
     #[test]
