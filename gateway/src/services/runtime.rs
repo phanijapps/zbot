@@ -78,6 +78,7 @@ impl RuntimeService {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -99,6 +100,7 @@ impl RuntimeService {
         memory_recall: Option<Arc<MemoryRecall>>,
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
+        embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     ) -> Self {
         let runner = Arc::new(ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -117,6 +119,7 @@ impl RuntimeService {
             memory_recall,
             bridge_registry,
             bridge_outbox,
+            embedding_client,
         ));
         Self {
             event_bus,

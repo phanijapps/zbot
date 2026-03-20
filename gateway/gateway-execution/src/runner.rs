@@ -90,6 +90,8 @@ pub struct ExecutionRunner {
     memory_recall: Option<Arc<super::recall::MemoryRecall>>,
     /// Semaphore to limit concurrent delegation spawns (prevents resource exhaustion)
     delegation_semaphore: Arc<Semaphore>,
+    /// Embedding client for generating vector embeddings (semantic search in memory)
+    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
 }
 
 impl ExecutionRunner {
@@ -125,6 +127,7 @@ impl ExecutionRunner {
             None,
             None,
             None,
+            None,
         )
     }
 
@@ -146,6 +149,7 @@ impl ExecutionRunner {
         memory_recall: Option<Arc<super::recall::MemoryRecall>>,
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
+        embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -171,6 +175,7 @@ impl ExecutionRunner {
             distiller,
             memory_recall,
             delegation_semaphore: Arc::new(Semaphore::new(3)),
+            embedding_client,
         };
 
         // Spawn delegation handler task
@@ -903,8 +908,7 @@ impl ExecutionRunner {
 
         // Build fact store from memory repo + embedding client (if available)
         let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = self.memory_repo.as_ref().map(|repo| {
-            // TODO: pass embedding client when available in runner context
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), None))
+            Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), self.embedding_client.clone()))
                 as Arc<dyn zero_core::MemoryFactStore>
         });
         // Clone for indexing (fact_store will be moved into builder)

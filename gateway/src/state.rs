@@ -190,6 +190,10 @@ impl AppState {
             }
         };
 
+        // Clone embedding client before it's moved into distiller — the runner
+        // also needs it so the memory fact store can generate embeddings.
+        let runner_embedding_client = embedding_client.clone();
+
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
             embedding_client,
@@ -217,6 +221,7 @@ impl AppState {
             Some(memory_recall),
             Some(bridge_registry.clone()),
             Some(bridge_outbox.clone()),
+            runner_embedding_client,
         ));
 
         // Create hook registry
