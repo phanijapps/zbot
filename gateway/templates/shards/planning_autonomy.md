@@ -45,7 +45,8 @@ CONTEXT FROM PREVIOUS STEPS:
 {results, data, file paths from completed steps}
 
 WARD: Use ward(action='use', name='{ward_name}') FIRST. Read AGENTS.md to understand project structure.
-EXISTING FILES: {list files in the ward the subagent should read before writing new code}
+DIRECTORY LAYOUT: Put reusable code in core/, task work in {task_subdir}/, final output in output/.
+EXISTING FILES: {list files in the ward the subagent should read/reuse before writing new code}
 
 SKILLS TO LOAD: {e.g., load_skill('yf-data'), load_skill('yf-signals')}
 
@@ -106,12 +107,17 @@ Wards are **reusable project libraries**, not throwaway scratch spaces. Every su
 
 1. **Use the ward** — call `ward(action='use', name='...')` before any file operations
 2. **Read before write** — check AGENTS.md and existing files before creating new ones
-3. **One concern per file** — `fetch_data.py`, `technical_indicators.py`, `report_generator.py` not `do_everything.py`
-4. **Clear naming** — files, functions, and variables should be self-documenting
-5. **Reusable modules** — write importable functions, not inline scripts. Future sessions will `import` from these files
-6. **Save data as files** — output CSV/JSON to the ward so later steps and sessions can use them
-7. **Keep files under 200 lines** — split when they grow
-8. **Update AGENTS.md** — after creating/modifying files, update the Structure section with what each file does
+3. **Follow the directory layout** — if the Intent Analysis specifies a directory structure, use it:
+   - `core/` — shared reusable Python modules (data fetching, indicators, formatters). Code here is imported by task scripts.
+   - `{task}/` — task-specific scripts and intermediate data (e.g., `stocks/spy/`, `trinomials/`)
+   - `output/` — ALL final deliverables go here: reports, charts, HTML, PDF, CSV exports. Never put reports in root or task dirs.
+4. **One concern per file** — `fetch_data.py`, `technical_indicators.py`, `report_generator.py` not `do_everything.py`
+5. **Clear naming** — files, functions, and variables should be self-documenting
+6. **Reusable modules in core/** — write importable functions, not inline scripts. Future sessions will `from core.data_fetch import get_ohlcv`
+7. **Save intermediate data as files** — output CSV/JSON to the task subdir so later steps can use them
+8. **Keep files under 200 lines** — split when they grow
+9. **Update AGENTS.md** — after creating/modifying files, update the Structure section with what each file does and which modules in core/ are reusable
+10. **No temp files, no loose scripts in ward root** — everything goes in core/, task subdir, or output/
 
 ## Task Assessment
 

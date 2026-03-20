@@ -27,6 +27,10 @@ pub struct WardRecommendation {
     pub ward_name: String,
     /// Suggested subdirectory for this specific task (e.g., "stocks/lmnd", "trinomials")
     pub subdirectory: Option<String>,
+    /// Directory layout: key = directory path, value = purpose
+    /// e.g., {"core/": "Shared Python modules", "output/": "Reports, charts, HTML"}
+    #[serde(default)]
+    pub structure: std::collections::HashMap<String, String>,
     /// Why this ward
     pub reason: String,
 }
@@ -88,11 +92,18 @@ Given a user request and the platform's available resources, your job is to:
 
 ## Ward Philosophy
 Wards are reusable project workspaces organized by DOMAIN, not by task. Think of them as permanent libraries:
-- "financial-analysis" for ALL stock/options/market work (with subdirs like stocks/lmnd, stocks/spy)
-- "math-tutor" for ALL math work (with subdirs like trinomials, projectiles, calculus)
+- "financial-analysis" for ALL stock/options/market work
+- "math-tutor" for ALL math work
 - "research-hub" for general research projects
-Each ward has reusable code in core/, task-specific work in subdirs, and output/ for reports.
 If an existing ward matches the domain, REUSE it. Only create new for genuinely new domains.
+
+Every ward MUST follow this directory convention:
+- core/         — Shared reusable Python modules (data fetching, indicators, formatters)
+- {task-subdir}/ — Task-specific scripts and intermediate data (e.g., stocks/spy/, trinomials/)
+- output/       — All final deliverables: reports, charts, HTML, PDF, CSV exports
+- AGENTS.md     — Living documentation of the ward's purpose, structure, and reusable components
+
+Include a "structure" map in your ward_recommendation showing directories and their purpose.
 
 ## Rules
 - Hidden intents must be actionable instructions, not labels
@@ -113,7 +124,8 @@ Respond with ONLY a JSON object (no markdown fences, no explanation) matching th
   "ward_recommendation": {
     "action": "use_existing | create_new",
     "ward_name": "domain-level name like financial-analysis, math-tutor, research-hub",
-    "subdirectory": "task-specific subdir like stocks/lmnd, trinomials -- null for simple tasks",
+    "subdirectory": "task-specific subdir like stocks/spy, trinomials -- null for simple tasks",
+    "structure": {"core/": "purpose", "stocks/spy/": "purpose", "output/": "purpose"},
     "reason": "why this ward"
   },
   "execution_strategy": {
@@ -232,12 +244,21 @@ pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalys
         section.push('\n');
     }
 
-    // Ward recommendation
+    // Ward recommendation with directory structure
     let ward = &analysis.ward_recommendation;
     section.push_str(&format!("**Ward**: `{}` ({}) — {}\n", ward.ward_name, ward.action, ward.reason));
     if let Some(ref subdir) = ward.subdirectory {
-        section.push_str(&format!("**Subdirectory**: `{}`\n", subdir));
+        section.push_str(&format!("**Task directory**: `{}`\n", subdir));
     }
+    if !ward.structure.is_empty() {
+        section.push_str("**Directory layout** (create these, put files in the right place):\n");
+        let mut dirs: Vec<_> = ward.structure.iter().collect();
+        dirs.sort_by_key(|(k, _)| k.clone());
+        for (dir, purpose) in &dirs {
+            section.push_str(&format!("- `{}` — {}\n", dir, purpose));
+        }
+    }
+    section.push_str("**After completing work**: Update AGENTS.md with what was built and what's reusable.\n");
     section.push('\n');
 
     if let Some(graph) = &analysis.execution_strategy.graph {
@@ -647,6 +668,7 @@ mod tests {
                 action: "use_existing".into(),
                 ward_name: "scratch".into(),
                 subdirectory: None,
+                structure: Default::default(),
                 reason: "test".into(),
             },
             execution_strategy: ExecutionStrategy {
@@ -683,6 +705,7 @@ mod tests {
                 action: "use_existing".into(),
                 ward_name: "scratch".into(),
                 subdirectory: None,
+                structure: Default::default(),
                 reason: "test".into(),
             },
             execution_strategy: ExecutionStrategy {
