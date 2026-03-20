@@ -6,7 +6,10 @@
 use agent_runtime::{ChatMessage, ChatResponse, LlmClient, LlmError, StreamCallback};
 use async_trait::async_trait;
 use gateway_execution::middleware::intent_analysis::{analyze_intent, inject_intent_context};
-use serde_json::{json, Value};
+use gateway_services::{AgentService, SharedVaultPaths, SkillService, VaultPaths};
+use serde_json::Value;
+use std::sync::Arc;
+use zero_core::MemoryFactStore;
 
 // ===========================================================================
 // Mock LLM clients
@@ -79,8 +82,54 @@ impl LlmClient for FailingLlmClient {
 }
 
 // ===========================================================================
+// Mock fact store
+// ===========================================================================
+
+/// Minimal mock fact store that accepts writes and returns empty results.
+struct MockFactStore;
+
+#[async_trait]
+impl MemoryFactStore for MockFactStore {
+    async fn save_fact(
+        &self,
+        _agent_id: &str,
+        _category: &str,
+        _key: &str,
+        _content: &str,
+        _confidence: f64,
+        _session_id: Option<&str>,
+    ) -> Result<Value, String> {
+        Ok(serde_json::json!({"status": "ok"}))
+    }
+
+    async fn recall_facts(
+        &self,
+        _agent_id: &str,
+        _query: &str,
+        _limit: usize,
+    ) -> Result<Value, String> {
+        Ok(serde_json::json!({"results": []}))
+    }
+}
+
+// ===========================================================================
 // Helpers
 // ===========================================================================
+
+/// Create test fixtures: fact store, skill service, agent service, vault paths.
+fn test_fixtures() -> (MockFactStore, SkillService, AgentService, SharedVaultPaths) {
+    let tmp = std::env::temp_dir().join("intent_analysis_integration_test");
+    let _ = std::fs::create_dir_all(tmp.join("skills"));
+    let _ = std::fs::create_dir_all(tmp.join("agents"));
+    let _ = std::fs::create_dir_all(tmp.join("wards"));
+
+    let fact_store = MockFactStore;
+    let skill_service = SkillService::new(tmp.join("skills"));
+    let agent_service = AgentService::new(tmp.join("agents"));
+    let vault_paths: SharedVaultPaths = Arc::new(VaultPaths::new(tmp));
+
+    (fact_store, skill_service, agent_service, vault_paths)
+}
 
 fn complex_analysis_json() -> String {
     serde_json::json!({
@@ -128,21 +177,6 @@ fn complex_analysis_json() -> String {
     .to_string()
 }
 
-fn sample_skills() -> Vec<Value> {
-    vec![
-        json!({"name": "web-search", "description": "Search the web for real-time information"}),
-        json!({"name": "code-exec", "description": "Execute code in a sandboxed environment"}),
-        json!({"name": "file-write", "description": "Write content to files"}),
-    ]
-}
-
-fn sample_agents() -> Vec<Value> {
-    vec![
-        json!({"name": "researcher", "description": "Specializes in information gathering and research"}),
-        json!({"name": "analyst", "description": "Performs quantitative and qualitative analysis"}),
-    ]
-}
-
 // ===========================================================================
 // Tests
 // ===========================================================================
@@ -154,8 +188,10 @@ async fn test_full_enrichment_flow() {
         response: complex_analysis_json(),
     };
 
+    let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
+
     // Step 1: analyze_intent
-    let analysis = analyze_intent(&mock, "Analyze my investment portfolio", &sample_skills(), &sample_agents(), &[])
+    let analysis = analyze_intent(&mock, "Analyze my investment portfolio", &fact_store, &skill_svc, &agent_svc, &paths)
         .await
         .expect("analyze_intent should succeed with valid JSON");
 
@@ -215,8 +251,9 @@ async fn test_full_enrichment_flow() {
 #[tokio::test]
 async fn test_graceful_degradation_on_llm_failure() {
     let client = FailingLlmClient;
+    let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
 
-    let result = analyze_intent(&client, "Hello", &[], &[], &[]).await;
+    let result = analyze_intent(&client, "Hello", &fact_store, &skill_svc, &agent_svc, &paths).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -233,8 +270,9 @@ async fn test_graceful_degradation_on_malformed_json() {
     let mock = MockLlmClient {
         response: "I'm not sure what you mean.".to_string(),
     };
+    let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
 
-    let result = analyze_intent(&mock, "Do something", &[], &[], &[]).await;
+    let result = analyze_intent(&mock, "Do something", &fact_store, &skill_svc, &agent_svc, &paths).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -271,8 +309,9 @@ async fn test_simple_request_no_graph() {
     let mock = MockLlmClient {
         response: simple_json,
     };
+    let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
 
-    let analysis = analyze_intent(&mock, "Hi there", &[], &[], &[])
+    let analysis = analyze_intent(&mock, "Hi there", &fact_store, &skill_svc, &agent_svc, &paths)
         .await
         .expect("should parse simple intent");
 
@@ -295,8 +334,9 @@ async fn test_skills_recommended_but_not_loaded() {
     let mock = MockLlmClient {
         response: complex_analysis_json(),
     };
+    let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
 
-    let analysis = analyze_intent(&mock, "Analyze my portfolio", &sample_skills(), &sample_agents(), &[])
+    let analysis = analyze_intent(&mock, "Analyze my portfolio", &fact_store, &skill_svc, &agent_svc, &paths)
         .await
         .expect("should succeed");
 
