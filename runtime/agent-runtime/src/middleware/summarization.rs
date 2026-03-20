@@ -123,7 +123,11 @@ impl SummarizationMiddleware {
             .join("\n\n")
     }
 
-    /// Split messages into keep and summarize groups
+    /// Split messages into keep and summarize groups.
+    ///
+    /// IMPORTANT: Never splits between an assistant message with tool_calls
+    /// and its tool responses. The split boundary is walked forward to find
+    /// a clean break point.
     fn split_messages(
         &self,
         messages: &[ChatMessage],
@@ -131,7 +135,6 @@ impl SummarizationMiddleware {
     ) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
         let to_keep = self.config.keep.to_keep_count(messages.len(), context_window);
 
-        // Keep the most recent messages (last N)
         // System messages are always kept
         let system_messages: Vec<_> = messages
             .iter()
@@ -148,7 +151,21 @@ impl SummarizationMiddleware {
         let keep_count = to_keep.saturating_sub(system_messages.len());
 
         let (to_keep_messages, to_summarize_messages) = if non_system_messages.len() > keep_count {
-            let split_idx = non_system_messages.len() - keep_count;
+            let target_split = non_system_messages.len() - keep_count;
+
+            // Walk the split boundary forward to find a clean break point.
+            // A clean break is NOT inside an assistant+tool pair.
+            let mut split_idx = target_split;
+            for i in target_split..non_system_messages.len() {
+                let msg = &non_system_messages[i];
+                // Clean boundary: user message or assistant message (not a tool response)
+                if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
+                    split_idx = i;
+                    break;
+                }
+                // tool message = inside a pair, keep walking forward
+            }
+
             let summarize = non_system_messages[..split_idx].to_vec();
             let keep = non_system_messages[split_idx..].to_vec();
             (keep, summarize)

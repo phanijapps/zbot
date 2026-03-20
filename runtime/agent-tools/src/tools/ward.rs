@@ -13,6 +13,9 @@ use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, Z
 /// Ward memory file name (hidden file inside each ward)
 const WARD_MEMORY_FILE: &str = ".ward_memory.json";
 
+/// AGENTS.md file name - living readme for agent executions
+const WARD_AGENTS_MD: &str = "AGENTS.md";
+
 /// Tool for managing wards (named project directories).
 ///
 /// Wards are persistent, agent-named project directories under `vault/wards/`.
@@ -66,6 +69,46 @@ impl WardTool {
             }
         }
         json!({})
+    }
+
+    /// Read AGENTS.md content from a ward directory, if it exists.
+    fn read_agents_md(&self, ward_dir: &std::path::Path) -> Option<String> {
+        let agents_md_path = ward_dir.join(WARD_AGENTS_MD);
+        std::fs::read_to_string(&agents_md_path).ok()
+    }
+
+    /// Create a starter AGENTS.md in a new ward.
+    fn create_agents_md(&self, ward_dir: &std::path::Path, ward_name: &str) {
+        let agents_md_path = ward_dir.join(WARD_AGENTS_MD);
+        if agents_md_path.exists() {
+            return; // Don't overwrite existing AGENTS.md
+        }
+
+        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+        let content = format!(
+r#"# {}
+
+## Purpose
+<!-- Describe what this ward/project is for -->
+
+## Structure
+<!-- Document file organization and what each file/directory does -->
+
+## Conventions
+<!-- Tech stack, patterns, naming conventions, dependencies -->
+
+## Reusable Components
+<!-- Scripts, modules, utilities that future sessions can reuse -->
+
+## History
+- {}: Ward created
+"#,
+            ward_name, today
+        );
+
+        if let Err(e) = std::fs::write(&agents_md_path, content) {
+            tracing::warn!("Failed to create AGENTS.md in ward '{}': {}", ward_name, e);
+        }
     }
 
     /// Get a short description from ward memory (if any).
@@ -169,6 +212,11 @@ impl Tool for WardTool {
                     })?;
                 }
 
+                // Create starter AGENTS.md for new wards
+                if created {
+                    self.create_agents_md(&ward_dir, name);
+                }
+
                 // Set ward_id in context state
                 ctx.set_state("ward_id".to_string(), json!(name));
 
@@ -177,6 +225,9 @@ impl Tool for WardTool {
 
                 // Load ward memory
                 let memory = self.load_ward_memory(&ward_dir);
+
+                // Read AGENTS.md if it exists
+                let agents_md = self.read_agents_md(&ward_dir);
 
                 tracing::info!("Ward switched to '{}' (created: {})", name, created);
 
@@ -188,6 +239,7 @@ impl Tool for WardTool {
                     "files": files,
                     "file_count": files.len(),
                     "ward_memory": memory,
+                    "agents_md": agents_md,
                 }))
             }
 
@@ -388,5 +440,58 @@ mod tests {
 
         let desc = tool.ward_description(dir.path());
         assert!(desc.is_none());
+    }
+
+    #[test]
+    fn test_create_agents_md() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFs {
+            base: dir.path().to_path_buf(),
+        });
+        let tool = WardTool::new(fs);
+        let ward_dir = dir.path().join("wards").join("test-project");
+        std::fs::create_dir_all(&ward_dir).unwrap();
+
+        tool.create_agents_md(&ward_dir, "test-project");
+
+        let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
+        assert!(content.contains("# test-project"));
+        assert!(content.contains("## Purpose"));
+        assert!(content.contains("## Structure"));
+        assert!(content.contains("## Reusable Components"));
+        assert!(content.contains("Ward created"));
+    }
+
+    #[test]
+    fn test_read_agents_md() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFs {
+            base: dir.path().to_path_buf(),
+        });
+        let tool = WardTool::new(fs);
+
+        std::fs::write(dir.path().join("AGENTS.md"), "# My Project\n\nTest content").unwrap();
+
+        let content = tool.read_agents_md(dir.path());
+        assert!(content.is_some());
+        assert!(content.unwrap().contains("# My Project"));
+    }
+
+    #[test]
+    fn test_create_agents_md_does_not_overwrite() {
+        let dir = TempDir::new().unwrap();
+        let fs = Arc::new(TestFs {
+            base: dir.path().to_path_buf(),
+        });
+        let tool = WardTool::new(fs);
+
+        let ward_dir = dir.path().join("wards").join("existing");
+        std::fs::create_dir_all(&ward_dir).unwrap();
+        std::fs::write(ward_dir.join("AGENTS.md"), "# Custom content").unwrap();
+
+        tool.create_agents_md(&ward_dir, "existing");
+
+        let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
+        assert!(content.contains("# Custom content")); // Not overwritten
     }
 }

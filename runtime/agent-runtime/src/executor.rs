@@ -449,6 +449,11 @@ impl AgentExecutor {
                 }
             }
 
+            // Sanitize messages to remove orphaned tool messages before LLM call.
+            // This prevents API errors when compaction or summarization splits
+            // assistant+tool pairs.
+            sanitize_messages(&mut current_messages);
+
             // Real streaming via chat_stream() with mpsc channel bridge.
             // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
             // including intermediate text that accompanies tool calls.
@@ -707,6 +712,23 @@ impl AgentExecutor {
                                         ward_id: ward_id.to_string(),
                                     });
                                 }
+                            }
+
+                            // Check for plan_update marker
+                            if parsed.get("__plan_update")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
+                                let explanation = parsed.get("explanation")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+
+                                on_event(StreamEvent::ActionPlanUpdate {
+                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                    plan,
+                                    explanation,
+                                });
                             }
                         }
 
@@ -1452,13 +1474,18 @@ pub async fn create_executor(
 
 /// Compact messages to reduce context size when approaching token limits.
 ///
-/// Strategy: keep system messages, keep last N tool call/result pairs,
+/// Strategy: keep system messages, keep last N messages (with pair integrity),
 /// insert a summarization placeholder for trimmed history.
+///
+/// IMPORTANT: assistant+tool_call / tool_response pairs are treated as atomic
+/// units. If an assistant message with tool_calls is kept, all its tool
+/// responses are kept too. If a tool response would be trimmed, its parent
+/// assistant message is also trimmed.
 fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    const KEEP_RECENT: usize = 20; // Keep last 20 messages
+    const KEEP_RECENT: usize = 20;
 
     if messages.len() <= KEEP_RECENT + 2 {
-        return messages; // Nothing to compact
+        return messages;
     }
 
     let mut compacted = Vec::new();
@@ -1474,15 +1501,31 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         }
     }
 
-    // Preserve the first non-system message (original user request) so the agent
-    // never loses what it was asked to do.
+    // Preserve the first non-system message (original user request)
     let first_user_msg = messages[non_system_start..].iter().find(|m| m.role == "user");
     if let Some(user_msg) = first_user_msg {
         compacted.push(user_msg.clone());
     }
 
-    // Insert compaction notice
-    let trimmed_count = messages.len() - non_system_start - KEEP_RECENT;
+    // Find a clean split point that doesn't break assistant+tool pairs.
+    // Start from the target split point and walk forward until we find
+    // a boundary that's NOT inside a tool_call/tool_response group.
+    let target_start = messages.len().saturating_sub(KEEP_RECENT);
+    let mut split_at = target_start;
+
+    // Walk forward to find a clean boundary
+    for i in target_start..messages.len() {
+        let msg = &messages[i];
+        // A clean boundary is: a user message, or an assistant message WITHOUT tool_call_id
+        // (i.e., not a tool response, and not mid-pair)
+        if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
+            split_at = i;
+            break;
+        }
+        // If it's a tool message, we're inside a pair — keep walking
+    }
+
+    let trimmed_count = split_at.saturating_sub(non_system_start);
     if trimmed_count > 0 {
         compacted.push(ChatMessage::user(format!(
             "[SYSTEM: Context compacted. {} earlier messages were trimmed to stay within \
@@ -1491,11 +1534,55 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         )));
     }
 
-    // Keep the most recent messages
-    let recent_start = messages.len().saturating_sub(KEEP_RECENT);
-    compacted.extend(messages[recent_start..].iter().cloned());
+    // Keep messages from split point onward
+    compacted.extend(messages[split_at..].iter().cloned());
 
     compacted
+}
+
+/// Sanitize messages to ensure tool call/result pairs are valid.
+///
+/// Removes orphaned `tool` messages whose `tool_call_id` doesn't match
+/// any `tool_calls` entry in a preceding `assistant` message.
+/// This prevents API errors: "Messages with role 'tool' must be a response
+/// to a preceding message with 'tool_calls'"
+fn sanitize_messages(messages: &mut Vec<ChatMessage>) {
+    // Collect all valid tool_call_ids from assistant messages
+    let mut valid_tool_call_ids = HashSet::new();
+    for msg in messages.iter() {
+        if msg.role == "assistant" {
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    valid_tool_call_ids.insert(tc.id.clone());
+                }
+            }
+        }
+    }
+
+    // Remove orphaned tool messages
+    let original_len = messages.len();
+    messages.retain(|msg| {
+        if msg.role == "tool" {
+            if let Some(ref tool_call_id) = msg.tool_call_id {
+                if !valid_tool_call_ids.contains(tool_call_id) {
+                    tracing::warn!(
+                        tool_call_id = %tool_call_id,
+                        "Removing orphaned tool message — no matching assistant tool_call found"
+                    );
+                    return false;
+                }
+            }
+        }
+        true
+    });
+
+    if messages.len() < original_len {
+        tracing::warn!(
+            removed = original_len - messages.len(),
+            "Sanitized {} orphaned tool messages from context",
+            original_len - messages.len()
+        );
+    }
 }
 
 /// Truncate tool arguments to prevent context explosion.

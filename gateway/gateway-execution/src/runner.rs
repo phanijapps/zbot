@@ -17,7 +17,7 @@ use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, mpsc, RwLock};
+use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 
 use crate::middleware::intent_analysis::{analyze_intent, inject_intent_context};
 
@@ -88,6 +88,8 @@ pub struct ExecutionRunner {
     distiller: Option<Arc<super::distillation::SessionDistiller>>,
     /// Memory recall for automatic fact retrieval at session start
     memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    /// Semaphore to limit concurrent delegation spawns (prevents resource exhaustion)
+    delegation_semaphore: Arc<Semaphore>,
 }
 
 impl ExecutionRunner {
@@ -168,6 +170,7 @@ impl ExecutionRunner {
             memory_repo,
             distiller,
             memory_recall,
+            delegation_semaphore: Arc::new(Semaphore::new(3)),
         };
 
         // Spawn delegation handler task
@@ -194,6 +197,7 @@ impl ExecutionRunner {
         let log_service = self.log_service.clone();
         let state_service = self.state_service.clone();
         let workspace_cache = self.workspace_cache.clone();
+        let delegation_semaphore = self.delegation_semaphore.clone();
 
         tokio::spawn(async move {
             while let Some(request) = rx.recv().await {
@@ -202,6 +206,10 @@ impl ExecutionRunner {
                     child_agent = %request.child_agent_id,
                     "Processing delegation request"
                 );
+
+                // Acquire semaphore permit to limit concurrent delegations (max 3)
+                let semaphore = delegation_semaphore.clone();
+                let permit = semaphore.acquire_owned().await.ok();
 
                 // Spawn the delegated agent using the standalone function
                 if let Err(e) = spawn_delegated_agent(
@@ -219,6 +227,7 @@ impl ExecutionRunner {
                     log_service.clone(),
                     state_service.clone(),
                     workspace_cache.clone(),
+                    permit,
                 )
                 .await
                 {

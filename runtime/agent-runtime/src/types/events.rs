@@ -134,6 +134,15 @@ pub enum StreamEvent {
         wait_for_result: bool,
     },
 
+    /// Plan update action from the update_plan tool.
+    /// Signals that the agent's plan has been updated.
+    #[serde(rename = "action_plan_update")]
+    ActionPlanUpdate {
+        timestamp: u64,
+        plan: Value,
+        explanation: Option<String>,
+    },
+
     // ========================================================================
     // METRICS EVENTS
     // ========================================================================
@@ -215,6 +224,7 @@ impl StreamEvent {
             | Self::RequestInput { timestamp, .. }
             | Self::ActionRespond { timestamp, .. }
             | Self::ActionDelegate { timestamp, .. }
+            | Self::ActionPlanUpdate { timestamp, .. }
             | Self::TokenUpdate { timestamp, .. }
             | Self::Heartbeat { timestamp, .. }
             | Self::ContextState { timestamp, .. }

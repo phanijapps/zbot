@@ -390,6 +390,19 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+
+    /// Agent's plan was updated via update_plan tool.
+    PlanUpdate {
+        session_id: String,
+        execution_id: String,
+        plan: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        explanation: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -474,6 +487,7 @@ impl ServerMessage {
             Self::InvokeAccepted { conversation_id, .. } => Some(conversation_id),
             Self::WardChanged { .. } => None,
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
+            Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
             | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
             | Self::SessionEnded { .. } => None,
@@ -548,6 +562,9 @@ impl ServerMessage {
             }
             Self::IterationsExtended { session_id, execution_id, iterations_used, iterations_added, reason, conversation_id, .. } => {
                 Self::IterationsExtended { session_id, execution_id, iterations_used, iterations_added, reason, conversation_id, seq: Some(seq) }
+            }
+            Self::PlanUpdate { session_id, execution_id, plan, explanation, conversation_id, .. } => {
+                Self::PlanUpdate { session_id, execution_id, plan, explanation, conversation_id, seq: Some(seq) }
             }
             // Messages without sequence numbers pass through unchanged
             other => other,

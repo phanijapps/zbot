@@ -117,6 +117,13 @@ pub fn convert_stream_event(
             reason,
             conversation_id: Some(conversation_id.to_string()),
         }),
+        StreamEvent::ActionPlanUpdate { plan, explanation, .. } => Some(GatewayEvent::PlanUpdate {
+            session_id: session_id.to_string(),
+            execution_id: execution_id.to_string(),
+            plan,
+            explanation,
+            conversation_id: Some(conversation_id.to_string()),
+        }),
         // Handle other event types (ToolCallEnd, ShowContent, RequestInput, TokenUpdate)
         // These don't have direct gateway equivalents or are handled separately.
         _ => None,

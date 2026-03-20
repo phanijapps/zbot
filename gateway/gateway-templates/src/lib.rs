@@ -19,7 +19,7 @@ pub struct Templates;
 
 /// Shards that are always appended to custom instructions.
 /// These provide core functionality documentation that users shouldn't have to maintain.
-const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning"];
+const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning", "planning_autonomy"];
 
 /// Load system prompt using VaultPaths, creating starter if missing.
 ///

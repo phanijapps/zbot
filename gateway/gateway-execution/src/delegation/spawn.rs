@@ -13,7 +13,7 @@ use api_logs::LogService;
 use execution_state::StateService;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
 
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
@@ -53,6 +53,7 @@ pub async fn spawn_delegated_agent(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
+    delegation_permit: Option<OwnedSemaphorePermit>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session = execution_state::Session::new_child(
@@ -202,6 +203,7 @@ pub async fn spawn_delegated_agent(
         delegation_tx,
         log_service,
         state_service,
+        delegation_permit,
     );
 
     tracing::info!(
@@ -229,6 +231,7 @@ fn spawn_execution_task(
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
+    delegation_permit: Option<OwnedSemaphorePermit>,
 ) {
     let agent_id = request.child_agent_id.clone();
     let task_msg = request.task.clone();
@@ -236,6 +239,11 @@ fn spawn_execution_task(
     let parent_execution_id = request.parent_execution_id.clone();
 
     tokio::spawn(async move {
+        // Hold the delegation permit for the duration of the task.
+        // When this task completes (or is dropped), the permit is released,
+        // allowing another queued delegation to proceed.
+        let _delegation_permit = delegation_permit;
+
         // Create batch writer with conversation repo for session message streaming
         let batch_writer = spawn_batch_writer_with_repo(
             state_service.clone(),
