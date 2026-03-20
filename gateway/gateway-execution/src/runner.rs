@@ -933,6 +933,8 @@ impl ExecutionRunner {
         // Intent analysis enrichment (root agent first turn only)
         let enriched_agent = if is_root {
             if let Some(msg) = user_message {
+                // Intent analysis: same model/config as agent but thinking disabled
+                // (reasoning tokens would corrupt JSON parsing)
                 let llm_config = agent_runtime::LlmConfig::new(
                     provider.base_url.clone(),
                     provider.api_key.clone(),
@@ -941,11 +943,15 @@ impl ExecutionRunner {
                 )
                 .with_temperature(agent.temperature)
                 .with_max_tokens(agent.max_tokens)
-                .with_thinking(agent.thinking_enabled);
+                .with_thinking(false);
                 match agent_runtime::OpenAiClient::new(llm_config) {
                     Ok(raw_client) => {
+                        let retry_client = agent_runtime::RetryingLlmClient::new(
+                            std::sync::Arc::new(raw_client),
+                            agent_runtime::RetryPolicy::default(),
+                        );
                         let llm_client: std::sync::Arc<dyn agent_runtime::LlmClient> =
-                            std::sync::Arc::new(raw_client);
+                            std::sync::Arc::new(retry_client);
                         match analyze_intent(
                             llm_client.as_ref(),
                             msg,
