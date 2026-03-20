@@ -98,7 +98,8 @@ If an existing ward matches the domain, REUSE it. Only create new for genuinely 
 - Hidden intents must be actionable instructions, not labels
 - Every non-trivial execution must end with a quality verification node
 - Use conditional edges when outcomes determine next steps
-- Recommend only skills and agents from the provided lists
+- CRITICAL: recommend ONLY skills and agents that appear in the lists below. Do NOT invent agent names.
+- In the execution graph, ONLY use agent names from the "Relevant Agents" list or "root". Any other name will crash.
 - If the request is simple (greeting, quick question), use approach "simple" with no graph
 - Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
 
@@ -415,25 +416,38 @@ struct SearchResults {
     wards: Vec<String>,
 }
 
+/// Minimum relevance score to include a result (filters noise).
+const MIN_RELEVANCE_SCORE: f64 = 0.15;
+/// Maximum skills to send to the LLM.
+const MAX_SKILLS: usize = 8;
+/// Maximum agents to send to the LLM.
+const MAX_AGENTS: usize = 5;
+/// Maximum wards to send to the LLM.
+const MAX_WARDS: usize = 5;
+
 /// Search memory_facts for resources semantically relevant to the user message.
 async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) -> SearchResults {
     let mut skills = Vec::new();
     let mut agents = Vec::new();
     let mut wards = Vec::new();
 
-    // Single recall with generous limit, then filter by category
+    // Recall with generous fetch limit, then filter by score and cap per category
     match fact_store.recall_facts("root", user_message, 50).await {
         Ok(result) => {
             if let Some(items) = result.get("results").and_then(|r| r.as_array()) {
                 for item in items {
+                    let score = item.get("score").and_then(|s| s.as_f64()).unwrap_or(0.0);
+                    if score < MIN_RELEVANCE_SCORE {
+                        continue;
+                    }
+
                     let category = item.get("category").and_then(|c| c.as_str()).unwrap_or("");
                     let content = item.get("content").and_then(|c| c.as_str()).unwrap_or("");
                     let key = item.get("key").and_then(|k| k.as_str()).unwrap_or("");
 
                     match category {
-                        "skill" => {
+                        "skill" if skills.len() < MAX_SKILLS => {
                             let name = key.strip_prefix("skill:").unwrap_or(key);
-                            // content format: "name | description | category: X"
                             let parts: Vec<&str> = content.splitn(3, " | ").collect();
                             let desc = parts.get(1).copied().unwrap_or("");
                             skills.push(serde_json::json!({
@@ -441,7 +455,7 @@ async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) 
                                 "description": desc,
                             }));
                         }
-                        "agent" => {
+                        "agent" if agents.len() < MAX_AGENTS => {
                             let name = key.strip_prefix("agent:").unwrap_or(key);
                             let parts: Vec<&str> = content.splitn(2, " | ").collect();
                             let desc = parts.get(1).copied().unwrap_or("");
@@ -450,7 +464,7 @@ async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) 
                                 "description": desc,
                             }));
                         }
-                        "ward" => {
+                        "ward" if wards.len() < MAX_WARDS => {
                             wards.push(content.to_string());
                         }
                         _ => {}
@@ -460,6 +474,14 @@ async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) 
         }
         Err(e) => tracing::warn!("Semantic search failed: {}", e),
     }
+
+    tracing::info!(
+        skills_above_threshold = skills.len(),
+        agents_above_threshold = agents.len(),
+        wards_above_threshold = wards.len(),
+        min_score = MIN_RELEVANCE_SCORE,
+        "Filtered by relevance score"
+    );
 
     SearchResults { skills, agents, wards }
 }
