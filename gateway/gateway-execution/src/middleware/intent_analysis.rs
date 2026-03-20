@@ -113,6 +113,7 @@ Include a "structure" map in your ward_recommendation showing directories and th
 - In the execution graph, ONLY use agent names from the "Relevant Agents" list or "root". Any other name will crash.
 - If the request is simple (greeting, quick question), use approach "simple" with no graph
 - Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
+- Any graph node that creates or modifies files MUST include "coding" in its skills list. The coding skill teaches agents how to write clean, modular, reusable code in the ward directory structure.
 
 ## Output Format
 Respond with ONLY a JSON object (no markdown fences, no explanation) matching this schema:
