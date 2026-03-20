@@ -911,8 +911,8 @@ impl ExecutionRunner {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), self.embedding_client.clone()))
                 as Arc<dyn zero_core::MemoryFactStore>
         });
-        // Clone for indexing (fact_store will be moved into builder)
-        let fact_store_for_indexing = fact_store.clone();
+        // Clone for intent analysis (before fact_store is moved into builder)
+        let fact_store_for_analysis = fact_store.clone();
 
         // Build connector resource provider (HTTP + bridge composite)
         let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
@@ -948,19 +948,6 @@ impl ExecutionRunner {
         // Intent analysis enrichment (root agent first turn only)
         let enriched_agent = if is_root {
             if let Some(msg) = user_message {
-                // Collect existing ward names for the LLM to decide reuse vs create
-                let wards_dir = self.paths.vault_dir().join("wards");
-                let existing_wards: Vec<String> = std::fs::read_dir(&wards_dir)
-                    .ok()
-                    .map(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .filter(|e| e.path().is_dir())
-                            .filter_map(|e| e.file_name().into_string().ok())
-                            .collect()
-                    })
-                    .unwrap_or_default();
-
                 // Intent analysis: same model/config as agent but thinking disabled
                 // (reasoning tokens would corrupt JSON parsing)
                 let llm_config = agent_runtime::LlmConfig::new(
@@ -980,32 +967,39 @@ impl ExecutionRunner {
                         );
                         let llm_client: std::sync::Arc<dyn agent_runtime::LlmClient> =
                             std::sync::Arc::new(retry_client);
-                        match analyze_intent(
-                            llm_client.as_ref(),
-                            msg,
-                            &available_skills,
-                            &available_agents,
-                            &existing_wards,
-                        )
-                        .await
-                        {
-                            Ok(analysis) => {
-                                let mut enriched = agent.clone();
-                                inject_intent_context(&mut enriched.instructions, &analysis);
-                                tracing::info!(
-                                    primary_intent = %analysis.primary_intent,
-                                    hidden_intents = analysis.hidden_intents.len(),
-                                    "Intent analysis enrichment complete"
-                                );
-                                Some(enriched)
+
+                        if let Some(ref fs) = fact_store_for_analysis {
+                            match analyze_intent(
+                                llm_client.as_ref(),
+                                msg,
+                                fs.as_ref(),
+                                &self.skill_service,
+                                &self.agent_service,
+                                &self.paths,
+                            )
+                            .await
+                            {
+                                Ok(analysis) => {
+                                    let mut enriched = agent.clone();
+                                    inject_intent_context(&mut enriched.instructions, &analysis);
+                                    tracing::info!(
+                                        primary_intent = %analysis.primary_intent,
+                                        hidden_intents = analysis.hidden_intents.len(),
+                                        "Intent analysis enrichment complete"
+                                    );
+                                    Some(enriched)
+                                }
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Intent analysis failed, proceeding without enrichment: {}",
+                                        e
+                                    );
+                                    None
+                                }
                             }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Intent analysis failed, proceeding without enrichment: {}",
-                                    e
-                                );
-                                None
-                            }
+                        } else {
+                            tracing::warn!("No fact store available — skipping intent analysis");
+                            None
                         }
                     }
                     Err(e) => {
@@ -1022,41 +1016,6 @@ impl ExecutionRunner {
         } else {
             None
         };
-
-        // Index skills and agents into memory for semantic search (root only, once per session)
-        if is_root {
-            if let Some(ref fs) = fact_store_for_indexing {
-                for skill in &available_skills {
-                    if let (Some(name), Some(desc)) = (
-                        skill.get("name").and_then(|v| v.as_str()),
-                        skill.get("description").and_then(|v| v.as_str()),
-                    ) {
-                        let key = format!("skill:{}", name);
-                        let content = format!("{} - {}", name, desc);
-                        if let Err(e) = fs.save_fact("root", "skill", &key, &content, 1.0, None).await {
-                            tracing::debug!("Failed to index skill {}: {}", name, e);
-                        }
-                    }
-                }
-                for agent_val in &available_agents {
-                    if let (Some(name), Some(desc)) = (
-                        agent_val.get("name").and_then(|v| v.as_str()),
-                        agent_val.get("description").and_then(|v| v.as_str()),
-                    ) {
-                        let key = format!("agent:{}", name);
-                        let content = format!("{} - {}", name, desc);
-                        if let Err(e) = fs.save_fact("root", "agent", &key, &content, 1.0, None).await {
-                            tracing::debug!("Failed to index agent {}: {}", name, e);
-                        }
-                    }
-                }
-                tracing::info!(
-                    skills = available_skills.len(),
-                    agents = available_agents.len(),
-                    "Indexed skills and agents into memory"
-                );
-            }
-        }
 
         let agent_for_build = enriched_agent.as_ref().unwrap_or(agent);
 

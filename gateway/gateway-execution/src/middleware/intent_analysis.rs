@@ -1,6 +1,8 @@
 use agent_runtime::{ChatMessage, LlmClient};
+use gateway_services::{AgentService, SharedVaultPaths, SkillService};
 use serde::Deserialize;
 use serde_json::Value;
+use zero_core::MemoryFactStore;
 
 // ---------------------------------------------------------------------------
 // Types
@@ -246,33 +248,206 @@ pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalys
 // analyze_intent
 // ---------------------------------------------------------------------------
 
-/// Call the LLM to produce an `IntentAnalysis` for a user message.
+/// Autonomous intent analysis: indexes resources, searches semantically, calls LLM.
 pub async fn analyze_intent(
     llm_client: &dyn LlmClient,
     user_message: &str,
-    available_skills: &[Value],
-    available_agents: &[Value],
-    existing_wards: &[String],
+    fact_store: &dyn MemoryFactStore,
+    skill_service: &SkillService,
+    agent_service: &AgentService,
+    vault_paths: &SharedVaultPaths,
 ) -> Result<IntentAnalysis, String> {
+    tracing::info!("Starting intent analysis for root session");
+
+    // Step 1: Index resources into memory (idempotent upsert)
+    index_resources(fact_store, skill_service, agent_service, vault_paths).await;
+
+    // Step 2: Semantic search for relevant resources
+    let results = search_resources(fact_store, user_message).await;
+
+    tracing::info!(
+        skills_matched = results.skills.len(),
+        agents_matched = results.agents.len(),
+        wards_matched = results.wards.len(),
+        "Semantic search complete"
+    );
+
+    // Step 3: Build LLM prompt with only relevant resources
     let messages = vec![
         ChatMessage::system(INTENT_ANALYSIS_PROMPT.to_string()),
         ChatMessage::user(format_user_template(
             user_message,
-            available_skills,
-            available_agents,
-            existing_wards,
+            &results.skills,
+            &results.agents,
+            &results.wards,
         )),
     ];
 
+    tracing::info!(
+        skills = results.skills.len(),
+        agents = results.agents.len(),
+        wards = results.wards.len(),
+        "LLM call — sending relevant resources"
+    );
+
+    // Step 4: Call LLM
     let response = llm_client
         .chat(messages, None)
         .await
         .map_err(|e| format!("Intent analysis LLM call failed: {}", e))?;
 
+    tracing::debug!(raw_response = %response.content, "LLM raw response");
+
     let content = strip_markdown_fences(&response.content);
 
-    serde_json::from_str::<IntentAnalysis>(&content)
-        .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))
+    // Step 5: Parse response
+    let analysis = serde_json::from_str::<IntentAnalysis>(&content)
+        .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))?;
+
+    tracing::info!(
+        primary_intent = %analysis.primary_intent,
+        hidden_intents = analysis.hidden_intents.len(),
+        ward = %analysis.ward_recommendation.ward_name,
+        approach = %analysis.execution_strategy.approach,
+        "Intent analysis complete"
+    );
+
+    Ok(analysis)
+}
+
+/// Index skills, agents, and wards into memory_facts for semantic search.
+/// Uses upsert (save_fact) so this is idempotent — safe to call every session.
+async fn index_resources(
+    fact_store: &dyn MemoryFactStore,
+    skill_service: &SkillService,
+    agent_service: &AgentService,
+    vault_paths: &SharedVaultPaths,
+) {
+    // Index skills
+    match skill_service.list().await {
+        Ok(skills) => {
+            tracing::info!(count = skills.len(), "Indexing skills into memory");
+            for skill in &skills {
+                let key = format!("skill:{}", skill.name);
+                let content = format!("{} | {} | category: {}", skill.name, skill.description, skill.category);
+                if let Err(e) = fact_store.save_fact("root", "skill", &key, &content, 1.0, None).await {
+                    tracing::debug!("Failed to index skill {}: {}", skill.name, e);
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Failed to list skills for indexing: {}", e),
+    }
+
+    // Index agents
+    match agent_service.list().await {
+        Ok(agents) => {
+            tracing::info!(count = agents.len(), "Indexing agents into memory");
+            for agent in &agents {
+                let key = format!("agent:{}", agent.id);
+                let content = format!("{} | {}", agent.id, agent.description);
+                if let Err(e) = fact_store.save_fact("root", "agent", &key, &content, 1.0, None).await {
+                    tracing::debug!("Failed to index agent {}: {}", agent.id, e);
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Failed to list agents for indexing: {}", e),
+    }
+
+    // Index wards
+    let wards_dir = vault_paths.wards_dir();
+    match std::fs::read_dir(&wards_dir) {
+        Ok(entries) => {
+            let ward_dirs: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .collect();
+            tracing::info!(count = ward_dirs.len(), "Indexing wards into memory");
+            for entry in &ward_dirs {
+                let name = entry.file_name().to_string_lossy().to_string();
+                let agents_md_path = entry.path().join("AGENTS.md");
+                let purpose = if agents_md_path.exists() {
+                    std::fs::read_to_string(&agents_md_path)
+                        .ok()
+                        .and_then(|content| {
+                            content
+                                .lines()
+                                .find(|l| !l.trim().is_empty() && !l.starts_with('#'))
+                                .map(|l| l.trim().to_string())
+                        })
+                        .unwrap_or_default()
+                } else {
+                    String::new()
+                };
+
+                let key = format!("ward:{}", name);
+                let content = if purpose.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{} | {}", name, purpose)
+                };
+                if let Err(e) = fact_store.save_fact("root", "ward", &key, &content, 1.0, None).await {
+                    tracing::debug!("Failed to index ward {}: {}", name, e);
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Failed to read wards directory: {}", e),
+    }
+}
+
+/// Semantic search result grouped by resource type.
+struct SearchResults {
+    skills: Vec<Value>,
+    agents: Vec<Value>,
+    wards: Vec<String>,
+}
+
+/// Search memory_facts for resources semantically relevant to the user message.
+async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) -> SearchResults {
+    let mut skills = Vec::new();
+    let mut agents = Vec::new();
+    let mut wards = Vec::new();
+
+    // Single recall with generous limit, then filter by category
+    match fact_store.recall_facts("root", user_message, 50).await {
+        Ok(result) => {
+            if let Some(items) = result.get("results").and_then(|r| r.as_array()) {
+                for item in items {
+                    let category = item.get("category").and_then(|c| c.as_str()).unwrap_or("");
+                    let content = item.get("content").and_then(|c| c.as_str()).unwrap_or("");
+                    let key = item.get("key").and_then(|k| k.as_str()).unwrap_or("");
+
+                    match category {
+                        "skill" => {
+                            let name = key.strip_prefix("skill:").unwrap_or(key);
+                            // content format: "name | description | category: X"
+                            let parts: Vec<&str> = content.splitn(3, " | ").collect();
+                            let desc = parts.get(1).copied().unwrap_or("");
+                            skills.push(serde_json::json!({
+                                "name": name,
+                                "description": desc,
+                            }));
+                        }
+                        "agent" => {
+                            let name = key.strip_prefix("agent:").unwrap_or(key);
+                            let parts: Vec<&str> = content.splitn(2, " | ").collect();
+                            let desc = parts.get(1).copied().unwrap_or("");
+                            agents.push(serde_json::json!({
+                                "name": name,
+                                "description": desc,
+                            }));
+                        }
+                        "ward" => {
+                            wards.push(content.to_string());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        Err(e) => tracing::warn!("Semantic search failed: {}", e),
+    }
+
+    SearchResults { skills, agents, wards }
 }
 
 /// Strip optional markdown code-fences that LLMs sometimes wrap around JSON.
@@ -513,11 +688,12 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // MockLlmClient & async tests for analyze_intent
+    // MockLlmClient, MockFactStore & async tests for analyze_intent
     // -----------------------------------------------------------------------
 
     use agent_runtime::{ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
+    use std::sync::Arc;
 
     struct MockLlmClient {
         response: String,
@@ -558,6 +734,48 @@ mod tests {
         }
     }
 
+    /// Minimal mock fact store that accepts writes and returns empty results.
+    struct MockFactStore;
+
+    #[async_trait]
+    impl MemoryFactStore for MockFactStore {
+        async fn save_fact(
+            &self,
+            _agent_id: &str,
+            _category: &str,
+            _key: &str,
+            _content: &str,
+            _confidence: f64,
+            _session_id: Option<&str>,
+        ) -> Result<Value, String> {
+            Ok(serde_json::json!({"status": "ok"}))
+        }
+
+        async fn recall_facts(
+            &self,
+            _agent_id: &str,
+            _query: &str,
+            _limit: usize,
+        ) -> Result<Value, String> {
+            Ok(serde_json::json!({"results": []}))
+        }
+    }
+
+    /// Create test fixtures: fact store, skill service, agent service, vault paths.
+    fn test_fixtures() -> (MockFactStore, SkillService, AgentService, SharedVaultPaths) {
+        let tmp = std::env::temp_dir().join("intent_analysis_test");
+        let _ = std::fs::create_dir_all(tmp.join("skills"));
+        let _ = std::fs::create_dir_all(tmp.join("agents"));
+        let _ = std::fs::create_dir_all(tmp.join("wards"));
+
+        let fact_store = MockFactStore;
+        let skill_service = SkillService::new(tmp.join("skills"));
+        let agent_service = AgentService::new(tmp.join("agents"));
+        let vault_paths: SharedVaultPaths = Arc::new(gateway_services::VaultPaths::new(tmp));
+
+        (fact_store, skill_service, agent_service, vault_paths)
+    }
+
     #[tokio::test]
     async fn test_analyze_intent_simple() {
         let mock = MockLlmClient {
@@ -576,7 +794,8 @@ mod tests {
             .to_string(),
         };
 
-        let result = analyze_intent(&mock, "Hi", &[], &[], &[]).await;
+        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
+        let result = analyze_intent(&mock, "Hi", &fact_store, &skill_svc, &agent_svc, &paths).await;
         let analysis = result.expect("should parse simple intent");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.execution_strategy.approach, "simple");
@@ -612,10 +831,8 @@ mod tests {
             .to_string(),
         };
 
-        let skills = vec![json!({"name": "code-gen", "description": "Generates code"})];
-        let agents = vec![json!({"name": "coder", "description": "Writes code"})];
-
-        let result = analyze_intent(&mock, "Write code", &skills, &agents, &[]).await;
+        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
+        let result = analyze_intent(&mock, "Write code", &fact_store, &skill_svc, &agent_svc, &paths).await;
         let analysis = result.expect("should parse graph intent");
         assert_eq!(analysis.primary_intent, "code_generation");
         assert_eq!(analysis.recommended_skills, vec!["code-gen"]);
@@ -635,7 +852,8 @@ mod tests {
             response: "This is not valid JSON at all.".to_string(),
         };
 
-        let result = analyze_intent(&mock, "Hello", &[], &[], &[]).await;
+        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
+        let result = analyze_intent(&mock, "Hello", &fact_store, &skill_svc, &agent_svc, &paths).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -665,7 +883,8 @@ mod tests {
             .to_string(),
         };
 
-        let result = analyze_intent(&mock, "Hi", &[], &[], &[]).await;
+        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
+        let result = analyze_intent(&mock, "Hi", &fact_store, &skill_svc, &agent_svc, &paths).await;
         let analysis = result.expect("should strip fences and parse");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.rewritten_prompt, "Hello!");
