@@ -935,9 +935,15 @@ impl ExecutionRunner {
                 None
             };
 
+        // Create LLM throttle semaphore from provider config
+        let max_concurrent = provider.max_concurrent_requests.unwrap_or(3);
+        let llm_throttle = Arc::new(tokio::sync::Semaphore::new(max_concurrent as usize));
+        tracing::debug!(max_concurrent = max_concurrent, provider = %provider.name, "LLM throttle configured");
+
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
-            .with_workspace_cache(self.workspace_cache.clone());
+            .with_workspace_cache(self.workspace_cache.clone())
+            .with_llm_throttle(llm_throttle);
         if let Some(fs) = fact_store {
             builder = builder.with_fact_store(fs);
         }

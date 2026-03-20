@@ -228,11 +228,11 @@ async fn test_full_enrichment_flow() {
     assert!(prompt.contains("2. Identify tax-loss harvesting opportunities"));
     assert!(prompt.contains("3. Generate risk-adjusted return projections"));
 
-    // Recommended skills
-    assert!(prompt.contains("**Recommended Skills**"));
-    assert!(prompt.contains("- web-search"));
-    assert!(prompt.contains("- code-exec"));
-    assert!(prompt.contains("- file-write"));
+    // Skills mapped to graph nodes (not flat list)
+    assert!(prompt.contains("**Skills**"));
+    assert!(prompt.contains("Node A"));
+    assert!(prompt.contains("web-search"));
+    assert!(prompt.contains("code-exec"));
 
     // Recommended agents
     assert!(prompt.contains("**Recommended Agents**"));
@@ -343,10 +343,10 @@ async fn test_skills_recommended_but_not_loaded() {
     let mut prompt = String::from("You are a helpful assistant.");
     inject_intent_context(&mut prompt, &analysis);
 
-    // The injected section must tell the agent skills are lazy-loaded
+    // The injected section must tell the agent skills are step-mapped (load per node)
     assert!(
-        prompt.contains("load when needed, unload when done"),
-        "prompt should instruct lazy skill loading; got:\n{}",
+        prompt.contains("load ONLY when the step requires it, unload after"),
+        "prompt should instruct per-step skill loading; got:\n{}",
         prompt
     );
 }

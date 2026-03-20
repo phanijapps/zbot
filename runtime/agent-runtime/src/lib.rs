@@ -69,7 +69,7 @@ pub use types::{
 pub use llm::{
     LlmClient, LlmError, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
     ToolCallChunk, ChatResponse, TokenUsage,
-    RetryingLlmClient, RetryPolicy,
+    RetryingLlmClient, RetryPolicy, ThrottledLlmClient,
     EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError,
     OpenAiEmbeddingClient, LocalEmbeddingClient, content_hash,
 };

@@ -39,6 +39,7 @@ pub struct ExecutorBuilder {
     workspace_cache: Option<WorkspaceCache>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
+    llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
 }
 
 impl ExecutorBuilder {
@@ -50,6 +51,7 @@ impl ExecutorBuilder {
             workspace_cache: None,
             fact_store: None,
             connector_provider: None,
+            llm_throttle: None,
         }
     }
 
@@ -68,6 +70,12 @@ impl ExecutorBuilder {
     /// Set the connector resource provider for query_resource tool.
     pub fn with_connector_provider(mut self, provider: Arc<dyn ConnectorResourceProvider>) -> Self {
         self.connector_provider = Some(provider);
+        self
+    }
+
+    /// Set the LLM throttle semaphore (shared per provider across all executors).
+    pub fn with_llm_throttle(mut self, semaphore: Arc<tokio::sync::Semaphore>) -> Self {
+        self.llm_throttle = Some(semaphore);
         self
     }
 
@@ -158,7 +166,15 @@ impl ExecutorBuilder {
         );
 
         // Wrap with retry logic: 3 retries, 500ms base delay, exponential backoff with jitter
-        let llm_client = Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
+        let retrying_client: Arc<dyn agent_runtime::LlmClient> =
+            Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
+
+        // Wrap with throttle if configured (limits concurrent calls per provider)
+        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref sem) = self.llm_throttle {
+            Arc::new(agent_runtime::ThrottledLlmClient::new(retrying_client, sem.clone()))
+        } else {
+            retrying_client
+        };
 
         // Create file system context for tools
         let fs_context: Arc<dyn FileSystemContext> =

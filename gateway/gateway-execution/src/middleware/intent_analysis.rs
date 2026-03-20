@@ -201,8 +201,22 @@ pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalys
         section.push('\n');
     }
 
-    if !analysis.recommended_skills.is_empty() {
-        section.push_str("**Recommended Skills** (load when needed, unload when done):\n");
+    // Render skills mapped to graph nodes (load per step, not all at once)
+    if let Some(ref graph) = analysis.execution_strategy.graph {
+        let has_skills = graph.nodes.iter().any(|n| !n.skills.is_empty());
+        if has_skills {
+            section.push_str("**Skills** (load ONLY when the step requires it, unload after):\n");
+            for node in &graph.nodes {
+                if !node.skills.is_empty() {
+                    let skills_str = node.skills.join(", ");
+                    section.push_str(&format!("- Node {} ({}): load `{}`\n", node.id, node.task, skills_str));
+                }
+            }
+            section.push('\n');
+        }
+    } else if !analysis.recommended_skills.is_empty() {
+        // Simple strategy (no graph) — just list skills
+        section.push_str("**Recommended Skills** (load only when needed, unload when done):\n");
         for skill in &analysis.recommended_skills {
             section.push_str(&format!("- {}\n", skill));
         }
@@ -676,8 +690,8 @@ mod tests {
         assert!(prompt.contains("**Primary Intent**: code_generation"));
         assert!(prompt.contains("1. Write unit tests"));
         assert!(prompt.contains("2. Add error handling"));
-        assert!(prompt.contains("- code-gen"));
-        assert!(prompt.contains("- testing"));
+        // Skills are mapped to graph nodes, not flat list
+        assert!(prompt.contains("Node A (Generate code): load `code-gen`"));
         assert!(prompt.contains("- coder"));
         assert!(prompt.contains("- reviewer"));
         assert!(prompt.contains("**Ward**: `scratch`"));

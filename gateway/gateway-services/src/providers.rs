@@ -34,6 +34,10 @@ pub struct Provider {
     pub is_default: bool,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Maximum concurrent LLM requests for this provider (default: 3).
+    /// Set lower for rate-limited providers (e.g., 1 for free tiers).
+    #[serde(rename = "maxConcurrentRequests", skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize)]

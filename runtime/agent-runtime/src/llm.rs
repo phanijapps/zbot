@@ -23,6 +23,7 @@ pub mod retry;
 pub mod embedding;
 pub mod openai_embedding;
 pub mod local_embedding;
+pub mod throttle;
 
 pub use client::{
     LlmClient, LlmError, ChatResponse, StreamChunk, StreamCallback, ToolCallChunk, TokenUsage
@@ -30,6 +31,7 @@ pub use client::{
 pub use config::LlmConfig;
 pub use openai::OpenAiClient;
 pub use retry::{RetryingLlmClient, RetryPolicy};
+pub use throttle::ThrottledLlmClient;
 pub use embedding::{EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError, content_hash};
 pub use openai_embedding::OpenAiEmbeddingClient;
 pub use local_embedding::LocalEmbeddingClient;
