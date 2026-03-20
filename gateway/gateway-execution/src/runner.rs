@@ -907,6 +907,8 @@ impl ExecutionRunner {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), None))
                 as Arc<dyn zero_core::MemoryFactStore>
         });
+        // Clone for indexing (fact_store will be moved into builder)
+        let fact_store_for_indexing = fact_store.clone();
 
         // Build connector resource provider (HTTP + bridge composite)
         let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
@@ -1002,6 +1004,41 @@ impl ExecutionRunner {
         } else {
             None
         };
+
+        // Index skills and agents into memory for semantic search (root only, once per session)
+        if is_root {
+            if let Some(ref fs) = fact_store_for_indexing {
+                for skill in &available_skills {
+                    if let (Some(name), Some(desc)) = (
+                        skill.get("name").and_then(|v| v.as_str()),
+                        skill.get("description").and_then(|v| v.as_str()),
+                    ) {
+                        let key = format!("skill:{}", name);
+                        let content = format!("{} - {}", name, desc);
+                        if let Err(e) = fs.save_fact("root", "skill", &key, &content, 1.0, None).await {
+                            tracing::debug!("Failed to index skill {}: {}", name, e);
+                        }
+                    }
+                }
+                for agent_val in &available_agents {
+                    if let (Some(name), Some(desc)) = (
+                        agent_val.get("name").and_then(|v| v.as_str()),
+                        agent_val.get("description").and_then(|v| v.as_str()),
+                    ) {
+                        let key = format!("agent:{}", name);
+                        let content = format!("{} - {}", name, desc);
+                        if let Err(e) = fs.save_fact("root", "agent", &key, &content, 1.0, None).await {
+                            tracing::debug!("Failed to index agent {}: {}", name, e);
+                        }
+                    }
+                }
+                tracing::info!(
+                    skills = available_skills.len(),
+                    agents = available_agents.len(),
+                    "Indexed skills and agents into memory"
+                );
+            }
+        }
 
         let agent_for_build = enriched_agent.as_ref().unwrap_or(agent);
 
