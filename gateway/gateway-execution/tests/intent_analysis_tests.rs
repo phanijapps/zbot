@@ -92,6 +92,12 @@ fn complex_analysis_json() -> String {
         ],
         "recommended_skills": ["web-search", "code-exec", "file-write"],
         "recommended_agents": ["researcher", "analyst"],
+        "ward_recommendation": {
+            "action": "create_new",
+            "ward_name": "financial-analysis",
+            "subdirectory": "portfolio-review",
+            "reason": "New domain for financial work"
+        },
         "execution_strategy": {
             "approach": "graph",
             "graph": {
@@ -149,7 +155,7 @@ async fn test_full_enrichment_flow() {
     };
 
     // Step 1: analyze_intent
-    let analysis = analyze_intent(&mock, "Analyze my investment portfolio", &sample_skills(), &sample_agents())
+    let analysis = analyze_intent(&mock, "Analyze my investment portfolio", &sample_skills(), &sample_agents(), &[])
         .await
         .expect("analyze_intent should succeed with valid JSON");
 
@@ -210,7 +216,7 @@ async fn test_full_enrichment_flow() {
 async fn test_graceful_degradation_on_llm_failure() {
     let client = FailingLlmClient;
 
-    let result = analyze_intent(&client, "Hello", &[], &[]).await;
+    let result = analyze_intent(&client, "Hello", &[], &[], &[]).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -228,7 +234,7 @@ async fn test_graceful_degradation_on_malformed_json() {
         response: "I'm not sure what you mean.".to_string(),
     };
 
-    let result = analyze_intent(&mock, "Do something", &[], &[]).await;
+    let result = analyze_intent(&mock, "Do something", &[], &[], &[]).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -248,6 +254,12 @@ async fn test_simple_request_no_graph() {
         "hidden_intents": [],
         "recommended_skills": [],
         "recommended_agents": [],
+        "ward_recommendation": {
+            "action": "use_existing",
+            "ward_name": "scratch",
+            "subdirectory": null,
+            "reason": "Simple greeting needs no dedicated ward"
+        },
         "execution_strategy": {
             "approach": "simple",
             "explanation": "Simple greeting, no orchestration needed"
@@ -260,7 +272,7 @@ async fn test_simple_request_no_graph() {
         response: simple_json,
     };
 
-    let analysis = analyze_intent(&mock, "Hi there", &[], &[])
+    let analysis = analyze_intent(&mock, "Hi there", &[], &[], &[])
         .await
         .expect("should parse simple intent");
 
@@ -284,7 +296,7 @@ async fn test_skills_recommended_but_not_loaded() {
         response: complex_analysis_json(),
     };
 
-    let analysis = analyze_intent(&mock, "Analyze my portfolio", &sample_skills(), &sample_agents())
+    let analysis = analyze_intent(&mock, "Analyze my portfolio", &sample_skills(), &sample_agents(), &[])
         .await
         .expect("should succeed");
 

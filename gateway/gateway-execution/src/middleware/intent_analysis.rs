@@ -12,8 +12,21 @@ pub struct IntentAnalysis {
     pub hidden_intents: Vec<String>,
     pub recommended_skills: Vec<String>,
     pub recommended_agents: Vec<String>,
+    pub ward_recommendation: WardRecommendation,
     pub execution_strategy: ExecutionStrategy,
     pub rewritten_prompt: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct WardRecommendation {
+    /// "use_existing" or "create_new"
+    pub action: String,
+    /// Ward name — domain-level reusable name (e.g., "financial-analysis", "math-tutor")
+    pub ward_name: String,
+    /// Suggested subdirectory for this specific task (e.g., "stocks/lmnd", "trinomials")
+    pub subdirectory: Option<String>,
+    /// Why this ward
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -68,7 +81,16 @@ Given a user request and the platform's available resources, your job is to:
 1. Identify the primary intent behind the request
 2. Discover hidden/implicit intents the user hasn't stated but would expect
 3. Recommend which skills and agents would help
-4. Design an execution graph showing how to orchestrate the work
+4. Recommend the right ward (project workspace) — reuse existing or create new
+5. Design an execution graph showing how to orchestrate the work
+
+## Ward Philosophy
+Wards are reusable project workspaces organized by DOMAIN, not by task. Think of them as permanent libraries:
+- "financial-analysis" for ALL stock/options/market work (with subdirs like stocks/lmnd, stocks/spy)
+- "math-tutor" for ALL math work (with subdirs like trinomials, projectiles, calculus)
+- "research-hub" for general research projects
+Each ward has reusable code in core/, task-specific work in subdirs, and output/ for reports.
+If an existing ward matches the domain, REUSE it. Only create new for genuinely new domains.
 
 ## Rules
 - Hidden intents must be actionable instructions, not labels
@@ -76,6 +98,7 @@ Given a user request and the platform's available resources, your job is to:
 - Use conditional edges when outcomes determine next steps
 - Recommend only skills and agents from the provided lists
 - If the request is simple (greeting, quick question), use approach "simple" with no graph
+- Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
 
 ## Output Format
 Respond with ONLY a JSON object (no markdown fences, no explanation) matching this schema:
@@ -84,6 +107,12 @@ Respond with ONLY a JSON object (no markdown fences, no explanation) matching th
   "hidden_intents": ["string -- actionable instruction for each hidden intent"],
   "recommended_skills": ["skill-name from the list"],
   "recommended_agents": ["agent-name from the list"],
+  "ward_recommendation": {
+    "action": "use_existing | create_new",
+    "ward_name": "domain-level name like financial-analysis, math-tutor, research-hub",
+    "subdirectory": "task-specific subdir like stocks/lmnd, trinomials -- null for simple tasks",
+    "reason": "why this ward"
+  },
   "execution_strategy": {
     "approach": "simple | tracked | graph",
     "graph": {
@@ -107,7 +136,12 @@ When approach is "simple", omit the graph entirely."#;
 // format_user_template
 // ---------------------------------------------------------------------------
 
-pub fn format_user_template(message: &str, skills: &[Value], agents: &[Value]) -> String {
+pub fn format_user_template(
+    message: &str,
+    skills: &[Value],
+    agents: &[Value],
+    wards: &[String],
+) -> String {
     let skills_list = if skills.is_empty() {
         "(none available)".to_string()
     } else {
@@ -136,9 +170,15 @@ pub fn format_user_template(message: &str, skills: &[Value], agents: &[Value]) -
             .join("\n")
     };
 
+    let wards_list = if wards.is_empty() {
+        "(none — all new)".to_string()
+    } else {
+        wards.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")
+    };
+
     format!(
-        "### User Request\n{}\n\n### Available Skills\n{}\n\n### Available Agents\n{}",
-        message, skills_list, agents_list
+        "### User Request\n{}\n\n### Available Skills\n{}\n\n### Available Agents\n{}\n\n### Existing Wards\n{}",
+        message, skills_list, agents_list, wards_list
     )
 }
 
@@ -175,6 +215,14 @@ pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalys
         section.push('\n');
     }
 
+    // Ward recommendation
+    let ward = &analysis.ward_recommendation;
+    section.push_str(&format!("**Ward**: `{}` ({}) — {}\n", ward.ward_name, ward.action, ward.reason));
+    if let Some(ref subdir) = ward.subdirectory {
+        section.push_str(&format!("**Subdirectory**: `{}`\n", subdir));
+    }
+    section.push('\n');
+
     if let Some(graph) = &analysis.execution_strategy.graph {
         section.push_str("**Execution Graph**:\n");
         section.push_str(&format!("```mermaid\n{}\n```\n\n", graph.mermaid));
@@ -204,6 +252,7 @@ pub async fn analyze_intent(
     user_message: &str,
     available_skills: &[Value],
     available_agents: &[Value],
+    existing_wards: &[String],
 ) -> Result<IntentAnalysis, String> {
     let messages = vec![
         ChatMessage::system(INTENT_ANALYSIS_PROMPT.to_string()),
@@ -211,6 +260,7 @@ pub async fn analyze_intent(
             user_message,
             available_skills,
             available_agents,
+            existing_wards,
         )),
     ];
 
@@ -256,6 +306,7 @@ mod tests {
             "hidden_intents": [],
             "recommended_skills": [],
             "recommended_agents": [],
+            "ward_recommendation": {"action": "use_existing", "ward_name": "scratch", "subdirectory": null, "reason": "test"},
             "execution_strategy": {
                 "approach": "simple",
                 "explanation": "Simple greeting, no orchestration needed"
@@ -280,6 +331,7 @@ mod tests {
             "hidden_intents": ["Write unit tests", "Add error handling"],
             "recommended_skills": ["code-gen", "testing"],
             "recommended_agents": ["coder", "reviewer"],
+            "ward_recommendation": {"action": "use_existing", "ward_name": "scratch", "subdirectory": null, "reason": "test"},
             "execution_strategy": {
                 "approach": "graph",
                 "graph": {
@@ -354,21 +406,23 @@ mod tests {
             json!({"name": "coder", "description": "Writes production code"}),
         ];
 
-        let result = format_user_template("Build a REST API", &skills, &agents);
+        let result = format_user_template("Build a REST API", &skills, &agents, &[]);
 
         assert!(result.contains("### User Request\nBuild a REST API"));
         assert!(result.contains("- code-gen: Generates code from specs"));
         assert!(result.contains("- testing: Runs unit tests"));
         assert!(result.contains("- coder: Writes production code"));
+        assert!(result.contains("### Existing Wards\n(none — all new)"));
     }
 
     #[test]
     fn test_format_user_template_empty_resources() {
-        let result = format_user_template("Hello", &[], &[]);
+        let result = format_user_template("Hello", &[], &[], &[]);
 
         assert!(result.contains("### User Request\nHello"));
         assert!(result.contains("### Available Skills\n(none available)"));
         assert!(result.contains("### Available Agents\n(none available)"));
+        assert!(result.contains("### Existing Wards\n(none — all new)"));
     }
 
     #[test]
@@ -378,6 +432,12 @@ mod tests {
             hidden_intents: vec![],
             recommended_skills: vec![],
             recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "use_existing".into(),
+                ward_name: "scratch".into(),
+                subdirectory: None,
+                reason: "test".into(),
+            },
             execution_strategy: ExecutionStrategy {
                 approach: "simple".to_string(),
                 graph: None,
@@ -408,6 +468,12 @@ mod tests {
             ],
             recommended_skills: vec!["code-gen".to_string(), "testing".to_string()],
             recommended_agents: vec!["coder".to_string(), "reviewer".to_string()],
+            ward_recommendation: WardRecommendation {
+                action: "use_existing".into(),
+                ward_name: "scratch".into(),
+                subdirectory: None,
+                reason: "test".into(),
+            },
             execution_strategy: ExecutionStrategy {
                 approach: "graph".to_string(),
                 graph: Some(ExecutionGraph {
@@ -439,6 +505,7 @@ mod tests {
         assert!(prompt.contains("- testing"));
         assert!(prompt.contains("- coder"));
         assert!(prompt.contains("- reviewer"));
+        assert!(prompt.contains("**Ward**: `scratch`"));
         assert!(prompt.contains("```mermaid\ngraph TD\nA-->END\n```"));
         assert!(prompt.contains("**Orchestration**: Generate then done"));
         assert!(prompt.contains("**Max cycles**: 5"));
@@ -499,6 +566,7 @@ mod tests {
                 "hidden_intents": [],
                 "recommended_skills": [],
                 "recommended_agents": [],
+                "ward_recommendation": {"action": "create_new", "ward_name": "test-ward", "subdirectory": null, "reason": "test"},
                 "execution_strategy": {
                     "approach": "simple",
                     "explanation": "Simple greeting"
@@ -508,7 +576,7 @@ mod tests {
             .to_string(),
         };
 
-        let result = analyze_intent(&mock, "Hi", &[], &[]).await;
+        let result = analyze_intent(&mock, "Hi", &[], &[], &[]).await;
         let analysis = result.expect("should parse simple intent");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.execution_strategy.approach, "simple");
@@ -524,6 +592,7 @@ mod tests {
                 "hidden_intents": ["Write unit tests"],
                 "recommended_skills": ["code-gen"],
                 "recommended_agents": ["coder"],
+                "ward_recommendation": {"action": "create_new", "ward_name": "test-ward", "subdirectory": null, "reason": "test"},
                 "execution_strategy": {
                     "approach": "graph",
                     "graph": {
@@ -546,7 +615,7 @@ mod tests {
         let skills = vec![json!({"name": "code-gen", "description": "Generates code"})];
         let agents = vec![json!({"name": "coder", "description": "Writes code"})];
 
-        let result = analyze_intent(&mock, "Write code", &skills, &agents).await;
+        let result = analyze_intent(&mock, "Write code", &skills, &agents, &[]).await;
         let analysis = result.expect("should parse graph intent");
         assert_eq!(analysis.primary_intent, "code_generation");
         assert_eq!(analysis.recommended_skills, vec!["code-gen"]);
@@ -566,7 +635,7 @@ mod tests {
             response: "This is not valid JSON at all.".to_string(),
         };
 
-        let result = analyze_intent(&mock, "Hello", &[], &[]).await;
+        let result = analyze_intent(&mock, "Hello", &[], &[], &[]).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -585,6 +654,7 @@ mod tests {
     "hidden_intents": [],
     "recommended_skills": [],
     "recommended_agents": [],
+    "ward_recommendation": {"action": "create_new", "ward_name": "test-ward", "subdirectory": null, "reason": "test"},
     "execution_strategy": {
         "approach": "simple",
         "explanation": "Simple greeting"
@@ -595,7 +665,7 @@ mod tests {
             .to_string(),
         };
 
-        let result = analyze_intent(&mock, "Hi", &[], &[]).await;
+        let result = analyze_intent(&mock, "Hi", &[], &[], &[]).await;
         let analysis = result.expect("should strip fences and parse");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.rewritten_prompt, "Hello!");

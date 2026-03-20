@@ -944,6 +944,19 @@ impl ExecutionRunner {
         // Intent analysis enrichment (root agent first turn only)
         let enriched_agent = if is_root {
             if let Some(msg) = user_message {
+                // Collect existing ward names for the LLM to decide reuse vs create
+                let wards_dir = self.paths.vault_dir().join("wards");
+                let existing_wards: Vec<String> = std::fs::read_dir(&wards_dir)
+                    .ok()
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().is_dir())
+                            .filter_map(|e| e.file_name().into_string().ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+
                 // Intent analysis: same model/config as agent but thinking disabled
                 // (reasoning tokens would corrupt JSON parsing)
                 let llm_config = agent_runtime::LlmConfig::new(
@@ -968,6 +981,7 @@ impl ExecutionRunner {
                             msg,
                             &available_skills,
                             &available_agents,
+                            &existing_wards,
                         )
                         .await
                         {
