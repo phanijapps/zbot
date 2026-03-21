@@ -129,11 +129,15 @@ impl<'a> AgentLoader<'a> {
         &self,
         agent_id: &str,
     ) -> Result<(gateway_services::agents::Agent, Provider), String> {
-        let agent = self
+        let mut agent = self
             .agent_service
             .get(agent_id)
             .await
             .map_err(|e| format!("Failed to load agent {}: {}", agent_id, e))?;
+
+        // Append OS context and shards to agent instructions
+        // so subagents know platform commands and tool syntax
+        agent.instructions = append_system_context(&agent.instructions, &self.paths);
 
         let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
 
@@ -252,6 +256,28 @@ impl<'a> AgentLoader<'a> {
 
 /// Build specialist instructions from OS.md + tooling shard + role preamble.
 /// Does NOT include orchestration/planning instructions — specialists execute, they don't orchestrate.
+/// Append OS context and tooling shard to agent instructions.
+/// This ensures ALL agents (pre-configured and auto-created) know:
+/// - Platform commands (PowerShell vs bash)
+/// - Tool syntax (apply_patch, shell, etc.)
+fn append_system_context(instructions: &str, paths: &SharedVaultPaths) -> String {
+    let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
+        .unwrap_or_default();
+
+    let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
+    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
+    format!(
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}",
+        instructions, os_context, tooling, memory_shard
+    )
+}
+
 fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> String {
     let role_preamble = generate_role_preamble(agent_id);
 
