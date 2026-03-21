@@ -109,8 +109,9 @@ Include a "structure" map in your ward_recommendation showing directories and th
 - Hidden intents must be actionable instructions, not labels
 - Every non-trivial execution must end with a quality verification node
 - Use conditional edges when outcomes determine next steps
-- CRITICAL: recommend ONLY skills and agents that appear in the lists below. Do NOT invent agent names.
-- In the execution graph, ONLY use agent names from the "Relevant Agents" list or "root". Any other name will crash.
+- CRITICAL: Skills and agents are DIFFERENT things. Skills are loaded with load_skill(). Agents are delegated to with delegate_to_agent().
+- In "recommended_skills": use skill names from the "Relevant Skills" list. These are SKILLS, not agents.
+- In "recommended_agents" and graph node "agent" fields: use ONLY agent names from the "Relevant Agents" list or "root". NEVER put a skill name (like "coding" or "ml-pipeline-builder") as an agent. Any invalid agent name will crash.
 - If the request is simple (greeting, quick question), use approach "simple" with no graph
 - Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
 - Any graph node that creates or modifies files MUST include "coding" in its skills list. The coding skill teaches agents how to write clean, modular, reusable code in the ward directory structure.
