@@ -52,7 +52,7 @@
 |------|------|---------|
 | Global Shared | `agents_data/shared/*.json` | user_info, workspace, patterns, session_summaries |
 | Agent | `agents_data/{agent_id}/memory.json` | Per-agent private context |
-| Ward | `wards/{ward_id}/.ward_memory.json` | Project-specific context |
+| Ward | `wards/{ward_id}/AGENTS.md` | Project-specific context (ward memory) |
 | Session | `agent_data/{session_id}/` | Ephemeral: attachments, scratchpad |
 
 File locking (fs2 crate) protects shared memory from concurrent access.

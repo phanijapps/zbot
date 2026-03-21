@@ -82,7 +82,7 @@
 │  │   ├── .venv/                #   Shared Python venv for all wards     │
 │  │   ├── scratch/              #   Default ward for quick tasks         │
 │  │   └── {ward-name}/          #   Agent-named project directories      │
-│  │       └── .ward_memory.json #     Per-ward context                   │
+│  │       └── AGENTS.md        #     Per-ward context (ward memory)      │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
 │  ├── providers.json            # LLM provider configurations            │
