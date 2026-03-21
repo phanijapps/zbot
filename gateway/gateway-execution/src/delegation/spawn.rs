@@ -129,7 +129,7 @@ pub async fn spawn_delegated_agent(
 
     // Load agent and provider using AgentLoader
     let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
-    let (agent, provider) = match agent_loader.load(&request.child_agent_id).await {
+    let (agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
         Ok(result) => result,
         Err(e) => {
             // Mark the pre-created execution as crashed so session can complete
