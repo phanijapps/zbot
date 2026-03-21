@@ -168,10 +168,18 @@ fn load_shards(config_dir: &Path) -> String {
             tracing::debug!("Loading shard '{}' from user config", name);
             std::fs::read_to_string(&user_path).ok()
         } else {
-            // Fall back to embedded
+            // Write embedded default to disk so user can see and customize it
             let embedded_path = format!("shards/{}.md", name);
-            Templates::get(&embedded_path)
-                .map(|file| String::from_utf8_lossy(&file.data).to_string())
+            let embedded = Templates::get(&embedded_path)
+                .map(|file| String::from_utf8_lossy(&file.data).to_string());
+            if let Some(ref content) = embedded {
+                if let Err(e) = std::fs::write(&user_path, content) {
+                    tracing::debug!("Failed to write default shard {}: {}", name, e);
+                } else {
+                    tracing::info!("Created default shard: config/shards/{}.md", name);
+                }
+            }
+            embedded
         };
 
         if let Some(c) = content {

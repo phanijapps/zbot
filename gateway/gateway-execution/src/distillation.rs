@@ -82,7 +82,8 @@ fn default_confidence() -> f64 {
 }
 
 /// Minimum number of messages in a session to trigger distillation.
-const MIN_MESSAGES_FOR_DISTILLATION: usize = 10;
+/// Set low to capture learnings from even short sessions.
+const MIN_MESSAGES_FOR_DISTILLATION: usize = 4;
 
 /// Maximum messages to load for distillation (to stay within LLM context).
 const MAX_MESSAGES_FOR_DISTILLATION: usize = 100;
@@ -128,7 +129,15 @@ impl SessionDistiller {
                 DEFAULT_DISTILLATION_PROMPT.to_string()
             }
             Err(_) => {
-                // File doesn't exist, use embedded default (no log spam)
+                // Write default to disk so user can customize it
+                if let Some(parent) = prompt_path.parent() {
+                    std::fs::create_dir_all(parent).ok();
+                }
+                if let Err(e) = std::fs::write(&prompt_path, DEFAULT_DISTILLATION_PROMPT) {
+                    tracing::debug!("Failed to write default distillation prompt: {}", e);
+                } else {
+                    tracing::info!("Created default distillation prompt at {:?}", prompt_path);
+                }
                 DEFAULT_DISTILLATION_PROMPT.to_string()
             }
         }
