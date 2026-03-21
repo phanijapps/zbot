@@ -272,6 +272,7 @@ impl ExecutionRunner {
         let memory_repo = self.memory_repo.clone();
         let embedding_client = self.embedding_client.clone();
         let distiller = self.distiller.clone();
+        let memory_recall = self.memory_recall.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -317,6 +318,7 @@ impl ExecutionRunner {
                             memory_repo.clone(),
                             embedding_client.clone(),
                             distiller.clone(),
+                            memory_recall.clone(),
                         )
                         .await
                         {
@@ -430,13 +432,19 @@ impl ExecutionRunner {
         // Smart recall: inject relevant facts at session start (only for fresh sessions)
         if history.is_empty() {
             if let Some(recall) = &self.memory_recall {
-                match recall.recall(&config.agent_id, &message, 10).await {
-                    Ok(facts) if !facts.is_empty() => {
-                        let context = super::recall::format_recalled_facts(&facts);
-                        history.insert(0, ChatMessage::system(context));
+                // Enrich recall query with ward context for domain-scoped results
+                let ward_context = setup.ward_id.as_deref().unwrap_or("");
+                let recall_query = if ward_context.is_empty() || ward_context == "scratch" {
+                    message.clone()
+                } else {
+                    format!("{} {}", ward_context, message)
+                };
+                match recall.recall_with_graph(&config.agent_id, &recall_query, 10).await {
+                    Ok(result) if !result.facts.is_empty() => {
+                        history.insert(0, ChatMessage::system(result.formatted));
                         tracing::info!(
                             agent_id = %config.agent_id,
-                            fact_count = facts.len(),
+                            fact_count = result.facts.len(),
                             "Injected recalled memory facts"
                         );
                     }
@@ -1100,6 +1108,7 @@ async fn invoke_continuation(
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     distiller: Option<Arc<super::distillation::SessionDistiller>>,
+    memory_recall: Option<Arc<super::recall::MemoryRecall>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1144,10 +1153,22 @@ async fn invoke_continuation(
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
     // Load full session conversation (includes tool calls, results, and callbacks)
-    let history: Vec<ChatMessage> = conversation_repo
+    let mut history: Vec<ChatMessage> = conversation_repo
         .get_session_conversation(session_id, 200)
         .map(|messages| conversation_repo.session_messages_to_chat_format(&messages))
         .unwrap_or_default();
+
+    // Recall domain-relevant facts for continuation context
+    if let Some(recall) = &memory_recall {
+        match recall.recall_with_graph(root_agent_id, "[continuation - recall recent learnings]", 5).await {
+            Ok(result) if !result.facts.is_empty() => {
+                history.insert(0, ChatMessage::system(result.formatted));
+                tracing::info!(fact_count = result.facts.len(), "Recalled facts for continuation");
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!("Continuation recall failed: {}", e),
+        }
+    }
 
     tracing::info!(
         session_id = %session_id,
