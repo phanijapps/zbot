@@ -402,6 +402,11 @@ fn spawn_execution_task(
                 .await;
             }
         }
+
+        // Mark child session as completed (prevents orphaned "running" sessions)
+        if let Err(e) = state_service.complete_session(&child_session_id) {
+            tracing::warn!(child_session_id = %child_session_id, "Failed to complete child session: {}", e);
+        }
     });
 }
 
