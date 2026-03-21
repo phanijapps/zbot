@@ -262,19 +262,32 @@ impl SessionDistiller {
             let mut entity_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
             for ee in &response.entities {
-                let entity = Entity::new(
-                    agent_id.to_string(),
-                    EntityType::from_str(&ee.entity_type),
-                    ee.name.clone(),
-                );
-                entity_map.insert(ee.name.clone(), entity.id.clone());
+                // Check if entity already exists (dedup by name, case-insensitive)
+                match graph.find_entity_by_name(agent_id, &ee.name).await {
+                    Ok(Some(existing_id)) => {
+                        // Entity already exists — bump mention count and reuse ID
+                        if let Err(e) = graph.bump_entity_mention(&existing_id).await {
+                            tracing::warn!(entity = %ee.name, error = %e, "Failed to bump entity mention");
+                        }
+                        entity_map.insert(ee.name.clone(), existing_id);
+                    }
+                    _ => {
+                        // Entity not found — create new
+                        let entity = Entity::new(
+                            agent_id.to_string(),
+                            EntityType::from_str(&ee.entity_type),
+                            ee.name.clone(),
+                        );
+                        entity_map.insert(ee.name.clone(), entity.id.clone());
 
-                let knowledge = knowledge_graph::types::ExtractedKnowledge {
-                    entities: vec![entity],
-                    relationships: vec![],
-                };
-                if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
-                    tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
+                        let knowledge = knowledge_graph::types::ExtractedKnowledge {
+                            entities: vec![entity],
+                            relationships: vec![],
+                        };
+                        if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
+                            tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
+                        }
+                    }
                 }
             }
 

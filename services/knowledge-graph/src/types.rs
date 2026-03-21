@@ -21,6 +21,8 @@ pub enum EntityType {
     Tool,
     /// Project (e.g., "Project X")
     Project,
+    /// File (e.g., "main.rs", "config.toml")
+    File,
     /// Custom entity type
     Custom(String),
 }
@@ -55,6 +57,7 @@ impl EntityType {
             "concept" | "topic" => EntityType::Concept,
             "tool" | "technology" => EntityType::Tool,
             "project" => EntityType::Project,
+            "file" => EntityType::File,
             other => EntityType::Custom(other.to_string()),
         }
     }
@@ -68,6 +71,7 @@ impl EntityType {
             EntityType::Concept => "concept",
             EntityType::Tool => "tool",
             EntityType::Project => "project",
+            EntityType::File => "file",
             EntityType::Custom(s) => s,
         }
     }
@@ -356,6 +360,8 @@ mod tests {
         assert_eq!(EntityType::from_str("concept"), EntityType::Concept);
         assert_eq!(EntityType::from_str("tool"), EntityType::Tool);
         assert_eq!(EntityType::from_str("project"), EntityType::Project);
+        assert_eq!(EntityType::from_str("file"), EntityType::File);
+        assert_eq!(EntityType::from_str("File"), EntityType::File);
         assert_eq!(EntityType::from_str("custom_type"), EntityType::Custom("custom_type".to_string()));
     }
 
@@ -367,6 +373,7 @@ mod tests {
         assert_eq!(EntityType::Concept.as_str(), "concept");
         assert_eq!(EntityType::Tool.as_str(), "tool");
         assert_eq!(EntityType::Project.as_str(), "project");
+        assert_eq!(EntityType::File.as_str(), "file");
         assert_eq!(EntityType::Custom("custom".to_string()).as_str(), "custom");
     }
 

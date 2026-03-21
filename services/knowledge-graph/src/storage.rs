@@ -212,6 +212,18 @@ impl GraphStorage {
         Ok(entities)
     }
 
+    /// Find an existing entity by agent_id + name (case-insensitive), returning its ID.
+    pub async fn find_entity_by_name(&self, agent_id: &str, name: &str) -> GraphResult<Option<String>> {
+        let conn = self.conn.lock().await;
+        find_entity_by_name(&conn, agent_id, name)
+    }
+
+    /// Increment mention count and update last_seen for an existing entity.
+    pub async fn bump_entity_mention(&self, entity_id: &str) -> GraphResult<()> {
+        let conn = self.conn.lock().await;
+        bump_entity_mention(&conn, entity_id)
+    }
+
     /// Delete all data for an agent
     pub async fn delete_agent_data(&self, agent_id: &str) -> GraphResult<usize> {
         let conn = self.conn.lock().await;
@@ -772,6 +784,28 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
         ],
     ).map_err(|e| GraphError::Database(e))?;
 
+    Ok(())
+}
+
+/// Find an existing entity by agent_id + name (case-insensitive).
+fn find_entity_by_name(conn: &Connection, agent_id: &str, name: &str) -> GraphResult<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM kg_entities WHERE agent_id = ?1 AND name = ?2 COLLATE NOCASE LIMIT 1"
+    ).map_err(GraphError::Database)?;
+
+    match stmt.query_row(params![agent_id, name], |row| row.get::<_, String>(0)) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(GraphError::Database(e)),
+    }
+}
+
+/// Increment mention count and update last_seen for an existing entity.
+fn bump_entity_mention(conn: &Connection, entity_id: &str) -> GraphResult<()> {
+    conn.execute(
+        "UPDATE kg_entities SET mention_count = mention_count + 1, last_seen_at = ?1 WHERE id = ?2",
+        params![chrono::Utc::now().to_rfc3339(), entity_id],
+    ).map_err(GraphError::Database)?;
     Ok(())
 }
 
