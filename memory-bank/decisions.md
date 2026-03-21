@@ -170,19 +170,40 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Decision**: Store skills/agents in both MemoryFactStore (for semantic search via BM25 + embeddings) and KnowledgeGraphStore (for entity relationships).
 **Rationale**: Each storage is optimized for its access pattern. Memory provides hybrid search. Graph provides relationship traversal. Storing in both enables rich discovery without sacrificing performance.
 
-### Semantic Search: Merge Strategy
-**Problem**: Semantic search might miss exact keyword matches; keyword search can't find semantically similar terms.
-**Decision**: `analyze_intent` tries semantic search first, then merges with keyword matching results, deduplicating by name.
-**Rationale**: Best of both worlds. Semantic finds "web scraping" when user says "extract data from websites". Keyword ensures exact matches aren't missed. Highest relevance score wins on duplicates.
+### Intent Analysis: Autonomous Middleware (Not a Tool, Not Pre-Collected Arrays)
+**Problem**: Earlier versions tried two approaches that both failed: (1) a tool the agent was supposed to call (but it was never registered), and (2) pre-collecting all resources into arrays to pass to the LLM (wasted tokens on irrelevant resources).
+**Decision**: Intent analysis is an autonomous middleware that indexes resources into `memory_facts` with local embeddings, performs semantic search, and sends only top-N relevant resources to the LLM. Not a tool agents call. Not a full catalog dump.
+**Rationale**: Autonomous indexing + semantic search means the LLM only sees relevant resources (8 skills, 5 agents, 5 wards max). No wasted tokens. No registration issues. Middleware runs before the root agent's first LLM call — transparent and automatic. See `memory-bank/intent-analysis.md` for full documentation.
 
-### Intent Analysis: LLM-First, Pure Analysis
-**Problem**: Heuristic keyword matching misses hidden intents; auto-loading skills pollutes context; injection breaks tool boundaries.
-**Decision**: `analyze_intent` is a **pure analysis** tool:
-- LLM is PRIMARY analyzer (receives ALL resources, returns intelligent recommendations)
-- Heuristics only as FALLBACK (LLM failed or unavailable)
-- NO auto-loading — returns recommendations only
-- Agent explicitly calls `load_skill` when needed
-**Rationale**: Clean separation of concerns. LLM provides intelligent analysis (hidden intents, execution strategy, ward suggestions). Agent retains control over what to load. No surprise context injection. See `memory-bank/intent-analysis.md` for full documentation.
+### Modular System Prompt Config (SOUL.md, OS.md, Overridable Shards)
+**Problem**: A single `INSTRUCTIONS.md` file mixed identity, platform commands, and behavior rules. No way to override individual shards without forking the embedded defaults.
+**Decision**: Split system prompt into modular config files at `~/Documents/zbot/config/`:
+- `SOUL.md` — agent identity/personality
+- `INSTRUCTIONS.md` — execution rules
+- `OS.md` — auto-generated platform-specific commands (Windows/Mac/Linux)
+- `shards/` — overridable shards (defaults written to disk on first run)
+- `distillation_prompt.md` — customizable distillation prompt
+**Rationale**: Users can customize any piece independently. OS-specific commands are auto-generated (no manual maintenance). Shards can be overridden by placing a file with the same name in `config/shards/`. Extra user shards are automatically included. Assembly: `gateway/gateway-templates/src/lib.rs`.
+
+### ThrottledLlmClient: Per-Provider Concurrent Request Limiting
+**Problem**: Multiple concurrent delegations + root agent can burst many simultaneous LLM calls to the same provider, triggering 429 rate limits.
+**Decision**: Wrap LLM clients with `ThrottledLlmClient` that uses a shared `tokio::sync::Semaphore` per provider. All executors sharing the same provider share the semaphore.
+**Rationale**: Simple, composable. Configured via `maxConcurrentRequests` in `providers.json` (default: 3). Wrapping chain: `OpenAiClient -> RetryingLlmClient -> ThrottledLlmClient`. Implementation: `runtime/agent-runtime/src/llm/throttle.rs`.
+
+### Score Threshold + Per-Category Caps for Semantic Search
+**Problem**: Sending all indexed resources to the LLM wastes tokens on irrelevant results and produces noisy recommendations.
+**Decision**: Apply a minimum relevance score threshold (0.15) and per-category caps (8 skills, 5 agents, 5 wards) when selecting resources for intent analysis.
+**Rationale**: Recall 50 results from `memory_facts`, filter by score, cap per category. LLM sees only relevant resources. Thresholds tuned empirically — 0.15 filters noise without losing useful matches.
+
+### Child Session Lifecycle Fix
+**Problem**: Delegated subagent sessions were left in `running` state after completion, creating orphan sessions.
+**Decision**: Child sessions are now explicitly marked `completed` when the subagent finishes execution.
+**Rationale**: Clean lifecycle prevents orphaned sessions from accumulating in the database. Combined with delegation semaphore (max 3 concurrent) to prevent resource exhaustion.
+
+### Session Distillation: Lower Threshold, Broader Trigger
+**Problem**: Distillation only fired after `invoke()` and required 10+ messages, missing useful short sessions and continuation sessions.
+**Decision**: Fire distillation after both `invoke()` and `invoke_continuation()`. Lower min messages threshold from 10 to 4.
+**Rationale**: Many useful sessions are short (4-6 messages). Continuation sessions often contain important follow-up decisions. Distillation prompt is customizable via `config/distillation_prompt.md`.
 
 ## Patterns We Did NOT Adopt
 

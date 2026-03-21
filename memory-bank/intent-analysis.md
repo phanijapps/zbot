@@ -2,31 +2,46 @@
 
 ## Overview
 
-Intent analysis is a **pre-execution enrichment** step that runs transparently from the runner layer before a root agent executor is constructed. It makes a single LLM call to discover hidden intents, recommend resources, and design an execution graph — then injects the result as a `## Intent Analysis` section into the system prompt. Agents never call it; it happens automatically.
+Intent analysis is an **autonomous pre-execution middleware** that runs before the root agent's first LLM call. It indexes all available resources (skills, agents, wards) into `memory_facts` with local embeddings (fastembed), performs semantic search to find the most relevant resources for the user's request, sends only the top-N to a single LLM call, and injects the result as a `## Intent Analysis` section into the system prompt. Agents never call it; it happens automatically. Root agent only — subagents and continuations skip it.
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                     Pre-Execution Enrichment Flow                            │
+│                     Autonomous Intent Analysis Flow                         │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   User Message ──────────────────────────────────────────────────────────►  │
 │                                                                              │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                    Runner Layer                                       │   │
-│   │  (gateway/gateway-execution — root agent only, before executor)      │   │
+│   │                    Step 1: Index Resources                           │   │
+│   │  (idempotent upsert into memory_facts via save_fact)               │   │
+│   │                                                                       │   │
+│   │   Skills → category:"skill", key:"skill:{name}"                    │   │
+│   │   Agents → category:"agent", key:"agent:{id}"                      │   │
+│   │   Wards  → category:"ward",  key:"ward:{name}" (reads AGENTS.md)  │   │
 │   └────────────────────────────────┬────────────────────────────────────┘   │
 │                                    │                                         │
 │                                    ▼                                         │
 │   ┌─────────────────────────────────────────────────────────────────────┐   │
-│   │                    LLM Analysis                                       │   │
+│   │                    Step 2: Semantic Search                           │   │
 │   │                                                                       │   │
-│   │   Input: user message + available skills + available agents          │   │
+│   │   recall_facts("root", user_message, 50)                            │   │
+│   │   Filter by MIN_RELEVANCE_SCORE (0.15)                              │   │
+│   │   Cap: 8 skills, 5 agents, 5 wards                                 │   │
+│   └────────────────────────────────┬────────────────────────────────────┘   │
+│                                    │                                         │
+│                                    ▼                                         │
+│   ┌─────────────────────────────────────────────────────────────────────┐   │
+│   │                    Step 3: LLM Analysis                              │   │
+│   │                                                                       │   │
+│   │   Input: user message + top-N skills + top-N agents + top-N wards  │   │
 │   │   Output: IntentAnalysis {                                           │   │
 │   │     primary_intent, hidden_intents (actionable instructions),        │   │
 │   │     recommended_skills, recommended_agents,                          │   │
-│   │     execution_strategy { approach, graph, explanation }              │   │
+│   │     ward_recommendation { action, ward_name, subdirectory,          │   │
+│   │                           structure, reason },                       │   │
+│   │     execution_strategy { approach, graph, explanation },             │   │
 │   │     rewritten_prompt                                                  │   │
 │   │   }                                                                   │   │
 │   └────────────────────────────────┬────────────────────────────────────┘   │
@@ -40,7 +55,9 @@ Intent analysis is a **pre-execution enrichment** step that runs transparently f
 │   │   Appends "## Intent Analysis" section to the base system prompt:   │   │
 │   │   - Primary Intent                                                    │   │
 │   │   - Hidden Intents (as numbered actionable instructions)             │   │
-│   │   - Recommended Skills / Agents                                       │   │
+│   │   - Skills mapped to graph nodes (or simple list)                    │   │
+│   │   - Recommended Agents                                                │   │
+│   │   - Ward (name, action, subdirectory, directory layout)              │   │
 │   │   - Execution Graph (mermaid, orchestration note, max cycles)        │   │
 │   │   - Rewritten Request                                                 │   │
 │   └────────────────────────────────┬────────────────────────────────────┘   │
@@ -58,67 +75,71 @@ Intent analysis is a **pre-execution enrichment** step that runs transparently f
 
 ## Key Design Principles
 
-### 1. Pre-Execution, Not a Tool
-- Runs from the runner layer before the executor is constructed
+### 1. Pre-Execution Middleware, Not a Tool
+- Runs as middleware before the root agent executor is constructed
 - Agents never call it — enrichment is transparent and automatic
-- Root-agent only: sub-agents spawned during execution do not trigger re-analysis
+- Root-agent only: subagents and continuations do not trigger re-analysis
 
-### 2. LLM Decides, No Conditional Logic
+### 2. Autonomous Resource Discovery
+- Indexes skills, agents, and wards into `memory_facts` with local embeddings (fastembed)
+- Uses semantic search (`recall_facts`) to find relevant resources for the user message
+- Only sends top-N results to the LLM (not the full catalog)
+- Score threshold (0.15) and per-category caps filter noise
+
+### 3. LLM Decides, No Conditional Logic
 - The system prompt injection presents recommendations without branching code
 - No `if recommended_skills then load_skill` wiring in the runner
 - The agent reads the `## Intent Analysis` section and uses its own judgment
 
-### 3. Recommend, Don't Inject
-- The enrichment adds guidance (skill names, agent names, a graph shape), not loaded content
+### 4. Recommend, Don't Inject
+- The enrichment adds guidance (skill names, agent names, ward, graph shape), not loaded content
 - Skills are not auto-loaded; agents are not auto-delegated
 - The agent retains full autonomy to follow, modify, or override recommendations
 
-### 4. Execution Strategy
+### 5. Execution Strategy
 LLM determines strategy via the `approach` field:
 - **simple**: Direct execution, no graph needed (greetings, quick questions)
 - **tracked**: Use `update_plan` for progress tracking on medium-complexity tasks
 - **graph**: Use `execution_graph` for parallel/sequential orchestration with conditional edges
 
-## LLM Prompt Structure
+### 6. Ward Recommendation
+LLM recommends a domain-level ward (not task-specific):
+- **action**: `use_existing` or `create_new`
+- **ward_name**: Domain-level reusable name (e.g., `financial-analysis`, `math-tutor`)
+- **subdirectory**: Task-specific subdir (e.g., `stocks/spy`)
+- **structure**: Directory layout map (`core/`, `output/`, task subdirs)
+- After completing work, agents update AGENTS.md with what was built
 
-```markdown
-## System Prompt (INTENT_ANALYSIS_PROMPT)
-You are an intent analyzer for an AI agent platform.
-Given a user request and the platform's available resources, your job is to:
-1. Identify the primary intent behind the request
-2. Discover hidden/implicit intents the user hasn't stated but would expect
-3. Recommend which skills and agents would help
-4. Design an execution graph showing how to orchestrate the work
+## Semantic Search Configuration
 
-Rules:
-- Hidden intents must be actionable instructions, not labels
-- Every non-trivial execution must end with a quality verification node
-- Use conditional edges when outcomes determine next steps
-- Recommend only skills and agents from the provided lists
-- If the request is simple, use approach "simple" with no graph
-
-## User Prompt
-### User Request
-{message}
-
-### Available Skills
-- skill_name: description
-
-### Available Agents
-- agent_name: description
-```
+| Parameter | Value | Purpose |
+|-----------|-------|---------|
+| `MIN_RELEVANCE_SCORE` | 0.15 | Minimum score to include a result |
+| `MAX_SKILLS` | 8 | Maximum skills sent to LLM |
+| `MAX_AGENTS` | 5 | Maximum agents sent to LLM |
+| `MAX_WARDS` | 5 | Maximum wards sent to LLM |
+| Fetch limit | 50 | Initial `recall_facts` limit before filtering |
 
 ## Response Schema
 
 ```typescript
 interface IntentAnalysis {
   primary_intent: string;
-  // Actionable instructions, not labels — e.g. "Write unit tests for every public function"
+  // Actionable instructions, not labels
   hidden_intents: string[];
   recommended_skills: string[];   // names from the available skills list
   recommended_agents: string[];   // names from the available agents list
+  ward_recommendation: WardRecommendation;
   execution_strategy: ExecutionStrategy;
   rewritten_prompt: string;       // user message with all implicit intent made explicit
+}
+
+interface WardRecommendation {
+  action: "use_existing" | "create_new";
+  ward_name: string;              // domain-level reusable name
+  subdirectory: string | null;    // task-specific subdir
+  structure: Record<string, string>;  // directory path → purpose
+  reason: string;
 }
 
 interface ExecutionStrategy {
@@ -129,7 +150,7 @@ interface ExecutionStrategy {
       id: string;
       task: string;
       agent: string;         // agent name or "root"
-      skills: string[];
+      skills: string[];      // "coding" required for any file-writing node
     }>;
     edges: Array<
       | { from: string; to: string }                                  // Direct
@@ -155,11 +176,18 @@ interface ExecutionStrategy {
 1. {hidden_intent_1}
 2. {hidden_intent_2}
 
-**Recommended Skills** (load when needed, unload when done):
-- {skill_name}
+**Skills** (load ONLY when the step requires it, unload after):
+- Node A (task description): load `coding`, `data-analysis`
 
 **Recommended Agents** (delegate to these):
 - {agent_name}
+
+**Ward**: `{ward_name}` ({action}) — {reason}
+**Task directory**: `{subdirectory}`
+**Directory layout** (create these, put files in the right place):
+- `core/` — Shared reusable modules
+- `output/` — Reports, charts, deliverables
+**After completing work**: Update AGENTS.md with what was built and what's reusable.
 
 **Execution Graph**:
 ```mermaid
@@ -177,11 +205,9 @@ interface ExecutionStrategy {
 
 | Component | Path |
 |-----------|------|
-| Enrichment Module | `gateway/gateway-execution/src/middleware/intent_analysis.rs` |
-| Skill Indexer | `runtime/agent-tools/src/tools/indexer/skill.rs` |
-| Agent Indexer | `runtime/agent-tools/src/tools/indexer/agent.rs` |
-| System Prompt Template | `gateway/templates/instructions_starter.md` |
-| Executor Integration | `gateway/gateway-execution/src/invoke/executor.rs` |
+| Middleware Module | `gateway/gateway-execution/src/middleware/intent_analysis.rs` |
+| Runner Integration | `gateway/gateway-execution/src/runner.rs` |
+| System Prompt Assembly | `gateway/gateway-templates/src/lib.rs` |
 
 ## Evolution History
 
@@ -200,15 +226,22 @@ interface ExecutionStrategy {
 - Removed `auto_load` parameter
 - Returns recommendations only
 - Agent explicitly calls `load_skill`
-- Cleaner separation of concerns
-- Implementation: `runtime/agent-tools/src/tools/intent.rs` (2,070 lines)
+- Implementation: `runtime/agent-tools/src/tools/intent.rs`
 - Issue: tool was never registered; agents were told to call it but couldn't
 
-### v4 (Current): Pre-Execution Enrichment
+### v4: Pre-Execution Enrichment
 - Moved out of the tool registry entirely
-- ~250-line module at `gateway/gateway-execution/src/middleware/intent_analysis.rs`
 - Runs from the runner before root agent executor construction
-- Injects `## Intent Analysis` section into system prompt — no tool call by agent
+- Injects `## Intent Analysis` section into system prompt
 - No conditional branching in runner code — LLM reads the section and decides
 - Hidden intents are actionable instructions, not labels
 - Execution strategy includes graph/conditional edges for complex orchestration
+
+### v5 (Current): Autonomous Middleware with Semantic Search
+- Fully autonomous: indexes resources into `memory_facts`, searches semantically, calls LLM
+- Uses local embeddings (fastembed) for resource indexing — no external API needed
+- Score threshold (0.15) and per-category caps (8 skills, 5 agents, 5 wards) filter noise
+- Only top-N relevant resources sent to LLM (not full catalog)
+- Ward recommendation with directory structure for domain-level workspace organization
+- `coding` skill required for any graph node that creates/modifies files
+- Moved to `gateway/gateway-execution/src/middleware/intent_analysis.rs`

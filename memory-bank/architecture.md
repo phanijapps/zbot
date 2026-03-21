@@ -57,7 +57,15 @@
 │  ├── conversations.db          # SQLite: conversations, messages,       │
 │  │                              #   memory_facts, embedding_cache       │
 │  ├── settings.json             # Application settings (tools, logs)     │
-│  ├── INSTRUCTIONS.md           # Custom system prompt (auto-created)    │
+│  ├── config/                   # System prompt config (auto-created)    │
+│  │   ├── SOUL.md               #   Agent identity/personality           │
+│  │   ├── INSTRUCTIONS.md       #   Execution rules                     │
+│  │   ├── OS.md                 #   Platform-specific commands (auto)    │
+│  │   ├── distillation_prompt.md#   Customizable distillation prompt     │
+│  │   └── shards/               #   Overridable prompt shards            │
+│  │       ├── tooling_skills.md #     Skills-first approach              │
+│  │       ├── memory_learning.md#     Memory patterns                    │
+│  │       └── planning_autonomy.md#   Planning and autonomy              │
 │  ├── logs/                     # Daemon log files (when enabled)        │
 │  │   └── zerod.YYYY-MM-DD.log  #   Rolling log files                    │
 │  ├── agents/{name}/            # Agent configurations                   │
@@ -326,6 +334,22 @@ pub trait LlmClient: Send + Sync {
 }
 ```
 
+### LLM Client Wrapping Chain
+
+The LLM client is wrapped in a chain of decorators for reliability and rate limiting:
+
+```
+OpenAiClient → RetryingLlmClient → ThrottledLlmClient
+```
+
+| Layer | Purpose | File |
+|-------|---------|------|
+| `OpenAiClient` | Raw OpenAI-compatible API calls | `runtime/agent-runtime/src/llm/openai.rs` |
+| `RetryingLlmClient` | Automatic retry on transient errors | `runtime/agent-runtime/src/llm/retry.rs` |
+| `ThrottledLlmClient` | Per-provider concurrent request limiting | `runtime/agent-runtime/src/llm/throttle.rs` |
+
+The `ThrottledLlmClient` uses a shared `tokio::sync::Semaphore` per provider. All executors for the same provider share the same semaphore, preventing burst 429 rate limits. Configured via `maxConcurrentRequests` in `providers.json` (default: 3).
+
 ## Session Management Architecture
 
 Sessions are the top-level container for user interactions. Each session has one continuous
@@ -417,6 +441,18 @@ ROOT SESSION (parent_session_id = NULL)
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Delegation
+
+When the root agent delegates to a subagent, the following constraints apply:
+
+| Aspect | Behavior |
+|--------|----------|
+| **Concurrency limit** | Max 3 concurrent delegations via `tokio::sync::Semaphore` |
+| **Child session lifecycle** | Child sessions are marked `completed` when subagent finishes (no orphans) |
+| **Subagent context** | Subagents receive `fact_store` with embeddings (no file fallback) |
+| **LLM throttle** | Subagents share the provider's `ThrottledLlmClient` semaphore |
+| **Intent analysis** | Subagents skip intent analysis (root-agent only) |
 
 ### Session vs Execution vs Conversation
 
@@ -867,7 +903,7 @@ CREATE TABLE embedding_cache (
 - `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
 - `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
 - `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
-- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (auto-extract facts + entities)
+- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (fires after both `invoke()` and `invoke_continuation()`, min 4 messages, extracts facts + entities + relationships)
 - `gateway/gateway-execution/src/recall.rs` — MemoryRecall (inject facts at session start)
 - `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
 
@@ -995,18 +1031,31 @@ index_resources called (or first discovery)
 └─────────────────────────────────────────┘
 ```
 
-### Discovery Flow (intent enrichment, list_skills)
+### Discovery Flow
 
+Resources are discovered through two paths:
+
+**Intent analysis middleware** (autonomous, pre-execution):
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ 1. Try semantic search via MemoryFactStore (if available)      │
-│    → recall_facts("default", message, 10)                       │
-│    → Filter by category (skill/agent)                           │
+│ 1. Index all resources into memory_facts (idempotent upsert)   │
+│    → Skills, agents, wards indexed with local embeddings       │
 │                                                                 │
-│ 2. Try cached index from context state                          │
+│ 2. Semantic search via recall_facts("root", message, 50)       │
+│    → Filter by score ≥ 0.15                                    │
+│    → Cap: 8 skills, 5 agents, 5 wards                          │
+│                                                                 │
+│ 3. Top-N results sent to LLM for analysis                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Tool-based discovery** (list_skills, list_agents):
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Try cached index from context state                          │
 │    → index:skills, index:agents                                 │
 │                                                                 │
-│ 3. Fall back to disk scan                                       │
+│ 2. Fall back to disk scan                                       │
 │    → Parse SKILL.md/config.yaml on-demand                       │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -1015,18 +1064,9 @@ index_resources called (or first discovery)
 
 | Trigger | Behavior |
 |---------|----------|
+| Intent analysis middleware | Indexes skills, agents, wards into `memory_facts` every root session (idempotent upsert) |
 | `index_resources()` tool called | Full reindex (or force=true for stale) |
-| First intent enrichment run | Uses disk scan fallback if no index |
 | File modification detected | Staleness check during next indexing |
-
-### Semantic Search Integration
-
-The intent enrichment module uses semantic search when MemoryFactStore is available:
-
-1. **Semantic query**: `recall_facts()` returns facts matching the message semantically
-2. **Category filter**: Only skills/agents with matching category
-3. **Merge with keyword**: Semantic results merged with keyword-matched results
-4. **Deduplication**: Skills found via both methods appear once with highest score
 
 ### Error Recovery
 
@@ -1036,17 +1076,19 @@ When `load_skill` or agent loading fails:
 
 ## Intent Analysis System
 
-Intent analysis is a **pre-execution enrichment** step — not a tool agents call. The runner invokes it automatically before constructing the root agent executor, then injects the result as a `## Intent Analysis` section into the system prompt. See `memory-bank/intent-analysis.md` for full documentation.
+Intent analysis is an **autonomous pre-execution middleware** — not a tool agents call. It indexes resources into `memory_facts` with local embeddings (fastembed), performs semantic search, sends only top-N relevant resources to a single LLM call, and injects the result as a `## Intent Analysis` section into the system prompt. See `memory-bank/intent-analysis.md` for full documentation.
 
 Implementation: `gateway/gateway-execution/src/middleware/intent_analysis.rs`
 
-### Architecture Principle: Pre-Execution Enrichment
+### Architecture
 
 | Aspect | Design |
 |--------|--------|
-| **Trigger** | Runner layer, before root executor construction |
-| **Scope** | Root agent only — sub-agents do not re-trigger analysis |
-| **Primary Analyzer** | LLM (receives all available resources) |
+| **Trigger** | Middleware, before root agent's first LLM call |
+| **Scope** | Root agent only — subagents and continuations skip it |
+| **Resource Discovery** | Autonomous: indexes skills/agents/wards into `memory_facts`, searches semantically |
+| **LLM Input** | Top-N relevant resources only (not full catalog) |
+| **Filtering** | Score threshold (0.15), per-category caps (8 skills, 5 agents, 5 wards) |
 | **Side Effects** | None — injects guidance text, does not load skills or delegate |
 | **Agent Visibility** | Sees `## Intent Analysis` section in system prompt from turn one |
 
@@ -1057,13 +1099,28 @@ User Message
      │
      ▼
 ┌─────────────────────────────────────────────────────────────┐
-│ Runner: gateway/gateway-execution                           │
-│  analyze_intent() LLM call                                  │
-│  Input: message + available skills + available agents        │
-│  Output: IntentAnalysis { primary_intent,                   │
-│          hidden_intents (actionable), recommended_skills,   │
-│          recommended_agents, execution_strategy/graph,      │
-│          rewritten_prompt }                                  │
+│ Step 1: Index resources (idempotent upsert)                 │
+│   Skills → memory_facts (category:"skill")                  │
+│   Agents → memory_facts (category:"agent")                  │
+│   Wards  → memory_facts (category:"ward", reads AGENTS.md) │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 2: Semantic search (recall_facts with fastembed)        │
+│   Fetch top 50, filter by score ≥ 0.15                      │
+│   Cap: 8 skills, 5 agents, 5 wards                          │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 3: LLM call with top-N resources                       │
+│   Output: IntentAnalysis { primary_intent, hidden_intents,  │
+│     recommended_skills, recommended_agents,                  │
+│     ward_recommendation { action, ward_name, subdirectory,  │
+│                           structure, reason },               │
+│     execution_strategy { approach, graph, explanation },     │
+│     rewritten_prompt }                                       │
 └─────────────────────────────────────────────────────────────┘
      │
      (parse failed? skip enrichment, continue with base prompt)
@@ -1084,57 +1141,80 @@ User Message
 ### Key Behavioral Contract
 
 - Enrichment is automatic and transparent — agents do not call `analyze_intent`
+- Resource discovery is autonomous — indexes into `memory_facts`, searches via embeddings
 - Hidden intents are actionable instructions, not category labels
 - Runner contains no conditional logic based on analysis output — LLM decides
 - Recommended skills/agents are guidance; agent retains full autonomy
+- Ward recommendation includes directory structure for domain-level workspaces
 
 ## System Prompt Architecture
 
-The system prompt is composed of a base template plus automatically injected shards:
+The system prompt is assembled from modular config files at `~/Documents/zbot/config/`. Each file is created from an embedded starter template on first run and is user-customizable. Assembly is handled by `gateway/gateway-templates/src/lib.rs`.
 
 ```
 ┌─────────────────────────────────────────┐
-│ INSTRUCTIONS.md (user-customizable)     │
+│ SOUL.md — Agent identity/personality    │
 │                                         │
-│ Your custom agent instructions...       │
+│ Who the agent is, its personality...    │
 ├─────────────────────────────────────────┤
-│ # --- SYSTEM INJECTED ---               │
+│ INSTRUCTIONS.md — Execution rules       │
+│                                         │
+│ How the agent should behave...          │
 ├─────────────────────────────────────────┤
-│ ENVIRONMENT                             │
-│ - OS: windows (x86_64)                  │
-│ - Shell: PowerShell/cmd syntax          │
+│ OS.md — Platform-specific commands      │
+│ (auto-generated for current OS)         │
+│                                         │
+│ - Windows: PowerShell/cmd syntax        │
+│ - macOS: Unix shell + brew              │
+│ - Linux: Unix shell + package managers  │
 ├─────────────────────────────────────────┤
-│ SAFETY (shard)                          │
-│ - Never exfiltrate secrets              │
-│ - Confirm before dangerous operations   │
+│ # --- SYSTEM SHARDS ---                 │
 ├─────────────────────────────────────────┤
-│ TOOLING & SKILLS (shard)                │
+│ tooling_skills.md (shard)               │
 │ - Skills-first approach                 │
 │ - Delegation patterns                   │
 ├─────────────────────────────────────────┤
-│ MEMORY & LEARNING (shard)               │
+│ memory_learning.md (shard)              │
 │ - Shared memory usage                   │
 │ - Pattern recording                     │
+├─────────────────────────────────────────┤
+│ planning_autonomy.md (shard)            │
+│ - Planning and autonomous execution     │
+├─────────────────────────────────────────┤
+│ (any extra user shards in config/shards)│
 └─────────────────────────────────────────┘
 ```
 
+### Assembly Order
+
+1. **`config/SOUL.md`** — Agent identity/personality (created from `soul_starter.md` if missing)
+2. **`config/INSTRUCTIONS.md`** — Execution rules (created from `instructions_starter.md` if missing)
+3. **`config/OS.md`** — Platform-specific commands (auto-generated for current OS if missing)
+4. **Shards** — `config/shards/{name}.md` overrides embedded defaults; extra user files included too
+
 ### Shards
 
-Required shards are automatically appended to custom instructions:
+Required shards are loaded from `config/shards/` if present, otherwise from embedded defaults. Users can override any shard by placing a file with the same name in the shards directory.
 
 | Shard | Purpose |
 |-------|---------|
-| `safety` | Security rules (secrets, confirmations) |
 | `tooling_skills` | Skills-first approach, delegation |
 | `memory_learning` | Shared memory patterns |
+| `planning_autonomy` | Planning and autonomous execution |
 
-### Environment Injection
+Extra `.md` files placed in `config/shards/` are automatically included after the required shards.
 
-OS and architecture are detected at runtime and injected:
-- **Windows**: PowerShell/cmd syntax hints
-- **macOS/Linux**: Unix shell syntax hints
+### Distillation Prompt
 
-This ensures the agent uses correct shell commands for the platform.
+The distillation prompt is customizable via `config/distillation_prompt.md`. If the file does not exist, the embedded default is written to disk on first run. This allows users to tune what facts, entities, and relationships are extracted during session distillation.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-templates/src/lib.rs` | Prompt assembly logic |
+| `gateway/templates/` | Embedded starter templates (compiled in) |
+| `~/Documents/zbot/config/` | User-customizable config files |
 
 ## Connectors
 
