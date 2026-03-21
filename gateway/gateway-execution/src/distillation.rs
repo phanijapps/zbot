@@ -55,6 +55,8 @@ struct ExtractedEntity {
     name: String,
     #[serde(rename = "type")]
     entity_type: String,
+    #[serde(default)]
+    properties: std::collections::HashMap<String, serde_json::Value>,
 }
 
 /// A relationship extracted by the distillation LLM call.
@@ -273,11 +275,12 @@ impl SessionDistiller {
                     }
                     _ => {
                         // Entity not found — create new
-                        let entity = Entity::new(
+                        let mut entity = Entity::new(
                             agent_id.to_string(),
                             EntityType::from_str(&ee.entity_type),
                             ee.name.clone(),
                         );
+                        entity.properties = ee.properties.clone();
                         entity_map.insert(ee.name.clone(), entity.id.clone());
 
                         let knowledge = knowledge_graph::types::ExtractedKnowledge {
@@ -490,37 +493,67 @@ fn extract_json_from_content(content: &str) -> String {
 /// The distillation prompt sent as a system message.
 /// The default distillation prompt (embedded fallback).
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
-const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze this conversation and extract durable facts, entities, and relationships worth remembering for future sessions.
+const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, and relationships worth remembering for FUTURE sessions.
 
 Return a JSON object with three arrays:
 
 {
   "facts": [
-    {"category": "...", "key": "dot.notation.dedup.key", "content": "1-2 sentence fact", "confidence": 0.0-1.0}
+    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0}
   ],
   "entities": [
-    {"name": "entity name", "type": "person|project|tool|concept|file|organization"}
+    {"name": "entity name", "type": "person|organization|project|tool|concept|file", "properties": {}}
   ],
   "relationships": [
-    {"source": "entity name", "target": "entity name", "type": "uses|created|depends_on|related_to|part_of"}
+    {"source": "entity name", "target": "entity name", "type": "relationship_type"}
   ]
 }
 
-Fact categories:
-- preference: User likes/dislikes, coding style, tool preferences
-- decision: Architecture choices, technology selections, patterns chosen
-- pattern: Recurring workflows, common commands, file structures
-- entity: Important projects, files, APIs, people mentioned
-- instruction: Standing orders ("always use X", "never do Y")
-- correction: Mistakes made and lessons learned
+## Fact Categories (5 types)
 
-Rules:
-- Only facts useful in FUTURE sessions. Skip ephemeral details.
-- Key must be globally unique dot-notation (e.g., "user.preferred_language", "project.zbot.build_tool")
-- If a fact updates something already known, use the SAME key so it overwrites.
-- Maximum 10 facts, 10 entities, 10 relationships per session.
-- Confidence guide: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred
-- If nothing worth remembering, return {"facts": [], "entities": [], "relationships": []}"#;
+- `user` — user preferences, style, capabilities (e.g., coding style, language preferences, expertise areas)
+- `pattern` — how-to knowledge, error workarounds, successful workflows (e.g., build steps, debug techniques)
+- `domain` — domain knowledge with hierarchical keys (e.g., `domain.finance.lmnd.outlook`, `domain.rust.async_patterns`)
+- `instruction` — standing orders, workflow rules (e.g., "always use X", "never do Y", "run tests before commit")
+- `correction` — corrections to agent behavior (e.g., "don't suggest X because Y", mistakes and lessons learned)
+
+## Key Format
+
+Use dot-notation hierarchy: `{category}.{subdomain}.{topic}`
+Examples: `user.preferred_language`, `pattern.rust.error_handling`, `domain.finance.lmnd.outlook`, `instruction.testing.always_run_cargo_check`, `correction.code_style.no_unwrap`
+
+If a fact updates something already known, use the SAME key so it overwrites.
+
+## Entity Types
+
+- `person` — people mentioned by name
+- `organization` — companies and organizations (use "organization", NOT "company")
+- `project` — software projects, repos, products
+- `tool` — tools, libraries, frameworks, technologies
+- `concept` — abstract concepts, topics, methodologies
+- `file` — important ward files (core modules, config files, data files)
+
+Include `properties` where relevant:
+- Organizations: sector, ticker, industry
+- Projects: language, framework, ward (workspace path)
+- Files: ward (workspace path), exports, purpose
+- Tools: version, usage context
+
+## Relationship Types
+
+`related_to`, `uses`, `created`, `part_of`, `is_in`, `has_module`, `exports`, `prefers`, `analyzed_by`
+
+## Ward File Summaries
+
+When a session analyzes or works with files in a ward (workspace), include a `domain.{subdomain}.data_available` fact summarizing what data/files are available (e.g., `domain.finance.portfolio_data_available`).
+
+## Rules
+
+- Maximum 20 facts, 20 entities, 20 relationships per session.
+- Only extract facts useful in FUTURE sessions. Skip ephemeral details (one-off questions, transient errors, session-specific data).
+- Confidence: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred from context.
+- If nothing worth remembering, return {"facts": [], "entities": [], "relationships": []}.
+- Prefer fewer high-quality extractions over many low-value ones."#;
 
 // ============================================================================
 // TESTS
@@ -533,16 +566,16 @@ mod tests {
     #[test]
     fn test_parse_facts_from_json_array() {
         // Backward compat: plain array of facts
-        let json = r#"[{"category": "preference", "key": "lang.preferred", "content": "User prefers Rust", "confidence": 0.9}]"#;
+        let json = r#"[{"category": "user", "key": "user.preferred_language", "content": "User prefers Rust", "confidence": 0.9}]"#;
         let resp = parse_distillation_response(json).unwrap();
         assert_eq!(resp.facts.len(), 1);
-        assert_eq!(resp.facts[0].key, "lang.preferred");
+        assert_eq!(resp.facts[0].key, "user.preferred_language");
         assert_eq!(resp.facts[0].confidence, 0.9);
     }
 
     #[test]
     fn test_parse_full_response() {
-        let json = r#"{"facts": [{"category": "decision", "key": "db.engine", "content": "Using SQLite", "confidence": 0.85}], "entities": [{"name": "SQLite", "type": "tool"}], "relationships": [{"source": "AgentZero", "target": "SQLite", "type": "uses"}]}"#;
+        let json = r#"{"facts": [{"category": "domain", "key": "domain.zbot.db_engine", "content": "Using SQLite", "confidence": 0.85}], "entities": [{"name": "SQLite", "type": "tool", "properties": {"usage": "embedded database"}}], "relationships": [{"source": "AgentZero", "target": "SQLite", "type": "uses"}]}"#;
         let resp = parse_distillation_response(json).unwrap();
         assert_eq!(resp.facts.len(), 1);
         assert_eq!(resp.entities.len(), 1);
@@ -552,10 +585,10 @@ mod tests {
 
     #[test]
     fn test_parse_facts_from_markdown() {
-        let md = "```json\n[{\"category\": \"decision\", \"key\": \"db.engine\", \"content\": \"Using SQLite\", \"confidence\": 0.85}]\n```";
+        let md = "```json\n[{\"category\": \"domain\", \"key\": \"domain.zbot.db_engine\", \"content\": \"Using SQLite\", \"confidence\": 0.85}]\n```";
         let resp = parse_distillation_response(md).unwrap();
         assert_eq!(resp.facts.len(), 1);
-        assert_eq!(resp.facts[0].key, "db.engine");
+        assert_eq!(resp.facts[0].key, "domain.zbot.db_engine");
     }
 
     #[test]
@@ -572,7 +605,7 @@ mod tests {
 
     #[test]
     fn test_parse_facts_with_surrounding_text() {
-        let text = "Here are the extracted facts:\n[{\"category\": \"pattern\", \"key\": \"workflow.test\", \"content\": \"Always run tests before committing\", \"confidence\": 0.8}]\nDone.";
+        let text = "Here are the extracted facts:\n[{\"category\": \"pattern\", \"key\": \"pattern.workflow.test_before_commit\", \"content\": \"Always run tests before committing\", \"confidence\": 0.8}]\nDone.";
         let resp = parse_distillation_response(text).unwrap();
         assert_eq!(resp.facts.len(), 1);
         assert_eq!(resp.facts[0].category, "pattern");
@@ -601,7 +634,7 @@ mod tests {
 
     #[test]
     fn test_default_confidence() {
-        let json = r#"[{"category": "entity", "key": "project.name", "content": "Project is called AgentZero"}]"#;
+        let json = r#"[{"category": "domain", "key": "domain.zbot.project_name", "content": "Project is called AgentZero"}]"#;
         let resp = parse_distillation_response(json).unwrap();
         assert_eq!(resp.facts[0].confidence, 0.8);
     }
