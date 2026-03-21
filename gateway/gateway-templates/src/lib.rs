@@ -217,7 +217,7 @@ mod tests {
     fn test_default_system_prompt_contains_expected_content() {
         let prompt = default_system_prompt();
         assert!(prompt.contains("Jaffa"));
-        assert!(prompt.contains("SAFETY & PERMISSIONS"));
+        assert!(prompt.contains("CORE IDENTITY"));
     }
 
     #[test]
@@ -284,7 +284,7 @@ mod tests {
         assert!(shard.is_some());
         let content = shard.unwrap();
         assert!(content.contains("TOOLING & SKILLS"));
-        assert!(content.contains("list_skills"));
+        assert!(content.contains("apply_patch"));
         assert!(content.contains("delegate_to_agent"));
     }
 
