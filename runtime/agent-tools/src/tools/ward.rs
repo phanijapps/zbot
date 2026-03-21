@@ -10,9 +10,6 @@ use serde_json::{json, Value};
 
 use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
-/// Ward memory file name (hidden file inside each ward)
-const WARD_MEMORY_FILE: &str = ".ward_memory.json";
-
 /// AGENTS.md file name - living readme for agent executions
 const WARD_AGENTS_MD: &str = "AGENTS.md";
 
@@ -43,7 +40,7 @@ impl WardTool {
         if let Ok(entries) = std::fs::read_dir(ward_dir) {
             for entry in entries.flatten() {
                 let name = entry.file_name().to_string_lossy().to_string();
-                // Skip hidden files (like .ward_memory.json)
+                // Skip hidden files
                 if name.starts_with('.') {
                     continue;
                 }
@@ -56,19 +53,6 @@ impl WardTool {
         }
         files.sort();
         files
-    }
-
-    /// Load ward memory from `.ward_memory.json`.
-    fn load_ward_memory(&self, ward_dir: &std::path::Path) -> Value {
-        let memory_path = ward_dir.join(WARD_MEMORY_FILE);
-        if memory_path.exists() {
-            if let Ok(content) = std::fs::read_to_string(&memory_path) {
-                if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
-                    return parsed;
-                }
-            }
-        }
-        json!({})
     }
 
     /// Read AGENTS.md content from a ward directory, if it exists.
@@ -111,15 +95,27 @@ r#"# {}
         }
     }
 
-    /// Get a short description from ward memory (if any).
+    /// Get a short description from AGENTS.md purpose section (if any).
     fn ward_description(&self, ward_dir: &std::path::Path) -> Option<String> {
-        let memory = self.load_ward_memory(ward_dir);
-        memory
-            .get("entries")
-            .and_then(|e| e.get("purpose"))
-            .and_then(|p| p.get("value"))
-            .and_then(|v| v.as_str())
-            .map(String::from)
+        let content = self.read_agents_md(ward_dir)?;
+        // Look for Purpose section and extract first non-empty, non-comment line
+        let mut in_purpose = false;
+        for line in content.lines() {
+            if line.starts_with("## Purpose") {
+                in_purpose = true;
+                continue;
+            }
+            if in_purpose {
+                if line.starts_with("## ") {
+                    break; // Next section
+                }
+                let trimmed = line.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with("<!--") {
+                    return Some(trimmed.to_string());
+                }
+            }
+        }
+        None
     }
 }
 
@@ -223,9 +219,6 @@ impl Tool for WardTool {
                 // List files in the ward
                 let files = self.list_ward_files(&ward_dir);
 
-                // Load ward memory
-                let memory = self.load_ward_memory(&ward_dir);
-
                 // Read AGENTS.md if it exists
                 let agents_md = self.read_agents_md(&ward_dir);
 
@@ -238,7 +231,6 @@ impl Tool for WardTool {
                     "action": if created { "created" } else { "switched" },
                     "files": files,
                     "file_count": files.len(),
-                    "ward_memory": memory,
                     "agents_md": agents_md,
                 }))
             }
@@ -298,14 +290,14 @@ impl Tool for WardTool {
                 }
 
                 let files = self.list_ward_files(&ward_dir);
-                let memory = self.load_ward_memory(&ward_dir);
+                let agents_md = self.read_agents_md(&ward_dir);
 
                 Ok(json!({
                     "found": true,
                     "name": name,
                     "files": files,
                     "file_count": files.len(),
-                    "ward_memory": memory,
+                    "agents_md": agents_md,
                 }))
             }
 
@@ -378,7 +370,7 @@ mod tests {
         std::fs::create_dir(ward_dir.join("src")).unwrap();
 
         // Create hidden file (should be excluded)
-        std::fs::write(ward_dir.join(".ward_memory.json"), "{}").unwrap();
+        std::fs::write(ward_dir.join(".hidden_file"), "{}").unwrap();
 
         let files = tool.list_ward_files(&ward_dir);
         assert_eq!(files.len(), 3);
@@ -388,43 +380,18 @@ mod tests {
     }
 
     #[test]
-    fn test_load_ward_memory_missing() {
+    fn test_ward_description_from_agents_md() {
         let dir = TempDir::new().unwrap();
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
         let tool = WardTool::new(fs);
 
-        let memory = tool.load_ward_memory(dir.path());
-        assert_eq!(memory, json!({}));
-    }
-
-    #[test]
-    fn test_load_ward_memory_with_data() {
-        let dir = TempDir::new().unwrap();
-        let fs = Arc::new(TestFs {
-            base: dir.path().to_path_buf(),
-        });
-        let tool = WardTool::new(fs);
-
-        let memory_data = json!({
-            "entries": {
-                "purpose": {
-                    "value": "Stock tracker using yfinance",
-                    "tags": [],
-                    "created_at": "2024-01-01T00:00:00Z",
-                    "updated_at": "2024-01-01T00:00:00Z"
-                }
-            }
-        });
         std::fs::write(
-            dir.path().join(WARD_MEMORY_FILE),
-            serde_json::to_string(&memory_data).unwrap(),
+            dir.path().join("AGENTS.md"),
+            "# My Project\n\n## Purpose\nStock tracker using yfinance\n\n## Structure\n",
         )
         .unwrap();
-
-        let memory = tool.load_ward_memory(dir.path());
-        assert!(memory.get("entries").is_some());
 
         let desc = tool.ward_description(dir.path());
         assert_eq!(desc, Some("Stock tracker using yfinance".to_string()));

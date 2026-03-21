@@ -39,7 +39,7 @@ cargo test -p agent-tools      # 25 tests
 ### Memory (`tools/memory.rs`)
 | Tool | Risk | Description |
 |------|------|-------------|
-| `memory` | Safe | Persistent key-value storage. Scopes: `shared`, `agent`, `ward`. Ward scope stores to `wards/{ward_id}/.ward_memory.json`. |
+| `memory` | Safe | Persistent key-value storage. Scopes: `shared`, `agent`. |
 
 ### Web (`tools/web.rs`)
 | Tool | Risk | Description |
