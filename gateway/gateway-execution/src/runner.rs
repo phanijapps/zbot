@@ -203,6 +203,8 @@ impl ExecutionRunner {
         let state_service = self.state_service.clone();
         let workspace_cache = self.workspace_cache.clone();
         let delegation_semaphore = self.delegation_semaphore.clone();
+        let memory_repo = self.memory_repo.clone();
+        let embedding_client = self.embedding_client.clone();
 
         tokio::spawn(async move {
             while let Some(request) = rx.recv().await {
@@ -233,6 +235,8 @@ impl ExecutionRunner {
                     state_service.clone(),
                     workspace_cache.clone(),
                     permit,
+                    memory_repo.clone(),
+                    embedding_client.clone(),
                 )
                 .await
                 {
@@ -265,6 +269,9 @@ impl ExecutionRunner {
         let log_service = self.log_service.clone();
         let state_service = self.state_service.clone();
         let workspace_cache = self.workspace_cache.clone();
+        let memory_repo = self.memory_repo.clone();
+        let embedding_client = self.embedding_client.clone();
+        let distiller = self.distiller.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -307,6 +314,9 @@ impl ExecutionRunner {
                             log_service.clone(),
                             state_service.clone(),
                             workspace_cache.clone(),
+                            memory_repo.clone(),
+                            embedding_client.clone(),
+                            distiller.clone(),
                         )
                         .await
                         {
@@ -1087,6 +1097,9 @@ async fn invoke_continuation(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
+    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    distiller: Option<Arc<super::distillation::SessionDistiller>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1159,8 +1172,18 @@ async fn invoke_continuation(
         .and_then(|s| s.ward_id);
 
     // Build executor
-    let builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
+    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
+
+    // Build fact store for continuation (so save_fact uses DB, not file fallback)
+    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {
+        Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), embedding_client.clone()))
+            as Arc<dyn zero_core::MemoryFactStore>
+    });
+    if let Some(fs) = fact_store {
+        builder = builder.with_fact_store(fs);
+    }
+
     let executor = builder
         .build(
             &agent,
@@ -1330,6 +1353,17 @@ async fn invoke_continuation(
                     None,
                 )
                 .await;
+
+                // Fire-and-forget session distillation
+                if let Some(distiller) = distiller {
+                    let sid = session_id_clone.clone();
+                    let aid = agent_id_clone.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = distiller.distill(&sid, &aid).await {
+                            tracing::warn!("Continuation distillation failed: {}", e);
+                        }
+                    });
+                }
             }
             Err(e) => {
                 crash_execution(

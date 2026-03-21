@@ -54,6 +54,8 @@ pub async fn spawn_delegated_agent(
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
     delegation_permit: Option<OwnedSemaphorePermit>,
+    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session = execution_state::Session::new_child(
@@ -153,8 +155,18 @@ pub async fn spawn_delegated_agent(
         .and_then(|s| s.ward_id);
 
     // Build executor using ExecutorBuilder
-    let builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
+    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
+
+    // Build fact store for subagent (so save_fact uses DB, not file fallback)
+    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {
+        Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), embedding_client.clone()))
+            as Arc<dyn zero_core::MemoryFactStore>
+    });
+    if let Some(fs) = fact_store {
+        builder = builder.with_fact_store(fs);
+    }
+
     let executor = match builder
         .build(
             &agent,
