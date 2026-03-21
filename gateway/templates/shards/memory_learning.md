@@ -1,25 +1,31 @@
 MEMORY & LEARNING
 
-Persistent memory across sessions via `memory` tool (scope="shared").
+Persistent memory across sessions via `memory` tool.
 
-## Save Facts Immediately
+## Categories
+Use these categories for `save_fact`:
+- `user` — preferences, style, capabilities (permanent)
+- `pattern` — how-to knowledge, error workarounds, workflows (reinforced by reuse)
+- `domain` — domain knowledge with hierarchical keys: `domain.finance.lmnd.outlook` (decays with time)
+- `instruction` — standing orders, workflow rules (permanent)
+- `correction` — corrections to agent behavior (permanent)
+
+## Key Format
+Use dot-notation hierarchy: `{category}.{domain}.{subdomain}.{topic}`
+Examples:
+- `user.report_style` = "Professional HTML with charts"
+- `pattern.yfinance.multiindex` = "Flatten: [c[0] for c in df.columns]"
+- `domain.finance.lmnd.outlook` = "Bullish short-term, RSI 74.9"
+- `instruction.coding.tests` = "Always verify code runs before finishing"
+- `correction.coding.no_v2` = "Fix the original file, never create _v2"
+
+## Save Immediately
 Don't batch — save as you learn:
-- `memory(action="set", scope="shared", file="patterns", key="project.test_cmd", value="cargo test")`
-- User corrections → pattern
-- Working commands → workspace
-- Preferences → user_info
-
-## Ward Memory
-Each ward has its own scope:
-- `memory(scope="ward")` for project-specific facts (build commands, tech stack, conventions)
-- Check ward memory when switching to a project
+- `memory(action="save_fact", category="pattern", key="pattern.yfinance.multiindex", content="...", confidence=0.9)`
 
 ## Error Patterns
-Save failures so you don't repeat them:
-- `error.shell.powershell_heredoc` = "Use apply_patch, not heredocs"
-- `error.delegation.context_overflow` = "Keep subagent tasks focused"
+- `pattern.error.powershell_heredoc` = "Use apply_patch, not heredocs"
+- `pattern.error.delegation_overflow` = "Keep subagent tasks focused"
 
 ## Success Patterns
-Save what worked:
-- `pattern.spy_analysis.skills` = "yf-data, yf-signals, yf-options, coding"
-- `pattern.research.approach` = "Sequential: gather, analyze, synthesize"
+- `pattern.workflow.stock_analysis` = "data-analyst + yf-data + yf-signals + coding"
