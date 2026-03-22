@@ -207,7 +207,6 @@ impl ShellTool {
     /// substring matching on their content (e.g., python scripts containing "rm",
     /// cat heredocs with backticks).
     const ALLOWED_PREFIXES: &'static [&'static str] = &[
-        "cat ",
         "python ",
         "python3 ",
         "python.exe ",
@@ -218,6 +217,17 @@ impl ShellTool {
     fn validate_command(command: &str) -> Result<()> {
         let command_lower = command.to_lowercase();
         let command_normalized = command_lower.replace("  ", " ").trim().to_string();
+
+        // Block file-writing shell commands — use apply_patch instead.
+        // Checked before the allowlist so that e.g. `cat > file` and `python << 'EOF'`
+        // are caught even though `cat ` / `python ` would normally bypass validation.
+        // apply_patch heredocs are excluded inside is_file_writing_command().
+        if is_file_writing_command(&command_normalized) {
+            return Err(ZeroError::Tool(
+                "Use apply_patch for file creation/editing, not shell commands. \
+                 Example: shell(command=\"apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path/file.py\\n+content\\n*** End Patch\\nEOF\")".to_string()
+            ));
+        }
 
         // Allowlist: commands that bypass validation to avoid false positives
         for prefix in Self::ALLOWED_PREFIXES {
@@ -608,6 +618,49 @@ impl Tool for ShellTool {
 }
 
 // ============================================================================
+// FILE-WRITING DETECTION
+// ============================================================================
+
+/// Detect shell commands that write files — these should use apply_patch instead.
+fn is_file_writing_command(command: &str) -> bool {
+    let cmd = command.to_lowercase();
+
+    // PowerShell file-writing cmdlets
+    if cmd.contains("set-content") || cmd.contains("out-file") || cmd.contains("add-content") {
+        return true;
+    }
+
+    // PowerShell here-string to file: @" ... "@ or @' ... '@
+    // These create multi-line content and pipe to file
+    if (cmd.contains("@\"") || cmd.contains("@'")) && !cmd.contains("apply_patch") {
+        return true;
+    }
+
+    // Unix file-writing: cat > file, echo > file (but NOT cat file or echo text)
+    // Direct redirects (cat > file, echo > file)
+    if cmd.contains("cat >") || cmd.contains("echo >") || cmd.contains("printf >") {
+        return true;
+    }
+
+    // echo/printf with redirect anywhere: echo 'text' > file.txt
+    if (cmd.starts_with("echo ") || cmd.starts_with("printf ")) && cmd.contains(" > ") {
+        return true;
+    }
+
+    // Heredoc: << 'EOF' or << EOF (but not inside apply_patch)
+    if cmd.contains("<< '") || cmd.contains("<<'") || cmd.contains("<< \"") {
+        if !cmd.contains("apply_patch") {
+            return true;
+        }
+    }
+
+    // Python file writing via -c: python -c "open('file', 'w').write(...)"
+    // This is too broad — skip for now, apply_patch enforcement handles the intent
+
+    false
+}
+
+// ============================================================================
 // WINDOWS ADMIN CHECK
 // ============================================================================
 
@@ -680,9 +733,11 @@ mod tests {
         assert!(ShellTool::validate_command("python -c 'x = `cmd`; rm something'").is_ok());
         assert!(ShellTool::validate_command("python3 run.py --flag").is_ok());
 
-        // cat with heredoc content that has backticks
-        assert!(ShellTool::validate_command("cat > file.py << 'EOF'\nrm -rf /\nEOF").is_ok());
+        // cat reading is fine (no longer in ALLOWED_PREFIXES, but doesn't trigger any rules)
         assert!(ShellTool::validate_command("cat file.txt").is_ok());
+
+        // cat writing is blocked — use apply_patch instead
+        assert!(ShellTool::validate_command("cat > file.py << 'EOF'\nrm -rf /\nEOF").is_err());
     }
 
     #[test]
@@ -696,5 +751,38 @@ mod tests {
         let (result, truncated) = ShellTool::truncate_output(long, 100);
         assert!(truncated);
         assert!(result.contains("[Output truncated"));
+    }
+
+    #[test]
+    fn test_file_writing_commands_blocked() {
+        // PowerShell
+        assert!(ShellTool::validate_command("Set-Content -Path 'file.py' -Value 'code'").is_err());
+        assert!(ShellTool::validate_command("'hello' | Out-File test.txt").is_err());
+        assert!(ShellTool::validate_command("Add-Content -Path log.txt -Value 'line'").is_err());
+
+        // PowerShell here-strings
+        assert!(ShellTool::validate_command("@\"\ncode\n\"@ | Set-Content file.py").is_err());
+
+        // Unix redirects
+        assert!(ShellTool::validate_command("cat > file.py << 'EOF'").is_err());
+        assert!(ShellTool::validate_command("echo 'hello' > output.txt").is_err());
+
+        // Heredocs (not apply_patch)
+        assert!(ShellTool::validate_command("python << 'EOF'\nprint('hi')\nEOF").is_err());
+    }
+
+    #[test]
+    fn test_apply_patch_not_blocked() {
+        // apply_patch should NOT be blocked
+        assert!(ShellTool::validate_command("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: test.py\n+hello\n*** End Patch\nEOF").is_ok());
+    }
+
+    #[test]
+    fn test_reading_commands_not_blocked() {
+        // Reading commands should NOT be blocked
+        assert!(ShellTool::validate_command("Get-Content file.py").is_ok());
+        assert!(ShellTool::validate_command("cat file.py").is_ok());
+        assert!(ShellTool::validate_command("python script.py").is_ok());
+        assert!(ShellTool::validate_command("python -c \"print('hello')\"").is_ok());
     }
 }
