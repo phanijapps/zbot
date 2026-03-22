@@ -219,8 +219,8 @@ impl ShellTool {
         let command_normalized = command_lower.replace("  ", " ").trim().to_string();
 
         // Block file-writing shell commands — use apply_patch instead.
-        // Checked before the allowlist so that e.g. `cat > file` and `python << 'EOF'`
-        // are caught even though `cat ` / `python ` would normally bypass validation.
+        // Checked before the allowlist so that e.g. `cat > file` is caught
+        // even though `cat ` would normally bypass validation.
         // apply_patch heredocs are excluded inside is_file_writing_command().
         if is_file_writing_command(&command_normalized) {
             return Err(ZeroError::Tool(
@@ -648,9 +648,9 @@ fn is_file_writing_command(command: &str) -> bool {
         return true;
     }
 
-    // Heredoc: << 'EOF' or << EOF (but not inside apply_patch)
+    // Heredoc: << 'EOF' or << EOF (but not inside apply_patch or python stdin)
     if cmd.contains("<< '") || cmd.contains("<<'") || cmd.contains("<< \"") {
-        if !cmd.contains("apply_patch") {
+        if !cmd.contains("apply_patch") && !cmd.starts_with("python") {
             return true;
         }
     }
@@ -768,8 +768,8 @@ mod tests {
         assert!(ShellTool::validate_command("cat > file.py << 'EOF'").is_err());
         assert!(ShellTool::validate_command("echo 'hello' > output.txt").is_err());
 
-        // Heredocs (not apply_patch)
-        assert!(ShellTool::validate_command("python << 'EOF'\nprint('hi')\nEOF").is_err());
+        // Heredocs (not apply_patch) — but python heredocs are allowed (stdin, not file writing)
+        assert!(ShellTool::validate_command("python << 'EOF'\nprint('hi')\nEOF").is_ok());
     }
 
     #[test]

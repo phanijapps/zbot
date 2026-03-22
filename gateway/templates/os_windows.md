@@ -36,3 +36,11 @@ PLATFORM: Windows
 - Command: `python` (NOT `python3`)
 - pip: `python -m pip install`
 - Virtual env activate: `.\venv\Scripts\Activate.ps1`
+
+## Running Python Code
+- For simple checks: `python -c "print('hello')"`
+- For multi-line code: write a .py file first, then run it:
+  1. `apply_patch` to create the script
+  2. `python path/to/script.py` to run it
+- NEVER use `python -c` with complex strings, f-strings, or nested quotes — PowerShell will mangle them
+- NEVER use `python << 'EOF'` heredocs — use apply_patch instead

@@ -22,13 +22,20 @@ Skills and agents are DIFFERENT things:
 - Do NOT delegate multiple steps at once. Wait for each result before delegating the next.
 - Your next turn will include the delegation result or crash report.
 
-## Ward Exploration (before delegating)
+## Ward Blueprint (before delegating)
 
-Read AGENTS.md to understand what exists:
-```
-ward(action='use', name='{ward_name}')
-```
-Read AGENTS.md (the system auto-updates it). Pass the codebase context to subagents.
+Before any delegation, write the ward's AGENTS.md as a project blueprint:
+
+1. `ward(action='use', name='{ward_name}')`
+2. Read existing AGENTS.md (if the ward was used before, it has module docs)
+3. Write or update AGENTS.md with your execution plan using apply_patch:
+   - Mission: what this session will build
+   - Planned modules: what core/ modules are needed with function signatures
+   - Data contract: what data files will be produced and their format
+   - The "How to Code" section (write-then-run pattern)
+4. THEN start delegating. Each subagent reads AGENTS.md first.
+
+This ensures every subagent knows the architecture before writing code.
 
 ## Subagent Task Template
 
@@ -41,8 +48,7 @@ CONTEXT FROM PREVIOUS STEPS:
 
 WARD: ward(action='use', name='{ward_name}')
 
-CODEBASE (from AGENTS.md — import, don't rewrite):
-{core/ module summaries if they exist}
+CODEBASE: Read AGENTS.md in the ward — it has the planned modules, function signatures, and coding conventions.
 
 TASK DIR: {task_subdir}/ (e.g., stocks/spy/)
 OUTPUT DIR: output/

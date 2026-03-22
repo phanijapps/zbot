@@ -26,3 +26,10 @@ PLATFORM: Linux
 - Command: `python3` (most distros). Check with `which python3`.
 - pip: `python3 -m pip install`
 - Virtual env activate: `source venv/bin/activate`
+
+## Running Python Code
+- For simple checks: `python3 -c "print('hello')"`
+- For multi-line code, either:
+  - Use a heredoc: `python3 << 'PYEOF'` ... `PYEOF`
+  - Or write a .py file first with `apply_patch`, then `python3 path/to/script.py`
+- Prefer `apply_patch` + run for scripts longer than ~10 lines
