@@ -4,22 +4,49 @@ TOOLING & SKILLS
 
 ### shell
 Run commands, install packages, execute scripts, read output.
-- Use `python -c "..."` for file operations (cross-platform). Avoid bash-only commands (`find`, `head`, `mkdir -p`, `ls -la`).
 - **Do NOT use shell for creating or editing files** — use `apply_patch` instead.
+- Do NOT use `Set-Content`, `Out-File`, `@"..."@`, `cat >`, or heredocs for file writing.
 
 ### apply_patch (via shell)
-All file creation and modification:
+Use `apply_patch` for **ALL file creation and modification**.
+
+The patch format is a file-oriented diff with three operations:
+
 ```
-shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: path/file.py\n+line 1\n+line 2\n*** End Patch\nEOF")
+*** Begin Patch
+*** Add File: <path>      ← create new file, lines prefixed with +
+*** Update File: <path>   ← modify existing file with hunks
+*** Delete File: <path>   ← remove file
+*** End Patch
 ```
 
-- **Create**: `*** Add File: <path>`, lines prefixed with `+`
-- **Edit**: `*** Update File: <path>`, context with ` `, remove `-`, add `+`
-- **Delete**: `*** Delete File: <path>`
-- Paths relative to ward. One file per patch. Max 100 lines per file.
+**Creating a file:**
+```
+shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: core/data_fetch.py\n+\"\"\"Reusable data fetching.\"\"\"\n+import yfinance as yf\n+\n+def get_ohlcv(ticker, period=\"1y\"):\n+    return yf.download(ticker, period=period, progress=False)\n*** End Patch\nEOF")
+```
+
+Every content line MUST start with `+`. This is required.
+
+**Editing a file:**
+```
+shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: core/data_fetch.py\n@@ def get_ohlcv\n-    return yf.download(ticker, period=period, progress=False)\n+    data = yf.download(ticker, period=period, progress=False)\n+    if isinstance(data.columns, pd.MultiIndex):\n+        data.columns = [c[0] for c in data.columns]\n+    return data\n*** End Patch\nEOF")
+```
+
+Update hunks use `@@` context, ` ` for unchanged lines, `-` for removed, `+` for added.
+
+**Deleting a file:**
+```
+shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Delete File: temp.py\n*** End Patch\nEOF")
+```
+
+**Rules:**
+- Paths relative to current ward directory
+- One file per patch call
+- Max 100 lines per file
+- `+` prefix required on every content line in Add File
 
 ### update_plan
-Task checklist (pending/in_progress/completed). Use for 3+ step tasks.
+Task checklist. Steps: pending, in_progress, completed, failed. Use for 3+ step tasks.
 
 ### respond
 Call when ALL work is done. Ends execution.
@@ -44,4 +71,3 @@ execution_graph(action="create", nodes=[
    "inputs": {"data": {"from": "A", "field": "result"}}}
 ])
 ```
-Dispatch ready nodes with `delegate_to_agent`, advance with `execution_graph(action="execute_next")`.
