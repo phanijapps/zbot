@@ -37,6 +37,9 @@ pub struct DelegationRequest {
     pub task: String,
     /// Optional context to pass to the child agent
     pub context: Option<Value>,
+    /// Optional max iterations for the child agent execution loop.
+    /// Defaults to 25 if not specified.
+    pub max_iterations: Option<u32>,
 }
 
 // ============================================================================

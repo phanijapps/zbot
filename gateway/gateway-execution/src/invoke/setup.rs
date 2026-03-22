@@ -272,9 +272,16 @@ fn append_system_context(instructions: &str, paths: &SharedVaultPaths) -> String
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
+    // Subagent discipline: execute directly, don't over-plan
+    let subagent_note = "\n\n# --- SUBAGENT RULES ---\n\
+        You are a specialist executing a specific task. Do NOT create complex plans.\n\
+        Execute your task directly in as few tool calls as possible.\n\
+        Use apply_patch for ALL file creation and editing.\n\
+        If your task fails after 2 attempts, respond with what you accomplished and what failed.\n";
+
     format!(
-        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}",
-        instructions, os_context, tooling, memory_shard
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}{}",
+        instructions, os_context, tooling, memory_shard, subagent_note
     )
 }
 

@@ -75,6 +75,10 @@ impl Tool for DelegateTool {
                     "type": "boolean",
                     "default": false,
                     "description": "If true, wait for the subagent to complete before continuing. Default is fire-and-forget."
+                },
+                "max_iterations": {
+                    "type": "integer",
+                    "description": "Maximum number of iterations the subagent can run. Defaults to 25 if not specified."
                 }
             },
             "required": ["agent_id", "task"]
@@ -121,6 +125,11 @@ impl Tool for DelegateTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let max_iterations = args
+            .get("max_iterations")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
         // Get parent context from state
         let parent_agent_id = ctx
             .get_state("agent_id")
@@ -153,6 +162,7 @@ impl Tool for DelegateTool {
             task: task.to_string(),
             context,
             wait_for_result,
+            max_iterations,
         });
         ctx.set_actions(actions);
 

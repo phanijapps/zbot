@@ -214,6 +214,7 @@ mod tests {
             task: "do something".to_string(),
             context: None,
             wait_for_result: false,
+            max_iterations: None,
         };
 
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");

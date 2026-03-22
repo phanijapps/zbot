@@ -625,6 +625,7 @@ impl AgentExecutor {
                                 task: delegate.task.clone(),
                                 context: delegate.context.clone(),
                                 wait_for_result: delegate.wait_for_result,
+                                max_iterations: delegate.max_iterations,
                             });
                         }
 

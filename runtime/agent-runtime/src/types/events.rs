@@ -132,6 +132,7 @@ pub enum StreamEvent {
         task: String,
         context: Option<Value>,
         wait_for_result: bool,
+        max_iterations: Option<u32>,
     },
 
     /// Plan update action from the update_plan tool.
