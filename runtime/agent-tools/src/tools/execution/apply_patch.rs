@@ -67,6 +67,14 @@ const EOF_MARKER: &str = "*** End of File";
 const CONTEXT_MARKER: &str = "@@ ";
 const EMPTY_CONTEXT: &str = "@@";
 
+/// Check if a line is a patch format marker (not file content).
+fn is_patch_marker(line: &str) -> bool {
+    let trimmed = line.trim();
+    trimmed.starts_with("*** ")
+        || trimmed == "@@"
+        || trimmed.starts_with("@@ ")
+}
+
 // ============================================================================
 // PARSER
 // ============================================================================
@@ -99,13 +107,16 @@ fn check_boundaries(lines: &[&str]) -> Result<(), PatchError> {
     let first = lines.first().map(|l| l.trim());
     let last = lines.last().map(|l| l.trim());
     match (first, last) {
-        (Some(f), Some(l)) if f == BEGIN_PATCH && l == END_PATCH => Ok(()),
-        (Some(f), _) if f != BEGIN_PATCH => Err(PatchError::InvalidPatch(
-            "First line must be '*** Begin Patch'".into(),
-        )),
-        _ => Err(PatchError::InvalidPatch(
-            "Last line must be '*** End Patch'".into(),
-        )),
+        (Some(f), Some(l)) if f == BEGIN_PATCH && (l == END_PATCH || l.starts_with(END_PATCH)) => Ok(()),
+        (Some(f), _) if f != BEGIN_PATCH => Err(PatchError::InvalidPatch(format!(
+            "Patch must start with '*** Begin Patch'. Got: '{}'. \
+             Format: apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+content\\n*** End Patch\\nEOF",
+            f
+        ))),
+        _ => Err(PatchError::InvalidPatch(format!(
+            "Patch must end with '*** End Patch'. \
+             Format: apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+content\\n*** End Patch\\nEOF"
+        ))),
     }
 }
 
@@ -122,7 +133,8 @@ fn try_heredoc_unwrap<'a>(lines: &'a [&'a str]) -> Result<&'a [&'a str], PatchEr
         }
     }
     Err(PatchError::InvalidPatch(
-        "First line must be '*** Begin Patch'".into(),
+        "Patch must start with '*** Begin Patch'. \
+         Format: apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+content\\n*** End Patch\\nEOF".into(),
     ))
 }
 
@@ -134,10 +146,21 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
         let mut consumed = 1;
         for line in &lines[1..] {
             if let Some(added) = line.strip_prefix('+') {
+                // Standard: line has + prefix
                 contents.push_str(added);
                 contents.push('\n');
                 consumed += 1;
+            } else if !is_patch_marker(line) && !line.trim().is_empty() {
+                // Lenient: auto-fix missing + prefix for content lines
+                contents.push_str(line);
+                contents.push('\n');
+                consumed += 1;
+            } else if line.trim().is_empty() {
+                // Preserve blank lines in file content
+                contents.push('\n');
+                consumed += 1;
             } else {
+                // Hit a patch marker — stop
                 break;
             }
         }
@@ -210,7 +233,11 @@ fn parse_one_hunk(lines: &[&str], line_number: usize) -> Result<(Hunk, usize), P
     }
 
     Err(PatchError::InvalidHunk {
-        message: format!("'{}' is not a valid hunk header", first),
+        message: format!(
+            "Expected a file operation (*** Add File: / *** Update File: / *** Delete File:). \
+             Got: '{}'. If adding a file, each content line must start with '+'.",
+            first
+        ),
         line_number,
     })
 }
@@ -1375,5 +1402,60 @@ mod tests {
         }];
         let result = apply_hunks(&hunks, &ward_dir);
         assert!(result.is_ok());
+    }
+
+    // ---- Lenient parsing tests ----
+
+    #[test]
+    fn test_add_file_lenient_no_plus_prefix() {
+        let patch = "*** Begin Patch\n*** Add File: test.py\nimport os\nimport sys\nprint('hello')\n*** End Patch";
+        let hunks = parse_patch(patch).unwrap();
+        assert_eq!(hunks.len(), 1);
+        match &hunks[0] {
+            Hunk::AddFile { path, contents } => {
+                assert_eq!(path, &PathBuf::from("test.py"));
+                assert!(contents.contains("import os"));
+                assert!(contents.contains("import sys"));
+                assert!(contents.contains("print('hello')"));
+            }
+            _ => panic!("Expected AddFile"),
+        }
+    }
+
+    #[test]
+    fn test_add_file_lenient_mixed_plus_and_bare() {
+        let patch = "*** Begin Patch\n*** Add File: test.py\n+import os\nimport sys\n+print('hello')\n*** End Patch";
+        let hunks = parse_patch(patch).unwrap();
+        match &hunks[0] {
+            Hunk::AddFile { path: _, contents } => {
+                assert!(contents.contains("import os"));
+                assert!(contents.contains("import sys"));
+                assert!(contents.contains("print('hello')"));
+            }
+            _ => panic!("Expected AddFile"),
+        }
+    }
+
+    #[test]
+    fn test_add_file_with_blank_lines() {
+        let patch = "*** Begin Patch\n*** Add File: test.py\n+import os\n+\n+def main():\n+    pass\n*** End Patch";
+        let hunks = parse_patch(patch).unwrap();
+        match &hunks[0] {
+            Hunk::AddFile { contents, .. } => {
+                assert!(contents.contains("import os"));
+                assert!(contents.contains("\n\n")); // blank line preserved
+                assert!(contents.contains("def main():"));
+            }
+            _ => panic!("Expected AddFile"),
+        }
+    }
+
+    #[test]
+    fn test_error_message_includes_format_hint() {
+        let patch = "wrong start\n*** End Patch";
+        let err = parse_patch(patch).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Begin Patch"), "Error should mention Begin Patch: {}", msg);
+        assert!(msg.contains("Format:"), "Error should include format hint: {}", msg);
     }
 }
