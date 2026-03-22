@@ -8,121 +8,111 @@ Evidence from sess-ce764111: 16 delegations for a 6-step task. Root crashed at 2
 
 ## Design
 
-### 1. Sequential Delegation Per Session
+### 1. Sequential Delegation Enforcement
 
-**Current:** Root fires 6 `delegate_to_agent` calls. The delegation handler spawns them concurrently via semaphore (max 3). Root then polls `execution_graph(status)` burning iterations.
+**Current:** Root fires 6 `delegate_to_agent` calls in one turn. The delegation handler spawns them concurrently. Continuation only fires when ALL `pending_delegations` reach 0, so root can't make mid-flow decisions.
 
-**Fix:** The delegation handler processes requests **one at a time per session**. When a delegation request arrives:
-1. Check if there's an active (running) delegation for this session
-2. If yes: queue the request, log it, process when the current one completes
-3. If no: spawn immediately
+**Fix (two layers):**
 
-The global semaphore drops from 3 to **2** (limits total concurrent delegations across all sessions).
+**Layer A — Tool-level warning:** The `delegate_to_agent` tool checks if there are already active delegations for this session. If yes, it still processes the request (to avoid breaking existing flows) but returns a warning in the response:
+```
+"Warning: You already have N active delegation(s). Delegate one step at a time and wait for the result. The system will resume you automatically when each delegation completes."
+```
 
-**Implementation:**
-- `runner.rs` `spawn_delegation_handler`: maintain a `HashMap<String, VecDeque<DelegationRequest>>` keyed by session_id
-- When a delegation completes (success or failure), check the queue for that session and spawn the next one
-- The existing `Semaphore::new(3)` changes to `Semaphore::new(2)`
+**Layer B — Handler-level sequential queue:** The delegation handler maintains a per-session queue (`HashMap<String, VecDeque<DelegationRequest>>`). When a request arrives:
+1. If no active delegation for this session: spawn immediately
+2. If active delegation exists: queue the request
+3. When a delegation completes (success or failure): pop next from queue, spawn it
+4. Each queued request completion decrements `pending_delegations`
 
-**Effect:** Root fires 6 delegate calls → first one spawns immediately, other 5 queue → first completes → continuation fires → root sees result → decides whether to continue → next delegation spawns. Sequential by default. No polling needed.
+This means if root fires 6, they run one at a time. Each completion triggers the next, and `pending_delegations` decrements correctly. Continuation fires after the last one completes.
+
+**Note:** This does NOT enable mid-flow decisions (root doesn't resume between queued delegations). But it prevents resource exhaustion and API rate limits. Mid-flow decisions come from the prompt fix (root should delegate one at a time).
+
+**Global semaphore:** `Semaphore::new(3)` → `Semaphore::new(2)`.
 
 ### 2. Kill Orphans on Root Completion/Crash
 
-**Current:** When root crashes with pending_delegations: 3, those subagents keep running indefinitely.
+**Current:** When root crashes with pending_delegations: 3, subagents keep running indefinitely.
 
-**Fix:** When a root execution completes or crashes, cancel all in-flight delegations for that session.
+**Fix:** When root execution completes or crashes, call `cancel_session_delegations(session_id)`:
 
-**Implementation:**
-- `runner.rs`: after root execution completes/crashes (both Ok and Err branches in the spawn task), call a new function `cancel_session_delegations(session_id)`
-- `cancel_session_delegations`: iterate `DelegationRegistry`, find all entries for this session, call `handle.request_stop()` on each
-- Subagent executors already check `handle.is_stop_requested()` on each iteration — they'll stop on the next check
-- Mark stopped child executions as "cancelled" (not "crashed")
-- Also drain the per-session delegation queue (from change 1) — discard queued requests
+1. Add `get_by_session_id()` method to `DelegationRegistry` — iterates entries, filters by `ctx.session_id`, returns list of `(execution_id, DelegationContext)` pairs
+2. For each active delegation: find the corresponding `ExecutionHandle` in the handles map (keyed by conversation_id — use `ctx.parent_conversation_id` to reconstruct the child conversation_id pattern, OR store `child_conversation_id` in the context)
+3. Call `handle.stop()` (NOT `request_stop()` — the actual method is `stop()`) on each child handle
+4. Mark each child execution as `ExecutionStatus::Cancelled` (already exists in the enum — no schema migration needed)
+5. Drain the per-session delegation queue — for each discarded request:
+   - Mark `request.child_execution_id` as `Cancelled` in the DB
+   - Call `state_service.complete_delegation(session_id)` to decrement `pending_delegations`
+6. Call `state_service.complete_session(session_id)` to finalize
 
-**New execution status:** Add `cancelled` alongside `completed` and `crashed`. Cancelled means "parent stopped us, not an error."
+**Key-mismatch note:** The `DelegationRegistry` is keyed by `execution_id`, the handles map by `conversation_id`. To bridge: store `child_conversation_id` in the `DelegationContext` (it's already constructed in spawn.rs — just needs to be saved to the context).
 
 ### 3. Graceful Failure Acceptance
 
-**Current:** Root re-creates entire plan when delegations fail. Never marks steps as failed. Enters re-plan/re-delegate loop until it crashes.
+**Current:** Root re-creates entire plan when delegations fail. Enters re-plan/re-delegate loop.
 
-**Fix (prompt):** Planning autonomy shard update:
+**Fix (prompt):** Replace "Self-Healing on Failure" section in `planning_autonomy.md`:
 ```
 When a delegation fails:
 1. Read the structured crash report. Note what was accomplished.
-2. Retry the FAILED STEP once with a simpler task.
-3. If the retry also fails, mark the step FAILED and move to the next step.
+2. Retry the FAILED STEP once with a simpler task description.
+3. If the retry also fails, mark the step "failed" and move to the next step.
 4. NEVER re-create the plan. Update step statuses on the existing plan.
 5. If more than half your steps have failed, call respond() with partial results.
 6. Include in your response: what succeeded, what failed, and why.
+
+After delegating a step, the system will automatically resume you when it completes.
+Do NOT poll with execution_graph(status). Do NOT use Start-Sleep. Just wait.
 ```
 
-**Fix (code):** The `update_plan` tool detects plan replacement and warns:
-- If a plan already exists AND the new plan has all steps set to "pending" (a full reset), return a warning:
-  `"Warning: You are replacing an existing plan. Update step statuses instead of creating a new plan. If you need to re-plan, mark completed steps as completed in the new plan."`
-- Don't block — just warn. The LLM can still override, but the warning nudges correct behavior.
+**Fix (code) — Plan replacement warning:** In the `update_plan` tool:
+- If a plan already exists with completed/failed steps AND the new plan has all steps "pending" (full reset), return warning:
+  `"Warning: You are replacing an existing plan. Update step statuses instead."`
+- Non-blocking — just a warning in the response.
 
-**Implementation:** In `runtime/agent-tools/src/tools/execution/plan.rs` (or wherever `update_plan` is implemented), check:
-```rust
-if existing_plan_has_completed_steps && new_plan_all_pending {
-    // Return warning alongside the update
-}
-```
+**Fix (code) — Add "failed" status:** The `update_plan` schema currently allows `["pending", "in_progress", "completed"]`. Add `"failed"` to the enum so the LLM can mark steps as failed per the prompt guidance.
 
 ### 4. Subagent Plan Cap
 
-**Current:** Subagents create 9-15 step plans for simple delegated tasks.
+**Current:** Subagents create 9-15 step plans for simple tasks.
 
-**Fix:** The `update_plan` tool limits plan size based on context. If the executor is a subagent (has delegation context / is not root):
-- Max 5 steps in a plan
-- If more than 5 submitted, truncate to 5 and warn:
-  `"Plan truncated to 5 steps. You are a specialist — keep tasks focused."`
+**Fix:** The `update_plan` tool checks if the executor is a delegated subagent. If yes, cap plans at 5 steps. If more submitted, truncate and warn:
+`"Plan truncated to 5 steps. You are a specialist — keep tasks focused."`
 
-**Implementation:** The executor context has a flag or state that indicates whether it's a root or delegated execution. The `update_plan` tool reads this flag. If delegated AND steps > 5, truncate.
+**Detection:** Add `is_delegated: bool` to `ExecutorConfig` (in `runtime/agent-runtime/src/executor.rs`). Set to `true` in `spawn.rs` when building the delegated executor config — inject as initial_state `"app:is_delegated"`. The `update_plan` tool reads `ctx.get_state("app:is_delegated")`.
 
-**How to detect subagent:** The executor config already has `initial_state` which includes `hook_context` with delegation info. Or simpler: add a `is_delegated: bool` field to `ExecutorConfig`, set to `true` in `spawn.rs` when building the delegated executor.
+### 5. No Polling (prompt only)
 
-### 5. No Polling
+**Current:** Root calls `execution_graph(status)` and `Start-Sleep` repeatedly, wasting iterations.
 
-**Current:** Root calls `execution_graph(status)` repeatedly to check delegation progress, wasting iterations.
-
-**Fix (prompt):** Remove any guidance about checking execution graph status. The planning shard should say:
-```
-After delegating a step, the system will automatically resume you when the delegation completes.
-Do NOT poll or check status. Your next turn will include the delegation result.
-```
-
-**Fix (code):** Not needed — the continuation mechanism already handles this. The polling is LLM behavior triggered by prompt patterns. Removing the prompt guidance and adding explicit "do not poll" should stop it.
+**Fix:** Prompt change only (Section 3 above covers this). The continuation mechanism already handles automatic resumption. No code change needed.
 
 ## File Changes
 
 | File | Change |
 |---|---|
-| `gateway/gateway-execution/src/runner.rs` | Sequential delegation queue per session, semaphore 3→2, cancel_session_delegations on root finish |
-| `gateway/gateway-execution/src/delegation/spawn.rs` | Support cancellation status |
-| `gateway/gateway-execution/src/delegation/context.rs` | Queue data structure |
-| `runtime/agent-tools/src/tools/execution/plan.rs` | Plan replacement warning, subagent plan cap |
-| `runtime/agent-runtime/src/executor.rs` | `is_delegated` flag in config |
-| `gateway/templates/shards/planning_autonomy.md` | Graceful failure protocol, no polling guidance |
-| `services/execution-state/src/service.rs` | Add "cancelled" status if not exists |
+| `gateway/gateway-execution/src/runner.rs` | Per-session delegation queue, semaphore 3→2, cancel_session_delegations on root finish, store child_conversation_id in context |
+| `gateway/gateway-execution/src/delegation/spawn.rs` | Pass child_conversation_id to DelegationContext |
+| `gateway/gateway-execution/src/delegation/context.rs` | Add child_conversation_id to DelegationContext, queue drain with execution cancellation |
+| `gateway/gateway-execution/src/delegation/registry.rs` | Add get_by_session_id() method |
+| `runtime/agent-tools/src/tools/execution/update_plan.rs` | Plan replacement warning, "failed" status, subagent plan cap |
+| `runtime/agent-runtime/src/executor.rs` | Add is_delegated to ExecutorConfig |
+| `gateway/gateway-execution/src/invoke/executor.rs` | Set is_delegated in initial_state for delegated executors |
+| `gateway/templates/shards/planning_autonomy.md` | Graceful failure protocol, no polling, one-at-a-time delegation |
+| `runtime/agent-tools/src/tools/agent.rs` | Warning when pending_delegations > 0 |
 
 ## Testing
 
 | Test | What it verifies |
 |---|---|
-| Sequential delegation | Second delegation for same session queues until first completes |
-| Cross-session parallelism | Delegations from different sessions can run concurrently (up to semaphore limit) |
-| Orphan cancellation | Root crash → all child handles get stop signal |
-| Queue drain on cancel | Queued delegations discarded when root finishes |
-| Plan replacement warning | Replacing plan with all-pending triggers warning |
-| Plan update works normally | Updating step statuses on existing plan — no warning |
-| Subagent plan cap | Delegated executor with 10-step plan → truncated to 5 with warning |
+| Sequential queue | Second delegation for same session queues until first completes |
+| Cross-session parallelism | Different sessions can delegate concurrently (up to semaphore 2) |
+| Orphan cancellation | Root crash → all child handles get stop() signal |
+| Queue drain on cancel | Queued delegations marked cancelled, pending_delegations decremented |
+| Plan replacement warning | Replacing completed plan with all-pending triggers warning |
+| Plan update normal | Updating step statuses on existing plan — no warning |
+| Failed status | update_plan with step status "failed" accepted |
+| Subagent plan cap | Delegated executor with 10-step plan → truncated to 5 |
 | Root plan not capped | Root executor with 10-step plan → no truncation |
-
-## What This Does NOT Change
-
-- Subagents can still create plans (up to 5 steps)
-- Root can still call `delegate_to_agent` multiple times (they queue)
-- `execution_graph` tool still works (for complex DAG workflows)
-- Throttle per provider still works
-- Auto-create specialist agents still works
-- Structured crash reports still work
+| Delegate warning | delegate_to_agent with active delegation returns warning |
