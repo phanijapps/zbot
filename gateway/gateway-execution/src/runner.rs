@@ -1652,6 +1652,191 @@ async fn cancel_session_delegations(
 
 /// Auto-update ward AGENTS.md by scanning the directory structure.
 /// Called by the system after delegations complete, before continuation.
+/// Extract Python function signatures from a .py file.
+/// Returns lines like `def fetch_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame`
+/// stripped of the trailing colon.
+fn extract_function_signatures(file_path: &std::path::Path) -> Vec<String> {
+    let content = match std::fs::read_to_string(file_path) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+
+    let mut signatures = Vec::new();
+    let mut in_def = false;
+    let mut current_def = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("def ") {
+            // Start of a function definition
+            in_def = true;
+            current_def = trimmed.to_string();
+            if current_def.contains(')') {
+                // Single-line def — strip trailing `:` or ` -> ...:` keeping the return annotation
+                if let Some(pos) = current_def.rfind("):") {
+                    // e.g. `def foo(x: int) -> str:` — keep up to `)` then check for return annotation
+                    let after_paren = &current_def[pos + 1..];
+                    if after_paren.contains("->") {
+                        // Include the return annotation, strip the final `:`
+                        let full = format!(
+                            "{}{}",
+                            &current_def[..pos + 1],
+                            after_paren[..after_paren.len()]
+                                .trim_end_matches(':')
+                                .trim_end()
+                        );
+                        signatures.push(full);
+                    } else {
+                        signatures.push(current_def[..pos + 1].trim().to_string());
+                    }
+                } else if let Some(pos) = current_def.find(':') {
+                    signatures.push(current_def[..pos].trim().to_string());
+                } else {
+                    signatures.push(current_def.clone());
+                }
+                in_def = false;
+                current_def.clear();
+            }
+        } else if in_def {
+            current_def.push(' ');
+            current_def.push_str(trimmed);
+            if current_def.contains(')') {
+                if let Some(pos) = current_def.rfind("):") {
+                    let after_paren = &current_def[pos + 1..];
+                    if after_paren.contains("->") {
+                        let full = format!(
+                            "{}{}",
+                            &current_def[..pos + 1],
+                            after_paren.trim_end_matches(':').trim_end()
+                        );
+                        signatures.push(full);
+                    } else {
+                        signatures.push(current_def[..pos + 1].trim().to_string());
+                    }
+                } else if let Some(pos) = current_def.find(':') {
+                    signatures.push(current_def[..pos].trim().to_string());
+                } else {
+                    signatures.push(current_def.clone());
+                }
+                in_def = false;
+                current_def.clear();
+            }
+        }
+    }
+
+    signatures
+}
+
+/// Extract the first-line docstring from a Python file.
+fn extract_first_docstring(file_path: &std::path::Path) -> String {
+    std::fs::read_to_string(file_path)
+        .ok()
+        .and_then(|content| {
+            content
+                .lines()
+                .find(|l| l.starts_with("\"\"\"") || l.starts_with("'''"))
+                .map(|l| {
+                    l.trim_start_matches("\"\"\"")
+                        .trim_start_matches("'''")
+                        .trim_end_matches("\"\"\"")
+                        .trim_end_matches("'''")
+                        .trim()
+                        .to_string()
+                })
+        })
+        .unwrap_or_default()
+}
+
+/// Preserve the `## Purpose` section from an existing AGENTS.md, falling back to a default.
+fn extract_purpose_section(agents_md_path: &std::path::Path, ward_id: &str) -> String {
+    if let Ok(existing) = std::fs::read_to_string(agents_md_path) {
+        let mut in_purpose = false;
+        let mut purpose_lines = Vec::new();
+        for line in existing.lines() {
+            if line.starts_with("## Purpose") {
+                in_purpose = true;
+                continue;
+            }
+            if in_purpose {
+                if line.starts_with("## ") {
+                    break;
+                }
+                purpose_lines.push(line.to_string());
+            }
+        }
+        // Trim leading/trailing blank lines
+        let text: String = purpose_lines.join("\n");
+        let text = text.trim().to_string();
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    format!("Domain workspace for {} projects.", ward_id)
+}
+
+/// Format a byte count as a human-readable size string (e.g. "125 KB", "8 KB", "1.2 MB").
+fn format_file_size(bytes: u64) -> String {
+    if bytes >= 1_048_576 {
+        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
+    } else if bytes >= 1024 {
+        format!("{} KB", bytes / 1024)
+    } else {
+        format!("{} B", bytes)
+    }
+}
+
+/// Collect data files (.csv, .json, .txt, .html, .parquet) recursively under a directory.
+/// Returns `(relative_path, size_in_bytes)` pairs, relative to `base_dir`.
+fn collect_data_files(
+    dir: &std::path::Path,
+    base_dir: &std::path::Path,
+) -> Vec<(String, u64)> {
+    let data_extensions = ["csv", "json", "txt", "html", "parquet", "xlsx", "pkl"];
+    let mut result = Vec::new();
+    collect_data_files_recursive(dir, base_dir, &data_extensions, &mut result);
+    result.sort_by(|a, b| a.0.cmp(&b.0));
+    result
+}
+
+fn collect_data_files_recursive(
+    dir: &std::path::Path,
+    base_dir: &std::path::Path,
+    extensions: &[&str],
+    result: &mut Vec<(String, u64)>,
+) {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "__pycache__" {
+            continue;
+        }
+        if path.is_dir() {
+            collect_data_files_recursive(&path, base_dir, extensions, result);
+        } else if path.is_file() {
+            let matches_ext = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .map(|ext| extensions.contains(&ext))
+                .unwrap_or(false);
+            if matches_ext {
+                let rel = path
+                    .strip_prefix(base_dir)
+                    .unwrap_or(&path)
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                let size = std::fs::metadata(&path)
+                    .map(|m| m.len())
+                    .unwrap_or(0);
+                result.push((rel, size));
+            }
+        }
+    }
+}
+
 fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     let ward_dir = vault_dir.join("wards").join(ward_id);
     let agents_md_path = ward_dir.join("AGENTS.md");
@@ -1661,50 +1846,89 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     }
 
     let mut sections = Vec::new();
+
+    // ── Title ──
     sections.push(format!("# {}\n", ward_id));
 
-    // Scan core/ modules
+    // ── Purpose (preserved from existing AGENTS.md) ──
+    let purpose = extract_purpose_section(&agents_md_path, ward_id);
+    sections.push(format!("\n## Purpose\n{}\n", purpose));
+
+    // ── Core Modules with function signatures ──
     let core_dir = ward_dir.join("core");
     if core_dir.exists() {
-        sections.push("## Core Modules\n".to_string());
         if let Ok(entries) = std::fs::read_dir(&core_dir) {
             let mut modules: Vec<_> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().extension().map(|ext| ext == "py").unwrap_or(false))
                 .collect();
             modules.sort_by_key(|e| e.file_name());
-            for entry in modules {
-                let name = entry.file_name().to_string_lossy().to_string();
-                // Read first docstring line
-                let desc = std::fs::read_to_string(entry.path())
-                    .ok()
-                    .and_then(|content| {
-                        content
-                            .lines()
-                            .find(|l| l.starts_with("\"\"\"") || l.starts_with("'''"))
-                            .map(|l| {
-                                l.trim_start_matches("\"\"\"")
-                                    .trim_start_matches("'''")
-                                    .trim_end_matches("\"\"\"")
-                                    .trim_end_matches("'''")
-                                    .trim()
-                                    .to_string()
-                            })
-                    })
-                    .unwrap_or_default();
-                if desc.is_empty() {
-                    sections.push(format!("- `core/{}`\n", name));
-                } else {
-                    sections.push(format!("- `core/{}` — {}\n", name, desc));
+
+            if !modules.is_empty() {
+                sections.push("\n## Core Modules\n".to_string());
+                for entry in &modules {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    let desc = extract_first_docstring(&entry.path());
+
+                    sections.push(format!("### core/{}\n", name));
+                    if !desc.is_empty() {
+                        sections.push(format!("{}\n", desc));
+                    }
+
+                    let sigs = extract_function_signatures(&entry.path());
+                    for sig in &sigs {
+                        // Strip the leading `def ` for display as callable signature
+                        let display = if let Some(rest) = sig.strip_prefix("def ") {
+                            rest.to_string()
+                        } else {
+                            sig.clone()
+                        };
+                        sections.push(format!("- `{}`\n", display));
+                    }
+                    sections.push("\n".to_string());
                 }
             }
+        }
+    }
+
+    // ── Available Data (scan task dirs + output for data files) ──
+    let mut data_files = Vec::new();
+
+    // Scan task directories for data files
+    if let Ok(entries) = std::fs::read_dir(&ward_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir()
+                && !["core", "output", "__pycache__", ".git"].contains(&name.as_str())
+                && !name.starts_with('.')
+            {
+                let mut found = collect_data_files(&path, &ward_dir);
+                data_files.append(&mut found);
+            }
+        }
+    }
+
+    // Also scan output/ for data files
+    let output_dir = ward_dir.join("output");
+    if output_dir.exists() {
+        let mut found = collect_data_files(&output_dir, &ward_dir);
+        data_files.append(&mut found);
+    }
+
+    data_files.sort_by(|a, b| a.0.cmp(&b.0));
+    data_files.dedup_by(|a, b| a.0 == b.0);
+
+    if !data_files.is_empty() {
+        sections.push("## Available Data\n".to_string());
+        for (rel_path, size) in &data_files {
+            sections.push(format!("- `{}` ({})\n", rel_path, format_file_size(*size)));
         }
         sections.push("\n".to_string());
     }
 
-    // Scan task directories (stocks/spy/, stocks/pton/, etc.)
+    // ── Task Directories ──
     let mut task_dirs = Vec::new();
-    // Look for first-level subdirs that aren't core/ or output/
     if let Ok(entries) = std::fs::read_dir(&ward_dir) {
         for entry in entries.filter_map(|e| e.ok()) {
             let path = entry.path();
@@ -1727,11 +1951,7 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
                 // Also include the first-level dir itself if it has files
                 let has_files = std::fs::read_dir(&path)
                     .ok()
-                    .map(|entries| {
-                        entries
-                            .filter_map(|e| e.ok())
-                            .any(|e| e.path().is_file())
-                    })
+                    .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().is_file()))
                     .unwrap_or(false);
                 if has_files {
                     task_dirs.push(name);
@@ -1748,14 +1968,14 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
         sections.push("\n".to_string());
     }
 
-    // Scan output/
-    let output_dir = ward_dir.join("output");
+    // ── Output ──
     if output_dir.exists() {
         if let Ok(entries) = std::fs::read_dir(&output_dir) {
-            let files: Vec<_> = entries
+            let mut files: Vec<_> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| e.path().is_file())
                 .collect();
+            files.sort_by_key(|e| e.file_name());
             if !files.is_empty() {
                 sections.push("## Output\n".to_string());
                 for entry in &files {
@@ -1767,8 +1987,65 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
         }
     }
 
+    // ── How to Code ──
+    // Determine an example module name for the import example
+    let example_import = std::fs::read_dir(&core_dir)
+        .ok()
+        .and_then(|mut entries| {
+            entries.find_map(|e| {
+                let e = e.ok()?;
+                let name = e.file_name().to_string_lossy().to_string();
+                if name.ends_with(".py") && name != "__init__.py" {
+                    let module = name.trim_end_matches(".py").to_string();
+                    let first_fn = extract_function_signatures(&e.path())
+                        .first()
+                        .and_then(|sig| {
+                            // Extract just the function name from `def func_name(...)`
+                            sig.strip_prefix("def ")
+                                .and_then(|rest| rest.split('(').next())
+                                .map(|s| s.to_string())
+                        });
+                    Some((module, first_fn))
+                } else {
+                    None
+                }
+            })
+        });
+
+    let import_example = match example_import {
+        Some((module, Some(func))) => format!("`from core.{} import {}`", module, func),
+        Some((module, None)) => format!("`from core.{} import ...`", module),
+        None => "`from core.<module> import <function>`".to_string(),
+    };
+
+    // Determine an example task dir prefix for the coding guide
+    let task_dir_hint = task_dirs
+        .first()
+        .map(|d| {
+            // Use the top-level portion, e.g. "stocks/spy" -> "stocks/{ticker}"
+            if let Some(slash) = d.find('/') {
+                format!("{}/{{name}}", &d[..slash])
+            } else {
+                format!("{}/", d)
+            }
+        })
+        .unwrap_or_else(|| "tasks/{name}/".to_string());
+
+    sections.push("## How to Code\n".to_string());
+    sections.push("1. Write Python scripts with apply_patch, run with: `python path/to/script.py`\n".to_string());
+    sections.push(format!("2. Import from core/: {}\n", import_example));
+    sections.push(
+        "3. Never use `python -c` for multi-line code — always write a .py file first\n"
+            .to_string(),
+    );
     sections.push(format!(
-        "*Auto-updated: {}*\n",
+        "4. Data files go in `{}/data/`, output files in `output/`\n",
+        task_dir_hint.trim_end_matches('/')
+    ));
+
+    // ── Timestamp ──
+    sections.push(format!(
+        "\n*Auto-updated: {}*\n",
         chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
     ));
 
