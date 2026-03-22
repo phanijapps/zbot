@@ -71,6 +71,10 @@ pub struct DelegationContext {
     /// Whether to send a callback message on completion.
     #[serde(default = "default_callback")]
     pub callback_on_complete: bool,
+
+    /// Conversation ID of the child agent (for routing events back).
+    #[serde(default)]
+    pub child_conversation_id: Option<String>,
 }
 
 fn default_callback() -> bool {
@@ -92,12 +96,19 @@ impl DelegationContext {
             parent_conversation_id: parent_conversation_id.into(),
             task_context: None,
             callback_on_complete: true,
+            child_conversation_id: None,
         }
     }
 
     /// Set task-scoped context.
     pub fn with_context(mut self, context: Value) -> Self {
         self.task_context = Some(context);
+        self
+    }
+
+    /// Set the child conversation ID.
+    pub fn with_child_conversation_id(mut self, id: String) -> Self {
+        self.child_conversation_id = Some(id);
         self
     }
 

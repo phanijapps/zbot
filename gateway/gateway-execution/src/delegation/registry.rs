@@ -50,6 +50,16 @@ impl DelegationRegistry {
             .collect()
     }
 
+    /// Get all active delegations for a session.
+    pub fn get_by_session_id(&self, session_id: &str) -> Vec<(String, DelegationContext)> {
+        let delegations = self.delegations.read().unwrap();
+        delegations
+            .iter()
+            .filter(|(_, ctx)| ctx.session_id == session_id)
+            .map(|(conv_id, ctx)| (conv_id.clone(), ctx.clone()))
+            .collect()
+    }
+
     /// Check if a conversation is a delegated subagent.
     pub fn is_delegated(&self, conversation_id: &str) -> bool {
         let delegations = self.delegations.read().unwrap();

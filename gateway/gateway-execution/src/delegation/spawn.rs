@@ -104,6 +104,7 @@ pub async fn spawn_delegated_agent(
         &request.parent_agent_id,
         &child_conversation_id, // legacy conversation_id
     );
+    let delegation_context = delegation_context.with_child_conversation_id(child_conversation_id.clone());
     let delegation_context = if let Some(ctx) = request.context.clone() {
         delegation_context.with_context(ctx)
     } else {
