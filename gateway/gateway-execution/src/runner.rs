@@ -634,6 +634,8 @@ impl ExecutionRunner {
         let thread_id = config.thread_id.clone();
         let distiller = self.distiller.clone();
         let paths = self.paths.clone();
+        let delegation_registry = self.delegation_registry.clone();
+        let handles = self.handles.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -800,6 +802,15 @@ impl ExecutionRunner {
                     )
                     .await;
 
+                    // Cancel any orphaned delegations for this session
+                    cancel_session_delegations(
+                        &session_id,
+                        &delegation_registry,
+                        &handles,
+                        &state_service,
+                    )
+                    .await;
+
                     // Auto-update ward AGENTS.md after root execution completes
                     let session_ward = state_service
                         .get_session(&session_id)
@@ -834,6 +845,15 @@ impl ExecutionRunner {
                         &conversation_id,
                         &e.to_string(),
                         true, // crash session for root execution
+                    )
+                    .await;
+
+                    // Cancel any orphaned delegations for this session
+                    cancel_session_delegations(
+                        &session_id,
+                        &delegation_registry,
+                        &handles,
+                        &state_service,
                     )
                     .await;
                 }
@@ -1563,6 +1583,49 @@ async fn invoke_continuation(
     });
 
     Ok(())
+}
+
+// ============================================================================
+// ORPHAN DELEGATION CLEANUP
+// ============================================================================
+
+/// Cancel all in-flight delegations for a session.
+/// Called when root execution completes or crashes to prevent orphaned subagents.
+async fn cancel_session_delegations(
+    session_id: &str,
+    delegation_registry: &crate::delegation::DelegationRegistry,
+    handles: &tokio::sync::RwLock<std::collections::HashMap<String, crate::handle::ExecutionHandle>>,
+    state_service: &execution_state::StateService<gateway_database::DatabaseManager>,
+) {
+    let active = delegation_registry.get_by_session_id(session_id);
+
+    if active.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        session_id = %session_id,
+        count = active.len(),
+        "Cancelling orphaned delegations"
+    );
+
+    for (child_conv_id, _ctx) in &active {
+        // Stop the execution handle
+        {
+            let handles_guard = handles.read().await;
+            if let Some(handle) = handles_guard.get(child_conv_id) {
+                handle.stop();
+            }
+        }
+
+        // Remove from registry
+        delegation_registry.remove(child_conv_id);
+
+        // Decrement pending_delegations so session can complete
+        if let Err(e) = state_service.complete_delegation(session_id) {
+            tracing::debug!("Failed to decrement pending_delegations: {}", e);
+        }
+    }
 }
 
 // ============================================================================
