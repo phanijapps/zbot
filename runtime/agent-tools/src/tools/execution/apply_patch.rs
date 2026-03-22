@@ -390,10 +390,97 @@ fn normalize_unicode(s: &str) -> String {
 }
 
 // ============================================================================
+// WARD ENFORCEMENT
+// ============================================================================
+
+/// Check if a cwd path is inside a wards/ directory (but not the scratch ward).
+fn is_ward_context(cwd: &Path) -> bool {
+    let cwd_str = cwd.to_string_lossy();
+    // Normalize separators for cross-platform matching
+    let normalized = cwd_str.replace('\\', "/");
+    // Must contain /wards/ and NOT end with /wards/scratch (or be inside it)
+    if let Some(pos) = normalized.rfind("/wards/") {
+        let after_wards = &normalized[pos + 7..]; // after "/wards/"
+        // scratch ward is exempt from root-file checks
+        !after_wards.starts_with("scratch")
+    } else {
+        false
+    }
+}
+
+/// Check if a file path has no directory component (lives in the ward root).
+fn is_ward_root_file(path: &str) -> bool {
+    let p = Path::new(path);
+    match p.parent() {
+        None => true,
+        Some(parent) => parent == Path::new("") || parent == Path::new("."),
+    }
+}
+
+/// Check if a filename is in the allow-list for ward root files.
+fn is_allowed_root_file(filename: &str) -> bool {
+    let name_lower = filename.to_lowercase();
+    name_lower == "agents.md"
+        || name_lower == "__init__.py"
+        || name_lower == "requirements.txt"
+        || name_lower == ".gitignore"
+}
+
+/// Check if a filename matches variant-file patterns (e.g. `_v2`, `_fixed`, `_3`).
+fn is_variant_filename(filename: &str) -> bool {
+    let stem = Path::new(filename)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let stem_lower = stem.to_lowercase();
+
+    // Check _v2, _v3, etc. (but allow _v1 as a legitimate version 1)
+    if let Some(pos) = stem_lower.rfind("_v") {
+        let after = &stem_lower[pos + 2..];
+        if !after.is_empty()
+            && after.chars().all(|c| c.is_ascii_digit())
+            && after.parse::<u32>().map(|n| n >= 2).unwrap_or(false)
+        {
+            return true;
+        }
+    }
+
+    // Check _fixed, _improved, _new, _backup, _copy, _old, _temp
+    for suffix in &[
+        "_fixed",
+        "_improved",
+        "_new",
+        "_backup",
+        "_copy",
+        "_old",
+        "_temp",
+    ] {
+        if stem_lower.ends_with(suffix) {
+            return true;
+        }
+    }
+
+    // Check _2, _3, _4 (numbered suffixes >= 2, at most 2 digits)
+    if let Some(pos) = stem_lower.rfind('_') {
+        let after = &stem_lower[pos + 1..];
+        if after.len() <= 2
+            && !after.is_empty()
+            && after.chars().all(|c| c.is_ascii_digit())
+            && after.parse::<u32>().map(|n| n >= 2).unwrap_or(false)
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+// ============================================================================
 // APPLICATOR
 // ============================================================================
 
 /// Result of applying a patch.
+#[derive(Debug)]
 pub struct PatchResult {
     pub added: Vec<PathBuf>,
     pub modified: Vec<PathBuf>,
@@ -423,6 +510,8 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
         return Err(PatchError::ApplyError("No hunks to apply".into()));
     }
 
+    let ward_active = is_ward_context(cwd);
+
     let mut added = Vec::new();
     let mut modified = Vec::new();
     let mut deleted = Vec::new();
@@ -430,6 +519,30 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
     for hunk in hunks {
         match hunk {
             Hunk::AddFile { path, contents } => {
+                if ward_active {
+                    let path_str = path.to_string_lossy();
+                    let filename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+
+                    // Block files in ward root (no directory component)
+                    if is_ward_root_file(&path_str) && !is_allowed_root_file(filename) {
+                        return Err(PatchError::ApplyError(format!(
+                            "Error: Cannot create files in ward root. Put files in core/, stocks/{{ticker}}/, or output/. Got: {}",
+                            filename
+                        )));
+                    }
+
+                    // Block variant filenames
+                    if is_variant_filename(filename) {
+                        return Err(PatchError::ApplyError(format!(
+                            "Error: Do not create variant files. Fix the original instead. Got: {}",
+                            filename
+                        )));
+                    }
+                }
+
                 let full = cwd.join(path);
                 if let Some(parent) = full.parent() {
                     std::fs::create_dir_all(parent).map_err(|e| {
@@ -446,6 +559,20 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
                 added.push(path.clone());
             }
             Hunk::DeleteFile { path } => {
+                // Variant check on delete (allow cleaning up, but still block variant names)
+                if ward_active {
+                    let filename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    if is_variant_filename(filename) {
+                        return Err(PatchError::ApplyError(format!(
+                            "Error: Do not create variant files. Fix the original instead. Got: {}",
+                            filename
+                        )));
+                    }
+                }
+
                 let full = cwd.join(path);
                 std::fs::remove_file(&full).map_err(|e| {
                     PatchError::IoError(format!("Failed to delete {}: {}", full.display(), e))
@@ -457,6 +584,33 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
                 move_path,
                 chunks,
             } => {
+                // Variant check on update (not root check — updating root files is fine)
+                if ward_active {
+                    let filename = path
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("");
+                    if is_variant_filename(filename) {
+                        return Err(PatchError::ApplyError(format!(
+                            "Error: Do not create variant files. Fix the original instead. Got: {}",
+                            filename
+                        )));
+                    }
+                    // Also check the move destination if present
+                    if let Some(dest) = move_path {
+                        let dest_name = dest
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("");
+                        if is_variant_filename(dest_name) {
+                            return Err(PatchError::ApplyError(format!(
+                                "Error: Do not create variant files. Fix the original instead. Got: {}",
+                                dest_name
+                            )));
+                        }
+                    }
+                }
+
                 let full = cwd.join(path);
                 let new_contents = derive_new_contents(&full, chunks)?;
 
@@ -1013,5 +1167,213 @@ mod tests {
         assert!(output.contains("A hello.txt"));
         let content = fs::read_to_string(dir.path().join("hello.txt")).unwrap();
         assert_eq!(content, "hello world\n");
+    }
+
+    // ---- Ward enforcement: is_variant_filename ----
+
+    #[test]
+    fn test_variant_filename_v2() {
+        assert!(is_variant_filename("analyzer_v2.py"));
+        assert!(is_variant_filename("analyzer_v3.py"));
+        assert!(is_variant_filename("report_v10.rs"));
+    }
+
+    #[test]
+    fn test_variant_filename_suffixes() {
+        assert!(is_variant_filename("main_fixed.py"));
+        assert!(is_variant_filename("main_improved.rs"));
+        assert!(is_variant_filename("script_new.py"));
+        assert!(is_variant_filename("data_backup.json"));
+        assert!(is_variant_filename("config_copy.toml"));
+        assert!(is_variant_filename("handler_old.rs"));
+        assert!(is_variant_filename("temp_temp.txt"));
+    }
+
+    #[test]
+    fn test_variant_filename_numbered() {
+        assert!(is_variant_filename("analyzer_2.py"));
+        assert!(is_variant_filename("analyzer_3.py"));
+        assert!(is_variant_filename("report_99.rs"));
+    }
+
+    #[test]
+    fn test_variant_filename_not_variant() {
+        assert!(!is_variant_filename("analyzer.py"));
+        assert!(!is_variant_filename("main.rs"));
+        assert!(!is_variant_filename("step_1.py")); // _1 is not >= 2
+        assert!(!is_variant_filename("config_v1.toml")); // _v1 is version 1, could be legit
+        // Note: _v1 is not blocked because it's version 1
+    }
+
+    // ---- Ward enforcement: is_ward_root_file ----
+
+    #[test]
+    fn test_ward_root_file() {
+        assert!(is_ward_root_file("investigate.py"));
+        assert!(is_ward_root_file("script.sh"));
+        assert!(!is_ward_root_file("core/analyzer.py"));
+        assert!(!is_ward_root_file("output/report.txt"));
+    }
+
+    #[test]
+    fn test_allowed_root_files() {
+        assert!(is_allowed_root_file("AGENTS.md"));
+        assert!(is_allowed_root_file("agents.md"));
+        assert!(is_allowed_root_file("__init__.py"));
+        assert!(is_allowed_root_file("requirements.txt"));
+        assert!(is_allowed_root_file(".gitignore"));
+        assert!(!is_allowed_root_file("investigate.py"));
+    }
+
+    // ---- Ward enforcement: is_ward_context ----
+
+    #[test]
+    fn test_is_ward_context() {
+        assert!(is_ward_context(Path::new("/home/user/zbot/wards/stocks")));
+        assert!(is_ward_context(Path::new(
+            "C:\\Users\\user\\Documents\\zbot\\wards\\myward"
+        )));
+        assert!(!is_ward_context(Path::new(
+            "/home/user/zbot/wards/scratch"
+        )));
+        assert!(!is_ward_context(Path::new(
+            "C:\\Users\\user\\Documents\\zbot\\wards\\scratch"
+        )));
+        assert!(!is_ward_context(Path::new("/home/user/projects/myapp")));
+    }
+
+    // ---- Ward enforcement: apply_hunks integration ----
+
+    #[test]
+    fn test_block_add_file_in_ward_root() {
+        let dir = tempfile::tempdir().unwrap();
+        // Create a ward-like path: .../wards/testward
+        let ward_dir = dir.path().join("wards").join("testward");
+        fs::create_dir_all(&ward_dir).unwrap();
+
+        let hunks = vec![Hunk::AddFile {
+            path: PathBuf::from("investigate.py"),
+            contents: "print('hello')\n".to_string(),
+        }];
+        let result = apply_hunks(&hunks, &ward_dir);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Cannot create files in ward root"));
+    }
+
+    #[test]
+    fn test_allow_add_file_in_ward_subdirectory() {
+        let dir = tempfile::tempdir().unwrap();
+        let ward_dir = dir.path().join("wards").join("testward");
+        fs::create_dir_all(&ward_dir).unwrap();
+
+        let hunks = vec![Hunk::AddFile {
+            path: PathBuf::from("core/analyzer.py"),
+            contents: "pass\n".to_string(),
+        }];
+        let result = apply_hunks(&hunks, &ward_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_allow_agents_md_in_ward_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let ward_dir = dir.path().join("wards").join("testward");
+        fs::create_dir_all(&ward_dir).unwrap();
+
+        let hunks = vec![Hunk::AddFile {
+            path: PathBuf::from("AGENTS.md"),
+            contents: "# Agent\n".to_string(),
+        }];
+        let result = apply_hunks(&hunks, &ward_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_block_variant_add_file_in_ward() {
+        let dir = tempfile::tempdir().unwrap();
+        let ward_dir = dir.path().join("wards").join("testward");
+        fs::create_dir_all(ward_dir.join("core")).unwrap();
+
+        let hunks = vec![Hunk::AddFile {
+            path: PathBuf::from("core/analyzer_v2.py"),
+            contents: "pass\n".to_string(),
+        }];
+        let result = apply_hunks(&hunks, &ward_dir);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Do not create variant files"));
+    }
+
+    #[test]
+    fn test_block_variant_update_file_in_ward() {
+        let dir = tempfile::tempdir().unwrap();
+        let ward_dir = dir.path().join("wards").join("testward");
+        fs::create_dir_all(ward_dir.join("core")).unwrap();
+        fs::write(ward_dir.join("core").join("analyzer_fixed.py"), "old\n").unwrap();
+
+        let hunks = vec![Hunk::UpdateFile {
+            path: PathBuf::from("core/analyzer_fixed.py"),
+            move_path: None,
+            chunks: vec![UpdateFileChunk {
+                change_context: None,
+                old_lines: vec!["old".to_string()],
+                new_lines: vec!["new".to_string()],
+                is_end_of_file: false,
+            }],
+        }];
+        let result = apply_hunks(&hunks, &ward_dir);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Do not create variant files"));
+    }
+
+    #[test]
+    fn test_no_ward_enforcement_outside_wards() {
+        // When cwd is not inside wards/, no enforcement applies
+        let dir = tempfile::tempdir().unwrap();
+
+        let hunks = vec![Hunk::AddFile {
+            path: PathBuf::from("investigate.py"),
+            contents: "pass\n".to_string(),
+        }];
+        let result = apply_hunks(&hunks, dir.path());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_no_ward_enforcement_in_scratch() {
+        let dir = tempfile::tempdir().unwrap();
+        let scratch_dir = dir.path().join("wards").join("scratch");
+        fs::create_dir_all(&scratch_dir).unwrap();
+
+        let hunks = vec![Hunk::AddFile {
+            path: PathBuf::from("investigate.py"),
+            contents: "pass\n".to_string(),
+        }];
+        let result = apply_hunks(&hunks, &scratch_dir);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_allow_update_root_file_in_ward() {
+        // Should be able to update files in ward root (for cleanup)
+        let dir = tempfile::tempdir().unwrap();
+        let ward_dir = dir.path().join("wards").join("testward");
+        fs::create_dir_all(&ward_dir).unwrap();
+        fs::write(ward_dir.join("existing.py"), "old\n").unwrap();
+
+        let hunks = vec![Hunk::UpdateFile {
+            path: PathBuf::from("existing.py"),
+            move_path: None,
+            chunks: vec![UpdateFileChunk {
+                change_context: None,
+                old_lines: vec!["old".to_string()],
+                new_lines: vec!["new".to_string()],
+                is_end_of_file: false,
+            }],
+        }];
+        let result = apply_hunks(&hunks, &ward_dir);
+        assert!(result.is_ok());
     }
 }
