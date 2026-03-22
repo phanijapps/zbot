@@ -158,7 +158,8 @@ pub async fn spawn_delegated_agent(
 
     // Build executor using ExecutorBuilder
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
-        .with_workspace_cache(workspace_cache);
+        .with_workspace_cache(workspace_cache)
+        .with_delegated(true);
 
     // Build fact store for subagent (so save_fact uses DB, not file fallback)
     let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {

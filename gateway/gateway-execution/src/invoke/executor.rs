@@ -40,6 +40,7 @@ pub struct ExecutorBuilder {
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
     llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
+    is_delegated: bool,
 }
 
 impl ExecutorBuilder {
@@ -52,6 +53,7 @@ impl ExecutorBuilder {
             fact_store: None,
             connector_provider: None,
             llm_throttle: None,
+            is_delegated: false,
         }
     }
 
@@ -76,6 +78,12 @@ impl ExecutorBuilder {
     /// Set the LLM throttle semaphore (shared per provider across all executors).
     pub fn with_llm_throttle(mut self, semaphore: Arc<tokio::sync::Semaphore>) -> Self {
         self.llm_throttle = Some(semaphore);
+        self
+    }
+
+    /// Mark this executor as a delegated subagent (enables plan step cap).
+    pub fn with_delegated(mut self, is_delegated: bool) -> Self {
+        self.is_delegated = is_delegated;
         self
     }
 
@@ -147,6 +155,12 @@ impl ExecutorBuilder {
         if let Some(ward) = ward_id {
             executor_config = executor_config
                 .with_initial_state("ward_id", serde_json::Value::String(ward.to_string()));
+        }
+
+        // Mark delegated executors so tools can enforce subagent constraints
+        if self.is_delegated {
+            executor_config = executor_config
+                .with_initial_state("app:is_delegated", serde_json::Value::Bool(true));
         }
 
         // Create LLM client using provider config
