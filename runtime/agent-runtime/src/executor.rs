@@ -627,6 +627,14 @@ impl AgentExecutor {
                                 wait_for_result: delegate.wait_for_result,
                                 max_iterations: delegate.max_iterations,
                             });
+                            // Mark that a delegation is active — prevents concurrent delegations
+                            {
+                                use zero_core::CallbackContext;
+                                shared_tool_context.set_state(
+                                    "app:has_active_delegation".to_string(),
+                                    Value::Bool(true),
+                                );
+                            }
                         }
 
                         // Check for generative UI markers

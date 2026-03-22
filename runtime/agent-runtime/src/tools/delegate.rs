@@ -143,6 +143,18 @@ impl Tool for DelegateTool {
             ));
         }
 
+        // Guard: Only one delegation at a time per session
+        let has_active = ctx
+            .get_state("app:has_active_delegation")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if has_active {
+            return Ok(json!({
+                "status": "queued",
+                "message": "You already have an active delegation. Wait for it to complete — the system will resume you automatically. Do NOT delegate another step until you see the result."
+            }));
+        }
+
         let parent_conversation_id = ctx
             .get_state("conversation_id")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
