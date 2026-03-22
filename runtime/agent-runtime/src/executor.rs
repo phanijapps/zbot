@@ -548,17 +548,12 @@ impl AgentExecutor {
             }
 
             // Handle tool calls
-            // Add the assistant message with TRUNCATED tool calls to prevent context explosion
-            let truncated_tool_calls: Vec<ToolCall> = tool_calls.iter().map(|tc| {
-                // Truncate arguments to prevent exponential context growth
-                let truncated_args = truncate_tool_args(&tc.arguments, 500);
-                ToolCall::new(tc.id.clone(), tc.name.clone(), truncated_args)
-            }).collect();
-
+            // Store the assistant message with ORIGINAL tool calls (not truncated).
+            // Truncation caused the LLM to copy garbled text on retries.
             current_messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: response.content.clone(),
-                tool_calls: Some(truncated_tool_calls),
+                tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
             });
 
