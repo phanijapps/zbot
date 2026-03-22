@@ -504,6 +504,7 @@ impl ExecutionRunner {
         let respond_to = config.respond_to.clone();
         let thread_id = config.thread_id.clone();
         let distiller = self.distiller.clone();
+        let paths = self.paths.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -669,6 +670,16 @@ impl ExecutionRunner {
                         bridge_outbox.as_ref(),
                     )
                     .await;
+
+                    // Auto-update ward AGENTS.md after root execution completes
+                    let session_ward = state_service
+                        .get_session(&session_id)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.ward_id);
+                    if let Some(ref ward_id) = session_ward {
+                        auto_update_agents_md(paths.vault_dir(), ward_id);
+                    }
 
                     // Fire-and-forget session distillation
                     if let Some(distiller) = distiller.as_ref() {
@@ -1192,6 +1203,11 @@ async fn invoke_continuation(
         .flatten()
         .and_then(|s| s.ward_id);
 
+    // Auto-update ward AGENTS.md before continuation
+    if let Some(ref ward_id) = session_ward_id {
+        auto_update_agents_md(paths.vault_dir(), ward_id);
+    }
+
     // Build executor
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
@@ -1418,4 +1434,138 @@ async fn invoke_continuation(
     });
 
     Ok(())
+}
+
+// ============================================================================
+// WARD AGENTS.MD AUTO-UPDATE
+// ============================================================================
+
+/// Auto-update ward AGENTS.md by scanning the directory structure.
+/// Called by the system after delegations complete, before continuation.
+fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
+    let ward_dir = vault_dir.join("wards").join(ward_id);
+    let agents_md_path = ward_dir.join("AGENTS.md");
+
+    if !ward_dir.exists() || ward_id == "scratch" {
+        return;
+    }
+
+    let mut sections = Vec::new();
+    sections.push(format!("# {}\n", ward_id));
+
+    // Scan core/ modules
+    let core_dir = ward_dir.join("core");
+    if core_dir.exists() {
+        sections.push("## Core Modules\n".to_string());
+        if let Ok(entries) = std::fs::read_dir(&core_dir) {
+            let mut modules: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map(|ext| ext == "py").unwrap_or(false))
+                .collect();
+            modules.sort_by_key(|e| e.file_name());
+            for entry in modules {
+                let name = entry.file_name().to_string_lossy().to_string();
+                // Read first docstring line
+                let desc = std::fs::read_to_string(entry.path())
+                    .ok()
+                    .and_then(|content| {
+                        content
+                            .lines()
+                            .find(|l| l.starts_with("\"\"\"") || l.starts_with("'''"))
+                            .map(|l| {
+                                l.trim_start_matches("\"\"\"")
+                                    .trim_start_matches("'''")
+                                    .trim_end_matches("\"\"\"")
+                                    .trim_end_matches("'''")
+                                    .trim()
+                                    .to_string()
+                            })
+                    })
+                    .unwrap_or_default();
+                if desc.is_empty() {
+                    sections.push(format!("- `core/{}`\n", name));
+                } else {
+                    sections.push(format!("- `core/{}` — {}\n", name, desc));
+                }
+            }
+        }
+        sections.push("\n".to_string());
+    }
+
+    // Scan task directories (stocks/spy/, stocks/pton/, etc.)
+    let mut task_dirs = Vec::new();
+    // Look for first-level subdirs that aren't core/ or output/
+    if let Ok(entries) = std::fs::read_dir(&ward_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if path.is_dir()
+                && !["core", "output", "__pycache__", ".git"].contains(&name.as_str())
+                && !name.starts_with('.')
+            {
+                // Recurse one level to find task subdirs
+                if let Ok(sub_entries) = std::fs::read_dir(&path) {
+                    for sub in sub_entries.filter_map(|e| e.ok()) {
+                        if sub.path().is_dir() {
+                            let sub_name = sub.file_name().to_string_lossy().to_string();
+                            if !sub_name.starts_with('.') && sub_name != "__pycache__" {
+                                task_dirs.push(format!("{}/{}", name, sub_name));
+                            }
+                        }
+                    }
+                }
+                // Also include the first-level dir itself if it has files
+                let has_files = std::fs::read_dir(&path)
+                    .ok()
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .any(|e| e.path().is_file())
+                    })
+                    .unwrap_or(false);
+                if has_files {
+                    task_dirs.push(name);
+                }
+            }
+        }
+    }
+    if !task_dirs.is_empty() {
+        task_dirs.sort();
+        sections.push("## Task Directories\n".to_string());
+        for dir in &task_dirs {
+            sections.push(format!("- `{}/`\n", dir));
+        }
+        sections.push("\n".to_string());
+    }
+
+    // Scan output/
+    let output_dir = ward_dir.join("output");
+    if output_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&output_dir) {
+            let files: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_file())
+                .collect();
+            if !files.is_empty() {
+                sections.push("## Output\n".to_string());
+                for entry in &files {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    sections.push(format!("- `output/{}`\n", name));
+                }
+                sections.push("\n".to_string());
+            }
+        }
+    }
+
+    sections.push(format!(
+        "*Auto-updated: {}*\n",
+        chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
+    ));
+
+    let content = sections.join("");
+    if let Err(e) = std::fs::write(&agents_md_path, &content) {
+        tracing::warn!(ward = %ward_id, error = %e, "Failed to auto-update AGENTS.md");
+    } else {
+        tracing::info!(ward = %ward_id, "Auto-updated AGENTS.md");
+    }
 }
