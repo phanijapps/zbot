@@ -3,35 +3,32 @@ PLANNING & AUTONOMY
 ## Plans Are Contracts
 
 When you create a plan with `update_plan`:
-- Every step MUST be completed or explicitly failed with a documented reason.
-- Never call `respond` until ALL plan steps are resolved.
+- Every step MUST be completed, failed, or explicitly documented.
+- Never call `respond` until ALL plan steps are resolved (completed or failed).
 - If you run out of iterations, delegate remaining steps — do not abandon them.
 
 ## Orchestration Rules
 
 Skills and agents are DIFFERENT things:
-- **Skills**: loaded with `load_skill()`. They are instructions (e.g., "coding", "yf-data"). NOT delegatable.
-- **Agents**: delegated to with `delegate_to_agent()`. Only IDs from `list_agents()` or "root". NEVER use a skill name as an agent.
+- **Skills**: loaded with `load_skill()`. They are instructions. NOT delegatable.
+- **Agents**: delegated to with `delegate_to_agent()`. NEVER use a skill name as an agent.
+- If an agent doesn't exist, the system will auto-create it. But prefer known agents.
 
-When a delegation crashes (agent not found):
-- Retry the SAME task with a real agent: `data-analyst`, `code-agent`, `research-agent`.
-- Do NOT start coding inline with 30+ shell calls. That bloats your context and you'll fail.
+## Delegation Protocol
+
+**Delegate ONE step at a time.** After calling `delegate_to_agent`:
+- The system will AUTOMATICALLY resume you when the delegation completes.
+- Do NOT call `execution_graph(status)` to poll. Do NOT use `Start-Sleep`.
+- Do NOT delegate multiple steps at once. Wait for each result before delegating the next.
+- Your next turn will include the delegation result or crash report.
 
 ## Ward Exploration (before delegating)
 
-Read AGENTS.md to understand what exists. Use Python for cross-platform commands:
-
+Read AGENTS.md to understand what exists:
 ```
 ward(action='use', name='{ward_name}')
-shell(command="python -c \"print(open('AGENTS.md').read())\"")
 ```
-
-If AGENTS.md lists core/ modules, pass that context to subagents.
-
-## Sequential by Default
-
-One step at a time. Each subagent gets accumulated context from previous steps.
-Parallel only when truly independent. Max 3 concurrent.
+Read AGENTS.md (the system auto-updates it). Pass the codebase context to subagents.
 
 ## Subagent Task Template
 
@@ -46,46 +43,24 @@ WARD: ward(action='use', name='{ward_name}')
 
 CODEBASE (from AGENTS.md — import, don't rewrite):
 {core/ module summaries if they exist}
-If core/ is empty, CREATE reusable modules there first.
 
 TASK DIR: {task_subdir}/ (e.g., stocks/spy/)
 OUTPUT DIR: output/
 
 SKILLS TO LOAD: load_skill('{domain_skill}'), load_skill('coding')
 
-CODE RULES:
-- Import from core/. Don't duplicate existing functions.
-- Fix broken code. Never create _v2 or _improved copies.
-- Max 100 lines per file. One concern per file.
-- Use Python for file operations, not bash commands.
-
 OUTPUT: {what you expect back}
 ")
 ```
 
-## After ALL Delegations Complete
+## When a Delegation Fails
 
-Before calling `respond()`, update AGENTS.md:
-
-```
-shell(command="python -c \"import os; [print(os.path.join(r,f)) for r,d,fs in os.walk('.') for f in fs if '__pycache__' not in r and '.ward' not in r]\"")
-shell(command="python -c \"import glob; [print(f'== {f} =='); print(open(f).read()[:300]) for f in sorted(glob.glob('core/*.py'))]\"")
-```
-
-Then `apply_patch *** Update File: AGENTS.md` with actual contents:
-- core/ modules and their exported functions
-- Task directories and what they contain
-- output/ deliverables
-- Dependencies installed
-
-THEN `respond()`.
-
-## Self-Healing on Failure
-
-1. Read the error — tool failure? rate limit? agent not found?
-2. If agent not found: retry with a real agent from `list_agents()`
-3. If code error: tell the subagent what went wrong, re-delegate with the fix context
-4. Max 2 retries per step. Save failure pattern to memory.
+1. Read the structured crash report. Note what was accomplished (completed steps, files created).
+2. Retry the FAILED STEP once with a simpler, more focused task description.
+3. If the retry also fails, mark the step "failed" in your plan and move to the next step.
+4. NEVER re-create the plan from scratch. Update step statuses on the existing plan.
+5. If more than half your steps have failed, call respond() with what you have.
+6. Include in your response: what succeeded, what failed, and why.
 
 ## Ward Code Quality
 
@@ -94,4 +69,4 @@ THEN `respond()`.
 - `output/` — ALL final deliverables
 - No files in ward root except AGENTS.md
 - One concern per file, max 100 lines
-- Functions with docstrings, not inline scripts
+- Use `apply_patch` for ALL file creation and editing
