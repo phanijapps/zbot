@@ -328,9 +328,10 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute shell commands. Uses zsh/bash on macOS/Linux, PowerShell on Windows. \
-         Has security guardrails to prevent dangerous operations. \
-         Disabled when running with elevated privileges (root/administrator)."
+        "Execute shell commands or apply_patch for file operations. \
+         For creating/editing files, use: shell(command=\"apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+line1\\n+line2\\n*** End Patch\\nEOF\"). \
+         Every content line must start with '+'. \
+         Do NOT use Set-Content, Out-File, heredocs, or redirects for file writing — only apply_patch."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
