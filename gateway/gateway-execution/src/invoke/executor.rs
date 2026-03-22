@@ -41,6 +41,7 @@ pub struct ExecutorBuilder {
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
     llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
     is_delegated: bool,
+    extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
 }
 
 impl ExecutorBuilder {
@@ -54,6 +55,7 @@ impl ExecutorBuilder {
             connector_provider: None,
             llm_throttle: None,
             is_delegated: false,
+            extra_initial_state: None,
         }
     }
 
@@ -84,6 +86,14 @@ impl ExecutorBuilder {
     /// Mark this executor as a delegated subagent (enables plan step cap).
     pub fn with_delegated(mut self, is_delegated: bool) -> Self {
         self.is_delegated = is_delegated;
+        self
+    }
+
+    /// Add an initial state entry that will be injected into executor context.
+    pub fn with_initial_state(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.extra_initial_state
+            .get_or_insert_with(Vec::new)
+            .push((key.to_string(), value));
         self
     }
 
@@ -161,6 +171,13 @@ impl ExecutorBuilder {
         if self.is_delegated {
             executor_config = executor_config
                 .with_initial_state("app:is_delegated", serde_json::Value::Bool(true));
+        }
+
+        // Inject extra initial state (e.g., ward_purpose, ward_structure from intent analysis)
+        if let Some(entries) = &self.extra_initial_state {
+            for (key, value) in entries {
+                executor_config = executor_config.with_initial_state(key, value.clone());
+            }
         }
 
         // Create LLM client using provider config

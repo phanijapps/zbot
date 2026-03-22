@@ -61,33 +61,71 @@ impl WardTool {
         std::fs::read_to_string(&agents_md_path).ok()
     }
 
-    /// Create a starter AGENTS.md in a new ward.
-    fn create_agents_md(&self, ward_dir: &std::path::Path, ward_name: &str) {
+    /// Create AGENTS.md in a new ward, enriched with intent context if available.
+    fn create_agents_md(&self, ward_dir: &std::path::Path, ward_name: &str, ctx: &dyn ToolContext) {
+        let purpose = ctx
+            .get_state("ward_purpose")
+            .and_then(|v| v.as_str().map(String::from));
+        let structure = ctx
+            .get_state("ward_structure")
+            .and_then(|v| {
+                v.as_object().map(|obj| {
+                    obj.iter()
+                        .map(|(dir, desc)| format!("- `{}` — {}", dir, desc.as_str().unwrap_or("")))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                })
+            });
+        Self::write_agents_md(ward_dir, ward_name, purpose.as_deref(), structure.as_deref());
+    }
+
+    /// Write AGENTS.md with purpose and structure. Testable without ToolContext.
+    fn write_agents_md(
+        ward_dir: &std::path::Path,
+        ward_name: &str,
+        purpose: Option<&str>,
+        structure: Option<&str>,
+    ) {
         let agents_md_path = ward_dir.join(WARD_AGENTS_MD);
         if agents_md_path.exists() {
-            return; // Don't overwrite existing AGENTS.md
+            return;
         }
 
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+        let default_purpose = format!("Domain workspace for {} projects.", ward_name);
+        let purpose = purpose.unwrap_or(&default_purpose);
+
+        let structure = structure.unwrap_or(
+            "- `core/` — Shared reusable Python modules\n- `output/` — Final deliverables (reports, charts, HTML)",
+        );
+
         let content = format!(
-r#"# {}
+r#"# {name}
 
 ## Purpose
-<!-- Describe what this ward/project is for -->
+{purpose}
 
-## Structure
-<!-- Document file organization and what each file/directory does -->
+## Directory Layout
+{structure}
+
+## Core Modules
+*(populated as modules are created in core/)*
 
 ## Conventions
-<!-- Tech stack, patterns, naming conventions, dependencies -->
-
-## Reusable Components
-<!-- Scripts, modules, utilities that future sessions can reuse -->
+- Python with yfinance, pandas, matplotlib
+- All reusable code in `core/`, task-specific work in subdirectories
+- Output files (reports, charts) go in `output/`
+- Use `apply_patch` for all file operations
+- Max 100 lines per file, one concern per module
 
 ## History
-- {}: Ward created
+- {today}: Ward created
 "#,
-            ward_name, today
+            name = ward_name,
+            purpose = purpose,
+            structure = structure,
+            today = today,
         );
 
         if let Err(e) = std::fs::write(&agents_md_path, content) {
@@ -201,6 +239,19 @@ impl Tool for WardTool {
                 let ward_dir = wards_root.join(name);
                 let created = !ward_dir.exists();
 
+                // Subagents cannot create wards — only root can
+                let is_delegated = ctx
+                    .get_state("app:is_delegated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                if created && is_delegated {
+                    return Err(ZeroError::Tool(format!(
+                        "Subagents cannot create wards. Use the ward specified in your task: '{}' does not exist. \
+                         Ask the root agent to create it first.",
+                        name
+                    )));
+                }
+
                 // Create ward directory if needed
                 if created {
                     std::fs::create_dir_all(&ward_dir).map_err(|e| {
@@ -208,9 +259,9 @@ impl Tool for WardTool {
                     })?;
                 }
 
-                // Create starter AGENTS.md for new wards
+                // Create AGENTS.md with intent context for new wards
                 if created {
-                    self.create_agents_md(&ward_dir, name);
+                    self.create_agents_md(&ward_dir, name, ctx.as_ref());
                 }
 
                 // Set ward_id in context state
@@ -411,22 +462,36 @@ mod tests {
 
     #[test]
     fn test_create_agents_md() {
-        let dir = TempDir::new().unwrap();
-        let fs = Arc::new(TestFs {
-            base: dir.path().to_path_buf(),
-        });
-        let tool = WardTool::new(fs);
-        let ward_dir = dir.path().join("wards").join("test-project");
-        std::fs::create_dir_all(&ward_dir).unwrap();
+        let ward_dir = TempDir::new().unwrap();
+        let ward_path = ward_dir.path().to_path_buf();
 
-        tool.create_agents_md(&ward_dir, "test-project");
+        WardTool::write_agents_md(&ward_path, "test-project", None, None);
 
-        let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
+        let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();
         assert!(content.contains("# test-project"));
         assert!(content.contains("## Purpose"));
-        assert!(content.contains("## Structure"));
-        assert!(content.contains("## Reusable Components"));
+        assert!(content.contains("Domain workspace for test-project"));
+        assert!(content.contains("core/"));
         assert!(content.contains("Ward created"));
+    }
+
+    #[test]
+    fn test_create_agents_md_with_context() {
+        let ward_dir = TempDir::new().unwrap();
+        let ward_path = ward_dir.path().to_path_buf();
+
+        WardTool::write_agents_md(
+            &ward_path,
+            "financial-analysis",
+            Some("Comprehensive investment analysis and professional reports"),
+            Some("- `core/` — Shared data fetching and analysis modules\n- `stocks/` — Per-ticker analysis\n- `output/` — Reports and charts"),
+        );
+
+        let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();
+        assert!(content.contains("# financial-analysis"));
+        assert!(content.contains("Comprehensive investment analysis"));
+        assert!(content.contains("Per-ticker analysis"));
+        assert!(content.contains("output/"));
     }
 
     #[test]
@@ -446,19 +511,13 @@ mod tests {
 
     #[test]
     fn test_create_agents_md_does_not_overwrite() {
-        let dir = TempDir::new().unwrap();
-        let fs = Arc::new(TestFs {
-            base: dir.path().to_path_buf(),
-        });
-        let tool = WardTool::new(fs);
+        let ward_dir = TempDir::new().unwrap();
+        let ward_path = ward_dir.path().to_path_buf();
+        std::fs::write(ward_path.join("AGENTS.md"), "# Custom content").unwrap();
 
-        let ward_dir = dir.path().join("wards").join("existing");
-        std::fs::create_dir_all(&ward_dir).unwrap();
-        std::fs::write(ward_dir.join("AGENTS.md"), "# Custom content").unwrap();
+        WardTool::write_agents_md(&ward_path, "existing", None, None);
 
-        tool.create_agents_md(&ward_dir, "existing");
-
-        let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
+        let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();
         assert!(content.contains("# Custom content")); // Not overwritten
     }
 }

@@ -1130,6 +1130,8 @@ impl ExecutionRunner {
         }
 
         // Intent analysis enrichment (root agent first turn only)
+        let mut ward_purpose: Option<String> = None;
+        let mut ward_structure: Option<serde_json::Value> = None;
         let enriched_agent = if is_root {
             if let Some(msg) = user_message {
                 // Intent analysis: same model/config as agent but thinking disabled
@@ -1169,8 +1171,16 @@ impl ExecutionRunner {
                                     tracing::info!(
                                         primary_intent = %analysis.primary_intent,
                                         hidden_intents = analysis.hidden_intents.len(),
+                                        ward = %analysis.ward_recommendation.ward_name,
                                         "Intent analysis enrichment complete"
                                     );
+                                    // Save ward context for AGENTS.md creation
+                                    ward_purpose = Some(analysis.ward_recommendation.reason.clone());
+                                    ward_structure = if analysis.ward_recommendation.structure.is_empty() {
+                                        None
+                                    } else {
+                                        Some(serde_json::to_value(&analysis.ward_recommendation.structure).unwrap_or_default())
+                                    };
                                     Some(enriched)
                                 }
                                 Err(e) => {
@@ -1202,6 +1212,14 @@ impl ExecutionRunner {
         };
 
         let agent_for_build = enriched_agent.as_ref().unwrap_or(agent);
+
+        // Inject ward context into executor state for AGENTS.md creation
+        if let Some(purpose) = &ward_purpose {
+            builder = builder.with_initial_state("ward_purpose", serde_json::Value::String(purpose.clone()));
+        }
+        if let Some(structure) = &ward_structure {
+            builder = builder.with_initial_state("ward_structure", structure.clone());
+        }
 
         builder
             .build(
