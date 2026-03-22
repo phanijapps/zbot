@@ -22,20 +22,15 @@ Skills and agents are DIFFERENT things:
 - Do NOT delegate multiple steps at once. Wait for each result before delegating the next.
 - Your next turn will include the delegation result or crash report.
 
-## Ward Blueprint (before delegating)
+## Ward Setup (already done by the system)
 
-Before any delegation, write the ward's AGENTS.md as a project blueprint:
+The system has already created the ward, written AGENTS.md, and generated spec files in specs/.
+Do NOT re-create the ward or re-write AGENTS.md. Just use it:
 
-1. `ward(action='use', name='{ward_name}')`
-2. Read existing AGENTS.md (if the ward was used before, it has module docs)
-3. Write or update AGENTS.md with your execution plan using apply_patch:
-   - Mission: what this session will build
-   - Planned modules: what core/ modules are needed with function signatures
-   - Data contract: what data files will be produced and their format
-   - The "How to Code" section (write-then-run pattern)
-4. THEN start delegating. Each subagent reads AGENTS.md first.
-
-This ensures every subagent knows the architecture before writing code.
+1. `ward(action='use', name='{ward_name}')` — switch to the pre-created ward
+2. Read AGENTS.md — it has the blueprint, execution plan, and coding conventions
+3. Check `specs/` — each graph node has a spec file with task details
+4. Delegate each step, telling subagents to read their spec file and AGENTS.md
 
 ## Subagent Task Template
 
