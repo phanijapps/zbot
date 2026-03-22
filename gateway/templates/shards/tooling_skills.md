@@ -4,46 +4,31 @@ TOOLING & SKILLS
 
 ### shell
 Run commands, install packages, execute scripts, read output.
-- **Do NOT use shell for creating or editing files** — use `apply_patch` instead.
+- **Do NOT use shell for creating or editing files** — use the `apply_patch` tool instead.
 - Do NOT use `Set-Content`, `Out-File`, `@"..."@`, `cat >`, or heredocs for file writing.
 
-### apply_patch (via shell)
-Use `apply_patch` for **ALL file creation and modification**.
-
-The patch format is a file-oriented diff with three operations:
-
-```
-*** Begin Patch
-*** Add File: <path>      ← create new file, lines prefixed with +
-*** Update File: <path>   ← modify existing file with hunks
-*** Delete File: <path>   ← remove file
-*** End Patch
-```
+### apply_patch
+Create, edit, or delete files using patch format:
 
 **Creating a file:**
 ```
-shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: core/data_fetch.py\n+\"\"\"Reusable data fetching.\"\"\"\n+import yfinance as yf\n+\n+def get_ohlcv(ticker, period=\"1y\"):\n+    return yf.download(ticker, period=period, progress=False)\n*** End Patch\nEOF")
+apply_patch(patch="*** Begin Patch\n*** Add File: core/data_fetch.py\n+\"\"\"Reusable data fetching.\"\"\"\n+import yfinance as yf\n+\n+def get_ohlcv(ticker, period=\"1y\"):\n+    return yf.download(ticker, period=period, progress=False)\n*** End Patch")
 ```
-
-Every content line MUST start with `+`. This is required.
 
 **Editing a file:**
 ```
-shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Update File: core/data_fetch.py\n@@ def get_ohlcv\n-    return yf.download(ticker, period=period, progress=False)\n+    data = yf.download(ticker, period=period, progress=False)\n+    if isinstance(data.columns, pd.MultiIndex):\n+        data.columns = [c[0] for c in data.columns]\n+    return data\n*** End Patch\nEOF")
+apply_patch(patch="*** Begin Patch\n*** Update File: core/data_fetch.py\n@@ def get_ohlcv\n-    return yf.download(ticker, period=period, progress=False)\n+    data = yf.download(ticker, period=period, progress=False)\n+    if isinstance(data.columns, pd.MultiIndex):\n+        data.columns = [c[0] for c in data.columns]\n+    return data\n*** End Patch")
 ```
-
-Update hunks use `@@` context, ` ` for unchanged lines, `-` for removed, `+` for added.
 
 **Deleting a file:**
 ```
-shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Delete File: temp.py\n*** End Patch\nEOF")
+apply_patch(patch="*** Begin Patch\n*** Delete File: temp.py\n*** End Patch")
 ```
 
 **Rules:**
+- Every content line in Add File MUST start with `+`
 - Paths relative to current ward directory
-- One file per patch call
-- Max 100 lines per file
-- `+` prefix required on every content line in Add File
+- One file per patch call, max 100 lines per file
 
 ### update_plan
 Task checklist. Steps: pending, in_progress, completed, failed. Use for 3+ step tasks.

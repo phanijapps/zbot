@@ -29,7 +29,7 @@ PLATFORM: Linux
 
 ## Running Python Code
 - For simple checks: `python3 -c "print('hello')"`
-- For multi-line code, either:
-  - Use a heredoc: `python3 << 'PYEOF'` ... `PYEOF`
-  - Or write a .py file first with `apply_patch`, then `python3 path/to/script.py`
-- Prefer `apply_patch` + run for scripts longer than ~10 lines
+- For multi-line code: write a .py file first, then run it:
+  1. Use the `apply_patch` tool to create the script
+  2. `python3 path/to/script.py` to run it
+- Prefer `apply_patch` tool + run for scripts longer than ~10 lines
