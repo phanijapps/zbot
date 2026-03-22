@@ -1168,6 +1168,13 @@ impl ExecutionRunner {
                                 Ok(analysis) => {
                                     let mut enriched = agent.clone();
                                     inject_intent_context(&mut enriched.instructions, &analysis);
+
+                                    // Set up ward with blueprint and specs
+                                    setup_ward_from_analysis(
+                                        self.paths.vault_dir(),
+                                        &analysis,
+                                    );
+
                                     tracing::info!(
                                         primary_intent = %analysis.primary_intent,
                                         hidden_intents = analysis.hidden_intents.len(),
@@ -2055,4 +2062,215 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     } else {
         tracing::info!(ward = %ward_id, "Auto-updated AGENTS.md");
     }
+}
+
+// ============================================================================
+// WARD SETUP FROM INTENT ANALYSIS
+// ============================================================================
+
+/// Set up ward directory, AGENTS.md blueprint, and per-node spec files
+/// from the intent analysis results. Called once before root agent starts.
+fn setup_ward_from_analysis(
+    vault_dir: &std::path::Path,
+    analysis: &crate::middleware::intent_analysis::IntentAnalysis,
+) {
+    let ward = &analysis.ward_recommendation;
+    let ward_dir = vault_dir.join("wards").join(&ward.ward_name);
+
+    // Skip scratch ward
+    if ward.ward_name == "scratch" {
+        return;
+    }
+
+    // Create ward directory structure
+    let is_new = !ward_dir.exists();
+    std::fs::create_dir_all(&ward_dir).ok();
+
+    // Create subdirectories from ward structure
+    for dir_name in ward.structure.keys() {
+        let dir_path = ward_dir.join(dir_name.trim_end_matches('/'));
+        std::fs::create_dir_all(&dir_path).ok();
+    }
+
+    // Also create core/ and output/ if not in structure
+    std::fs::create_dir_all(ward_dir.join("core")).ok();
+    std::fs::create_dir_all(ward_dir.join("output")).ok();
+
+    // Create subdirectory from ward_recommendation
+    if let Some(ref subdir) = ward.subdirectory {
+        let subdir_data = ward_dir.join(subdir).join("data");
+        std::fs::create_dir_all(&subdir_data).ok();
+    }
+
+    // Write AGENTS.md blueprint (only if new)
+    if is_new {
+        write_agents_md_blueprint(&ward_dir, &ward.ward_name, &ward.reason, &ward.structure, analysis);
+    }
+
+    // Create spec files for each graph node
+    if let Some(ref graph) = analysis.execution_strategy.graph {
+        // Determine the topic directory (e.g., "spy" from subdirectory "stocks/spy")
+        let topic = ward.subdirectory.as_deref()
+            .and_then(|s| s.split('/').last())
+            .unwrap_or("session");
+
+        let today = chrono::Utc::now().format("%Y%m%d").to_string();
+        let specs_dir = ward_dir.join("specs").join(topic);
+        std::fs::create_dir_all(&specs_dir).ok();
+
+        for node in &graph.nodes {
+            let spec_filename = format!("{}_{}.md",
+                node.id,
+                sanitize_filename(&node.task, 30)
+            );
+            let spec_path = specs_dir.join(&spec_filename);
+
+            // Don't overwrite existing specs (they may have been updated with results)
+            if spec_path.exists() {
+                continue;
+            }
+
+            let skills_str = if node.skills.is_empty() {
+                "none".to_string()
+            } else {
+                node.skills.join(", ")
+            };
+
+            // Find edges TO this node to determine dependencies
+            let depends_on: Vec<&str> = graph.edges.iter()
+                .filter_map(|edge| {
+                    match edge {
+                        crate::middleware::intent_analysis::GraphEdge::Direct { from, to } if to == &node.id => Some(from.as_str()),
+                        _ => None,
+                    }
+                })
+                .collect();
+
+            let deps_str = if depends_on.is_empty() {
+                "None (first step)".to_string()
+            } else {
+                depends_on.iter().map(|d| format!("Node {}", d)).collect::<Vec<_>>().join(", ")
+            };
+
+            let spec_content = format!(
+r#"# {id}: {task}
+Date: {date}
+Status: planned
+Agent: {agent}
+Skills: {skills}
+
+## Dependencies
+{deps}
+
+## Task
+{task}
+
+## Expected Output
+Save results to the task subdirectory as JSON/CSV files.
+Use core/ modules where available. Create new core/ modules only for reusable functionality.
+
+## Notes
+- Read AGENTS.md for coding conventions and available modules
+- Import from core/ before writing new utility functions
+- Write scripts with apply_patch, run with python
+"#,
+                id = node.id,
+                task = node.task,
+                date = today,
+                agent = node.agent,
+                skills = skills_str,
+                deps = deps_str,
+            );
+
+            if let Err(e) = std::fs::write(&spec_path, &spec_content) {
+                tracing::debug!("Failed to write spec {}: {}", spec_filename, e);
+            }
+        }
+
+        tracing::info!(
+            ward = %ward.ward_name,
+            nodes = graph.nodes.len(),
+            topic = topic,
+            "Created ward specs"
+        );
+    }
+}
+
+/// Write the initial AGENTS.md blueprint from intent analysis.
+fn write_agents_md_blueprint(
+    ward_dir: &std::path::Path,
+    ward_name: &str,
+    purpose: &str,
+    structure: &std::collections::HashMap<String, String>,
+    analysis: &crate::middleware::intent_analysis::IntentAnalysis,
+) {
+    let agents_md_path = ward_dir.join("AGENTS.md");
+
+    // Don't overwrite if it already has real content (not just auto-generated)
+    if agents_md_path.exists() {
+        if let Ok(existing) = std::fs::read_to_string(&agents_md_path) {
+            // Check if it has actual content beyond the template
+            if existing.contains("## Core Modules") && existing.contains("- `") {
+                return; // Already has substance, don't overwrite
+            }
+        }
+    }
+
+    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let mut content = format!("# {}\n\n## Purpose\n{}\n\n", ward_name, purpose);
+
+    // Directory layout from structure
+    if !structure.is_empty() {
+        content.push_str("## Directory Layout\n");
+        let mut dirs: Vec<_> = structure.iter().collect();
+        dirs.sort_by_key(|(k, _)| k.as_str());
+        for (dir, desc) in &dirs {
+            content.push_str(&format!("- `{}` -- {}\n", dir, desc));
+        }
+        content.push('\n');
+    }
+
+    // Planned execution from graph
+    if let Some(ref graph) = analysis.execution_strategy.graph {
+        content.push_str("## Execution Plan\n");
+        for node in &graph.nodes {
+            let skills = if node.skills.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", node.skills.join(", "))
+            };
+            content.push_str(&format!("- **{}**: {} -> `{}`{}\n",
+                node.id, node.task, node.agent, skills));
+        }
+        content.push('\n');
+    }
+
+    // How to Code section
+    content.push_str("## How to Code\n");
+    content.push_str("1. Write Python scripts with apply_patch, run with: `python path/to/script.py`\n");
+    content.push_str("2. Import from core/: `from core.<module> import <function>`\n");
+    content.push_str("3. Never use `python -c` for multi-line code -- always write a .py file first\n");
+    content.push_str("4. Read existing data files before fetching -- avoid duplicate work\n");
+    content.push_str("5. Check specs/ folder for your task specification\n\n");
+
+    content.push_str(&format!("*Blueprint created: {}*\n", today));
+
+    if let Err(e) = std::fs::write(&agents_md_path, &content) {
+        tracing::warn!("Failed to write AGENTS.md blueprint: {}", e);
+    }
+}
+
+/// Sanitize a string for use as a filename (lowercase, replace spaces with underscores, limit length).
+fn sanitize_filename(s: &str, max_len: usize) -> String {
+    s.to_lowercase()
+        .chars()
+        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
+        .collect::<String>()
+        .trim_matches('_')
+        .chars()
+        .take(max_len)
+        .collect::<String>()
+        .trim_end_matches('_')
+        .to_string()
 }
