@@ -1,12 +1,17 @@
 // ============================================================================
 // APPLY PATCH
 // Codex-compatible patch format parser and applicator.
-// Intercepted by the shell tool — no separate tool schema needed.
+// Provides a first-class ApplyPatchTool — no shell interception needed.
 // ============================================================================
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
+use async_trait::async_trait;
+use serde_json::{json, Value};
 use thiserror::Error;
+
+use zero_core::{FileSystemContext, Tool, ToolContext, ToolPermissions, ZeroError};
 
 // ============================================================================
 // ERROR TYPES
@@ -796,11 +801,15 @@ fn apply_replacements(
 }
 
 // ============================================================================
-// SHELL INTERCEPTOR
+// SHELL INTERCEPTOR (legacy, retained for tests)
 // ============================================================================
 
 /// Check if a shell command is an apply_patch invocation.
 /// Returns the patch text if detected, None otherwise.
+///
+/// Note: No longer used at runtime — the first-class `ApplyPatchTool` handles
+/// patch operations directly. Retained for backward-compatible tests.
+#[allow(dead_code)]
 pub fn detect_apply_patch(command: &str) -> Option<String> {
     let trimmed = command.trim();
 
@@ -845,6 +854,7 @@ pub fn detect_apply_patch(command: &str) -> Option<String> {
     None
 }
 
+#[allow(dead_code)]
 fn extract_heredoc_delimiter(s: &str) -> (String, &str) {
     let s = s.trim_start();
 
@@ -872,6 +882,9 @@ fn extract_heredoc_delimiter(s: &str) -> (String, &str) {
 
 /// Intercept an apply_patch command within a shell invocation.
 /// Returns Some(result_string) if handled, None if not an apply_patch command.
+///
+/// Note: No longer used at runtime — retained for backward-compatible tests.
+#[allow(dead_code)]
 pub fn intercept_apply_patch(command: &str, cwd: &Path) -> Option<Result<String, PatchError>> {
     let patch_text = detect_apply_patch(command)?;
 
@@ -884,6 +897,118 @@ pub fn intercept_apply_patch(command: &str, cwd: &Path) -> Option<Result<String,
         Ok(result) => Some(Ok(result.summary())),
         Err(e) => Some(Err(e)),
     }
+}
+
+// ============================================================================
+// APPLY PATCH TOOL (first-class tool, not via shell)
+// ============================================================================
+
+/// First-class tool for file creation, editing, and deletion via patch format.
+/// Receives patch text directly as a JSON parameter — no shell, no heredoc, no quoting issues.
+pub struct ApplyPatchTool {
+    fs: Arc<dyn FileSystemContext>,
+}
+
+impl ApplyPatchTool {
+    pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
+        Self { fs }
+    }
+}
+
+#[async_trait]
+impl Tool for ApplyPatchTool {
+    fn name(&self) -> &str {
+        "apply_patch"
+    }
+
+    fn description(&self) -> &str {
+        "Create, edit, or delete files. Patch format:\n\
+         *** Begin Patch\n\
+         *** Add File: path/file.py    (new file, lines start with +)\n\
+         *** Update File: path/file.py (edit, hunks with @@, lines: ' ' context, '-' remove, '+' add)\n\
+         *** Delete File: path/file.py (remove file)\n\
+         *** End Patch\n\n\
+         Every content line in Add File MUST start with '+'. Paths relative to ward."
+    }
+
+    fn parameters_schema(&self) -> Option<Value> {
+        Some(json!({
+            "type": "object",
+            "properties": {
+                "patch": {
+                    "type": "string",
+                    "description": "The patch content. Must start with '*** Begin Patch' and end with '*** End Patch'."
+                }
+            },
+            "required": ["patch"]
+        }))
+    }
+
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::moderate(vec!["filesystem:write".into()])
+    }
+
+    async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> zero_core::Result<Value> {
+        let patch_text = args
+            .get("patch")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ZeroError::Tool("Missing 'patch' parameter".to_string()))?;
+
+        // Resolve CWD from ward context
+        let cwd = resolve_ward_cwd(&self.fs, &ctx);
+
+        // Parse the patch
+        let hunks = match parse_patch(patch_text) {
+            Ok(h) => h,
+            Err(e) => {
+                return Ok(json!({
+                    "success": false,
+                    "error": e.to_string(),
+                }));
+            }
+        };
+
+        if hunks.is_empty() {
+            return Ok(json!({
+                "success": false,
+                "error": "Patch contains no file operations.",
+            }));
+        }
+
+        // Apply the hunks
+        match apply_hunks(&hunks, &cwd) {
+            Ok(result) => Ok(json!({
+                "success": true,
+                "summary": result.summary(),
+            })),
+            Err(e) => Ok(json!({
+                "success": false,
+                "error": e.to_string(),
+            })),
+        }
+    }
+}
+
+/// Resolve the working directory for patch operations.
+/// Uses the active ward directory if available, otherwise falls back to home/Documents/zbot/wards/scratch.
+fn resolve_ward_cwd(fs: &Arc<dyn FileSystemContext>, ctx: &Arc<dyn ToolContext>) -> PathBuf {
+    // Try to get ward_id from context
+    let ward_id = ctx
+        .get_state("ward_id")
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_else(|| "scratch".to_string());
+
+    // Try ward_dir from FileSystemContext
+    if let Some(dir) = fs.ward_dir(&ward_id) {
+        return dir;
+    }
+
+    // Fallback: use Documents/zbot/wards/{ward_id}
+    if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
+        return doc_dir.join("zbot").join("wards").join(&ward_id);
+    }
+
+    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 // ============================================================================

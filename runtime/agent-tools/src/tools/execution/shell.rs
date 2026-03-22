@@ -13,8 +13,6 @@ use tokio::time::timeout;
 
 use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
-use super::apply_patch;
-
 // ============================================================================
 // SECURITY CONFIGURATION
 // ============================================================================
@@ -224,8 +222,7 @@ impl ShellTool {
         // apply_patch heredocs are excluded inside is_file_writing_command().
         if is_file_writing_command(&command_normalized) {
             return Err(ZeroError::Tool(
-                "Use apply_patch for file creation/editing, not shell commands. \
-                 Example: shell(command=\"apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path/file.py\\n+content\\n*** End Patch\\nEOF\")".to_string()
+                "Use the apply_patch tool for file creation/editing, not shell commands.".to_string()
             ));
         }
 
@@ -328,10 +325,7 @@ impl Tool for ShellTool {
     }
 
     fn description(&self) -> &str {
-        "Execute shell commands or apply_patch for file operations. \
-         For creating/editing files, use: shell(command=\"apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+line1\\n+line2\\n*** End Patch\\nEOF\"). \
-         Every content line must start with '+'. \
-         Do NOT use Set-Content, Out-File, heredocs, or redirects for file writing — only apply_patch."
+        "Execute shell commands. For creating/editing files, use the apply_patch tool instead (not shell)."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -423,47 +417,7 @@ impl Tool for ShellTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        // ---- apply_patch interception (before validation) ----
-        // If the command is an apply_patch invocation, handle it directly without spawning a shell.
-        // This enables multi-file create/update/delete in a single tool call with zero extra schema.
-        // Must run BEFORE validate_command to avoid false positives on patch content.
-        {
-            // Resolve cwd the same way the shell would
-            let patch_cwd = if let Some(dir) = cwd {
-                std::path::PathBuf::from(dir)
-            } else if let Some(doc_dir) = dirs::document_dir().or_else(dirs::home_dir) {
-                let ward_id = ctx
-                    .get_state("ward_id")
-                    .and_then(|v| v.as_str().map(String::from))
-                    .unwrap_or_else(|| "scratch".to_string());
-                doc_dir.join("zbot").join("wards").join(&ward_id)
-            } else {
-                std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
-            };
-
-            if let Some(result) = apply_patch::intercept_apply_patch(command, &patch_cwd) {
-                return match result {
-                    Ok(output) => Ok(json!({
-                        "success": true,
-                        "exit_code": 0,
-                        "stdout": output,
-                        "stderr": "",
-                        "truncated": false,
-                        "shell": "apply_patch",
-                    })),
-                    Err(e) => Ok(json!({
-                        "success": false,
-                        "exit_code": 1,
-                        "stdout": "",
-                        "stderr": e.to_string(),
-                        "truncated": false,
-                        "shell": "apply_patch",
-                    })),
-                };
-            }
-        }
-
-        // Validate command against security rules (after apply_patch interception)
+        // Validate command against security rules
         Self::validate_command(command)?;
 
         tracing::debug!(
@@ -774,7 +728,8 @@ mod tests {
 
     #[test]
     fn test_apply_patch_not_blocked() {
-        // apply_patch should NOT be blocked
+        // apply_patch heredoc syntax should not be blocked by validation
+        // (even though it would fail at shell execution since apply_patch is now a separate tool)
         assert!(ShellTool::validate_command("apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: test.py\n+hello\n*** End Patch\nEOF").is_ok());
     }
 
