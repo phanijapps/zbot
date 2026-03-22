@@ -99,6 +99,17 @@ pub trait CallbackContext: ReadonlyContext {
 
     /// Set state value.
     fn set_state(&self, key: String, value: Value);
+
+    /// Atomically claim a key — returns true if this caller was first, false if already claimed.
+    /// Used to prevent concurrent tool calls from racing (e.g., only first delegate_to_agent proceeds).
+    /// Default implementation uses get+set (not truly atomic), override for lock-based atomicity.
+    fn try_claim(&self, key: &str) -> bool {
+        if self.get_state(key).is_some() {
+            return false;
+        }
+        self.set_state(key.to_string(), Value::Bool(true));
+        true
+    }
 }
 
 /// Tool context provides additional context for tool execution.

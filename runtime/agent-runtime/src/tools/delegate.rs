@@ -143,12 +143,9 @@ impl Tool for DelegateTool {
             ));
         }
 
-        // Guard: Only one delegation at a time per session
-        let has_active = ctx
-            .get_state("app:has_active_delegation")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        if has_active {
+        // Guard: Only one delegation at a time per session.
+        // Atomic claim — first concurrent delegate_to_agent wins, rest return "queued".
+        if !ctx.try_claim("app:delegation_active") {
             return Ok(json!({
                 "status": "queued",
                 "message": "You already have an active delegation. Wait for it to complete — the system will resume you automatically. Do NOT delegate another step until you see the result."
