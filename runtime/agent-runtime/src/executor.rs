@@ -343,6 +343,17 @@ impl AgentExecutor {
         loop {
             progress_tracker.tick();
 
+            // Reset delegation claim at the start of each turn.
+            // This allows root to delegate again after a previous delegation completes.
+            // try_claim checks for Bool(true); setting to Bool(false) releases the claim.
+            {
+                use zero_core::CallbackContext;
+                shared_tool_context.set_state(
+                    "app:delegation_active".to_string(),
+                    Value::Bool(false),
+                );
+            }
+
             // Turn budget: soft nudge then hard stop
             if self.config.max_turns > 0 && progress_tracker.total_iterations >= self.config.max_turns {
                 tracing::warn!(

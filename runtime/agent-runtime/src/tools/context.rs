@@ -277,7 +277,8 @@ impl zero_core::CallbackContext for ToolContext {
     /// Atomic claim — check and set under a single write lock.
     fn try_claim(&self, key: &str) -> bool {
         if let Ok(mut state) = self.state.write() {
-            if state.contains_key(key) {
+            // Check if already claimed (value is Bool(true))
+            if let Some(serde_json::Value::Bool(true)) = state.get(key) {
                 return false;
             }
             state.insert(key.to_string(), serde_json::Value::Bool(true));
