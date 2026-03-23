@@ -2292,24 +2292,30 @@ r#"# Tech Stack
             let spec_content = format!(
 r#"# {id}: {task}
 Date: {date}
-Status: planned
+Status: placeholder
 Agent: {agent}
 Skills: {skills}
 
 ## Dependencies
 {deps}
 
+## Objective
+<!-- FILL: One sentence — what does this step produce? -->
+
+## Inputs
+<!-- FILL: What data/files are available from previous steps? What core/ functions to import? -->
+
 ## Task
 {task}
 
-## Expected Output
-Save results to the task subdirectory as JSON/CSV files.
-Use core/ modules where available. Create new core/ modules only for reusable functionality.
+## Output
+<!-- FILL: Exact file paths, column names / JSON schema, data formats -->
 
-## Notes
-- Read AGENTS.md for coding conventions and available modules
-- Import from core/ before writing new utility functions
-- Write scripts with apply_patch, run with python
+## Success Criteria
+<!-- FILL: How to verify — file exists, has N rows, specific fields present -->
+
+## Implementation Plan
+<!-- FILL: Step-by-step tool calls (apply_patch, shell) to complete this task -->
 "#,
                 id = node.id,
                 task = node.task,
