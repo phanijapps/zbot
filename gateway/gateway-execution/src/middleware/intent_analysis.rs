@@ -205,6 +205,7 @@ pub fn format_user_template(
 
 pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalysis) {
     let mut section = String::from("\n\n## Intent Analysis\n\n");
+    let is_graph = analysis.execution_strategy.graph.is_some();
 
     section.push_str(&format!("**Primary Intent**: {}\n\n", analysis.primary_intent));
 
@@ -216,62 +217,35 @@ pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalys
         section.push('\n');
     }
 
-    // Render skills mapped to graph nodes (load per step, not all at once)
-    if let Some(ref graph) = analysis.execution_strategy.graph {
-        let has_skills = graph.nodes.iter().any(|n| !n.skills.is_empty());
-        if has_skills {
-            section.push_str("**Skills** (load ONLY when the step requires it, unload after):\n");
-            for node in &graph.nodes {
-                if !node.skills.is_empty() {
-                    let skills_str = node.skills.join(", ");
-                    section.push_str(&format!("- Node {} ({}): load `{}`\n", node.id, node.task, skills_str));
-                }
+    // Ward
+    let ward = &analysis.ward_recommendation;
+    section.push_str(&format!("**Ward**: `{}` ({}) — {}\n\n", ward.ward_name, ward.action, ward.reason));
+
+    if is_graph {
+        // GRAPH TASKS: slim injection — specs are in the ward, not here
+        section.push_str(&format!(
+            "**Approach**: graph ({} nodes). Placeholder specs are in `specs/` in the ward.\n\
+             **Action**: Delegate to a planning subagent to fill the specs, then delegate execution.\n\
+             Do NOT load skills, create your own plan, or write code directly. Read the specs.\n\n",
+            analysis.execution_strategy.graph.as_ref().map(|g| g.nodes.len()).unwrap_or(0)
+        ));
+    } else {
+        // SIMPLE/TRACKED TASKS: full injection — skills, agents, everything
+        if !analysis.recommended_skills.is_empty() {
+            section.push_str("**Recommended Skills** (load when needed):\n");
+            for skill in &analysis.recommended_skills {
+                section.push_str(&format!("- {}\n", skill));
             }
             section.push('\n');
         }
-    } else if !analysis.recommended_skills.is_empty() {
-        // Simple strategy (no graph) — just list skills
-        section.push_str("**Recommended Skills** (load only when needed, unload when done):\n");
-        for skill in &analysis.recommended_skills {
-            section.push_str(&format!("- {}\n", skill));
-        }
-        section.push('\n');
-    }
 
-    if !analysis.recommended_agents.is_empty() {
-        section.push_str("**Recommended Agents** (delegate to these):\n");
-        for agent in &analysis.recommended_agents {
-            section.push_str(&format!("- {}\n", agent));
+        if !analysis.recommended_agents.is_empty() {
+            section.push_str("**Recommended Agents**:\n");
+            for agent in &analysis.recommended_agents {
+                section.push_str(&format!("- {}\n", agent));
+            }
+            section.push('\n');
         }
-        section.push('\n');
-    }
-
-    // Ward recommendation with directory structure
-    let ward = &analysis.ward_recommendation;
-    section.push_str(&format!("**Ward**: `{}` ({}) — {}\n", ward.ward_name, ward.action, ward.reason));
-    if let Some(ref subdir) = ward.subdirectory {
-        section.push_str(&format!("**Task directory**: `{}`\n", subdir));
-    }
-    if !ward.structure.is_empty() {
-        section.push_str("**Directory layout** (create these, put files in the right place):\n");
-        let mut dirs: Vec<_> = ward.structure.iter().collect();
-        dirs.sort_by_key(|(k, _)| k.clone());
-        for (dir, purpose) in &dirs {
-            section.push_str(&format!("- `{}` — {}\n", dir, purpose));
-        }
-    }
-    section.push_str("**After completing work**: Update AGENTS.md with what was built and what's reusable.\n");
-    section.push('\n');
-
-    if let Some(graph) = &analysis.execution_strategy.graph {
-        section.push_str("**Execution Graph**:\n");
-        section.push_str(&format!("```mermaid\n{}\n```\n\n", graph.mermaid));
-        section.push_str(&format!(
-            "**Orchestration**: {}\n\n",
-            analysis.execution_strategy.explanation
-        ));
-        let max_cycles = graph.max_cycles.unwrap_or(2);
-        section.push_str(&format!("**Max cycles**: {}\n\n", max_cycles));
     }
 
     section.push_str(&format!(
@@ -737,14 +711,12 @@ mod tests {
         assert!(prompt.contains("**Primary Intent**: code_generation"));
         assert!(prompt.contains("1. Write unit tests"));
         assert!(prompt.contains("2. Add error handling"));
-        // Skills are mapped to graph nodes, not flat list
-        assert!(prompt.contains("Node A (Generate code): load `code-gen`"));
-        assert!(prompt.contains("- coder"));
-        assert!(prompt.contains("- reviewer"));
         assert!(prompt.contains("**Ward**: `scratch`"));
-        assert!(prompt.contains("```mermaid\ngraph TD\nA-->END\n```"));
-        assert!(prompt.contains("**Orchestration**: Generate then done"));
-        assert!(prompt.contains("**Max cycles**: 5"));
+        // Graph tasks get slim injection — no skills, agents, or mermaid
+        assert!(prompt.contains("**Approach**: graph (1 nodes)"));
+        assert!(prompt.contains("Placeholder specs"));
+        assert!(!prompt.contains("```mermaid")); // No graph in slim injection
+        assert!(!prompt.contains("Node A")); // No skill-node mapping
         assert!(prompt.contains("**Rewritten request**: Generate code with tests and error handling"));
     }
 

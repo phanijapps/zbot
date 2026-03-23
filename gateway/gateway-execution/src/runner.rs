@@ -595,6 +595,41 @@ impl ExecutionRunner {
             }
         };
 
+        // Inject mandatory first action for graph tasks with placeholder specs
+        if let Some(ref ward_id) = setup.ward_id {
+            let specs_dir = self.paths.vault_dir().join("wards").join(ward_id).join("specs");
+            if specs_dir.exists() {
+                let has_placeholders = std::fs::read_dir(&specs_dir).ok()
+                    .map(|entries| {
+                        entries
+                            .filter_map(|e| e.ok())
+                            .filter(|e| e.path().is_dir())
+                            .any(|topic_dir| {
+                                std::fs::read_dir(topic_dir.path()).ok()
+                                    .map(|files| {
+                                        files.filter_map(|f| f.ok()).any(|f| {
+                                            std::fs::read_to_string(f.path()).ok()
+                                                .map(|c| c.contains("Status: placeholder"))
+                                                .unwrap_or(false)
+                                        })
+                                    })
+                                    .unwrap_or(false)
+                            })
+                    })
+                    .unwrap_or(false);
+
+                if has_placeholders {
+                    history.push(ChatMessage::system(
+                        "[MANDATORY FIRST ACTION] Placeholder specs found in the ward's specs/ folder. \
+                         You MUST delegate to a planning subagent as your first action. \
+                         Follow the pipeline in your planning shard: delegate to data-analyst with max_iterations=40 \
+                         to fill the specs and analyze core/. Do NOT load skills, create plans, or write code yourself.".to_string()
+                    ));
+                    tracing::info!(ward = %ward_id, "Injected mandatory planning action for graph task");
+                }
+            }
+        }
+
         // Spawn execution task
         self.spawn_execution_task(
             executor,

@@ -228,23 +228,12 @@ async fn test_full_enrichment_flow() {
     assert!(prompt.contains("2. Identify tax-loss harvesting opportunities"));
     assert!(prompt.contains("3. Generate risk-adjusted return projections"));
 
-    // Skills mapped to graph nodes (not flat list)
-    assert!(prompt.contains("**Skills**"));
-    assert!(prompt.contains("Node A"));
-    assert!(prompt.contains("web-search"));
-    assert!(prompt.contains("code-exec"));
-
-    // Recommended agents
-    assert!(prompt.contains("**Recommended Agents**"));
-    assert!(prompt.contains("- researcher"));
-    assert!(prompt.contains("- analyst"));
-
-    // Mermaid graph
-    assert!(prompt.contains("```mermaid"));
-    assert!(prompt.contains("graph TD"));
-
-    // Max cycles
-    assert!(prompt.contains("**Max cycles**: 2"));
+    // Graph tasks get slim injection — no skills, agents, or graph details
+    assert!(prompt.contains("**Approach**: graph"));
+    assert!(prompt.contains("Placeholder specs"));
+    assert!(!prompt.contains("**Skills**")); // Stripped for graph tasks
+    assert!(!prompt.contains("```mermaid")); // No graph in slim injection
+    assert!(!prompt.contains("**Max cycles**")); // No graph details
 }
 
 /// LLM call failure should propagate as Err.
@@ -343,10 +332,10 @@ async fn test_skills_recommended_but_not_loaded() {
     let mut prompt = String::from("You are a helpful assistant.");
     inject_intent_context(&mut prompt, &analysis);
 
-    // The injected section must tell the agent skills are step-mapped (load per node)
+    // Graph tasks get slim injection — delegate to planning subagent
     assert!(
-        prompt.contains("load ONLY when the step requires it, unload after"),
-        "prompt should instruct per-step skill loading; got:\n{}",
+        prompt.contains("Placeholder specs"),
+        "prompt should reference placeholder specs for graph tasks; got:\n{}",
         prompt
     );
 }
