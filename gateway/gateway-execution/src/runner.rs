@@ -1861,6 +1861,15 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     let purpose = extract_purpose_section(&agents_md_path, ward_id);
     sections.push(format!("\n## Purpose\n{}\n", purpose));
 
+    // ── Ward Documentation ──
+    let memory_dir_exists = ward_dir.join("memory").exists();
+    if memory_dir_exists {
+        sections.push("## Ward Documentation\n".to_string());
+        sections.push("- [memory/ward.md](memory/ward.md) — Domain history and session log\n".to_string());
+        sections.push("- [memory/structure.md](memory/structure.md) — Code organization conventions\n".to_string());
+        sections.push("- [memory/techstack.md](memory/techstack.md) — Runtime environment and packages\n\n".to_string());
+    }
+
     // ── Core Modules with function signatures ──
     let core_dir = ward_dir.join("core");
     if core_dir.exists() {
@@ -1994,6 +2003,53 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
         }
     }
 
+    // ── Specs & Plans ──
+    let has_specs = ward_dir.join("specs").exists();
+    let has_plans = ward_dir.join("plans").exists();
+    if has_specs || has_plans {
+        sections.push("## Specs & Plans\n".to_string());
+        // List spec directories
+        if has_specs {
+            if let Ok(entries) = std::fs::read_dir(ward_dir.join("specs")) {
+                let mut spec_topics: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                spec_topics.sort();
+                for topic in &spec_topics {
+                    let spec_count = std::fs::read_dir(ward_dir.join("specs").join(topic))
+                        .ok()
+                        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
+                        .unwrap_or(0);
+                    if spec_count > 0 {
+                        sections.push(format!("- `specs/{}/` — {} spec(s)\n", topic, spec_count));
+                    }
+                }
+            }
+        }
+        if has_plans {
+            if let Ok(entries) = std::fs::read_dir(ward_dir.join("plans")) {
+                let mut plan_topics: Vec<_> = entries
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.path().is_dir())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect();
+                plan_topics.sort();
+                for topic in &plan_topics {
+                    let plan_count = std::fs::read_dir(ward_dir.join("plans").join(topic))
+                        .ok()
+                        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
+                        .unwrap_or(0);
+                    if plan_count > 0 {
+                        sections.push(format!("- `plans/{}/` — {} plan(s)\n", topic, plan_count));
+                    }
+                }
+            }
+        }
+        sections.push("\n".to_string());
+    }
+
     // ── How to Code ──
     // Determine an example module name for the import example
     let example_import = std::fs::read_dir(&core_dir)
@@ -2102,6 +2158,84 @@ fn setup_ward_from_analysis(
         std::fs::create_dir_all(&subdir_data).ok();
     }
 
+    // Create memory/ folder with documentation templates
+    let memory_dir = ward_dir.join("memory");
+    std::fs::create_dir_all(&memory_dir).ok();
+
+    // ward.md — domain purpose and history
+    let ward_md_path = memory_dir.join("ward.md");
+    if !ward_md_path.exists() {
+        let ward_md_content = format!(
+r#"# {name}
+
+## Domain
+{reason}
+
+## Purpose
+{reason}
+
+## Session History
+- {today}: Ward created
+"#,
+            name = ward.ward_name,
+            reason = ward.reason,
+            today = chrono::Utc::now().format("%Y-%m-%d"),
+        );
+        std::fs::write(&ward_md_path, ward_md_content).ok();
+    }
+
+    // structure.md — code organization conventions
+    let structure_md_path = memory_dir.join("structure.md");
+    if !structure_md_path.exists() {
+        let structure_content = r#"# Code Structure
+
+## Conventions
+- One concern per file, max 100 lines
+- Functions with docstrings and typed parameters
+- `if __name__ == "__main__":` guard for scripts
+- Data saved as JSON/CSV, never print-only
+
+## Directory Rules
+- `core/` — Reusable across all topics. Import, don't copy.
+- `{task}/` — Topic-specific scripts and data
+- `{task}/data/` — Raw and computed data files
+- `output/` — Final deliverables only
+- `specs/` — Task specifications (archived)
+- `plans/` — Implementation plans (archived)
+- `memory/` — Ward documentation
+- No files in ward root except AGENTS.md
+"#;
+        std::fs::write(&structure_md_path, structure_content).ok();
+    }
+
+    // techstack.md — runtime environment
+    let techstack_md_path = memory_dir.join("techstack.md");
+    if !techstack_md_path.exists() {
+        let python_cmd = if cfg!(windows) { "python" } else { "python3" };
+        let activate_cmd = if cfg!(windows) {
+            ".\\venv\\Scripts\\Activate.ps1"
+        } else {
+            "source venv/bin/activate"
+        };
+        let techstack_content = format!(
+r#"# Tech Stack
+
+## Python
+- Command: `{python_cmd}`
+- Virtual env: Check ward root or system venv
+- Activate: `{activate_cmd}`
+
+## How to Run
+```
+{python_cmd} stocks/{{ticker}}/collect_data.py
+```
+"#,
+            python_cmd = python_cmd,
+            activate_cmd = activate_cmd,
+        );
+        std::fs::write(&techstack_md_path, techstack_content).ok();
+    }
+
     // Write AGENTS.md blueprint (only if new)
     if is_new {
         write_agents_md_blueprint(&ward_dir, &ward.ward_name, &ward.reason, &ward.structure, analysis);
@@ -2117,6 +2251,9 @@ fn setup_ward_from_analysis(
         let today = chrono::Utc::now().format("%Y%m%d").to_string();
         let specs_dir = ward_dir.join("specs").join(topic);
         std::fs::create_dir_all(&specs_dir).ok();
+
+        let plans_dir = ward_dir.join("plans").join(topic);
+        std::fs::create_dir_all(&plans_dir).ok();
 
         for node in &graph.nodes {
             let spec_filename = format!("{}_{}.md",
@@ -2230,6 +2367,12 @@ fn write_agents_md_blueprint(
         }
         content.push('\n');
     }
+
+    // Ward Documentation references
+    content.push_str("## Ward Documentation\n");
+    content.push_str("- [memory/ward.md](memory/ward.md) — Domain history\n");
+    content.push_str("- [memory/structure.md](memory/structure.md) — Code conventions\n");
+    content.push_str("- [memory/techstack.md](memory/techstack.md) — Runtime environment\n\n");
 
     // Planned execution from graph
     if let Some(ref graph) = analysis.execution_strategy.graph {
