@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
 
+use crate::tools::guards::has_placeholder_specs;
+
 // ============================================================================
 // UPDATE PLAN TOOL
 // ============================================================================
@@ -75,6 +77,13 @@ impl Tool for UpdatePlanTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        if has_placeholder_specs(ctx.as_ref()) {
+            return Ok(json!({
+                "status": "redirect",
+                "message": "Placeholder specs exist in your ward's specs/ folder. Delegate to a planning subagent to fill them instead of creating your own plan."
+            }));
+        }
+
         // Check for error markers from truncated/malformed tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
             let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");

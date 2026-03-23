@@ -12,6 +12,7 @@ mod memory;
 mod introspection;
 mod ward;
 mod connectors;
+pub(crate) mod guards;
 
 use std::sync::Arc;
 
