@@ -1263,6 +1263,24 @@ impl ExecutionRunner {
             builder = builder.with_initial_state("ward_structure", structure.clone());
         }
 
+        // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
+        if is_root {
+            if let Some(wid) = ward_id {
+                let specs_dir = self.paths.vault_dir().join("wards").join(wid).join("specs");
+                if specs_dir.exists() {
+                    let has_placeholders = std::fs::read_dir(&specs_dir).ok()
+                        .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
+                        .unwrap_or(false);
+                    if has_placeholders {
+                        builder = builder.with_initial_state(
+                            "app:has_placeholder_specs",
+                            serde_json::Value::Bool(true),
+                        );
+                    }
+                }
+            }
+        }
+
         builder
             .build(
                 agent_for_build,

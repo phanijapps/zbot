@@ -152,6 +152,30 @@ impl Tool for DelegateTool {
             }));
         }
 
+        // Guard: Block ad-hoc delegations when placeholder specs exist.
+        // Only planning subagent delegations are allowed (task contains "planning" or "Spec writer").
+        let has_placeholders = ctx
+            .get_state("app:has_placeholder_specs")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let is_delegated = ctx
+            .get_state("app:is_delegated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if has_placeholders && !is_delegated {
+            let task_lower = task.to_lowercase();
+            let is_planning_task = task_lower.contains("planning subagent")
+                || task_lower.contains("spec writer")
+                || task_lower.contains("plan, not execute")
+                || task_lower.contains("fill") && task_lower.contains("spec");
+            if !is_planning_task {
+                return Ok(json!({
+                    "status": "redirect",
+                    "message": "Placeholder specs exist in the ward. Delegate to a planning subagent (code-agent) to fill them first. Do not delegate ad-hoc tasks."
+                }));
+            }
+        }
+
         let parent_conversation_id = ctx
             .get_state("conversation_id")
             .and_then(|v| v.as_str().map(|s| s.to_string()))
