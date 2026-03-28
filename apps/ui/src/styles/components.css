@@ -2930,3 +2930,32 @@
 .env-var-row .form-input {
   flex: 1;
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Reduced Motion
+   ═══════════════════════════════════════════════════════════ */
+
+@media (prefers-reduced-motion: reduce) {
+  .slideover {
+    transition: none;
+  }
+
+  .slideover-backdrop {
+    transition: none;
+  }
+
+  .agent-card,
+  .skill-card,
+  .schedule-card,
+  .ts-card,
+  .pw-card {
+    transition: none;
+  }
+
+  .agent-card:hover,
+  .skill-card:hover,
+  .ts-card:hover,
+  .pw-card:hover {
+    transform: none;
+  }
+}

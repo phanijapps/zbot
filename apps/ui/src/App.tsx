@@ -4,13 +4,10 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
   Bot,
-  Zap,
-  Cable,
-  Server,
   Settings,
   Loader2,
   AlertCircle,
@@ -18,18 +15,13 @@ import {
   Eye,
   LayoutDashboard,
   Plug,
-  Calendar,
   Brain,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
-import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
-import { WebCronPanel } from "./features/cron/WebCronPanel";
-import { WebConnectorsPanel } from "./features/connectors/WebConnectorsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
-import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { WebMemoryPanel } from "./features/memory";
@@ -175,18 +167,21 @@ function App() {
       />
       <WebAppShell connectionStatus={connectionStatus}>
         <Routes>
-          {/* Dashboard is home, Chat is handled by slider */}
+          {/* Active pages */}
           <Route path="/" element={<WebOpsDashboard />} />
           <Route path="/chat" element={<WebOpsDashboard />} />
           <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/memory" element={<WebMemoryPanel />} />
           <Route path="/agents" element={<WebAgentsPanel />} />
-          <Route path="/skills" element={<WebSkillsPanel />} />
-          <Route path="/hooks" element={<WebCronPanel />} />
-          <Route path="/connectors" element={<WebConnectorsPanel />} />
-          <Route path="/providers" element={<WebIntegrationsPanel />} />
-          <Route path="/mcps" element={<WebMcpsPanel />} />
+          <Route path="/integrations" element={<WebIntegrationsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
+
+          {/* Redirects from old routes */}
+          <Route path="/providers" element={<Navigate to="/settings" replace />} />
+          <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
+          <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
+          <Route path="/connectors" element={<Navigate to="/integrations?tab=plugins" replace />} />
+          <Route path="/mcps" element={<Navigate to="/integrations" replace />} />
         </Routes>
       </WebAppShell>
     </BrowserRouter>
@@ -224,19 +219,10 @@ const navGroups: NavGroup[] = [
     ],
   },
   {
-    label: "Configure",
+    label: "Manage",
     items: [
       { to: "/agents", label: "Agents", icon: Bot },
-      { to: "/skills", label: "Skills", icon: Zap },
-    ],
-  },
-  {
-    label: "Connect",
-    items: [
-      { to: "/connectors", label: "Workers", icon: Plug },
-      { to: "/hooks", label: "Schedules", icon: Calendar },
-      { to: "/providers", label: "Providers", icon: Cable },
-      { to: "/mcps", label: "MCPs", icon: Server },
+      { to: "/integrations", label: "Integrations", icon: Plug },
     ],
   },
   {
