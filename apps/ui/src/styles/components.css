@@ -1833,7 +1833,7 @@
 }
 
 .slideover__title {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: var(--text-xl);
   font-weight: 500;
   color: var(--foreground);
@@ -1962,7 +1962,7 @@
 .tab-bar {
   display: flex;
   gap: 2px;
-  padding: 0 var(--spacing-9);
+  padding: 0 var(--spacing-8);
   border-bottom: 1px solid var(--border);
 }
 
@@ -2010,7 +2010,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: var(--spacing-4) var(--spacing-9);
+  padding: var(--spacing-4) var(--spacing-8);
   border-bottom: 1px solid var(--border);
 }
 
@@ -2178,31 +2178,28 @@
    ═══════════════════════════════════════════════════════════ */
 
 .page-header-v2 {
-  padding: var(--spacing-7) var(--spacing-9) 0;
+  padding: var(--spacing-8) var(--spacing-8) 0;
 }
 
 .page-title-v2 {
-  font-family: var(--font-display);
-  font-size: 26px;
-  font-weight: 500;
+  font-size: var(--text-2xl);
+  font-weight: 600;
   color: var(--foreground);
-  letter-spacing: -0.3px;
-  margin-bottom: var(--spacing-1);
+  letter-spacing: -0.025em;
 }
 
 .page-subtitle-v2 {
   font-size: var(--text-sm);
   color: var(--muted-foreground);
-  font-weight: 300;
-  margin-bottom: var(--spacing-5);
-  line-height: 1.7;
+  margin-bottom: var(--spacing-6);
+  line-height: 1.6;
   max-width: 560px;
 }
 
 .page-content-v2 {
   flex: 1;
   overflow-y: auto;
-  padding: var(--spacing-6) var(--spacing-9) var(--spacing-10);
+  padding: var(--spacing-6) var(--spacing-8) var(--spacing-8);
 }
 
 .card-grid {
@@ -2365,7 +2362,7 @@
 }
 
 .agent-card__name {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 17px;
   font-weight: 500;
   color: var(--foreground);
@@ -2451,7 +2448,7 @@
 }
 
 .skill-card__name {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 16px;
   font-weight: 500;
   color: var(--foreground);
@@ -2668,7 +2665,7 @@
 }
 
 .ts-card__name {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 17px;
   font-weight: 500;
   color: var(--foreground);
@@ -2779,7 +2776,7 @@
 }
 
 .pw-card__name {
-  font-family: var(--font-display);
+  font-family: var(--font-body);
   font-size: 17px;
   font-weight: 500;
   color: var(--foreground);
