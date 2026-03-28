@@ -56,12 +56,19 @@
 │  ~/Documents/zbot/                                                       │
 │  ├── conversations.db          # SQLite: conversations, messages,       │
 │  │                              #   memory_facts, embedding_cache       │
-│  ├── settings.json             # Application settings (tools, logs)     │
-│  ├── config/                   # System prompt config (auto-created)    │
+│  ├── data/                                                               │
+│  │   ├── conversations.db     # SQLite: conversations, messages,       │
+│  │   │                        #   memory_facts, embedding_cache        │
+│  │   └── knowledge_graph.db   # SQLite: entities, relationships        │
+│  ├── config/                   # System prompt + app config             │
+│  │   ├── settings.json        #   App settings (offload, logs)         │
+│  │   ├── providers.json       #   LLM provider credentials             │
+│  │   ├── models.json          #   Model capability overrides (optional)│
 │  │   ├── SOUL.md               #   Agent identity/personality           │
 │  │   ├── INSTRUCTIONS.md       #   Execution rules                     │
 │  │   ├── OS.md                 #   Platform-specific commands (auto)    │
 │  │   ├── distillation_prompt.md#   Customizable distillation prompt     │
+│  │   ├── mcps.json             #   MCP server configurations            │
 │  │   └── shards/               #   Overridable prompt shards            │
 │  │       ├── tooling_skills.md #     Skills-first approach              │
 │  │       ├── memory_learning.md#     Memory patterns                    │
@@ -85,8 +92,6 @@
 │  │       └── AGENTS.md        #     Per-ward context (ward memory)      │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
-│  ├── providers.json            # LLM provider configurations            │
-│  ├── mcps.json                 # MCP server configurations              │
 │  ├── connectors.json           # Connector configurations               │
 │  ├── cron_jobs.json            # Scheduled job configurations           │
 │  ├── plugins/                  # Node.js plugin directories             │
@@ -115,6 +120,59 @@
 | Embeddings | fastembed (local ONNX) | Default: all-MiniLM-L6-v2 (384d), zero cost |
 | Serialization | serde + serde_json | JSON handling |
 | Logging | tracing + tracing-subscriber + tracing-appender | Structured logging with file rotation |
+
+## Model Capabilities Registry
+
+Models are tracked in a registry with capability metadata and context window sizes. Three-layer resolution:
+
+1. **Local overrides** (`config/models.json`) — user-editable, highest priority
+2. **Bundled registry** (`gateway/templates/models_registry.json`) — embedded in binary, 50+ models
+3. **Unknown model fallback** — conservative defaults (tools: true, 8K context)
+
+### ModelProfile Structure
+
+```json
+{
+  "glm-5.1": {
+    "name": "GLM-5.1",
+    "provider": "zhipu",
+    "capabilities": {
+      "tools": true, "vision": true, "thinking": true,
+      "embeddings": false, "voice": false,
+      "imageGeneration": false, "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 16384 }
+  }
+}
+```
+
+### Capabilities
+
+| Capability | Description |
+|------------|-------------|
+| `tools` | Function/tool calling support |
+| `vision` | Image input support |
+| `thinking` | Extended reasoning/chain-of-thought |
+| `embeddings` | Vector embedding model (not chat) |
+| `voice` | Audio input/output |
+| `imageGeneration` | Image generation (DALL-E style) |
+| `videoGeneration` | Video generation/processing |
+
+### How It's Used
+
+- **ExecutorBuilder**: Resolves context window from registry (replaces hardcoded lookup). Validates `thinking_enabled` against model capabilities.
+- **Delegation spawn**: Validates subagent model supports `tools` capability.
+- **UI**: Model dropdowns show capability badges (wrench, eye, brain, speaker) with tooltips.
+- **API**: `GET /api/models` returns the full merged registry.
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-services/src/models.rs` | ModelProfile, ModelCapabilities, ModelRegistry service |
+| `gateway/templates/models_registry.json` | Bundled catalog (50+ models across 9 providers) |
+| `gateway/src/http/models.rs` | REST API endpoints |
+| `gateway/gateway-execution/src/invoke/executor.rs` | Context window resolution + thinking validation |
 
 ## Logging Configuration
 
@@ -203,7 +261,7 @@ zerod --log-level debug
 | `gateway/gateway-services/src/settings.rs` | `AppSettings` with `logs` field, CRUD methods |
 | `gateway/src/http/settings.rs` | HTTP endpoints for log settings |
 | `apps/daemon/src/main.rs` | Logging initialization with settings.json + CLI merge |
-| `apps/ui/src/App.tsx` | Web UI settings panel with log configuration |
+| `apps/ui/src/features/settings/WebSettingsPanel.tsx` | Settings page (context protection, logging) |
 
 ## Crate Structure
 
@@ -268,7 +326,7 @@ gateway/
 ├── gateway-database/    # DatabaseManager, pool, schema, ConversationRepository
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
-├── gateway-services/    # AgentService, ProviderService, McpService, SkillService, SettingsService
+├── gateway-services/    # AgentService, ProviderService, ModelRegistry, McpService, SkillService, SettingsService
 ├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller, MemoryRecall
 ├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
 ├── gateway-cron/        # CronJobConfig, CronService

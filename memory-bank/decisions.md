@@ -190,6 +190,26 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Decision**: Wrap LLM clients with `ThrottledLlmClient` that uses a shared `tokio::sync::Semaphore` per provider. All executors sharing the same provider share the semaphore.
 **Rationale**: Simple, composable. Configured via `maxConcurrentRequests` in `providers.json` (default: 3). Wrapping chain: `OpenAiClient -> RetryingLlmClient -> ThrottledLlmClient`. Implementation: `runtime/agent-runtime/src/llm/throttle.rs`.
 
+### Model Capabilities Registry: Data-Driven Over Hardcoded
+**Problem**: Model context windows were hardcoded in a match statement (`get_model_context_window`). No capability metadata — agents could enable thinking on models that don't support it. Adding new models required code changes.
+**Decision**: Three-layer model registry: bundled JSON (embedded in binary) > local overrides (`config/models.json`) > unknown-model fallback. Each model has capabilities (tools, vision, thinking, embeddings, voice, imageGeneration, videoGeneration) and context window (input/output tokens).
+**Rationale**: Data-driven — new models added without code changes. Local overrides for custom/private models. Bundled registry updated with releases. Executor validates `thinking_enabled` against model capabilities (warn + disable). Context window resolution replaces hardcoded lookup. Implementation: `gateway/gateway-services/src/models.rs`, `gateway/templates/models_registry.json`.
+
+### Provider Default Model: Explicit Over Positional
+**Problem**: Default model was `provider.models[0]` — an implicit positional convention. Reordering the models array silently changed which model every agent used.
+**Decision**: Added `defaultModel` field to Provider struct. Priority: explicit `defaultModel` > first in `models` array > `"gpt-4o"` fallback.
+**Rationale**: Explicit is always better than implicit. Users can set their preferred default without worrying about array order. Implementation: `gateway/gateway-services/src/providers.rs`.
+
+### Settings UI: Deprecate Optional Tool Toggles
+**Problem**: Optional tool toggles (python, webFetch, todos, fileTools, uiTools, createAgent) confused non-technical users. Most didn't work correctly — TS types referenced non-existent backend keys (`grep`, `glob`, `loadSkill`). The toggles gave a false sense of control.
+**Decision**: Remove the Optional Tools section from the Settings UI. Keep introspection enabled via `settings.json`. Backend `ToolSettings` struct unchanged — tools can still be enabled programmatically or via direct JSON editing. UI focuses on the two settings that actually matter: context protection (offload) and logging.
+**Rationale**: Simpler surface for non-technical users. The tools that matter (shell, apply_patch, memory, ward) are always on. The deprecated toggles were rarely used and poorly implemented.
+
+### Providers Page: Card Grid Over Split Panel
+**Problem**: The original split-panel layout (sidebar list + detail pane) was a developer tool pattern. No inline editing, no guided setup, no capability visibility. Non-technical users didn't know what to do.
+**Decision**: Card grid with responsive 2-column layout. Each card shows provider name, status badge (Connected/Not tested/Active), model chips with capability badges. Click opens a slide-over detail panel with view/edit toggle. Empty state shows Top-3 preset cards (OpenAI, Anthropic, Ollama) with inline "type API key and connect" flow.
+**Rationale**: Cards give visual overview. Inline connect reduces the happy path to 2 clicks. Slide-over preserves context (grid visible behind). View/Edit toggle prevents accidental changes. 9 provider presets with pre-filled baseUrl and models. Implementation: `apps/ui/src/features/integrations/`.
+
 ### Score Threshold + Per-Category Caps for Semantic Search
 **Problem**: Sending all indexed resources to the LLM wastes tokens on irrelevant results and produces noisy recommendations.
 **Decision**: Apply a minimum relevance score threshold (0.15) and per-category caps (8 skills, 5 agents, 5 wards) when selecting resources for intent analysis.

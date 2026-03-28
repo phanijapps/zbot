@@ -190,6 +190,23 @@ const Card = ({ size }) => (
 - `.modal`, `.modal--sm/lg` - Dialog container
 - `.modal__header/body/footer` - Modal sections
 
+### Provider Page
+- `.provider-grid` - Responsive 2-column card grid
+- `.provider-card`, `.provider-card--active` - Provider card with status border
+- `.provider-card__status/name/url/models` - Card child elements
+- `.model-chip`, `.model-chip--removable` - Model tag with capability badges
+- `.model-chip__name/capabilities/context/remove` - Chip child elements
+- `.provider-slideover`, `.provider-slideover--open` - Slide-over detail panel
+- `.provider-slideover__backdrop/header/body/footer` - Slide-over sections
+- `.preset-card`, `.preset-card--dimmed` - Onboarding preset cards
+- `.inline-connect` - Expanded preset connect form
+- `.connection-bar`, `.connection-bar--ok/warn/error` - Status indicator
+- `.field-label`, `.field-value`, `.field-value--mono` - Read-only field display
+
+### Settings Page
+- Uses `.card`, `.settings-toggle-btn`, `.settings-expandable` from base components
+- `.settings-info-card`, `.settings-toggle-option`, `.settings-field-label` for form controls
+
 ---
 
 ## Adding New Components
