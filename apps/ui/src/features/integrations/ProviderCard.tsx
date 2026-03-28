@@ -47,7 +47,10 @@ export function ProviderCard({ provider, modelRegistry, isActive, onClick }: Pro
       </div>
 
       <div className="provider-card__name">{provider.name}</div>
-      <div className="provider-card__url">{shortenUrl(provider.baseUrl)}</div>
+      <div className="provider-card__url">
+        {shortenUrl(provider.baseUrl)}
+        {provider.models.length > 0 && <span> · {provider.models.length} model{provider.models.length !== 1 ? "s" : ""}</span>}
+      </div>
 
       <div className="provider-card__models">
         {visibleModels.map((model) => (

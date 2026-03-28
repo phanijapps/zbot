@@ -141,11 +141,9 @@ export function WebIntegrationsPanel() {
                   {providers.filter((p) => p.verified).length} connected · {defaultProvider ? "1 active" : "none active"}
                 </p>
               </div>
-              {availablePresets.length > 0 && (
-                <button className="btn btn--primary btn--sm" onClick={() => setShowAddPresets(!showAddPresets)}>
-                  <Plus size={14} /> Add Provider
-                </button>
-              )}
+              <button className="btn btn--primary btn--sm" onClick={() => availablePresets.length > 0 ? setShowAddPresets(!showAddPresets) : handleOpenCreate()}>
+                <Plus size={14} /> Add Provider
+              </button>
             </div>
 
             {/* Error */}
@@ -183,6 +181,15 @@ export function WebIntegrationsPanel() {
               defaultProviderId={defaultProviderId}
               onSelect={handleSelectProvider}
             />
+
+            {/* Add another link */}
+            {availablePresets.length > 0 && !showAddPresets && (
+              <div style={{ textAlign: "center", marginTop: "var(--spacing-4)" }}>
+                <button className="btn btn--ghost btn--sm" onClick={() => setShowAddPresets(true)}>
+                  <Plus size={14} /> Add another provider
+                </button>
+              </div>
+            )}
           </>
         ) : (
           /* Empty state for new users */

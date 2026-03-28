@@ -115,37 +115,16 @@ export function WebSettingsPanel() {
         <div className="flex flex-col gap-4">
 
           {/* ═══════════════════════════════════════════════════════
-              SYSTEM INFO — always visible, no toggles
+              SYSTEM INFO — compact info bar
              ═══════════════════════════════════════════════════════ */}
-          <div className="card card__padding--lg">
-            <div className="card__header">
-              <div className="flex items-center gap-3">
-                <div className="card__icon card__icon--primary">
-                  <Activity style={{ width: 18, height: 18 }} />
-                </div>
-                <div>
-                  <h2 className="settings-section-header">System</h2>
-                  <p className="page-subtitle">Gateway endpoints and data paths</p>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="settings-info-card">
-                <span className="settings-info-card__label">HTTP API</span>
-                <code className="settings-info-card__value">http://localhost:18791</code>
-              </div>
-              <div className="settings-info-card">
-                <span className="settings-info-card__label">WebSocket</span>
-                <code className="settings-info-card__value">ws://localhost:18790</code>
-              </div>
-              <div className="settings-info-card">
-                <span className="settings-info-card__label">Data Directory</span>
-                <code className="settings-info-card__value">~/Documents/zbot/</code>
-              </div>
-              <div className="settings-info-card">
-                <span className="settings-info-card__label">Log Directory</span>
-                <code className="settings-info-card__value">~/Documents/zbot/logs/</code>
-              </div>
+          <div className="card card__padding">
+            <div className="flex items-center gap-2" style={{ fontSize: "var(--text-xs)", color: "var(--muted-foreground)" }}>
+              <Activity style={{ width: 14, height: 14, color: "var(--primary)", flexShrink: 0 }} />
+              <span>API <code style={{ color: "var(--foreground)" }}>localhost:18791</code></span>
+              <span style={{ opacity: 0.3 }}>|</span>
+              <span>WS <code style={{ color: "var(--foreground)" }}>localhost:18790</code></span>
+              <span style={{ opacity: 0.3 }}>|</span>
+              <span>Data <code style={{ color: "var(--foreground)" }}>~/Documents/zbot/</code></span>
             </div>
           </div>
 
