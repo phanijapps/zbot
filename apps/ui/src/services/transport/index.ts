@@ -53,6 +53,9 @@ export type {
   // Subscription types
   SubscriptionScope,
   SubscriptionOptions,
+  // Plugin types
+  PluginInfo,
+  PluginsResponse,
   // Cron types
   CronJobResponse,
   CreateCronJobRequest,

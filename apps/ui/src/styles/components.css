@@ -2173,6 +2173,18 @@
   color: var(--destructive);
 }
 
+.meta-chip--stopped {
+  background: var(--background-elevated);
+  border: 1px solid var(--border);
+  color: var(--dim-foreground);
+}
+
+.meta-chip--starting {
+  background: var(--warning-muted);
+  border: 1px solid var(--warning-muted);
+  color: var(--warning);
+}
+
 /* ═══════════════════════════════════════════════════════════
    Page Layout (v2 — revamped pages)
    ═══════════════════════════════════════════════════════════ */

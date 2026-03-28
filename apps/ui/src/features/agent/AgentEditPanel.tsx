@@ -2,7 +2,7 @@
 // AGENT EDIT PANEL
 // Slide-over panel for editing agent configuration
 // Uses the shared Slideover component with sections:
-//   Basic | Model | Skills | Schedules | Advanced
+//   Basic | Model | Schedules | Advanced
 // ============================================================================
 
 import { useState, useEffect, useCallback } from "react";
@@ -18,7 +18,6 @@ import {
   Loader2,
   Brain,
   Mic,
-  Zap,
   Calendar,
   Play,
   Pause,
@@ -30,7 +29,6 @@ import {
   type AgentResponse,
   type UpdateAgentRequest,
   type ProviderResponse,
-  type SkillResponse,
   type McpListResponse,
   type ModelRegistryResponse,
   type CronJobResponse,
@@ -71,7 +69,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
   });
 
   // Data for dropdowns
-  const [skills, setSkills] = useState<SkillResponse[]>([]);
   const [mcps, setMcps] = useState<McpListResponse["servers"]>([]);
   const [agentSchedules, setAgentSchedules] = useState<CronJobResponse[]>([]);
 
@@ -90,15 +87,11 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
     setIsLoading(true);
     try {
       const transport = await getTransport();
-      const [skillsResult, mcpsResult, schedulesResult] = await Promise.all([
-        transport.listSkills(),
+      const [mcpsResult, schedulesResult] = await Promise.all([
         transport.listMcps(),
         transport.listCronJobs(),
       ]);
 
-      if (skillsResult.success && skillsResult.data) {
-        setSkills(skillsResult.data);
-      }
       if (mcpsResult.success && mcpsResult.data) {
         setMcps(mcpsResult.data.servers || []);
       }
@@ -139,15 +132,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
       setFormData({ ...formData, mcps: currentMcps.filter((id) => id !== mcpId) });
     } else {
       setFormData({ ...formData, mcps: [...currentMcps, mcpId] });
-    }
-  };
-
-  const toggleSkill = (skillId: string) => {
-    const currentSkills = formData.skills || [];
-    if (currentSkills.includes(skillId)) {
-      setFormData({ ...formData, skills: currentSkills.filter((id) => id !== skillId) });
-    } else {
-      setFormData({ ...formData, skills: [...currentSkills, skillId] });
     }
   };
 
@@ -210,7 +194,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
       )}
 
       {/* ── Basic ── */}
-      <section style={{ marginBottom: "var(--spacing-6)" }}>
+      <section className="slideover__section">
         <h3 style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)", marginBottom: "var(--spacing-3)" }}>
           Basic Information
         </h3>
@@ -237,7 +221,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
       </section>
 
       {/* ── Model ── */}
-      <section style={{ marginBottom: "var(--spacing-6)" }}>
+      <section className="slideover__section">
         <h3 style={{
           fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)",
           marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)",
@@ -325,49 +309,8 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
         </div>
       </section>
 
-      {/* ── Skills ── */}
-      <section style={{ marginBottom: "var(--spacing-6)" }}>
-        <h3 style={{
-          fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)",
-          marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)",
-        }}>
-          <Zap style={{ width: 16, height: 16, color: "var(--warning)" }} />
-          Skills
-        </h3>
-        {skills.length === 0 ? (
-          <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)", padding: "var(--spacing-3)", background: "var(--background-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>
-            No skills configured. Create skills in the Skills Library tab.
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
-            {skills.map((skill) => {
-              const isOn = (formData.skills || []).includes(skill.id);
-              return (
-                <div
-                  key={skill.id}
-                  className={`skill-toggle ${isOn ? "skill-toggle--on" : ""}`}
-                  onClick={() => toggleSkill(skill.id)}
-                >
-                  <button
-                    className={`toggle-switch ${isOn ? "toggle-switch--on" : "toggle-switch--off"}`}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleSkill(skill.id);
-                    }}
-                  />
-                  <div className="skill-toggle__info">
-                    <div className="skill-toggle__name">{skill.displayName}</div>
-                    <div className="skill-toggle__desc">{skill.description}</div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
       {/* ── Schedules targeting this agent ── */}
-      <section style={{ marginBottom: "var(--spacing-6)" }}>
+      <section className="slideover__section">
         <h3 style={{
           fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)",
           marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)",

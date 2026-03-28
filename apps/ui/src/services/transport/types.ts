@@ -680,6 +680,27 @@ export interface SubscriptionOptions {
 }
 
 // ============================================================================
+// Plugin Types
+// ============================================================================
+
+/** Plugin status from GET /api/plugins */
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  state: "running" | "stopped" | "failed" | "starting";
+  auto_restart: boolean;
+  enabled: boolean;
+  error?: string;
+}
+
+export interface PluginsResponse {
+  plugins: PluginInfo[];
+  total: number;
+}
+
+// ============================================================================
 // Bridge Worker Types
 // ============================================================================
 

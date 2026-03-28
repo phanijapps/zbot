@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-type ChipVariant = "model" | "skills" | "mcps" | "schedule" | "tools" | "stdio" | "http" | "sse" | "plugin" | "worker" | "enabled" | "disabled" | "running" | "error";
+type ChipVariant = "model" | "skills" | "mcps" | "schedule" | "tools" | "stdio" | "http" | "sse" | "plugin" | "worker" | "enabled" | "disabled" | "running" | "stopped" | "starting" | "error";
 
 interface MetaChipProps {
   variant: ChipVariant;

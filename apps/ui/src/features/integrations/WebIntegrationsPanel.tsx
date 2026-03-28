@@ -17,6 +17,7 @@ import {
   type CreateMcpRequest,
   type McpTestResult,
   type Transport,
+  type PluginInfo,
 } from "@/services/transport";
 import type { BridgeWorker } from "@/services/transport/types";
 import { TabBar, TabPanel } from "@/components/TabBar";
@@ -136,6 +137,7 @@ export function WebIntegrationsPanel() {
 
   // ── Workers/Plugins state ──
   const [workers, setWorkers] = useState<BridgeWorker[]>([]);
+  const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [workerSearch, setWorkerSearch] = useState("");
   const [workerFilter, setWorkerFilter] = useState<string>("all");
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -193,6 +195,17 @@ export function WebIntegrationsPanel() {
     }
   }, []);
 
+  const loadPlugins = useCallback(async (t: Transport) => {
+    try {
+      const result = await t.listPlugins();
+      if (result.success && result.data) {
+        setPlugins(result.data.plugins || []);
+      }
+    } catch {
+      // Silently fail on plugin polling
+    }
+  }, []);
+
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -200,7 +213,7 @@ export function WebIntegrationsPanel() {
         const t = await getTransport();
         if (!mounted) return;
         setTransport(t);
-        await Promise.all([loadMcps(t), loadWorkers(t)]);
+        await Promise.all([loadMcps(t), loadWorkers(t), loadPlugins(t)]);
       } catch (err) {
         if (mounted) setError(err instanceof Error ? err.message : "Unknown error");
       } finally {
@@ -208,16 +221,19 @@ export function WebIntegrationsPanel() {
       }
     })();
     return () => { mounted = false; };
-  }, [loadMcps, loadWorkers]);
+  }, [loadMcps, loadWorkers, loadPlugins]);
 
-  // Worker polling
+  // Worker + Plugin polling
   useEffect(() => {
     if (!transport) return;
-    intervalRef.current = setInterval(() => loadWorkers(transport), POLL_INTERVAL_MS);
+    intervalRef.current = setInterval(() => {
+      loadWorkers(transport);
+      loadPlugins(transport);
+    }, POLL_INTERVAL_MS);
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [transport, loadWorkers]);
+  }, [transport, loadWorkers, loadPlugins]);
 
   // ── Tool Server Actions ──
 
@@ -394,13 +410,21 @@ export function WebIntegrationsPanel() {
     return list;
   }, [mcpServers, mcpFilter, mcpSearch]);
 
-  const filteredWorkers = useMemo(() => {
-    let list = workers;
-    if (workerFilter === "plugins") {
-      list = list.filter((w) => w.adapter_id.startsWith("plugin:"));
-    } else if (workerFilter === "workers") {
-      list = list.filter((w) => !w.adapter_id.startsWith("plugin:"));
+  const filteredPlugins = useMemo(() => {
+    if (workerFilter === "workers") return [];
+    let list = plugins;
+    if (workerSearch.trim()) {
+      const q = workerSearch.toLowerCase();
+      list = list.filter((p) =>
+        p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q) || p.description.toLowerCase().includes(q),
+      );
     }
+    return list;
+  }, [plugins, workerFilter, workerSearch]);
+
+  const filteredWorkers = useMemo(() => {
+    if (workerFilter === "plugins") return [];
+    let list = workers;
     if (workerSearch.trim()) {
       const q = workerSearch.toLowerCase();
       list = list.filter((w) => w.adapter_id.toLowerCase().includes(q));
@@ -430,7 +454,7 @@ export function WebIntegrationsPanel() {
       <TabBar
         tabs={[
           { id: "tools", label: "Tool Servers", count: mcpServers.length },
-          { id: "plugins", label: "Plugins & Workers", count: workers.length },
+          { id: "plugins", label: "Plugins & Workers", count: plugins.length + workers.length },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -460,6 +484,7 @@ export function WebIntegrationsPanel() {
 
         <TabPanel id="plugins" activeTab={activeTab}>
           <PluginsWorkersTab
+            plugins={filteredPlugins}
             workers={filteredWorkers}
             search={workerSearch}
             onSearchChange={setWorkerSearch}
@@ -1019,6 +1044,7 @@ function ToolServerForm({
 // ============================================================================
 
 interface PluginsWorkersTabProps {
+  plugins: PluginInfo[];
   workers: BridgeWorker[];
   search: string;
   onSearchChange: (v: string) => void;
@@ -1027,7 +1053,9 @@ interface PluginsWorkersTabProps {
   onSelect: (w: BridgeWorker) => void;
 }
 
-function PluginsWorkersTab({ workers, search, onSearchChange, filter, onFilterChange, onSelect }: PluginsWorkersTabProps) {
+function PluginsWorkersTab({ plugins, workers, search, onSearchChange, filter, onFilterChange, onSelect }: PluginsWorkersTabProps) {
+  const isEmpty = plugins.length === 0 && workers.length === 0;
+
   return (
     <>
       <HelpBox icon={<Puzzle style={{ width: 16, height: 16 }} />}>
@@ -1047,7 +1075,7 @@ function PluginsWorkersTab({ workers, search, onSearchChange, filter, onFilterCh
         }
       />
 
-      {workers.length === 0 ? (
+      {isEmpty ? (
         <EmptyState
           icon={Cable}
           title="No plugins or workers connected"
@@ -1055,12 +1083,103 @@ function PluginsWorkersTab({ workers, search, onSearchChange, filter, onFilterCh
         />
       ) : (
         <div className="card-grid">
+          {plugins.map((p) => (
+            <PluginCard key={p.id} plugin={p} />
+          ))}
           {workers.map((w) => (
             <PluginWorkerCard key={w.adapter_id} worker={w} onClick={() => onSelect(w)} />
           ))}
         </div>
       )}
     </>
+  );
+}
+
+// ============================================================================
+// Plugin Card (from /api/plugins)
+// ============================================================================
+
+function pluginStateVariant(state: PluginInfo["state"]): "running" | "error" | "stopped" | "starting" {
+  switch (state) {
+    case "running": return "running";
+    case "failed": return "error";
+    case "stopped": return "stopped";
+    case "starting": return "starting";
+  }
+}
+
+function pluginStateLabel(state: PluginInfo["state"]): string {
+  switch (state) {
+    case "running": return "Running";
+    case "failed": return "Failed";
+    case "stopped": return "Stopped";
+    case "starting": return "Starting";
+  }
+}
+
+function PluginCard({ plugin }: { plugin: PluginInfo }) {
+  return (
+    <div className="pw-card">
+      <div className="pw-card__top">
+        <div className="pw-card__icon pw-card__icon--plugin">
+          {getPluginEmoji(plugin.id)}
+        </div>
+        <div className="pw-card__info">
+          <div className="pw-card__name">{plugin.name}</div>
+          <div className="pw-card__type-row">
+            <MetaChip variant="plugin">
+              <Puzzle style={{ width: 12, height: 12 }} />
+              Plugin
+            </MetaChip>
+            <span className="pw-card__origin">v{plugin.version}</span>
+          </div>
+        </div>
+      </div>
+
+      {plugin.description && (
+        <div className="pw-card__desc" style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)", marginTop: "var(--spacing-2)" }}>
+          {plugin.description}
+        </div>
+      )}
+
+      <div className="pw-card__meta">
+        <MetaChip variant={pluginStateVariant(plugin.state)}>
+          {plugin.state === "running" && <Check style={{ width: 12, height: 12 }} />}
+          {plugin.state === "failed" && <X style={{ width: 12, height: 12 }} />}
+          {plugin.state === "stopped" && <Power style={{ width: 12, height: 12 }} />}
+          {plugin.state === "starting" && <Loader2 style={{ width: 12, height: 12 }} />}
+          {pluginStateLabel(plugin.state)}
+        </MetaChip>
+        {plugin.auto_restart && (
+          <MetaChip variant="enabled">
+            <RefreshCw style={{ width: 12, height: 12 }} />
+            Auto-restart
+          </MetaChip>
+        )}
+      </div>
+
+      {plugin.state === "failed" && plugin.error && (
+        <div style={{
+          fontSize: "var(--text-xs)",
+          color: "var(--destructive)",
+          background: "var(--destructive-muted)",
+          padding: "var(--spacing-2) var(--spacing-3)",
+          borderRadius: "var(--radius-sm)",
+          marginTop: "var(--spacing-2)",
+          lineHeight: 1.4,
+          wordBreak: "break-word",
+        }}>
+          {plugin.error}
+        </div>
+      )}
+
+      <div className="pw-card__footer">
+        <div className="pw-card__footer-left">
+          <Puzzle style={{ width: 12, height: 12 }} />
+          <span>{plugin.id}</span>
+        </div>
+      </div>
+    </div>
   );
 }
 

@@ -47,6 +47,8 @@ import type {
   ConnectionStateCallback,
   GlobalCallback,
   SubscriptionOptions,
+  // Plugin types
+  PluginsResponse,
   // Bridge worker types
   BridgeWorker,
   // Cron types
@@ -328,6 +330,13 @@ export interface Transport {
 
   /** Manual reconnect - resets attempt counter and tries again */
   reconnect(): Promise<void>;
+
+  // =========================================================================
+  // Plugin Operations
+  // =========================================================================
+
+  /** List all plugins */
+  listPlugins(): Promise<TransportResult<PluginsResponse>>;
 
   // =========================================================================
   // Bridge Worker Operations

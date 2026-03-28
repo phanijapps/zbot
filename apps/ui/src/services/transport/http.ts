@@ -56,6 +56,8 @@ import type {
   SubscriptionErrorMessage,
   SubscriptionOptions,
   SubscriptionScope,
+  // Plugin types
+  PluginsResponse,
   // Bridge worker types
   BridgeWorker,
   // Cron types
@@ -1246,6 +1248,14 @@ export class HttpTransport implements Transport {
     setTimeout(() => {
       this.connect();
     }, delay);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Plugin Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listPlugins(): Promise<TransportResult<PluginsResponse>> {
+    return this.get<PluginsResponse>("/api/plugins");
   }
 
   // ─────────────────────────────────────────────────────────────────────────
