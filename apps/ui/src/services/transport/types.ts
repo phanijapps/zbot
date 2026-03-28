@@ -315,15 +315,20 @@ export interface McpTestResult {
 // ============================================================================
 
 export interface ToolSettings {
-  grep: boolean;
-  glob: boolean;
+  /** Enable python tool (run Python scripts) */
   python: boolean;
-  /** Enable web_fetch tool (disabled by default - large responses can cause context explosion) */
+  /** Enable web_fetch tool (HTTP requests — large responses can cause context explosion) */
   webFetch: boolean;
-  loadSkill: boolean;
+  /** Enable UI tools (request_input, show_content) */
   uiTools: boolean;
+  /** Enable create_agent tool */
   createAgent: boolean;
+  /** Enable introspection tools (list_tools, list_mcps) */
   introspection: boolean;
+  /** Enable file tools (read, write, edit, glob) as separate tools */
+  fileTools: boolean;
+  /** Enable heavyweight todos tool (SQLite-like task persistence) */
+  todos: boolean;
   /** Offload large tool results to filesystem instead of keeping in context */
   offloadLargeResults: boolean;
   /** Token threshold for offloading (default: 5000 tokens ≈ 20000 chars) */

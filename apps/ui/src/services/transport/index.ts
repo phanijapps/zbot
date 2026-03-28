@@ -145,10 +145,6 @@ export async function initializeTransport(config?: Partial<TransportConfig>): Pr
   await globalTransport.initialize(finalConfig);
   initialized = true;
 
-  console.log(`[Transport] Initialized`);
-  console.log(`[Transport] HTTP: ${finalConfig.httpUrl}`);
-  console.log(`[Transport] WebSocket: ${finalConfig.wsUrl}`);
-
   return globalTransport;
 }
 
