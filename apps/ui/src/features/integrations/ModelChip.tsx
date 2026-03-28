@@ -6,7 +6,7 @@
 import { Wrench, Eye, Brain, Volume2, X } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/shared/ui/tooltip";
 import type { ModelProfile } from "@/services/transport";
-import { formatContextWindow } from "./providerPresets";
+import { formatContextWindow } from "@/shared/utils/format";
 
 interface ModelChipProps {
   modelId: string;
