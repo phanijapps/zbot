@@ -578,6 +578,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--spacing-1-5);
+  margin-bottom: var(--spacing-4);
 }
 
 .form-label {
@@ -1881,7 +1882,15 @@
 }
 
 .slideover__section {
-  margin-bottom: var(--spacing-7);
+  margin-bottom: var(--spacing-6);
+  padding-bottom: var(--spacing-6);
+  border-bottom: 1px solid var(--border);
+}
+
+.slideover__section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
 }
 
 .slideover__section-title {
@@ -2596,7 +2605,7 @@
   display: flex;
   align-items: center;
   gap: var(--spacing-3);
-  padding: var(--spacing-2) var(--spacing-3);
+  padding: var(--spacing-3) var(--spacing-4);
   background: var(--background-surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);

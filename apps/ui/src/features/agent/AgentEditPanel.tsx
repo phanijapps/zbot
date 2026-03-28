@@ -21,7 +21,6 @@ import {
   Calendar,
   Play,
   Pause,
-  Plus,
 } from "lucide-react";
 import {
   getTransport,
@@ -341,21 +340,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
             ))}
           </div>
         )}
-        <button
-          className="add-link"
-          onClick={() => {
-            onClose();
-            // Navigate to schedules tab
-            window.location.hash = "";
-            const params = new URLSearchParams(window.location.search);
-            params.set("tab", "schedules");
-            window.history.pushState(null, "", `?${params.toString()}`);
-            window.dispatchEvent(new PopStateEvent("popstate"));
-          }}
-        >
-          <Plus style={{ width: 14, height: 14 }} />
-          Add schedule
-        </button>
       </section>
 
       {/* ── Advanced ── */}
