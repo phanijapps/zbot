@@ -92,6 +92,8 @@ pub struct ExecutionRunner {
     delegation_semaphore: Arc<Semaphore>,
     /// Embedding client for generating vector embeddings (semantic search in memory)
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    /// Model capabilities registry for context window and capability lookups
+    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
 }
 
 impl ExecutionRunner {
@@ -176,6 +178,7 @@ impl ExecutionRunner {
             memory_recall,
             delegation_semaphore: Arc::new(Semaphore::new(2)),
             embedding_client,
+            model_registry: None,
         };
 
         // Spawn delegation handler task
@@ -185,6 +188,11 @@ impl ExecutionRunner {
         runner.spawn_continuation_handler();
 
         runner
+    }
+
+    /// Set the model capabilities registry.
+    pub fn set_model_registry(&mut self, registry: Arc<gateway_services::models::ModelRegistry>) {
+        self.model_registry = Some(registry);
     }
 
     /// Spawn a background task that processes delegation requests.
@@ -402,6 +410,7 @@ impl ExecutionRunner {
         let embedding_client = self.embedding_client.clone();
         let distiller = self.distiller.clone();
         let memory_recall = self.memory_recall.clone();
+        let model_registry = self.model_registry.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -448,6 +457,7 @@ impl ExecutionRunner {
                             embedding_client.clone(),
                             distiller.clone(),
                             memory_recall.clone(),
+                            model_registry.clone(),
                         )
                         .await
                         {
@@ -1157,6 +1167,9 @@ impl ExecutionRunner {
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone())
             .with_llm_throttle(llm_throttle);
+        if let Some(ref registry) = self.model_registry {
+            builder = builder.with_model_registry(registry.clone());
+        }
         if let Some(fs) = fact_store {
             builder = builder.with_fact_store(fs);
         }
@@ -1347,6 +1360,7 @@ async fn invoke_continuation(
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     distiller: Option<Arc<super::distillation::SessionDistiller>>,
     memory_recall: Option<Arc<super::recall::MemoryRecall>>,
+    model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1438,6 +1452,9 @@ async fn invoke_continuation(
     // Build executor
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache);
+    if let Some(registry) = model_registry {
+        builder = builder.with_model_registry(registry);
+    }
 
     // Build fact store for continuation (so save_fact uses DB, not file fallback)
     let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {

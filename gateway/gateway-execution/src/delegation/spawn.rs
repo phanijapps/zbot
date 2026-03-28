@@ -156,9 +156,19 @@ pub async fn spawn_delegated_agent(
         .flatten()
         .and_then(|s| s.ward_id);
 
+    // Build model registry for capability lookups
+    let bundled_models = gateway_templates::Templates::get("models_registry.json")
+        .map(|f| f.data.to_vec())
+        .unwrap_or_default();
+    let model_registry = Arc::new(gateway_services::models::ModelRegistry::load(
+        &bundled_models,
+        &paths.vault_dir(),
+    ));
+
     // Build executor using ExecutorBuilder
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache)
+        .with_model_registry(model_registry)
         .with_delegated(true);
 
     // Build fact store for subagent (so save_fact uses DB, not file fallback)

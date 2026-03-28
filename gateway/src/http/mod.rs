@@ -13,6 +13,7 @@ mod graph;
 mod health;
 mod memory;
 mod mcps;
+mod models;
 mod openapi;
 mod plugins;
 mod providers;
@@ -81,6 +82,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/skills/:id", delete(skills::delete_skill))
         // Provider endpoints
         .nest("/api/providers", providers::routes())
+        // Model registry endpoints
+        .route("/api/models", get(models::list_models))
+        .route("/api/models/:id", get(models::get_model))
         // MCP endpoints
         .route("/api/mcps", get(mcps::list_mcps))
         .route("/api/mcps", post(mcps::create_mcp))

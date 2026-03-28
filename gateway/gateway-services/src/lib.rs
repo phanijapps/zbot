@@ -15,6 +15,7 @@ pub mod agent_registry;
 pub mod agents;
 pub mod logging;
 pub mod mcp;
+pub mod models;
 pub mod paths;
 pub mod plugin_service;
 pub mod providers;
@@ -24,6 +25,7 @@ pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
 pub use agents::AgentService;
+pub use models::ModelRegistry;
 pub use logging::LogSettings;
 pub use mcp::McpService;
 pub use paths::{SharedVaultPaths, VaultPaths};

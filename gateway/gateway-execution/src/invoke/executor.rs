@@ -3,6 +3,7 @@
 //! Builds agent executors with all required components.
 
 use gateway_services::agents::Agent;
+use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SkillService};
 use agent_runtime::{
@@ -40,6 +41,7 @@ pub struct ExecutorBuilder {
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
     llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
+    model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
 }
@@ -54,6 +56,7 @@ impl ExecutorBuilder {
             fact_store: None,
             connector_provider: None,
             llm_throttle: None,
+            model_registry: None,
             is_delegated: false,
             extra_initial_state: None,
         }
@@ -86,6 +89,12 @@ impl ExecutorBuilder {
     /// Mark this executor as a delegated subagent (enables plan step cap).
     pub fn with_delegated(mut self, is_delegated: bool) -> Self {
         self.is_delegated = is_delegated;
+        self
+    }
+
+    /// Set the model registry for capability lookups and context window resolution.
+    pub fn with_model_registry(mut self, registry: Arc<ModelRegistry>) -> Self {
+        self.model_registry = Some(registry);
         self
     }
 
@@ -180,6 +189,25 @@ impl ExecutorBuilder {
             }
         }
 
+        // Validate thinking capability against model registry
+        let thinking_enabled = if agent.thinking_enabled {
+            if let Some(ref registry) = self.model_registry {
+                if !registry.has_capability(&agent.model, gateway_services::models::Capability::Thinking) {
+                    tracing::warn!(
+                        model = %agent.model,
+                        "thinking_enabled but model lacks thinking capability — disabling"
+                    );
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
             provider.base_url.clone(),
@@ -189,7 +217,7 @@ impl ExecutorBuilder {
         )
         .with_temperature(agent.temperature)
         .with_max_tokens(agent.max_tokens)
-        .with_thinking(agent.thinking_enabled);
+        .with_thinking(thinking_enabled);
 
         let raw_client: Arc<dyn agent_runtime::LlmClient> = Arc::new(
             OpenAiClient::new(llm_config)
@@ -225,9 +253,12 @@ impl ExecutorBuilder {
         executor_config.conversation_id = Some(conversation_id.to_string());
         executor_config.temperature = agent.temperature;
         executor_config.max_tokens = agent.max_tokens;
-        // Provider-level override takes precedence, then model lookup, then default
-        executor_config.context_window_tokens = provider.context_window
-            .unwrap_or_else(|| agent_runtime::middleware::token_counter::get_model_context_window(&agent.model) as u64);
+        // Resolve context window: provider override > model registry > default 8192
+        executor_config.context_window_tokens = provider.context_window.unwrap_or_else(|| {
+            self.model_registry.as_ref()
+                .map(|r| r.context_window(&agent.model).input)
+                .unwrap_or(8192)
+        });
         executor_config.mcps = agent.mcps.clone();
 
         // Configure tool result offload settings

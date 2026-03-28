@@ -102,7 +102,7 @@ impl RuntimeService {
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     ) -> Self {
-        let runner = Arc::new(ExecutionRunner::with_connector_registry(
+        let mut runner = ExecutionRunner::with_connector_registry(
             event_bus.clone(),
             agent_service,
             provider_service,
@@ -120,10 +120,19 @@ impl RuntimeService {
             bridge_registry,
             bridge_outbox,
             embedding_client,
+        );
+
+        // Initialize model registry from bundled + local overrides
+        let bundled_models = gateway_templates::Templates::get("models_registry.json")
+            .map(|f| f.data.to_vec())
+            .unwrap_or_default();
+        runner.set_model_registry(Arc::new(
+            gateway_services::models::ModelRegistry::load(&bundled_models, &paths.vault_dir()),
         ));
+
         Self {
             event_bus,
-            runner: Some(runner),
+            runner: Some(Arc::new(runner)),
             paths: Some(paths),
         }
     }

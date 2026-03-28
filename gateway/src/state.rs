@@ -11,7 +11,7 @@ use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
-use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
+use crate::services::{AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
 use agent_runtime::llm::LocalEmbeddingClient;
 use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
@@ -86,6 +86,9 @@ pub struct AppState {
     /// Plugin manager for STDIO plugin lifecycle.
     pub plugin_manager: Arc<gateway_bridge::PluginManager>,
 
+    /// Model capabilities registry (bundled + local overrides).
+    pub model_registry: Arc<ModelRegistry>,
+
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
 
@@ -116,6 +119,12 @@ impl AppState {
         let skills = Arc::new(SkillService::new(skills_dir));
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
         let mcp_service = Arc::new(McpService::new(paths.clone()));
+
+        // Initialize model capabilities registry (bundled + local overrides)
+        let bundled_models = gateway_templates::Templates::get("models_registry.json")
+            .map(|f| f.data.to_vec())
+            .unwrap_or_default();
+        let model_registry = Arc::new(ModelRegistry::load(&bundled_models, &paths.vault_dir()));
 
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
@@ -260,6 +269,7 @@ impl AppState {
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             plugin_manager,
+            model_registry,
             workspace_cache,
             paths,
             config_dir,
@@ -322,6 +332,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
@@ -388,6 +399,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
