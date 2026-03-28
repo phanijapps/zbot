@@ -293,7 +293,12 @@ export function WebIntegrationsPanel() {
             <div className="mb-5">
               <label className="block text-xs text-[var(--muted-foreground)] uppercase tracking-wider mb-2">Quick Setup</label>
               <div className="flex flex-wrap gap-1.5">
-                {PROVIDER_PRESETS.map((preset) => (
+                {PROVIDER_PRESETS.filter((preset) =>
+                  !providers.some((p) =>
+                    p.name.toLowerCase() === preset.name.toLowerCase() ||
+                    p.baseUrl.replace(/\/+$/, "") === preset.baseUrl.replace(/\/+$/, "")
+                  )
+                ).map((preset) => (
                   <button
                     key={preset.name}
                     onClick={() => {
