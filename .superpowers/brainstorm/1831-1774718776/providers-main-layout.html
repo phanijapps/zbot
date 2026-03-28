@@ -1,0 +1,156 @@
+<h2>Main View: Providers with Data</h2>
+<p class="subtitle">Once providers are configured, what layout should the page use?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Card Grid + Slide-over Detail</h3>
+      <p>Provider cards in a responsive grid. Click a card to open a slide-over panel for editing.</p>
+
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-header">Card Grid Layout</div>
+        <div class="mockup-body" style="padding: 24px; background: #1e1b18;">
+
+          <!-- Page header -->
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 18px; font-weight: 600; color: #e8e0d8;">Providers</div>
+              <div style="font-size: 13px; color: #807870;">3 connected · 1 active</div>
+            </div>
+            <div style="background: #C17D3F; color: white; border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 500; cursor: pointer;">+ Add Provider</div>
+          </div>
+
+          <!-- Card grid -->
+          <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px;">
+
+            <!-- Active provider card -->
+            <div style="background: #2a2420; border: 1px solid #C17D3F; border-radius: 12px; padding: 16px; cursor: pointer; position: relative;">
+              <div style="position: absolute; top: 12px; right: 12px; display: flex; gap: 6px;">
+                <span style="background: rgba(78,160,78,0.15); color: #4EA04E; font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500;">Connected</span>
+                <span style="background: rgba(193,125,63,0.15); color: #C17D3F; font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500;">Active</span>
+              </div>
+              <div style="font-size: 15px; font-weight: 600; color: #e8e0d8;">Z.AI</div>
+              <div style="font-size: 11px; color: #807870; margin-top: 2px;">api.z.ai</div>
+              <div style="display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;">
+                <span style="background: #1e1b18; padding: 2px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">glm-5.1</span>
+                <span style="background: #1e1b18; padding: 2px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">glm-5</span>
+                <span style="background: #1e1b18; padding: 2px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">+4 more</span>
+              </div>
+            </div>
+
+            <!-- Regular provider card -->
+            <div style="background: #2a2420; border: 1px solid #3a3530; border-radius: 12px; padding: 16px; cursor: pointer; position: relative;">
+              <div style="position: absolute; top: 12px; right: 12px;">
+                <span style="background: rgba(78,160,78,0.15); color: #4EA04E; font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500;">Connected</span>
+              </div>
+              <div style="font-size: 15px; font-weight: 600; color: #e8e0d8;">DeepSeek</div>
+              <div style="font-size: 11px; color: #807870; margin-top: 2px;">api.deepseek.com</div>
+              <div style="display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;">
+                <span style="background: #1e1b18; padding: 2px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">deepseek-chat</span>
+                <span style="background: #1e1b18; padding: 2px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">deepseek-reasoner</span>
+              </div>
+            </div>
+
+            <!-- Unverified provider -->
+            <div style="background: #2a2420; border: 1px solid #3a3530; border-radius: 12px; padding: 16px; cursor: pointer; position: relative;">
+              <div style="position: absolute; top: 12px; right: 12px;">
+                <span style="background: rgba(184,137,46,0.15); color: #B8892E; font-size: 10px; padding: 2px 8px; border-radius: 99px; font-weight: 500;">Not tested</span>
+              </div>
+              <div style="font-size: 15px; font-weight: 600; color: #e8e0d8;">OpenRouter</div>
+              <div style="font-size: 11px; color: #807870; margin-top: 2px;">openrouter.ai</div>
+              <div style="display: flex; gap: 6px; margin-top: 12px; flex-wrap: wrap;">
+                <span style="background: #1e1b18; padding: 2px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">3 models</span>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 8px; font-size: 12px; color: #C17D3F;">Cards scale with screen. Clicking opens a slide-over for editing. Active provider has a gold border.</div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>List View + Inline Expand</h3>
+      <p>Vertical list of provider rows. Click to expand details inline (accordion style).</p>
+
+      <div class="mockup" style="margin-top: 12px;">
+        <div class="mockup-header">List + Accordion Layout</div>
+        <div class="mockup-body" style="padding: 24px; background: #1e1b18; max-width: 600px;">
+
+          <!-- Page header -->
+          <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px;">
+            <div>
+              <div style="font-size: 18px; font-weight: 600; color: #e8e0d8;">Providers</div>
+              <div style="font-size: 13px; color: #807870;">3 connected · 1 active</div>
+            </div>
+            <div style="background: #C17D3F; color: white; border-radius: 8px; padding: 6px 14px; font-size: 12px; font-weight: 500; cursor: pointer;">+ Add Provider</div>
+          </div>
+
+          <!-- List items -->
+          <div style="display: flex; flex-direction: column; gap: 2px;">
+
+            <!-- Expanded item -->
+            <div style="background: #2a2420; border: 1px solid #C17D3F; border-radius: 12px; overflow: hidden;">
+              <div style="padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+                <div style="display: flex; align-items: center; gap: 10px;">
+                  <div style="font-size: 14px; font-weight: 600; color: #e8e0d8;">Z.AI</div>
+                  <span style="background: rgba(78,160,78,0.15); color: #4EA04E; font-size: 10px; padding: 2px 8px; border-radius: 99px;">Connected</span>
+                  <span style="background: rgba(193,125,63,0.15); color: #C17D3F; font-size: 10px; padding: 2px 8px; border-radius: 99px;">Active</span>
+                </div>
+                <span style="color: #807870; font-size: 12px;">6 models ▲</span>
+              </div>
+              <!-- Expanded content -->
+              <div style="border-top: 1px solid #3a3530; padding: 16px; display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                <div>
+                  <div style="font-size: 10px; color: #807870; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">Base URL</div>
+                  <div style="font-size: 12px; color: #a09890; font-family: monospace; background: #1e1b18; padding: 6px 8px; border-radius: 6px;">api.z.ai/api/coding/paas/v4</div>
+                </div>
+                <div>
+                  <div style="font-size: 10px; color: #807870; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px;">API Key</div>
+                  <div style="font-size: 12px; color: #a09890; font-family: monospace; background: #1e1b18; padding: 6px 8px; border-radius: 6px;">83c6****ca20 <span style="color: #C17D3F; cursor: pointer;">Edit</span></div>
+                </div>
+                <div style="grid-column: 1 / -1;">
+                  <div style="font-size: 10px; color: #807870; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 6px;">Models</div>
+                  <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                    <span style="background: #1e1b18; padding: 3px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">glm-5.1 🔧👁🧠</span>
+                    <span style="background: #1e1b18; padding: 3px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">glm-5 🔧👁</span>
+                    <span style="background: #1e1b18; padding: 3px 8px; border-radius: 6px; font-size: 11px; color: #a09890;">glm-4.7 🔧👁</span>
+                  </div>
+                </div>
+                <div style="grid-column: 1 / -1; display: flex; gap: 8px; margin-top: 4px;">
+                  <span style="color: #C17D3F; font-size: 12px; cursor: pointer;">Test Connection</span>
+                  <span style="color: #807870; font-size: 12px;">·</span>
+                  <span style="color: #cc4040; font-size: 12px; cursor: pointer;">Delete</span>
+                </div>
+              </div>
+            </div>
+
+            <!-- Collapsed item -->
+            <div style="background: #2a2420; border: 1px solid #3a3530; border-radius: 12px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="font-size: 14px; font-weight: 600; color: #e8e0d8;">DeepSeek</div>
+                <span style="background: rgba(78,160,78,0.15); color: #4EA04E; font-size: 10px; padding: 2px 8px; border-radius: 99px;">Connected</span>
+              </div>
+              <span style="color: #807870; font-size: 12px;">2 models ▼</span>
+            </div>
+
+            <!-- Collapsed item -->
+            <div style="background: #2a2420; border: 1px solid #3a3530; border-radius: 12px; padding: 14px 16px; display: flex; align-items: center; justify-content: space-between; cursor: pointer;">
+              <div style="display: flex; align-items: center; gap: 10px;">
+                <div style="font-size: 14px; font-weight: 600; color: #e8e0d8;">OpenRouter</div>
+                <span style="background: rgba(184,137,46,0.15); color: #B8892E; font-size: 10px; padding: 2px 8px; border-radius: 99px;">Not tested</span>
+              </div>
+              <span style="color: #807870; font-size: 12px;">3 models ▼</span>
+            </div>
+
+          </div>
+        </div>
+      </div>
+      <div style="margin-top: 8px; font-size: 12px; color: #C17D3F;">Single column, expand in place. No context switch. Works well on narrow screens.</div>
+    </div>
+  </div>
+</div>
