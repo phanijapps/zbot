@@ -132,5 +132,5 @@ src-tauri/tauri.conf.json.default
 ~/.config/zeroagent/
 ~/.local/share/zeroagent/
 
-# Superpowers brainstorming sessions
-.superpowers/brainstorm/
+# Superpowers working files
+.superpowers/
