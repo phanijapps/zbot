@@ -1,118 +1,414 @@
 // ============================================================================
-// WEB INTEGRATIONS PANEL (PROVIDERS PAGE)
-// Provider management with card grid, slide-over detail, and guided onboarding
+// WEB INTEGRATIONS PANEL
+// Unified Integrations page: Tool Servers | Plugins & Workers
 // ============================================================================
 
-import { useState, useEffect } from "react";
-import { Plug, Plus, Loader2 } from "lucide-react";
-import { getTransport } from "@/services/transport";
-import type { ProviderResponse, ModelRegistryResponse } from "@/services/transport";
-import { ProvidersEmptyState } from "@/features/settings/ProvidersEmptyState";
-import { ProvidersGrid } from "@/features/settings/ProvidersGrid";
-import { ProviderSlideover } from "@/features/settings/ProviderSlideover";
-import type { ProviderPreset } from "@/features/settings/providerPresets";
-import { getAvailablePresets } from "@/features/settings/providerPresets";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useSearchParams } from "react-router-dom";
+import {
+  Server, Plus, Trash2, Pencil, Play, Loader2, Wrench,
+  Eye, EyeOff, Key, X, Cpu, Database, Cable, Check,
+  Terminal, Globe, Power, RefreshCw, Puzzle,
+} from "lucide-react";
+import {
+  getTransport,
+  type McpServerSummary,
+  type McpServerConfig,
+  type CreateMcpRequest,
+  type McpTestResult,
+  type Transport,
+} from "@/services/transport";
+import type { BridgeWorker } from "@/services/transport/types";
+import { TabBar, TabPanel } from "@/components/TabBar";
+import { HelpBox } from "@/components/HelpBox";
+import { ActionBar, FilterChip } from "@/components/ActionBar";
+import { MetaChip } from "@/components/MetaChip";
+import { Slideover } from "@/components/Slideover";
+import { EmptyState } from "@/shared/ui/EmptyState";
+
+// ============================================================================
+// Constants
+// ============================================================================
+
+const POLL_INTERVAL_MS = 5000;
+
+const MCP_EMOJIS = [
+  "\u{1F9F0}", "\u{1F310}", "\u{1F5C4}", "\u{26A1}", "\u{1F4E6}", "\u{1F50C}", "\u{1F4BB}",
+  "\u{1F527}", "\u{1F4DA}", "\u{1F680}", "\u{1F9E9}", "\u{1F50D}", "\u{2699}", "\u{1F4CA}", "\u{1F3AF}",
+];
+
+const PLUGIN_EMOJIS = [
+  "\u{1F50C}", "\u{1F9E9}", "\u{2699}", "\u{1F4E1}", "\u{1F517}", "\u{1F4A0}", "\u{1F3AE}",
+  "\u{1F5A5}", "\u{1F4E2}", "\u{1F916}",
+];
+
+function getMcpEmoji(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  }
+  return MCP_EMOJIS[Math.abs(hash) % MCP_EMOJIS.length];
+}
+
+function getPluginEmoji(id: string): string {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) {
+    hash = ((hash << 5) - hash + id.charCodeAt(i)) | 0;
+  }
+  return PLUGIN_EMOJIS[Math.abs(hash) % PLUGIN_EMOJIS.length];
+}
+
+// ============================================================================
+// Env Var Helpers
+// ============================================================================
+
+interface EnvVarEntry {
+  id: string;
+  key: string;
+  value: string;
+}
+
+function recordToEnvVars(record: Record<string, string> | undefined): EnvVarEntry[] {
+  if (!record) return [];
+  return Object.entries(record).map(([key, value]) => ({
+    id: crypto.randomUUID(),
+    key,
+    value,
+  }));
+}
+
+function envVarsToRecord(envVars: EnvVarEntry[]): Record<string, string> | undefined {
+  const filtered = envVars.filter((e) => e.key.trim() !== "");
+  if (filtered.length === 0) return undefined;
+  return Object.fromEntries(filtered.map((e) => [e.key.trim(), e.value]));
+}
+
+function formatUptime(connectedAt: Date): string {
+  const diffMs = Date.now() - connectedAt.getTime();
+  const diffSec = Math.floor(diffMs / 1000);
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.floor(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHr = Math.floor(diffMin / 60);
+  if (diffHr < 24) return `${diffHr}h ${diffMin % 60}m ago`;
+  const diffDay = Math.floor(diffHr / 24);
+  return `${diffDay}d ${diffHr % 24}h ago`;
+}
+
+/** Map MCP type to MetaChip variant */
+function typeToVariant(type: string): "stdio" | "http" | "sse" {
+  if (type === "stdio") return "stdio";
+  if (type === "sse") return "sse";
+  return "http"; // http and streamable-http both use http variant
+}
+
+/** Map MCP type to card icon modifier */
+function typeToIconClass(type: string): string {
+  if (type === "stdio") return "ts-card__icon--stdio";
+  if (type === "sse") return "ts-card__icon--sse";
+  return "ts-card__icon--http";
+}
 
 // ============================================================================
 // Component
 // ============================================================================
 
 export function WebIntegrationsPanel() {
-  const [providers, setProviders] = useState<ProviderResponse[]>([]);
-  const [modelRegistry, setModelRegistry] = useState<ModelRegistryResponse>({});
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab = searchParams.get("tab") || "tools";
+
+  const setActiveTab = useCallback(
+    (tab: string) => {
+      setSearchParams(tab === "tools" ? {} : { tab });
+    },
+    [setSearchParams],
+  );
+
+  // ── Transport ──
+  const [transport, setTransport] = useState<Transport | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Slide-over state
-  const [slideoverOpen, setSlideoverOpen] = useState(false);
-  const [slideoverMode, setSlideoverMode] = useState<"view" | "create">("view");
-  const [selectedProvider, setSelectedProvider] = useState<ProviderResponse | null>(null);
-  const [createPreset, setCreatePreset] = useState<ProviderPreset | null>(null);
+  // ── Tool Servers state ──
+  const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
+  const [mcpSearch, setMcpSearch] = useState("");
+  const [mcpFilter, setMcpFilter] = useState<string>("all");
 
-  // Add-more state (shows preset grid when providers exist)
-  const [showAddPresets, setShowAddPresets] = useState(false);
+  // ── Workers/Plugins state ──
+  const [workers, setWorkers] = useState<BridgeWorker[]>([]);
+  const [workerSearch, setWorkerSearch] = useState("");
+  const [workerFilter, setWorkerFilter] = useState<string>("all");
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const defaultProvider = providers.find((p) => p.isDefault);
-  const defaultProviderId = defaultProvider?.id;
+  // ── Slideover state (Tool Server) ──
+  const [tsSlideoverOpen, setTsSlideoverOpen] = useState(false);
+  const [tsSlideoverMode, setTsSlideoverMode] = useState<"view" | "create" | "edit">("view");
+  const [selectedMcpSummary, setSelectedMcpSummary] = useState<McpServerSummary | null>(null);
+  const [selectedMcpDetail, setSelectedMcpDetail] = useState<McpServerConfig | null>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<McpTestResult | null>(null);
 
-  // ---- Data Loading ----
+  // ── Slideover state (Plugin/Worker) ──
+  const [pwSlideoverOpen, setPwSlideoverOpen] = useState(false);
+  const [selectedWorker, setSelectedWorker] = useState<BridgeWorker | null>(null);
 
-  useEffect(() => {
-    loadData();
-  }, []);
+  // ── Form state (Tool Server create/edit) ──
+  const [formData, setFormData] = useState<Partial<CreateMcpRequest>>({
+    type: "stdio",
+    name: "",
+    description: "",
+    command: "",
+    args: [],
+    url: "",
+    enabled: true,
+  });
+  const [argsInput, setArgsInput] = useState("");
+  const [envVars, setEnvVars] = useState<EnvVarEntry[]>([]);
+  const [showEnvValues, setShowEnvValues] = useState<Set<string>>(new Set());
+  const [editingId, setEditingId] = useState<string | null>(null);
 
-  const loadData = async () => {
-    setIsLoading(true);
-    setError(null);
+  // ── Data Loading ──
+
+  const loadMcps = useCallback(async (t: Transport) => {
     try {
-      const transport = await getTransport();
-      const [providersResult, modelsResult] = await Promise.all([
-        transport.listProviders(),
-        transport.listModels(),
-      ]);
-      if (providersResult.success && providersResult.data) {
-        setProviders(providersResult.data);
+      const result = await t.listMcps();
+      if (result.success && result.data) {
+        setMcpServers(result.data.servers);
       } else {
-        setError(providersResult.error || "Failed to load providers");
-      }
-      if (modelsResult.success && modelsResult.data) {
-        setModelRegistry(modelsResult.data);
+        setError(result.error || "Failed to load tool servers");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setIsLoading(false);
     }
-  };
+  }, []);
 
-  // ---- Actions ----
-
-  const handleSelectProvider = (provider: ProviderResponse) => {
-    setSelectedProvider(provider);
-    setSlideoverMode("view");
-    setCreatePreset(null);
-    setSlideoverOpen(true);
-  };
-
-  const handleOpenCreate = (preset?: ProviderPreset) => {
-    setSelectedProvider(null);
-    setSlideoverMode("create");
-    setCreatePreset(preset || null);
-    setSlideoverOpen(true);
-    setShowAddPresets(false);
-  };
-
-  const handleCloseSlider = () => {
-    setSlideoverOpen(false);
-    setSelectedProvider(null);
-    setCreatePreset(null);
-  };
-
-  const handleProviderSaved = () => {
-    handleCloseSlider();
-    loadData();
-  };
-
-  const handleProviderDeleted = () => {
-    handleCloseSlider();
-    loadData();
-  };
-
-  const handleSetActive = async (id: string) => {
+  const loadWorkers = useCallback(async (t: Transport) => {
     try {
-      const transport = await getTransport();
-      const result = await transport.setDefaultProvider(id);
-      if (result.success) {
-        await loadData();
-      } else {
-        setError(result.error || "Failed to set active provider");
+      const result = await t.listBridgeWorkers();
+      if (result.success && result.data) {
+        setWorkers(result.data);
       }
     } catch {
-      setError("Failed to set active provider");
+      // Silently fail on worker polling
     }
-  };
+  }, []);
 
-  // ---- Render ----
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const t = await getTransport();
+        if (!mounted) return;
+        setTransport(t);
+        await Promise.all([loadMcps(t), loadWorkers(t)]);
+      } catch (err) {
+        if (mounted) setError(err instanceof Error ? err.message : "Unknown error");
+      } finally {
+        if (mounted) setIsLoading(false);
+      }
+    })();
+    return () => { mounted = false; };
+  }, [loadMcps, loadWorkers]);
+
+  // Worker polling
+  useEffect(() => {
+    if (!transport) return;
+    intervalRef.current = setInterval(() => loadWorkers(transport), POLL_INTERVAL_MS);
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [transport, loadWorkers]);
+
+  // ── Tool Server Actions ──
+
+  const loadMcpDetail = useCallback(async (id: string) => {
+    if (!transport) return;
+    try {
+      const result = await transport.getMcp(id);
+      if (result.success && result.data) {
+        setSelectedMcpDetail(result.data);
+      }
+    } catch (err) {
+      console.error("Failed to load MCP detail:", err);
+    }
+  }, [transport]);
+
+  const handleSelectMcp = useCallback(async (mcp: McpServerSummary) => {
+    setSelectedMcpSummary(mcp);
+    setTestResult(null);
+    setTsSlideoverMode("view");
+    setTsSlideoverOpen(true);
+    // Load detail
+    if (!transport) return;
+    try {
+      const result = await transport.getMcp(mcp.id);
+      if (result.success && result.data) {
+        setSelectedMcpDetail(result.data);
+      }
+    } catch (err) {
+      console.error("Failed to load MCP detail:", err);
+    }
+  }, [transport]);
+
+  const handleOpenCreate = useCallback(() => {
+    setTsSlideoverMode("create");
+    setEditingId(null);
+    setFormData({
+      type: "stdio",
+      name: "",
+      description: "",
+      command: "",
+      args: [],
+      url: "",
+      enabled: true,
+    });
+    setArgsInput("");
+    setEnvVars([]);
+    setShowEnvValues(new Set());
+    setSelectedMcpSummary(null);
+    setSelectedMcpDetail(null);
+    setTestResult(null);
+    setTsSlideoverOpen(true);
+  }, []);
+
+  const handleOpenEdit = useCallback(() => {
+    if (!selectedMcpDetail) return;
+    setTsSlideoverMode("edit");
+    setEditingId(selectedMcpDetail.id || selectedMcpSummary?.id || null);
+    setFormData({
+      type: selectedMcpDetail.type,
+      name: selectedMcpDetail.name,
+      description: selectedMcpDetail.description,
+      command: selectedMcpDetail.command || "",
+      url: selectedMcpDetail.url || "",
+      enabled: selectedMcpDetail.enabled,
+    });
+    setArgsInput(selectedMcpDetail.args?.join(", ") || "");
+    setEnvVars(recordToEnvVars(selectedMcpDetail.env));
+    setShowEnvValues(new Set());
+  }, [selectedMcpDetail, selectedMcpSummary]);
+
+  const handleSave = useCallback(async () => {
+    if (!transport || !formData.name || !formData.type) return;
+
+    try {
+      const args = argsInput.split(",").map((a) => a.trim()).filter(Boolean);
+
+      const request: CreateMcpRequest = {
+        type: formData.type as CreateMcpRequest["type"],
+        name: formData.name,
+        description: formData.description || "",
+        enabled: formData.enabled ?? true,
+      };
+
+      if (tsSlideoverMode === "edit" && editingId) {
+        request.id = editingId;
+      }
+
+      if (formData.type === "stdio") {
+        request.command = formData.command || "";
+        request.args = args;
+        request.env = envVarsToRecord(envVars);
+      } else {
+        request.url = formData.url || "";
+      }
+
+      let result;
+      if (tsSlideoverMode === "edit" && editingId) {
+        result = await transport.updateMcp(editingId, request);
+      } else {
+        result = await transport.createMcp(request);
+      }
+
+      if (result.success) {
+        await loadMcps(transport);
+        if (tsSlideoverMode === "edit" && selectedMcpSummary) {
+          await loadMcpDetail(selectedMcpSummary.id);
+          setTsSlideoverMode("view");
+        } else {
+          setTsSlideoverOpen(false);
+        }
+      } else {
+        setError(result.error || `Failed to ${tsSlideoverMode} tool server`);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    }
+  }, [transport, formData, argsInput, envVars, tsSlideoverMode, editingId, selectedMcpSummary, loadMcps, loadMcpDetail]);
+
+  const handleDelete = useCallback(async () => {
+    if (!transport || !selectedMcpSummary) return;
+    if (!confirm("Are you sure you want to delete this tool server?")) return;
+
+    try {
+      const result = await transport.deleteMcp(selectedMcpSummary.id);
+      if (result.success) {
+        setTsSlideoverOpen(false);
+        setSelectedMcpSummary(null);
+        setSelectedMcpDetail(null);
+        await loadMcps(transport);
+      } else {
+        setError(result.error || "Failed to delete tool server");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown error");
+    }
+  }, [transport, selectedMcpSummary, loadMcps]);
+
+  const handleTest = useCallback(async () => {
+    if (!transport || !selectedMcpSummary) return;
+
+    setIsTesting(true);
+    setTestResult(null);
+
+    try {
+      const result = await transport.testMcp(selectedMcpSummary.id);
+      if (result.success && result.data) {
+        setTestResult(result.data);
+      } else {
+        setTestResult({ success: false, message: result.error || "Test failed" });
+      }
+    } catch (err) {
+      setTestResult({ success: false, message: err instanceof Error ? err.message : "Unknown error" });
+    } finally {
+      setIsTesting(false);
+    }
+  }, [transport, selectedMcpSummary]);
+
+  // ── Filtered lists ──
+
+  const filteredMcps = useMemo(() => {
+    let list = mcpServers;
+    if (mcpFilter !== "all") {
+      list = list.filter((m) => {
+        if (mcpFilter === "http") return m.type === "http" || m.type === "streamable-http";
+        return m.type === mcpFilter;
+      });
+    }
+    if (mcpSearch.trim()) {
+      const q = mcpSearch.toLowerCase();
+      list = list.filter((m) =>
+        m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q),
+      );
+    }
+    return list;
+  }, [mcpServers, mcpFilter, mcpSearch]);
+
+  const filteredWorkers = useMemo(() => {
+    let list = workers;
+    if (workerFilter === "plugins") {
+      list = list.filter((w) => w.adapter_id.startsWith("plugin:"));
+    } else if (workerFilter === "workers") {
+      list = list.filter((w) => !w.adapter_id.startsWith("plugin:"));
+    }
+    if (workerSearch.trim()) {
+      const q = workerSearch.toLowerCase();
+      list = list.filter((w) => w.adapter_id.toLowerCase().includes(q));
+    }
+    return list;
+  }, [workers, workerFilter, workerSearch]);
+
+  // ── Render ──
 
   if (isLoading) {
     return (
@@ -122,98 +418,792 @@ export function WebIntegrationsPanel() {
     );
   }
 
-  const hasProviders = providers.length > 0;
-  const availablePresets = getAvailablePresets(providers);
-
   return (
-    <div className="page">
-      <div className="page-container">
-        {hasProviders ? (
-          <>
-            {/* Page header */}
-            <div className="page-header" style={{ marginBottom: "var(--spacing-5)" }}>
-              <div>
-                <h1 style={{ fontSize: "var(--text-lg)", fontWeight: 600, color: "var(--foreground)", display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
-                  <Plug size={20} style={{ color: "var(--primary)" }} />
-                  Providers
-                </h1>
-                <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)", marginTop: 2 }}>
-                  {providers.filter((p) => p.verified).length} connected · {defaultProvider ? "1 active" : "none active"}
-                </p>
-              </div>
-              <button className="btn btn--primary btn--sm" onClick={() => availablePresets.length > 0 ? setShowAddPresets(!showAddPresets) : handleOpenCreate()}>
-                <Plus size={14} /> Add Provider
+    <div className="page" style={{ display: "flex", flexDirection: "column" }}>
+      <div className="page-header-v2">
+        <h1 className="page-title-v2">Integrations</h1>
+        <p className="page-subtitle-v2">
+          Connect z-Bot to external tools, services, and plugins. Give your agents new abilities.
+        </p>
+      </div>
+
+      <TabBar
+        tabs={[
+          { id: "tools", label: "Tool Servers", count: mcpServers.length },
+          { id: "plugins", label: "Plugins & Workers", count: workers.length },
+        ]}
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+      />
+
+      {error && (
+        <div className="alert alert--error" style={{ margin: "0 var(--spacing-9) var(--spacing-4)" }}>
+          <span>{error}</span>
+          <button className="btn btn--ghost btn--sm" onClick={() => setError(null)} style={{ marginLeft: "auto" }}>
+            <X style={{ width: 14, height: 14 }} />
+          </button>
+        </div>
+      )}
+
+      <div className="page-content-v2">
+        <TabPanel id="tools" activeTab={activeTab}>
+          <ToolServersTab
+            mcps={filteredMcps}
+            search={mcpSearch}
+            onSearchChange={setMcpSearch}
+            filter={mcpFilter}
+            onFilterChange={setMcpFilter}
+            onSelect={handleSelectMcp}
+            onCreate={handleOpenCreate}
+          />
+        </TabPanel>
+
+        <TabPanel id="plugins" activeTab={activeTab}>
+          <PluginsWorkersTab
+            workers={filteredWorkers}
+            search={workerSearch}
+            onSearchChange={setWorkerSearch}
+            filter={workerFilter}
+            onFilterChange={setWorkerFilter}
+            onSelect={(w) => { setSelectedWorker(w); setPwSlideoverOpen(true); }}
+          />
+        </TabPanel>
+      </div>
+
+      {/* Tool Server Slideover */}
+      <Slideover
+        open={tsSlideoverOpen}
+        onClose={() => { setTsSlideoverOpen(false); if (tsSlideoverMode !== "view") { setTsSlideoverMode("view"); } }}
+        title={
+          tsSlideoverMode === "create"
+            ? "Add Tool Server"
+            : tsSlideoverMode === "edit"
+              ? "Edit Tool Server"
+              : selectedMcpDetail?.name || "Tool Server"
+        }
+        subtitle={
+          tsSlideoverMode === "view" && selectedMcpSummary
+            ? selectedMcpSummary.id
+            : tsSlideoverMode === "create"
+              ? "Configure a new MCP tool server"
+              : "Update the tool server configuration"
+        }
+        icon={
+          <div className={`ts-card__icon ${selectedMcpSummary ? typeToIconClass(selectedMcpSummary.type) : "ts-card__icon--stdio"}`}>
+            {selectedMcpSummary ? getMcpEmoji(selectedMcpSummary.id) : <Server style={{ width: 20, height: 20 }} />}
+          </div>
+        }
+        footer={
+          tsSlideoverMode === "view" ? (
+            <div style={{ display: "flex", gap: "var(--spacing-2)", width: "100%" }}>
+              <button className="btn btn--outline btn--sm" onClick={handleTest} disabled={isTesting}>
+                {isTesting ? <Loader2 style={{ width: 14, height: 14 }} className="animate-spin" /> : <Play style={{ width: 14, height: 14 }} />}
+                Test
+              </button>
+              <button className="btn btn--outline btn--sm" onClick={handleOpenEdit}>
+                <Pencil style={{ width: 14, height: 14 }} /> Edit
+              </button>
+              <button className="btn btn--ghost btn--sm" onClick={handleDelete} style={{ marginLeft: "auto", color: "var(--destructive)" }}>
+                <Trash2 style={{ width: 14, height: 14 }} /> Delete
               </button>
             </div>
+          ) : (
+            <div style={{ display: "flex", gap: "var(--spacing-2)", width: "100%", justifyContent: "flex-end" }}>
+              <button
+                className="btn btn--ghost btn--sm"
+                onClick={() => {
+                  if (tsSlideoverMode === "edit") { setTsSlideoverMode("view"); }
+                  else { setTsSlideoverOpen(false); }
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn--primary btn--sm"
+                onClick={handleSave}
+                disabled={!formData.name || (formData.type === "stdio" ? !formData.command : !formData.url)}
+              >
+                {tsSlideoverMode === "create" ? "Add Server" : "Save Changes"}
+              </button>
+            </div>
+          )
+        }
+      >
+        {tsSlideoverMode === "view" ? (
+          <ToolServerDetail
+            summary={selectedMcpSummary}
+            detail={selectedMcpDetail}
+            testResult={testResult}
+          />
+        ) : (
+          <ToolServerForm
+            formData={formData}
+            setFormData={setFormData}
+            argsInput={argsInput}
+            setArgsInput={setArgsInput}
+            envVars={envVars}
+            setEnvVars={setEnvVars}
+            showEnvValues={showEnvValues}
+            setShowEnvValues={setShowEnvValues}
+          />
+        )}
+      </Slideover>
 
-            {/* Error */}
-            {error && (
-              <div className="alert alert--error" style={{ marginBottom: "var(--spacing-4)" }}>
-                <span>{error}</span>
-                <button className="btn btn--ghost btn--sm" onClick={() => setError(null)} style={{ marginLeft: "auto" }}>Dismiss</button>
+      {/* Plugin/Worker Slideover */}
+      <Slideover
+        open={pwSlideoverOpen}
+        onClose={() => setPwSlideoverOpen(false)}
+        title={selectedWorker?.adapter_id || "Worker"}
+        subtitle={selectedWorker ? `Connected ${formatUptime(new Date(selectedWorker.connected_at))}` : undefined}
+        icon={
+          <div className={`pw-card__icon ${selectedWorker?.adapter_id.startsWith("plugin:") ? "pw-card__icon--plugin" : "pw-card__icon--worker"}`}>
+            {selectedWorker ? getPluginEmoji(selectedWorker.adapter_id) : <Cpu style={{ width: 20, height: 20 }} />}
+          </div>
+        }
+      >
+        {selectedWorker && <WorkerDetail worker={selectedWorker} />}
+      </Slideover>
+    </div>
+  );
+}
+
+// ============================================================================
+// Tool Servers Tab
+// ============================================================================
+
+interface ToolServersTabProps {
+  mcps: McpServerSummary[];
+  search: string;
+  onSearchChange: (v: string) => void;
+  filter: string;
+  onFilterChange: (v: string) => void;
+  onSelect: (mcp: McpServerSummary) => void;
+  onCreate: () => void;
+}
+
+function ToolServersTab({ mcps, search, onSearchChange, filter, onFilterChange, onSelect, onCreate }: ToolServersTabProps) {
+  return (
+    <>
+      <HelpBox>
+        Tool Servers give your agents superpowers &mdash; access to files, databases, APIs, and more.
+        They follow the Model Context Protocol (MCP) standard.
+      </HelpBox>
+
+      <ActionBar
+        searchPlaceholder="Search tool servers..."
+        searchValue={search}
+        onSearchChange={onSearchChange}
+        filters={
+          <>
+            <FilterChip label="All" active={filter === "all"} onClick={() => onFilterChange("all")} />
+            <FilterChip label="stdio" active={filter === "stdio"} onClick={() => onFilterChange("stdio")} />
+            <FilterChip label="http" active={filter === "http"} onClick={() => onFilterChange("http")} />
+            <FilterChip label="sse" active={filter === "sse"} onClick={() => onFilterChange("sse")} />
+          </>
+        }
+        actions={
+          <button className="btn btn--primary btn--sm" onClick={onCreate}>
+            <Plus style={{ width: 14, height: 14 }} /> Add Tool Server
+          </button>
+        }
+      />
+
+      {mcps.length === 0 ? (
+        <EmptyState
+          icon={Server}
+          title="No tool servers"
+          description="Tool servers give your agents abilities like reading files, querying databases, and calling APIs."
+          action={{ label: "Add Tool Server", onClick: onCreate }}
+        />
+      ) : (
+        <div className="card-grid">
+          {mcps.map((mcp) => (
+            <ToolServerCard key={mcp.id} mcp={mcp} onClick={() => onSelect(mcp)} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ============================================================================
+// Tool Server Card
+// ============================================================================
+
+function ToolServerCard({ mcp, onClick }: { mcp: McpServerSummary; onClick: () => void }) {
+  const variant = typeToVariant(mcp.type);
+  const iconClass = typeToIconClass(mcp.type);
+
+  return (
+    <div className="ts-card" onClick={onClick}>
+      <div className="ts-card__top">
+        <div className={`ts-card__icon ${iconClass}`}>
+          {getMcpEmoji(mcp.id)}
+        </div>
+        <div className="ts-card__info">
+          <div className="ts-card__name">{mcp.name}</div>
+          <div className="ts-card__type-row">
+            <MetaChip variant={variant}>
+              {mcp.type === "stdio" && <Terminal style={{ width: 12, height: 12 }} />}
+              {(mcp.type === "http" || mcp.type === "streamable-http") && <Globe style={{ width: 12, height: 12 }} />}
+              {mcp.type === "sse" && <RefreshCw style={{ width: 12, height: 12 }} />}
+              {mcp.type}
+            </MetaChip>
+          </div>
+        </div>
+      </div>
+
+      {mcp.description && (
+        <div className="ts-card__desc">{mcp.description}</div>
+      )}
+
+      <div className="ts-card__meta">
+        <MetaChip variant={mcp.enabled ? "enabled" : "disabled"}>
+          <Power style={{ width: 12, height: 12 }} />
+          {mcp.enabled ? "Enabled" : "Disabled"}
+        </MetaChip>
+      </div>
+
+      <div className="ts-card__footer">
+        <div className="ts-card__footer-left">
+          <Server style={{ width: 12, height: 12 }} />
+          <span>{mcp.id}</span>
+        </div>
+        <div className="ts-card__footer-actions">
+          <button
+            className="btn btn--icon-ghost btn--sm"
+            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            title="View details"
+          >
+            <Eye style={{ width: 14, height: 14 }} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Tool Server Detail (View Mode in Slideover)
+// ============================================================================
+
+interface ToolServerDetailProps {
+  summary: McpServerSummary | null;
+  detail: McpServerConfig | null;
+  testResult: McpTestResult | null;
+}
+
+function ToolServerDetail({ summary, detail, testResult }: ToolServerDetailProps) {
+  if (!summary || !detail) {
+    return (
+      <div style={{ padding: "var(--spacing-6)", textAlign: "center", color: "var(--muted-foreground)" }}>
+        <Loader2 className="animate-spin" style={{ width: 24, height: 24, margin: "0 auto var(--spacing-3)" }} />
+        Loading details...
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-5)" }}>
+      {/* Test result */}
+      {testResult && (
+        <div className={`ts-test-result ${testResult.success ? "ts-test-result--success" : "ts-test-result--error"}`}>
+          {testResult.success ? (
+            <Check style={{ width: 18, height: 18, flexShrink: 0 }} />
+          ) : (
+            <X style={{ width: 18, height: 18, flexShrink: 0 }} />
+          )}
+          <span className="ts-test-result__text">{testResult.message}</span>
+        </div>
+      )}
+
+      {/* Details */}
+      <div>
+        <h4 style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)", marginBottom: "var(--spacing-3)" }}>
+          Details
+        </h4>
+
+        <div className="ts-detail-row">
+          <span className="ts-detail-label">Type</span>
+          <span className="ts-detail-value">
+            <MetaChip variant={typeToVariant(detail.type)}>
+              {detail.type === "stdio" ? <Terminal style={{ width: 12, height: 12 }} /> : <Globe style={{ width: 12, height: 12 }} />}
+              {detail.type}
+            </MetaChip>
+          </span>
+        </div>
+
+        {detail.type === "stdio" && detail.command && (
+          <div className="ts-detail-row">
+            <span className="ts-detail-label">Command</span>
+            <span className="ts-detail-value ts-detail-value--mono">{detail.command}</span>
+          </div>
+        )}
+
+        {detail.type === "stdio" && detail.args && detail.args.length > 0 && (
+          <div className="ts-detail-row">
+            <span className="ts-detail-label">Arguments</span>
+            <span className="ts-detail-value ts-detail-value--mono">{detail.args.join(" ")}</span>
+          </div>
+        )}
+
+        {detail.type === "stdio" && detail.env && Object.keys(detail.env).length > 0 && (
+          <div className="ts-detail-row">
+            <span className="ts-detail-label">Env Vars</span>
+            <div className="ts-detail-value" style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-1)" }}>
+              {Object.entries(detail.env).map(([key, value]) => (
+                <span key={key} className="ts-detail-value--mono">
+                  {key}={"*".repeat(Math.min(value.length, 12))}
+                </span>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {detail.type !== "stdio" && detail.url && (
+          <div className="ts-detail-row">
+            <span className="ts-detail-label">URL</span>
+            <span className="ts-detail-value ts-detail-value--mono">{detail.url}</span>
+          </div>
+        )}
+
+        {detail.description && (
+          <div className="ts-detail-row">
+            <span className="ts-detail-label">Description</span>
+            <span className="ts-detail-value">{detail.description}</span>
+          </div>
+        )}
+
+        <div className="ts-detail-row">
+          <span className="ts-detail-label">Status</span>
+          <span className="ts-detail-value">
+            <MetaChip variant={detail.enabled ? "enabled" : "disabled"}>
+              <Power style={{ width: 12, height: 12 }} />
+              {detail.enabled ? "Enabled" : "Disabled"}
+            </MetaChip>
+          </span>
+        </div>
+      </div>
+
+      {/* Discovered tools from test */}
+      {testResult?.success && testResult.tools && testResult.tools.length > 0 && (
+        <div>
+          <h4 style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)", marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
+            <Wrench style={{ width: 14, height: 14 }} />
+            Discovered Tools ({testResult.tools.length})
+          </h4>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
+            {testResult.tools.map((tool) => (
+              <div key={tool} className="ts-tool-item">
+                <div className="ts-tool-item__name">{tool}</div>
               </div>
-            )}
+            ))}
+          </div>
+        </div>
+      )}
 
-            {/* Add-more preset section */}
-            {showAddPresets && (
-              <div style={{ marginBottom: "var(--spacing-5)" }}>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-2)", marginBottom: "var(--spacing-3)" }}>
-                  {availablePresets.map((preset) => (
+      {/* Usage hint */}
+      <HelpBox>
+        <span style={{ fontSize: "var(--text-sm)" }}>
+          To use this tool server, add its ID to an agent's <code style={{ fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", padding: "2px 6px", background: "var(--muted)", borderRadius: "var(--radius-sm)" }}>mcps</code> field:
+        </span>
+        <code style={{ display: "block", fontFamily: "var(--font-mono)", fontSize: "var(--text-xs)", marginTop: "var(--spacing-2)", padding: "var(--spacing-2) var(--spacing-3)", background: "var(--background-surface)", border: "1px solid var(--border)", borderRadius: "var(--radius-md)" }}>
+          "mcps": ["{summary.id}"]
+        </code>
+      </HelpBox>
+    </div>
+  );
+}
+
+// ============================================================================
+// Tool Server Form (Create/Edit Mode in Slideover)
+// ============================================================================
+
+interface ToolServerFormProps {
+  formData: Partial<CreateMcpRequest>;
+  setFormData: (data: Partial<CreateMcpRequest>) => void;
+  argsInput: string;
+  setArgsInput: (v: string) => void;
+  envVars: EnvVarEntry[];
+  setEnvVars: React.Dispatch<React.SetStateAction<EnvVarEntry[]>>;
+  showEnvValues: Set<string>;
+  setShowEnvValues: React.Dispatch<React.SetStateAction<Set<string>>>;
+}
+
+function ToolServerForm({
+  formData,
+  setFormData,
+  argsInput,
+  setArgsInput,
+  envVars,
+  setEnvVars,
+  showEnvValues,
+  setShowEnvValues,
+}: ToolServerFormProps) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-4)" }}>
+      {/* Type selector */}
+      <div className="form-group">
+        <label className="form-label">Type</label>
+        <select
+          className="form-select"
+          value={formData.type}
+          onChange={(e) => setFormData({ ...formData, type: e.target.value as CreateMcpRequest["type"] })}
+        >
+          <option value="stdio">Stdio (Local Process)</option>
+          <option value="http">HTTP</option>
+          <option value="sse">SSE (Server-Sent Events)</option>
+          <option value="streamable-http">Streamable HTTP</option>
+        </select>
+      </div>
+
+      {/* Name */}
+      <div className="form-group">
+        <label className="form-label">Name</label>
+        <input
+          className="form-input"
+          type="text"
+          value={formData.name || ""}
+          onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+          placeholder="filesystem, weather, etc."
+        />
+      </div>
+
+      {/* Description */}
+      <div className="form-group">
+        <label className="form-label">Description</label>
+        <input
+          className="form-input"
+          type="text"
+          value={formData.description || ""}
+          onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+          placeholder="What this server provides"
+        />
+      </div>
+
+      {/* Stdio-specific fields */}
+      {formData.type === "stdio" ? (
+        <>
+          <div className="form-group">
+            <label className="form-label">Command</label>
+            <input
+              className="form-input"
+              type="text"
+              value={formData.command || ""}
+              onChange={(e) => setFormData({ ...formData, command: e.target.value })}
+              placeholder="npx, node, python, etc."
+            />
+          </div>
+
+          <div className="form-group">
+            <label className="form-label">Arguments (comma-separated)</label>
+            <input
+              className="form-input"
+              type="text"
+              value={argsInput}
+              onChange={(e) => setArgsInput(e.target.value)}
+              placeholder="-y, @anthropic/mcp-server-filesystem, /home/user"
+            />
+          </div>
+
+          {/* Environment Variables */}
+          <div className="form-group">
+            <label className="form-label" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-1)" }}>
+              <Key style={{ width: 14, height: 14 }} />
+              Environment Variables
+            </label>
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
+              {envVars.map((envVar) => (
+                <div key={envVar.id} className="env-var-row">
+                  <input
+                    className="form-input"
+                    type="text"
+                    value={envVar.key}
+                    onChange={(e) => {
+                      setEnvVars((prev) =>
+                        prev.map((ev) =>
+                          ev.id === envVar.id ? { ...ev, key: e.target.value } : ev,
+                        ),
+                      );
+                    }}
+                    placeholder="VARIABLE_NAME"
+                    style={{ fontFamily: "var(--font-mono)" }}
+                  />
+                  <div style={{ flex: 1, position: "relative" }}>
+                    <input
+                      className="form-input"
+                      type={showEnvValues.has(envVar.id) ? "text" : "password"}
+                      value={envVar.value}
+                      onChange={(e) => {
+                        setEnvVars((prev) =>
+                          prev.map((ev) =>
+                            ev.id === envVar.id ? { ...ev, value: e.target.value } : ev,
+                          ),
+                        );
+                      }}
+                      placeholder="value"
+                      style={{ fontFamily: "var(--font-mono)", paddingRight: "var(--spacing-8)" }}
+                    />
                     <button
-                      key={preset.name}
-                      className="btn btn--outline btn--sm"
-                      onClick={() => handleOpenCreate(preset)}
+                      type="button"
+                      onClick={() => {
+                        setShowEnvValues((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(envVar.id)) next.delete(envVar.id);
+                          else next.add(envVar.id);
+                          return next;
+                        });
+                      }}
+                      style={{ position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)", background: "none", border: "none", cursor: "pointer", color: "var(--muted-foreground)" }}
                     >
-                      {preset.name}
+                      {showEnvValues.has(envVar.id) ? (
+                        <EyeOff style={{ width: 14, height: 14 }} />
+                      ) : (
+                        <Eye style={{ width: 14, height: 14 }} />
+                      )}
                     </button>
-                  ))}
-                  <button className="btn btn--ghost btn--sm" onClick={() => handleOpenCreate()}>
-                    Custom...
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--icon-ghost btn--sm"
+                    onClick={() => setEnvVars((prev) => prev.filter((ev) => ev.id !== envVar.id))}
+                    style={{ color: "var(--destructive)" }}
+                  >
+                    <Trash2 style={{ width: 14, height: 14 }} />
                   </button>
                 </div>
-              </div>
-            )}
-
-            {/* Provider card grid */}
-            <ProvidersGrid
-              providers={providers}
-              modelRegistry={modelRegistry}
-              defaultProviderId={defaultProviderId}
-              onSelect={handleSelectProvider}
-            />
-
-            {/* Add another link */}
-            {availablePresets.length > 0 && !showAddPresets && (
-              <div style={{ textAlign: "center", marginTop: "var(--spacing-4)" }}>
-                <button className="btn btn--ghost btn--sm" onClick={() => setShowAddPresets(true)}>
-                  <Plus size={14} /> Add another provider
-                </button>
-              </div>
-            )}
-          </>
-        ) : (
-          /* Empty state for new users */
-          <ProvidersEmptyState
-            existingProviders={providers}
-            onProviderCreated={loadData}
-            onOpenCustom={() => handleOpenCreate()}
+              ))}
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => setEnvVars((prev) => [...prev, { id: crypto.randomUUID(), key: "", value: "" }])}
+                style={{ alignSelf: "flex-start" }}
+              >
+                <Plus style={{ width: 14, height: 14 }} /> Add Variable
+              </button>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="form-group">
+          <label className="form-label">URL</label>
+          <input
+            className="form-input"
+            type="text"
+            value={formData.url || ""}
+            onChange={(e) => setFormData({ ...formData, url: e.target.value })}
+            placeholder="http://localhost:8080/mcp"
           />
+        </div>
+      )}
+
+      {/* Enabled toggle */}
+      <div style={{ display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
+        <input
+          type="checkbox"
+          id="ts-enabled"
+          checked={formData.enabled ?? true}
+          onChange={(e) => setFormData({ ...formData, enabled: e.target.checked })}
+          style={{ width: 16, height: 16 }}
+        />
+        <label htmlFor="ts-enabled" style={{ fontSize: "var(--text-sm)", color: "var(--foreground)" }}>
+          Enabled
+        </label>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Plugins & Workers Tab
+// ============================================================================
+
+interface PluginsWorkersTabProps {
+  workers: BridgeWorker[];
+  search: string;
+  onSearchChange: (v: string) => void;
+  filter: string;
+  onFilterChange: (v: string) => void;
+  onSelect: (w: BridgeWorker) => void;
+}
+
+function PluginsWorkersTab({ workers, search, onSearchChange, filter, onFilterChange, onSelect }: PluginsWorkersTabProps) {
+  return (
+    <>
+      <HelpBox icon={<Puzzle style={{ width: 16, height: 16 }} />}>
+        Plugins auto-start when z-Bot launches. Drop a plugin folder into ~/Documents/zbot/plugins/ and restart.
+      </HelpBox>
+
+      <ActionBar
+        searchPlaceholder="Search plugins & workers..."
+        searchValue={search}
+        onSearchChange={onSearchChange}
+        filters={
+          <>
+            <FilterChip label="All" active={filter === "all"} onClick={() => onFilterChange("all")} />
+            <FilterChip label="Plugins" active={filter === "plugins"} onClick={() => onFilterChange("plugins")} />
+            <FilterChip label="Workers" active={filter === "workers"} onClick={() => onFilterChange("workers")} />
+          </>
+        }
+      />
+
+      {workers.length === 0 ? (
+        <EmptyState
+          icon={Cable}
+          title="No plugins or workers connected"
+          description="To install a plugin, drop its folder into ~/Documents/zbot/plugins/ and restart zerod"
+        />
+      ) : (
+        <div className="card-grid">
+          {workers.map((w) => (
+            <PluginWorkerCard key={w.adapter_id} worker={w} onClick={() => onSelect(w)} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+// ============================================================================
+// Plugin / Worker Card
+// ============================================================================
+
+function PluginWorkerCard({ worker, onClick }: { worker: BridgeWorker; onClick: () => void }) {
+  const isPlugin = worker.adapter_id.startsWith("plugin:");
+  const iconClass = isPlugin ? "pw-card__icon--plugin" : "pw-card__icon--worker";
+  const connectedAt = new Date(worker.connected_at);
+
+  return (
+    <div className="pw-card" onClick={onClick}>
+      <div className="pw-card__top">
+        <div className={`pw-card__icon ${iconClass}`}>
+          {getPluginEmoji(worker.adapter_id)}
+        </div>
+        <div className="pw-card__info">
+          <div className="pw-card__name">{worker.adapter_id}</div>
+          <div className="pw-card__type-row">
+            <MetaChip variant={isPlugin ? "plugin" : "worker"}>
+              {isPlugin ? <Puzzle style={{ width: 12, height: 12 }} /> : <Cpu style={{ width: 12, height: 12 }} />}
+              {isPlugin ? "Plugin" : "Worker"}
+            </MetaChip>
+            <span className="pw-card__origin">{isPlugin ? worker.adapter_id.replace("plugin:", "") : "WebSocket"}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="pw-card__meta">
+        {worker.capabilities.length > 0 && (
+          <MetaChip variant="tools">
+            <Wrench style={{ width: 12, height: 12 }} />
+            {worker.capabilities.length} capabilities
+          </MetaChip>
+        )}
+        {worker.resources.length > 0 && (
+          <MetaChip variant="mcps">
+            <Database style={{ width: 12, height: 12 }} />
+            {worker.resources.length} resources
+          </MetaChip>
+        )}
+        <MetaChip variant="running">
+          <Check style={{ width: 12, height: 12 }} />
+          Running
+        </MetaChip>
+      </div>
+
+      <div className="pw-card__footer">
+        <div className="pw-card__footer-left">
+          <Cable style={{ width: 12, height: 12 }} />
+          <span>Connected {formatUptime(connectedAt)}</span>
+        </div>
+        <div className="pw-card__footer-actions">
+          <button
+            className="btn btn--icon-ghost btn--sm"
+            onClick={(e) => { e.stopPropagation(); onClick(); }}
+            title="View details"
+          >
+            <Eye style={{ width: 14, height: 14 }} />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Worker Detail (Slideover content)
+// ============================================================================
+
+function WorkerDetail({ worker }: { worker: BridgeWorker }) {
+  const connectedAt = new Date(worker.connected_at);
+  const isPlugin = worker.adapter_id.startsWith("plugin:");
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-5)" }}>
+      {/* Status */}
+      <div style={{ display: "flex", gap: "var(--spacing-2)", flexWrap: "wrap" }}>
+        <MetaChip variant={isPlugin ? "plugin" : "worker"}>
+          {isPlugin ? <Puzzle style={{ width: 12, height: 12 }} /> : <Cpu style={{ width: 12, height: 12 }} />}
+          {isPlugin ? "Plugin" : "Worker"}
+        </MetaChip>
+        <MetaChip variant="running">
+          <Check style={{ width: 12, height: 12 }} />
+          Connected {formatUptime(connectedAt)}
+        </MetaChip>
+      </div>
+
+      {/* Capabilities */}
+      <div>
+        <h4 style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)", marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
+          <Wrench style={{ width: 14, height: 14 }} />
+          Capabilities ({worker.capabilities.length})
+        </h4>
+        {worker.capabilities.length === 0 ? (
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)" }}>No capabilities declared</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
+            {worker.capabilities.map((cap) => (
+              <div key={cap.name} className="ts-tool-item">
+                <div className="ts-tool-item__name">{cap.name}</div>
+                {cap.description && <div className="ts-tool-item__desc">{cap.description}</div>}
+                {cap.schema && (
+                  <pre style={{
+                    fontSize: "var(--text-xs)",
+                    color: "var(--muted-foreground)",
+                    marginTop: "var(--spacing-2)",
+                    padding: "var(--spacing-2)",
+                    backgroundColor: "var(--muted)",
+                    borderRadius: "var(--radius-sm)",
+                    overflow: "auto",
+                    maxHeight: 120,
+                  }}>
+                    {JSON.stringify(cap.schema, null, 2)}
+                  </pre>
+                )}
+              </div>
+            ))}
+          </div>
         )}
       </div>
 
-      {/* Slide-over detail/edit/create panel */}
-      <ProviderSlideover
-        provider={selectedProvider}
-        modelRegistry={modelRegistry}
-        isActive={selectedProvider?.id === defaultProviderId}
-        isOpen={slideoverOpen}
-        mode={slideoverMode}
-        preset={createPreset}
-        onClose={handleCloseSlider}
-        onSaved={handleProviderSaved}
-        onDeleted={handleProviderDeleted}
-        onSetActive={handleSetActive}
-      />
+      {/* Resources */}
+      <div>
+        <h4 style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)", marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
+          <Database style={{ width: 14, height: 14 }} />
+          Resources ({worker.resources.length})
+        </h4>
+        {worker.resources.length === 0 ? (
+          <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)" }}>No resources declared</p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
+            {worker.resources.map((res) => (
+              <div key={res.name} className="ts-tool-item">
+                <div className="ts-tool-item__name">{res.name}</div>
+                {res.description && <div className="ts-tool-item__desc">{res.description}</div>}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
