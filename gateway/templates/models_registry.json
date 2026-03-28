@@ -560,5 +560,175 @@
       "videoGeneration": false
     },
     "context": { "input": 131072, "output": 8192 }
+  },
+  "llama3.3": {
+    "name": "Llama 3.3 70B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 4096 }
+  },
+  "llama3.2": {
+    "name": "Llama 3.2 3B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 4096 }
+  },
+  "llama3.2-vision": {
+    "name": "Llama 3.2 Vision 11B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": false,
+      "vision": true,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 4096 }
+  },
+  "qwen2.5": {
+    "name": "Qwen 2.5 7B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 131072, "output": 8192 }
+  },
+  "qwen2.5-coder": {
+    "name": "Qwen 2.5 Coder 7B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 131072, "output": 8192 }
+  },
+  "deepseek-r1": {
+    "name": "DeepSeek R1",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": false,
+      "vision": false,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 8192 }
+  },
+  "deepseek-v3": {
+    "name": "DeepSeek V3",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 8192 }
+  },
+  "mistral": {
+    "name": "Mistral 7B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": false,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 32768, "output": 4096 }
+  },
+  "gemma3": {
+    "name": "Gemma 3 12B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 131072, "output": 8192 }
+  },
+  "phi4": {
+    "name": "Phi-4 14B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": false,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 16384, "output": 4096 }
+  },
+  "nomic-embed-text": {
+    "name": "Nomic Embed Text",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": false,
+      "vision": false,
+      "thinking": false,
+      "embeddings": true,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 8192, "output": null },
+    "embedding": { "dimensions": 768, "maxDimensions": 768 }
+  },
+  "mxbai-embed-large": {
+    "name": "MxBai Embed Large",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": false,
+      "vision": false,
+      "thinking": false,
+      "embeddings": true,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 512, "output": null },
+    "embedding": { "dimensions": 1024, "maxDimensions": 1024 }
   }
 }
