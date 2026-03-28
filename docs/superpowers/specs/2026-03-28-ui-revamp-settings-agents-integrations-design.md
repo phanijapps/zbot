@@ -284,7 +284,7 @@ Animations:
 - **Create skill**: slide-over form with name, display name, description, category, instructions textarea
 - **Empty state**: "Skills are reusable instruction packages. They teach your agents how to handle specific tasks."
 - **Help box**: "Skills are shared — create once, assign to any agent."
-- **Data**: `listSkills()`, `createSkill()`, `deleteSkill()`
+- **Data**: `listSkills()`, `createSkill()`, `deleteSkill()` (Note: `updateSkill()` exists in transport but skills are currently create-and-delete only. Skill editing is out of scope for this revamp — skills are viewed and deleted from the slide-over, created from the form.)
 
 #### Tab: Schedules
 
@@ -294,7 +294,7 @@ Animations:
 - **Action bar**: search + "Create Schedule" button
 - **Create schedule**: modal with name, agent selector (NOT hardcoded to root), cron preset dropdown + custom input, message textarea, timezone, enabled toggle
 - **Empty state**: "Schedules run your agents automatically on a timer. Example: 'Check my email every morning at 9 AM'."
-- **Key change**: Schedule creation now includes agent selector
+- **Key change**: Schedule creation now includes agent selector. Defaults to "root" agent (pre-selected) but user can choose any agent from dropdown. Existing schedules display their `agent_id`. The `respond_to` field from `CronJobResponse` is not surfaced in the UI (internal use only).
 - **Data**: `listCronJobs()`, `createCronJob()`, `updateCronJob()`, `deleteCronJob()`, `enableCronJob()`, `disableCronJob()`, `triggerCronJob()`, `listAgents()`
 
 ### 3. Integrations Page (`/integrations`)
@@ -335,7 +335,7 @@ Animations:
 - **Empty state**: "Plugins and workers connect z-Bot to external services like Slack, Discord, or custom APIs."
 - **Help box**: "Plugins auto-start when z-Bot launches. Drop a plugin folder into `~/Documents/zbot/plugins/` and restart."
 - **Install hint**: Inline tip with plugin directory path
-- **Data**: `listBridgeWorkers()` (+ future plugin-specific endpoints if needed)
+- **Data**: `listBridgeWorkers()` with 5-second polling (preserved from current Workers page). Plugin-specific endpoints (restart, config) are deferred — current implementation only shows read-only status from bridge worker data. Configure/restart buttons shown in mockup are aspirational; for v1, these display info only.
 
 ## Help Text Strategy
 
@@ -366,29 +366,102 @@ Three layers, all present simultaneously:
 ## Files Changed
 
 ### Modified
-- `apps/ui/src/App.tsx` — Routes, navigation structure, sidebar groups
-- `apps/ui/src/styles/theme.css` — All design tokens (typography, colors, spacing)
-- `apps/ui/src/styles/components.css` — New component classes
-- `apps/ui/src/styles/fonts.css` — New font imports
-- `apps/ui/src/features/settings/WebSettingsPanel.tsx` — Absorbs providers, tabbed layout
-- `apps/ui/src/features/agent/WebAgentsPanel.tsx` — Absorbs skills/schedules, card grid redesign
-- `apps/ui/src/features/agent/AgentEditPanel.tsx` — Slide-over with skills/schedules sections
-- `apps/ui/src/features/mcps/WebMcpsPanel.tsx` — Renamed to Tool Servers, card grid layout
-- `apps/ui/src/features/connectors/WebConnectorsPanel.tsx` — Merged with plugins
+- `apps/ui/src/App.tsx` — Routes (add redirects, new paths), navigation structure, sidebar groups
+- `apps/ui/src/styles/theme.css` — All design tokens replaced (see Token Migration section)
+- `apps/ui/src/styles/components.css` — New component classes added
+- `apps/ui/src/styles/fonts.css` — Fraunces, IBM Plex Sans, JetBrains Mono imports
+- `apps/ui/src/features/settings/WebSettingsPanel.tsx` — Complete rewrite: absorbs providers, tabbed layout
+- `apps/ui/src/features/agent/WebAgentsPanel.tsx` — Complete rewrite: absorbs skills/schedules, card grid
+- `apps/ui/src/features/agent/AgentEditPanel.tsx` — Redesigned slide-over with skills/schedules sections
+- `apps/ui/src/features/index.ts` — Update barrel exports for renamed/removed modules
+
+### Moved (provider sub-components → settings feature)
+- `apps/ui/src/features/integrations/ProviderCard.tsx` → `apps/ui/src/features/settings/ProviderCard.tsx`
+- `apps/ui/src/features/integrations/ProviderSlideover.tsx` → `apps/ui/src/features/settings/ProviderSlideover.tsx`
+- `apps/ui/src/features/integrations/ProvidersGrid.tsx` → `apps/ui/src/features/settings/ProvidersGrid.tsx`
+- `apps/ui/src/features/integrations/ProvidersEmptyState.tsx` → `apps/ui/src/features/settings/ProvidersEmptyState.tsx`
+- `apps/ui/src/features/integrations/ModelChip.tsx` → `apps/ui/src/shared/ui/ModelChip.tsx` (shared — used in settings + agents)
+- `apps/ui/src/features/integrations/providerPresets.ts` → `apps/ui/src/features/settings/providerPresets.ts`
 
 ### New
-- `apps/ui/src/features/integrations/WebIntegrationsPanel.tsx` — Unified integrations page (Tool Servers + Plugins & Workers)
-- `apps/ui/src/components/Slideover.tsx` — Shared slide-over component (extracted from provider-specific)
+- `apps/ui/src/features/integrations/WebIntegrationsPanel.tsx` — **New file** replacing the old providers-focused file. Unified integrations page (Tool Servers + Plugins & Workers)
+- `apps/ui/src/features/integrations/ToolServerCard.tsx` — Tool server card component
+- `apps/ui/src/features/integrations/ToolServerSlideover.tsx` — Tool server detail/edit slide-over
+- `apps/ui/src/features/integrations/PluginWorkerCard.tsx` — Plugin/worker card component
+- `apps/ui/src/components/Slideover.tsx` — Shared slide-over shell (extracted, reused across pages)
 - `apps/ui/src/components/HelpBox.tsx` — Reusable help box component
 - `apps/ui/src/components/TabBar.tsx` — Reusable tab bar component
 - `apps/ui/src/components/ActionBar.tsx` — Search + filters + action button bar
 - `apps/ui/src/components/MetaChip.tsx` — Metadata chip component with variants
 - `apps/ui/src/components/EmptyState.tsx` — Enhanced empty state with help text
 
-### Deprecated (redirect only)
-- `apps/ui/src/features/skills/WebSkillsPanel.tsx` — Content moves to Agents tab
-- `apps/ui/src/features/cron/WebCronPanel.tsx` — Content moves to Agents tab
-- `apps/ui/src/features/integrations/WebIntegrationsPanel.tsx` — Current file replaced by new unified version
+### Deleted (content absorbed into other pages)
+- `apps/ui/src/features/skills/WebSkillsPanel.tsx` — Content moves to Agents page Skills tab
+- `apps/ui/src/features/cron/WebCronPanel.tsx` — Content moves to Agents page Schedules tab
+- `apps/ui/src/features/connectors/WebConnectorsPanel.tsx` — Content moves to Integrations Plugins & Workers tab
+- `apps/ui/src/features/mcps/WebMcpsPanel.tsx` — Content moves to Integrations Tool Servers tab
+
+### Route Redirects (in App.tsx)
+Old routes use `<Navigate replace>` to preserve bookmarks:
+- `/providers` → `/settings`
+- `/skills` → `/agents?tab=skills`
+- `/hooks` → `/agents?tab=schedules`
+- `/connectors` → `/integrations?tab=plugins`
+- `/mcps` → `/integrations`
+
+## Token Migration Strategy
+
+The existing `theme.css` tokens are **replaced wholesale**, not extended. This is a visual refresh, not an additive change.
+
+### Token Mapping (existing → new)
+
+| Existing Token | New Token | Notes |
+|---|---|---|
+| `--background` (`#F7F5F2` / `#191919`) | `--background` (`#f6f3ee` / `#141210`) | Warmer tones |
+| `--card` (`#FFFFFF` / `#1E1E1E`) | `--background-surface` (`#ffffff` / `#1a1816`) | Renamed for clarity |
+| `--popover` | `--background-elevated` (`#f0ece6` / `#201e1b`) | Renamed |
+| `--sidebar` (`#EFECE7` / `#141414`) | `--sidebar` (`#1a1714` / `#0d0c0a`) | **Dark in both themes now** |
+| `--primary` (`#C17D3F` / `#D4945A`) | `--primary` (`#a07d52` / `#c8956c`) | Similar copper, adjusted |
+| `--primary-muted` | `--primary-muted` | Same concept, new value |
+| (none) | `--primary-subtle` | New: very light accent bg |
+| `--foreground` | `--foreground` | Same concept, new value |
+| `--muted-foreground` | `--muted-foreground` | Same concept |
+| (none) | `--subtle-foreground` | New: tertiary text level |
+| (none) | `--dim-foreground` | New: quaternary text level |
+| `--border` | `--border` | Same concept, new value |
+| (none) | `--border-hover` | New: focus/hover border |
+| `--font-sans` | `--font-body` | Renamed, value changes to IBM Plex Sans |
+| `--font-mono` | `--font-mono` | Same name, value changes to JetBrains Mono |
+| (none) | `--font-display` | New: Fraunces serif for headings |
+
+### Migration approach
+1. Replace `:root` and `.dark` blocks in `theme.css` with new values
+2. Update the Tailwind `@theme inline` block to reference new tokens
+3. Grep for any hardcoded old token references in components and update
+4. The sidebar now uses dark colors in BOTH themes — sidebar foreground tokens (`--sidebar-foreground`) stay light in both
+
+### Sidebar in Light Theme
+The sidebar stays dark (`#1a1714`) in the light theme. This means:
+- Sidebar foreground colors remain light (cream/white) regardless of theme
+- The logo color stays `--primary` (copper) — no variant needed
+- `ThemeToggle` in sidebar footer keeps light icon color
+- The sidebar is effectively "theme-independent" — it has its own fixed palette
+
+### Font Loading
+Add to `fonts.css`:
+```css
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,400;9..144,500;9..144,700&family=IBM+Plex+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap');
+```
+
+### Type Badges
+Four MCP transport types get badges: `stdio` (copper), `http` (blue), `sse` (teal), `streamable-http` (maps to `http` badge).
+
+## Accessibility
+
+- **Keyboard navigation**: Tab bar items are focusable and selectable via Enter/Space. Slide-over traps focus when open, Escape closes it.
+- **ARIA**: Slide-over uses `role="dialog"` + `aria-modal="true"`. Tab bar uses `role="tablist"` / `role="tab"` / `role="tabpanel"`.
+- **Reduced motion**: Card entrance animations and hover transforms respect `prefers-reduced-motion: reduce` — replaced with instant opacity transitions.
+- **Color contrast**: All text colors meet WCAG AA against their backgrounds. The warm palette was validated for sufficient contrast ratios.
 
 ## Mockups
 
