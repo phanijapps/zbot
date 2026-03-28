@@ -422,15 +422,19 @@ export function WebIntegrationsPanel() {
     return list;
   }, [plugins, workerFilter, workerSearch]);
 
+  // Workers that are NOT plugins (plugins have their own cards from /api/plugins)
+  const pluginIds = useMemo(() => new Set(plugins.map((p) => p.id)), [plugins]);
+
   const filteredWorkers = useMemo(() => {
     if (workerFilter === "plugins") return [];
-    let list = workers;
+    // Exclude bridge workers that are actually plugins
+    let list = workers.filter((w) => !pluginIds.has(w.adapter_id));
     if (workerSearch.trim()) {
       const q = workerSearch.toLowerCase();
       list = list.filter((w) => w.adapter_id.toLowerCase().includes(q));
     }
     return list;
-  }, [workers, workerFilter, workerSearch]);
+  }, [workers, workerFilter, workerSearch, pluginIds]);
 
   // ── Render ──
 
@@ -486,6 +490,7 @@ export function WebIntegrationsPanel() {
           <PluginsWorkersTab
             plugins={filteredPlugins}
             workers={filteredWorkers}
+            allWorkers={workers}
             search={workerSearch}
             onSearchChange={setWorkerSearch}
             filter={workerFilter}
@@ -1046,6 +1051,7 @@ function ToolServerForm({
 interface PluginsWorkersTabProps {
   plugins: PluginInfo[];
   workers: BridgeWorker[];
+  allWorkers: BridgeWorker[];
   search: string;
   onSearchChange: (v: string) => void;
   filter: string;
@@ -1053,7 +1059,7 @@ interface PluginsWorkersTabProps {
   onSelect: (w: BridgeWorker) => void;
 }
 
-function PluginsWorkersTab({ plugins, workers, search, onSearchChange, filter, onFilterChange, onSelect }: PluginsWorkersTabProps) {
+function PluginsWorkersTab({ plugins, workers, allWorkers, search, onSearchChange, filter, onFilterChange, onSelect }: PluginsWorkersTabProps) {
   const isEmpty = plugins.length === 0 && workers.length === 0;
 
   return (
@@ -1083,9 +1089,10 @@ function PluginsWorkersTab({ plugins, workers, search, onSearchChange, filter, o
         />
       ) : (
         <div className="card-grid">
-          {plugins.map((p) => (
-            <PluginCard key={p.id} plugin={p} />
-          ))}
+          {plugins.map((p) => {
+            const bridgeData = allWorkers.find((w) => w.adapter_id === p.id);
+            return <PluginCard key={p.id} plugin={p} bridgeWorker={bridgeData} />;
+          })}
           {workers.map((w) => (
             <PluginWorkerCard key={w.adapter_id} worker={w} onClick={() => onSelect(w)} />
           ))}
@@ -1117,7 +1124,10 @@ function pluginStateLabel(state: PluginInfo["state"]): string {
   }
 }
 
-function PluginCard({ plugin }: { plugin: PluginInfo }) {
+function PluginCard({ plugin, bridgeWorker }: { plugin: PluginInfo; bridgeWorker?: BridgeWorker }) {
+  const capCount = bridgeWorker?.capabilities.length || 0;
+  const resCount = bridgeWorker?.resources.length || 0;
+
   return (
     <div className="pw-card">
       <div className="pw-card__top">
@@ -1137,7 +1147,7 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
       </div>
 
       {plugin.description && (
-        <div className="pw-card__desc" style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)", marginTop: "var(--spacing-2)" }}>
+        <div className="pw-card__desc">
           {plugin.description}
         </div>
       )}
@@ -1150,6 +1160,18 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
           {plugin.state === "starting" && <Loader2 style={{ width: 12, height: 12 }} />}
           {pluginStateLabel(plugin.state)}
         </MetaChip>
+        {capCount > 0 && (
+          <MetaChip variant="tools">
+            <Wrench style={{ width: 12, height: 12 }} />
+            {capCount} capabilities
+          </MetaChip>
+        )}
+        {resCount > 0 && (
+          <MetaChip variant="mcps">
+            <Database style={{ width: 12, height: 12 }} />
+            {resCount} resources
+          </MetaChip>
+        )}
         {plugin.auto_restart && (
           <MetaChip variant="enabled">
             <RefreshCw style={{ width: 12, height: 12 }} />
@@ -1188,24 +1210,22 @@ function PluginCard({ plugin }: { plugin: PluginInfo }) {
 // ============================================================================
 
 function PluginWorkerCard({ worker, onClick }: { worker: BridgeWorker; onClick: () => void }) {
-  const isPlugin = worker.adapter_id.startsWith("plugin:");
-  const iconClass = isPlugin ? "pw-card__icon--plugin" : "pw-card__icon--worker";
   const connectedAt = new Date(worker.connected_at);
 
   return (
     <div className="pw-card" onClick={onClick}>
       <div className="pw-card__top">
-        <div className={`pw-card__icon ${iconClass}`}>
-          {getPluginEmoji(worker.adapter_id)}
+        <div className="pw-card__icon pw-card__icon--worker">
+          <Cpu style={{ width: 20, height: 20 }} />
         </div>
         <div className="pw-card__info">
           <div className="pw-card__name">{worker.adapter_id}</div>
           <div className="pw-card__type-row">
-            <MetaChip variant={isPlugin ? "plugin" : "worker"}>
-              {isPlugin ? <Puzzle style={{ width: 12, height: 12 }} /> : <Cpu style={{ width: 12, height: 12 }} />}
-              {isPlugin ? "Plugin" : "Worker"}
+            <MetaChip variant="worker">
+              <Cable style={{ width: 12, height: 12 }} />
+              Worker
             </MetaChip>
-            <span className="pw-card__origin">{isPlugin ? worker.adapter_id.replace("plugin:", "") : "WebSocket"}</span>
+            <span className="pw-card__origin">WebSocket</span>
           </div>
         </div>
       </div>
