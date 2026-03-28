@@ -116,7 +116,36 @@ Replace the color custom properties in `:root` with the new warm editorial palet
 
 Keep existing spacing, radius, shadow, and layout tokens — those don't change.
 
-Also keep `--card` as an alias: `--card: var(--background-surface);` for backwards compat with existing components not yet migrated.
+**CRITICAL: Backwards-compat aliases.** Many removed tokens are actively used in `components.css` and feature components. Add these aliases to `:root` to prevent silent CSS breakage:
+
+```css
+  /* Backwards-compat aliases — remove after full migration */
+  --card: var(--background-surface);
+  --card-foreground: var(--foreground);
+  --popover: var(--background-elevated);
+  --popover-foreground: var(--foreground);
+  --muted: var(--background-elevated);
+  --secondary: var(--background-elevated);
+  --secondary-foreground: var(--foreground);
+  --secondary-hover: var(--border);
+  --accent: var(--primary);
+  --accent-foreground: var(--primary-foreground);
+  --input: var(--border);
+  --input-background: var(--background-surface);
+  --ring: var(--primary);
+  --ring-muted: var(--border);
+  --overlay: rgba(0, 0, 0, 0.5);
+  --selection: var(--primary-muted);
+  --selection-border: var(--primary);
+  --destructive-foreground: #ffffff;
+  --success-foreground: #ffffff;
+  --warning-foreground: #ffffff;
+  --sidebar-foreground: #f0ebe4;
+  --sidebar-accent: var(--primary-muted);
+  --sidebar-accent-hover: var(--primary-subtle);
+  --sidebar-muted: #8a8278;
+  --sidebar-border: var(--border);
+```
 
 - [ ] **Step 2: Update `.dark` block**
 
@@ -156,14 +185,104 @@ Also keep `--card` as an alias: `--card: var(--background-surface);` for backwar
   --teal-muted: rgba(79,209,197,0.1);
 
   --card: var(--background-surface);
+
+  /* Backwards-compat aliases for dark mode */
+  --card-foreground: var(--foreground);
+  --popover: var(--background-elevated);
+  --popover-foreground: var(--foreground);
+  --muted: var(--background-elevated);
+  --secondary: var(--background-elevated);
+  --secondary-foreground: var(--foreground);
+  --secondary-hover: var(--border);
+  --accent: var(--primary);
+  --accent-foreground: var(--primary-foreground);
+  --input: var(--border);
+  --input-background: var(--background-surface);
+  --ring: var(--primary);
+  --ring-muted: var(--border);
+  --overlay: rgba(0, 0, 0, 0.6);
+  --selection: var(--primary-muted);
+  --selection-border: var(--primary);
+  --destructive-foreground: #ffffff;
+  --success-foreground: #ffffff;
+  --warning-foreground: #ffffff;
+  --sidebar-foreground: #f0ebe4;
+  --sidebar-accent: var(--primary-muted);
+  --sidebar-accent-hover: var(--primary-subtle);
+  --sidebar-muted: #777777;
+  --sidebar-border: rgba(255,255,255,0.06);
 }
 ```
 
+Keep existing shadow tokens (`--shadow-card`, `--shadow-card-hover`, `--shadow-modal`, `--shadow-dropdown`) in both `:root` and `.dark` — do NOT remove them.
+
 - [ ] **Step 3: Update the Tailwind `@theme inline` block**
 
-Map the new tokens into Tailwind's theme system. Add entries for the new tokens (`--font-display`, `--border-hover`, `--background-surface`, etc.) and alias `--font-sans` to `--font-body`.
+Replace the existing `@theme inline` block with updated mappings. Key additions:
 
-- [ ] **Step 4: Visual check**
+```css
+@theme inline {
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+
+  --color-background: var(--background);
+  --color-background-surface: var(--background-surface);
+  --color-background-elevated: var(--background-elevated);
+  --color-foreground: var(--foreground);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-dim-foreground: var(--dim-foreground);
+
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-muted: var(--primary-muted);
+  --color-primary-subtle: var(--primary-subtle);
+
+  --color-border: var(--border);
+  --color-border-hover: var(--border-hover);
+
+  /* Keep existing semantic color mappings */
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+
+  /* New palette */
+  --color-blue: var(--blue);
+  --color-blue-muted: var(--blue-muted);
+  --color-purple: var(--purple);
+  --color-purple-muted: var(--purple-muted);
+  --color-teal: var(--teal);
+  --color-teal-muted: var(--teal-muted);
+}
+```
+
+- [ ] **Step 4: Grep for any remaining hardcoded old token references**
+
+Run: `grep -rn "--card\b\|--popover\b\|--secondary\b\|--accent\b\|--ring\b\|--overlay\b\|--input-background\b" apps/ui/src/styles/ apps/ui/src/features/ apps/ui/src/shared/ apps/ui/src/components/`
+
+Any reference to a removed token that is NOT covered by the aliases above needs to be fixed.
+
+- [ ] **Step 5: Run `npm run build`**
+
+Verify zero build errors. CSS token failures are silent, so also check the app visually.
+
+- [ ] **Step 6: Visual check**
 
 Open app in browser. Verify colors have shifted (warmer backgrounds, copper primary). Toggle dark/light mode. Sidebar should now be dark in BOTH themes.
 
@@ -253,15 +372,17 @@ export function Slideover({ open, onClose, title, subtitle, icon, children, foot
     };
   }, [open, handleEscape]);
 
+  if (!open) return null;
+
   return (
     <>
       <div
-        className={`slideover-backdrop ${open ? "slideover-backdrop--open" : ""}`}
+        className="slideover-backdrop slideover-backdrop--open"
         onClick={onClose}
         aria-hidden="true"
       />
       <div
-        className={`slideover ${open ? "slideover--open" : ""}`}
+        className="slideover slideover--open"
         style={{ width }}
         role="dialog"
         aria-modal="true"
@@ -561,10 +682,12 @@ export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
       {tabs.map((tab) => (
         <button
           key={tab.id}
+          id={`tab-${tab.id}`}
           className={`tab-bar__tab ${activeTab === tab.id ? "tab-bar__tab--active" : ""}`}
           onClick={() => onTabChange(tab.id)}
           role="tab"
           aria-selected={activeTab === tab.id}
+          aria-controls={`tabpanel-${tab.id}`}
         >
           {tab.label}
           {tab.count !== undefined && (
@@ -572,6 +695,22 @@ export function TabBar({ tabs, activeTab, onTabChange }: TabBarProps) {
           )}
         </button>
       ))}
+    </div>
+  );
+}
+
+// Companion component — wrap each tab's content in this
+interface TabPanelProps {
+  id: string;
+  activeTab: string;
+  children: React.ReactNode;
+}
+
+export function TabPanel({ id, activeTab, children }: TabPanelProps) {
+  if (activeTab !== id) return null;
+  return (
+    <div role="tabpanel" id={`tabpanel-${id}`} aria-labelledby={`tab-${id}`}>
+      {children}
     </div>
   );
 }
@@ -1138,29 +1277,38 @@ git commit -m "feat(ui): add page layout v2, card-grid, animation classes"
 
 ---
 
-### Task 11: Move ModelChip to Shared UI
+### Task 11: Extract `formatContextWindow` to Shared Utility
 
 **Files:**
-- Move: `apps/ui/src/features/integrations/ModelChip.tsx` → `apps/ui/src/shared/ui/ModelChip.tsx`
-- Modify: `apps/ui/src/shared/ui/index.ts`
+- Create: `apps/ui/src/shared/utils/format.ts`
 
-- [ ] **Step 1: Copy `ModelChip.tsx` to `shared/ui/`**
+`ModelChip.tsx` imports `formatContextWindow` from `./providerPresets`. Before moving ModelChip to shared, extract this utility.
 
-Read the existing file, copy it to the new location. Update any relative imports if needed.
+- [ ] **Step 1: Read `apps/ui/src/features/integrations/providerPresets.ts`** and find the `formatContextWindow` function.
 
-- [ ] **Step 2: Export from barrel**
+- [ ] **Step 2: Create `apps/ui/src/shared/utils/format.ts`** with the extracted function:
 
-Add `export { ModelChip } from "./ModelChip";` to `apps/ui/src/shared/ui/index.ts`.
+```tsx
+// apps/ui/src/shared/utils/format.ts
+export function formatContextWindow(tokens: number | null | undefined): string {
+  if (tokens == null) return "?";
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(0)}K`;
+  return String(tokens);
+}
+```
 
-- [ ] **Step 3: Update import in any file that references the old path**
+(Verify exact implementation by reading the source — above is the expected shape.)
 
-Search for imports of `ModelChip` from the integrations path and update to `@/shared/ui/ModelChip`.
+- [ ] **Step 3: Update `ModelChip.tsx`** to import from `@/shared/utils/format` instead of `./providerPresets`.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Update `providerPresets.ts`** to import and re-export from `@/shared/utils/format` (so nothing else breaks).
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add apps/ui/src/shared/ui/ModelChip.tsx apps/ui/src/shared/ui/index.ts
-git commit -m "refactor(ui): move ModelChip to shared/ui for reuse across pages"
+git add apps/ui/src/shared/utils/format.ts apps/ui/src/features/integrations/ModelChip.tsx apps/ui/src/features/integrations/providerPresets.ts
+git commit -m "refactor(ui): extract formatContextWindow to shared utility"
 ```
 
 ---
@@ -1178,13 +1326,14 @@ git commit -m "refactor(ui): move ModelChip to shared/ui for reuse across pages"
 
 - [ ] **Step 1: Copy all 5 files to `features/settings/`**
 - [ ] **Step 2: Update internal imports** (relative paths between these files change since they're in the same directory)
-- [ ] **Step 3: Update `ModelChip` imports** to point to `@/shared/ui/ModelChip`
-- [ ] **Step 4: Verify `npm run build` passes** (no broken imports)
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Move `ModelChip.tsx` to `apps/ui/src/shared/ui/ModelChip.tsx`** — now safe because `formatContextWindow` was extracted in Task 11. Update its import to `@/shared/utils/format`. Add export to `apps/ui/src/shared/ui/index.ts`.
+- [ ] **Step 4: Update all `ModelChip` imports** across the codebase to point to `@/shared/ui/ModelChip`
+- [ ] **Step 5: Verify `npm run build` passes** (no broken imports)
+- [ ] **Step 6: Commit**
 
 ```bash
-git add apps/ui/src/features/settings/
-git commit -m "refactor(ui): move provider components to settings feature"
+git add apps/ui/src/features/settings/ apps/ui/src/shared/ui/ModelChip.tsx apps/ui/src/shared/ui/index.ts
+git commit -m "refactor(ui): move provider components to settings, ModelChip to shared/ui"
 ```
 
 ---
@@ -1443,8 +1592,10 @@ const navGroups: NavGroup[] = [
 - [ ] **Step 3: Remove unused imports** (`WebSkillsPanel`, `WebCronPanel`, `WebConnectorsPanel`, `WebMcpsPanel`, `Cable`, `Server`, `Calendar`, `Zap`)
 - [ ] **Step 4: Add `Navigate` import from react-router-dom**
 - [ ] **Step 5: Update sidebar styling** — apply `--font-display` to logo, ensure sidebar-scoped colors work
+- [ ] **Step 6: Add sidebar badges** — Agents nav item shows agent count, Integrations shows total count (MCPs + workers). Fetch counts from existing data and render as `.nav-badge` spans next to the nav labels.
+- [ ] **Step 7: Run `npm run build`** to verify
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 8: Commit**
 
 ```bash
 git add apps/ui/src/App.tsx
@@ -1555,6 +1706,19 @@ Chunk 1 (Foundation)  ─── must complete first
                 └── Chunk 5 (Nav & Cleanup) ─── depends on all above
 ```
 
-Tasks 1-11 must complete sequentially (they build on each other's CSS).
-Tasks 12-13 (Settings), 14-15 (Agents), 16 (Integrations) can be parallelized.
-Tasks 17-19 (Nav/Cleanup) must run last.
+**Within Chunk 1:**
+- Tasks 1-3 (fonts, tokens, sidebar) must be sequential — each builds on the prior.
+- Tasks 4-10 (shared components) are independent of each other — can be parallelized.
+- Task 11 (extract formatContextWindow) must complete before Task 12 starts.
+
+**Chunks 2, 3, 4** are independent pages — can run in parallel.
+
+**Chunk 5** (Tasks 17-19) depends on all above completing.
+
+## Post-Migration Cleanup (future)
+
+After all pages are migrated and stable:
+- Remove `-v2` suffixed CSS class names, rename to final names
+- Remove backwards-compat token aliases from `theme.css` once grep confirms zero remaining references
+- Remove old deprecated page files if not already done
+- Use existing `.btn--primary` BEM convention (not `.btn-primary`) — plan components should follow existing patterns
