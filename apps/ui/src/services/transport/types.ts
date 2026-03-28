@@ -225,6 +225,41 @@ export interface ProviderTestResult {
 }
 
 // ============================================================================
+// Model Registry Types
+// ============================================================================
+
+export interface ModelProfile {
+  name: string;
+  provider: string;
+  capabilities: ModelCapabilities;
+  context: ContextWindow;
+  embedding?: EmbeddingSpec;
+}
+
+export interface ModelCapabilities {
+  tools: boolean;
+  vision: boolean;
+  thinking: boolean;
+  embeddings: boolean;
+  voice: boolean;
+  imageGeneration: boolean;
+  videoGeneration: boolean;
+}
+
+export interface ContextWindow {
+  input: number;
+  output: number | null;
+}
+
+export interface EmbeddingSpec {
+  dimensions: number;
+  maxDimensions?: number;
+}
+
+/** Full registry response: model ID → profile */
+export type ModelRegistryResponse = Record<string, ModelProfile>;
+
+// ============================================================================
 // MCP Types
 // ============================================================================
 

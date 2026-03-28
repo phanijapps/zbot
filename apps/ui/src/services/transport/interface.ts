@@ -24,6 +24,7 @@ import type {
   McpServerConfig,
   CreateMcpRequest,
   McpTestResult,
+  ModelRegistryResponse,
   MessageResponse,
   SessionMessage,
   SessionMessagesQuery,
@@ -148,6 +149,13 @@ export interface Transport {
 
   /** Set a provider as the default */
   setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>>;
+
+  // =========================================================================
+  // Model Registry Operations
+  // =========================================================================
+
+  /** Get all known models with capabilities */
+  listModels(): Promise<TransportResult<ModelRegistryResponse>>;
 
   // =========================================================================
   // MCP Operations

@@ -29,7 +29,24 @@ import {
   type ProviderResponse,
   type SkillResponse,
   type McpListResponse,
+  type ModelRegistryResponse,
+  type ModelProfile,
 } from "@/services/transport";
+import { Wrench, Eye, Volume2 } from "lucide-react";
+
+/** Small capability badges for a model */
+function ModelBadges({ profile }: { profile?: ModelProfile }) {
+  if (!profile) return null;
+  const caps = profile.capabilities;
+  return (
+    <span className="inline-flex gap-1 ml-1.5" aria-label="Model capabilities">
+      {caps.tools && <Wrench className="w-3 h-3 text-[var(--muted-foreground)]" />}
+      {caps.vision && <Eye className="w-3 h-3 text-[var(--muted-foreground)]" />}
+      {caps.thinking && <Brain className="w-3 h-3 text-[var(--muted-foreground)]" />}
+      {caps.voice && <Volume2 className="w-3 h-3 text-[var(--muted-foreground)]" />}
+    </span>
+  );
+}
 
 // ============================================================================
 // Types
@@ -63,6 +80,7 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
 
   // Data for dropdowns
   const [providers, setProviders] = useState<ProviderResponse[]>([]);
+  const [modelRegistry, setModelRegistry] = useState<ModelRegistryResponse>({});
   const [skills, setSkills] = useState<SkillResponse[]>([]);
   const [mcps, setMcps] = useState<McpListResponse["servers"]>([]);
 
@@ -81,14 +99,18 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
     setIsLoading(true);
     try {
       const transport = await getTransport();
-      const [providersResult, skillsResult, mcpsResult] = await Promise.all([
+      const [providersResult, skillsResult, mcpsResult, modelsResult] = await Promise.all([
         transport.listProviders(),
         transport.listSkills(),
         transport.listMcps(),
+        transport.listModels(),
       ]);
 
       if (providersResult.success && providersResult.data) {
         setProviders(providersResult.data);
+      }
+      if (modelsResult.success && modelsResult.data) {
+        setModelRegistry(modelsResult.data);
       }
       if (skillsResult.success && skillsResult.data) {
         setSkills(skillsResult.data);
@@ -273,6 +295,13 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
                       </option>
                     )) || <option value="">Select a provider first</option>}
                   </select>
+                  {formData.model && modelRegistry[formData.model] && (
+                    <div className="flex items-center gap-2 mt-1 text-xs text-[var(--muted-foreground)]">
+                      <span>{modelRegistry[formData.model].name}</span>
+                      <ModelBadges profile={modelRegistry[formData.model]} />
+                      <span className="ml-auto">{Math.round(modelRegistry[formData.model].context.input / 1000)}K ctx</span>
+                    </div>
+                  )}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-3">

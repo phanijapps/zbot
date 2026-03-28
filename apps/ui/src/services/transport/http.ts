@@ -17,6 +17,7 @@ import type {
   CreateProviderRequest,
   UpdateProviderRequest,
   ProviderTestResult,
+  ModelRegistryResponse,
   HealthResponse,
   StatusResponse,
   EventCallback,
@@ -231,6 +232,14 @@ export class HttpTransport implements Transport {
 
   async setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>> {
     return this.post<ProviderResponse>(`/api/providers/${encodeURIComponent(id)}/default`, {});
+  }
+
+  // =========================================================================
+  // Model Registry Operations
+  // =========================================================================
+
+  async listModels(): Promise<TransportResult<ModelRegistryResponse>> {
+    return this.get<ModelRegistryResponse>("/api/models");
   }
 
   // =========================================================================

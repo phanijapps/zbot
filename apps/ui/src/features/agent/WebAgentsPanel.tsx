@@ -4,9 +4,23 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import { Bot, Plus, Trash2, Cpu, Thermometer, Hash, X, Loader2, Pencil } from "lucide-react";
-import { getTransport, type AgentResponse, type CreateAgentRequest, type ProviderResponse, getProviderDefaultModel } from "@/services/transport";
+import { Bot, Plus, Trash2, Cpu, Thermometer, Hash, X, Loader2, Pencil, Wrench, Eye, Brain, Volume2 } from "lucide-react";
+import { getTransport, type AgentResponse, type CreateAgentRequest, type ProviderResponse, type ModelRegistryResponse, type ModelProfile, getProviderDefaultModel } from "@/services/transport";
 import { AgentEditPanel } from "./AgentEditPanel";
+
+/** Small capability badges for a model */
+function ModelBadges({ profile }: { profile?: ModelProfile }) {
+  if (!profile) return null;
+  const caps = profile.capabilities;
+  return (
+    <span className="inline-flex gap-1 ml-1.5">
+      {caps.tools && <Wrench className="w-3 h-3 text-[var(--muted-foreground)]" />}
+      {caps.vision && <Eye className="w-3 h-3 text-[var(--muted-foreground)]" />}
+      {caps.thinking && <Brain className="w-3 h-3 text-[var(--muted-foreground)]" />}
+      {caps.voice && <Volume2 className="w-3 h-3 text-[var(--muted-foreground)]" />}
+    </span>
+  );
+}
 
 // ============================================================================
 // Component
@@ -15,6 +29,7 @@ import { AgentEditPanel } from "./AgentEditPanel";
 export function WebAgentsPanel() {
   const [agents, setAgents] = useState<AgentResponse[]>([]);
   const [providers, setProviders] = useState<ProviderResponse[]>([]);
+  const [modelRegistry, setModelRegistry] = useState<ModelRegistryResponse>({});
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -37,10 +52,14 @@ export function WebAgentsPanel() {
     setIsLoading(true);
     try {
       const transport = await getTransport();
-      const [agentsResult, providersResult] = await Promise.all([
+      const [agentsResult, providersResult, modelsResult] = await Promise.all([
         transport.listAgents(),
         transport.listProviders(),
+        transport.listModels(),
       ]);
+      if (modelsResult.data) {
+        setModelRegistry(modelsResult.data);
+      }
 
       if (agentsResult.success && agentsResult.data) {
         setAgents(agentsResult.data);
@@ -252,6 +271,13 @@ export function WebAgentsPanel() {
                           </option>
                         )) || <option value="">Select a provider first</option>}
                     </select>
+                    {newAgent.model && modelRegistry[newAgent.model] && (
+                      <div className="flex items-center gap-2 mt-1 text-xs text-[var(--muted-foreground)]">
+                        <span>{modelRegistry[newAgent.model].name}</span>
+                        <ModelBadges profile={modelRegistry[newAgent.model]} />
+                        <span className="ml-auto">{Math.round(modelRegistry[newAgent.model].context.input / 1000)}K ctx</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
