@@ -208,7 +208,25 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 ### Providers Page: Card Grid Over Split Panel
 **Problem**: The original split-panel layout (sidebar list + detail pane) was a developer tool pattern. No inline editing, no guided setup, no capability visibility. Non-technical users didn't know what to do.
 **Decision**: Card grid with responsive 2-column layout. Each card shows provider name, status badge (Connected/Not tested/Active), model chips with capability badges. Click opens a slide-over detail panel with view/edit toggle. Empty state shows Top-3 preset cards (OpenAI, Anthropic, Ollama) with inline "type API key and connect" flow.
-**Rationale**: Cards give visual overview. Inline connect reduces the happy path to 2 clicks. Slide-over preserves context (grid visible behind). View/Edit toggle prevents accidental changes. 9 provider presets with pre-filled baseUrl and models. Implementation: `apps/ui/src/features/integrations/`.
+**Rationale**: Cards give visual overview. Inline connect reduces the happy path to 2 clicks. Slide-over preserves context (grid visible behind). View/Edit toggle prevents accidental changes. 9 provider presets with pre-filled baseUrl and models. Implementation: `apps/ui/src/features/settings/` (moved from integrations during UI revamp).
+
+### UI Revamp: 7 Pages → 3 Consolidated Pages
+**Problem**: UI had 7+ separate pages (Settings, Providers, MCPs, Skills, Agents, Workers, Schedules) with inconsistent layouts, no help text, and jargon-heavy labels. Non-technical users couldn't navigate.
+**Decision**: Consolidate into 3 tabbed pages:
+- **Settings** (Providers | General | Logging) — system setup, providers as default tab
+- **Agents** (My Agents | Skills Library | Schedules) — agent management with card grid
+- **Integrations** (Tool Servers | Plugins & Workers) — MCPs renamed to "Tool Servers", workers+plugins unified
+**Rationale**: Maps to user mental model: Setup → Build → Connect. Tabs reduce navigation decisions. Every section gets contextual help text and rich empty states for onboarding. Card grid + slide-over pattern used consistently across all pages.
+
+### UI Revamp: Design System — Warm Editorial Palette
+**Problem**: Existing UI used generic system fonts and basic colors. No distinctive visual identity.
+**Decision**: Warm copper accent (`#c8956c` dark, `#a07d52` light), cream/charcoal backgrounds, sidebar always dark in both themes. CSS custom properties for full themability. Backwards-compat aliases for all replaced tokens during migration.
+**Rationale**: User preferred existing font stack over Fraunces serif for headings. Sidebar-always-dark provides visual anchor. Token aliases prevent silent CSS breakage. Implementation: `apps/ui/src/styles/theme.css`, `components.css`.
+
+### Plugins vs Workers: Separate APIs, Shared Runtime
+**Problem**: Plugins (auto-discovered from `~/Documents/zbot/plugins/`) and bridge workers (WebSocket-connected) both appear in `/api/bridge/workers` when running, causing the UI to show plugins as workers.
+**Decision**: Use `/api/plugins` as source of truth for plugin listing (state, version, auto_restart, config). Enrich with bridge worker data (capabilities, resources) when plugin is connected. Filter bridge workers list to exclude entries matching known plugin IDs.
+**Rationale**: Plugin `adapter_id` equals plugin `id` (e.g. `"slack"`, NOT `"plugin:slack"`). A running plugin appears in both APIs. UI must deduplicate. Implementation: `apps/ui/src/features/integrations/WebIntegrationsPanel.tsx`.
 
 ### Score Threshold + Per-Category Caps for Semantic Search
 **Problem**: Sending all indexed resources to the LLM wastes tokens on irrelevant results and produces noisy recommendations.
