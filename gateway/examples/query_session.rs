@@ -42,7 +42,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let status: String = row.get(3)?;
         let parent: Option<String> = row.get(4)?;
         println!("{} | {:20} | {:10} | {:10} | parent: {:?}",
-            &id[..24], agent, dtype, status, parent.as_ref().map(|p| &p[..24.min(p.len())]));
+            &id[..id.floor_char_boundary(24)], agent, dtype, status,
+            parent.as_ref().map(|p| &p[..p.floor_char_boundary(24)]));
     }
 
     println!("\n=== MESSAGES (by execution) ===\n");
@@ -63,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dtype: String = row.get(3)?;
         let agent: String = row.get(4)?;
         println!("[{} | {}] {} ({}): {}",
-            &exec[..16], agent, role, dtype,
+            &exec[..exec.floor_char_boundary(16)], agent, role, dtype,
             content.replace('\n', " ").chars().take(80).collect::<String>());
     }
 

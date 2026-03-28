@@ -42,6 +42,21 @@ pub struct Provider {
     /// Set this when using models not in the built-in lookup table.
     #[serde(rename = "contextWindow", skip_serializing_if = "Option::is_none")]
     pub context_window: Option<u64>,
+    /// Default model for this provider. Used when creating root or specialist agents
+    /// that don't specify a model. Falls back to `models[0]` if not set.
+    #[serde(rename = "defaultModel", skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+}
+
+impl Provider {
+    /// Get the default model for this provider.
+    /// Priority: explicit `defaultModel` → first entry in `models` → `"gpt-4o"`.
+    pub fn default_model(&self) -> &str {
+        self.default_model
+            .as_deref()
+            .or_else(|| self.models.first().map(|s| s.as_str()))
+            .unwrap_or("gpt-4o")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

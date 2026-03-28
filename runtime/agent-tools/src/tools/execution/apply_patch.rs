@@ -90,7 +90,7 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, PatchError> {
     let lines: Vec<&str> = patch.trim().lines().collect();
     let inner = match check_boundaries(&lines) {
         Ok(()) => &lines[..],
-        Err(_) => try_heredoc_unwrap(&lines)?,
+        Err(direct_err) => try_heredoc_unwrap(&lines).map_err(|_| direct_err)?,
     };
 
     let last = inner.len().saturating_sub(1);
@@ -111,7 +111,9 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, PatchError> {
 fn check_boundaries(lines: &[&str]) -> Result<(), PatchError> {
     let first = lines.first().map(|l| l.trim());
     let last = lines.last().map(|l| l.trim());
-    match (first, last) {
+    // Tolerate LLMs prefixing *** End Patch with '+' (treats it as content in Add File blocks)
+    let last_normalized = last.map(|l| l.strip_prefix('+').unwrap_or(l).trim_start());
+    match (first, last_normalized) {
         (Some(f), Some(l)) if f == BEGIN_PATCH && (l == END_PATCH || l.starts_with(END_PATCH)) => Ok(()),
         (Some(f), _) if f != BEGIN_PATCH => Err(PatchError::InvalidPatch(format!(
             "Patch must start with '*** Begin Patch'. Got: '{}'. \
@@ -119,8 +121,9 @@ fn check_boundaries(lines: &[&str]) -> Result<(), PatchError> {
             f
         ))),
         _ => Err(PatchError::InvalidPatch(format!(
-            "Patch must end with '*** End Patch'. \
-             Format: apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+content\\n*** End Patch\\nEOF"
+            "Patch must end with '*** End Patch'. Got: '{}'. \
+             Format: apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+content\\n*** End Patch\\nEOF",
+            last.unwrap_or("(empty)")
         ))),
     }
 }
@@ -1582,5 +1585,29 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("Begin Patch"), "Error should mention Begin Patch: {}", msg);
         assert!(msg.contains("Format:"), "Error should include format hint: {}", msg);
+    }
+
+    #[test]
+    fn test_tolerates_plus_prefix_on_end_patch() {
+        // GLM-5 and similar models prefix *** End Patch with '+' inside Add File blocks
+        let patch = "*** Begin Patch\n*** Add File: script.py\n+print('hello')\n+*** End Patch";
+        let hunks = parse_patch(patch).unwrap();
+        assert_eq!(hunks.len(), 1);
+        match &hunks[0] {
+            Hunk::AddFile { path, contents } => {
+                assert_eq!(path, &PathBuf::from("script.py"));
+                assert_eq!(contents, "print('hello')\n");
+            }
+            _ => panic!("Expected AddFile"),
+        }
+    }
+
+    #[test]
+    fn test_error_propagates_real_cause() {
+        // When both boundaries fail, error should describe the actual problem
+        let patch = "*** Begin Patch\n*** Add File: f.py\n+code\nbad ending";
+        let err = parse_patch(patch).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("end with"), "Error should mention end boundary: {}", msg);
     }
 }

@@ -175,7 +175,7 @@ async fn run_invoke(
                     println!("[Tool Error: {}]", err);
                 } else if let Some(res) = result {
                     let preview = if res.len() > 100 {
-                        format!("{}...", &res[..100])
+                        format!("{}...", &res[..res.floor_char_boundary(100)])
                     } else {
                         res
                     };

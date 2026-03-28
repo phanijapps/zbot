@@ -186,6 +186,7 @@ export interface ProviderResponse {
   baseUrl: string;
   models: string[];
   embeddingModels?: string[];
+  defaultModel?: string;
   verified?: boolean;
   isDefault?: boolean;
   createdAt?: string;
@@ -199,6 +200,7 @@ export interface CreateProviderRequest {
   baseUrl: string;
   models: string[];
   embeddingModels?: string[];
+  defaultModel?: string;
 }
 
 export interface UpdateProviderRequest {
@@ -208,6 +210,12 @@ export interface UpdateProviderRequest {
   baseUrl?: string;
   models?: string[];
   embeddingModels?: string[];
+  defaultModel?: string;
+}
+
+/** Get the default model for a provider response. */
+export function getProviderDefaultModel(provider: ProviderResponse): string {
+  return provider.defaultModel || provider.models[0] || "";
 }
 
 export interface ProviderTestResult {

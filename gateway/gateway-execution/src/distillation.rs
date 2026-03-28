@@ -155,15 +155,14 @@ impl SessionDistiller {
             .or_else(|| providers.first())
             .ok_or_else(|| "No providers configured — cannot distill session".to_string())?;
 
-        let model = provider.models.first()
-            .ok_or_else(|| "Default provider has no models configured".to_string())?;
+        let model = provider.default_model();
 
         let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
 
         let config = LlmConfig::new(
             provider.base_url.clone(),
             provider.api_key.clone(),
-            model.clone(),
+            model.to_string(),
             provider_id,
         )
         .with_temperature(0.3)
@@ -399,7 +398,7 @@ fn build_transcript(messages: &[gateway_database::Message]) -> String {
 
         // Truncate very long messages for the distillation context
         let content = if msg.content.len() > 500 {
-            format!("{}... [truncated, {} chars total]", &msg.content[..500], msg.content.len())
+            format!("{}... [truncated, {} chars total]", zero_core::truncate_str(&msg.content, 500), msg.content.len())
         } else {
             msg.content.clone()
         };
@@ -422,7 +421,7 @@ fn truncate_json(json_str: &str, max_len: usize) -> String {
     if json_str.len() <= max_len {
         json_str.to_string()
     } else {
-        format!("{}...", &json_str[..max_len])
+        format!("{}...", zero_core::truncate_str(json_str, max_len))
     }
 }
 

@@ -74,6 +74,21 @@ pub use memory::MemoryFactStore;
 pub use connectors::{ConnectorResourceProvider, CapabilityInfo};
 
 // ============================================================================
+// STRING UTILITIES
+// ============================================================================
+
+/// Truncate a string to at most `max_bytes` bytes at a valid UTF-8 char boundary.
+/// Returns the original string if it fits, otherwise the largest valid slice.
+#[inline]
+pub fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        s
+    } else {
+        &s[..s.floor_char_boundary(max_bytes)]
+    }
+}
+
+// ============================================================================
 // STATE PREFIX CONSTANTS
 // ============================================================================
 

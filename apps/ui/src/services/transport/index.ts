@@ -52,6 +52,8 @@ export type {
   SubscriptionOptions,
 } from "./types";
 
+export { getProviderDefaultModel } from "./types";
+
 // ============================================================================
 // Default Configuration
 // ============================================================================

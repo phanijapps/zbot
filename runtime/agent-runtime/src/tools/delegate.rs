@@ -188,11 +188,19 @@ impl Tool for DelegateTool {
             uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
         );
 
+        // Enrich task with platform hint so subagents use correct shell syntax
+        let platform_hint = match std::env::consts::OS {
+            "windows" => "\n\n[PLATFORM: Windows / PowerShell. Do NOT use bash syntax (head, &&, cat, heredocs). Use Get-Content, ';', python.]",
+            "macos" => "\n\n[PLATFORM: macOS / zsh.]",
+            _ => "\n\n[PLATFORM: Linux / bash.]",
+        };
+        let enriched_task = format!("{}{}", task, platform_hint);
+
         // Set delegation action for the executor to pick up
         let mut actions = ctx.actions();
         actions.delegate = Some(zero_core::event::DelegateAction {
             agent_id: target_agent_id.to_string(),
-            task: task.to_string(),
+            task: enriched_task,
             context,
             wait_for_result,
             max_iterations,

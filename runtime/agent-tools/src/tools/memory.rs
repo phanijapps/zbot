@@ -451,7 +451,7 @@ impl MemoryTool {
                 json!({
                     "key": key,
                     "value_preview": if entry.value.len() > 100 {
-                        format!("{}...", &entry.value[..100])
+                        format!("{}...", zero_core::truncate_str(&entry.value, 100))
                     } else {
                         entry.value.clone()
                     },

@@ -307,7 +307,7 @@ fn handle_gateway_event(state: &mut AppState, event: GatewayEvent) {
             } else if let Some(res) = result {
                 // Truncate long results
                 let display = if res.len() > 500 {
-                    format!("{}...", &res[..500])
+                    format!("{}...", &res[..res.floor_char_boundary(500)])
                 } else {
                     res
                 };

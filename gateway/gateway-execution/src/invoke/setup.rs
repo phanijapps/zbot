@@ -158,12 +158,7 @@ impl<'a> AgentLoader<'a> {
                 // Create a default root agent using the default provider
                 let provider = self.provider_resolver.get_default()?;
 
-                // Use first model from provider or default
-                let model = provider
-                    .models
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "gpt-4o".to_string());
+                let model = provider.default_model().to_string();
 
                 let agent = gateway_services::agents::Agent {
                     id: "root".to_string(),
@@ -199,18 +194,17 @@ impl<'a> AgentLoader<'a> {
     ) -> Result<(gateway_services::agents::Agent, Provider), String> {
         // Try loading existing agent first
         match self.agent_service.get(agent_id).await {
-            Ok(agent) => {
+            Ok(mut agent) => {
+                // Append OS context and shards so pre-configured agents
+                // also know platform commands (PowerShell vs bash, etc.)
+                agent.instructions = append_system_context(&agent.instructions, &self.paths);
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
                 Ok((agent, provider))
             }
             Err(_) => {
                 // Agent doesn't exist — auto-create with default provider
                 let provider = self.provider_resolver.get_default()?;
-                let model = provider
-                    .models
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "gpt-4o".to_string());
+                let model = provider.default_model().to_string();
 
                 let instructions = build_specialist_instructions(agent_id, &self.paths);
 

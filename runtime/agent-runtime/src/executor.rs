@@ -1612,7 +1612,7 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
                 if s.len() > 200 {
                     truncated.insert(
                         key.clone(),
-                        Value::String(format!("{}... [truncated, {} chars]", &s[..200], s.len())),
+                        Value::String(format!("{}... [truncated, {} chars]", zero_core::truncate_str(s, 200), s.len())),
                     );
                 } else {
                     truncated.insert(key.clone(), value.clone());

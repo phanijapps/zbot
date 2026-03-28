@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   getTransport,
+  getProviderDefaultModel,
   type AgentResponse,
   type UpdateAgentRequest,
   type ProviderResponse,
@@ -247,7 +248,7 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
                       setFormData({
                         ...formData,
                         providerId: e.target.value,
-                        model: provider?.models[0] || "",
+                        model: provider ? getProviderDefaultModel(provider) : "",
                       });
                     }}
                     className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent"

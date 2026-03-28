@@ -249,8 +249,15 @@ export interface Provider {
   models: string[];
   /** Embedding models for vector search/memory */
   embeddingModels?: string[];
+  /** Default model for auto-created agents. Falls back to models[0]. */
+  defaultModel?: string;
   verified?: boolean;
   createdAt: string;
+}
+
+/** Get the default model for a provider. */
+export function getDefaultModel(provider: Provider): string {
+  return provider.defaultModel || provider.models[0] || "gpt-4o";
 }
 
 /** Provider test result */

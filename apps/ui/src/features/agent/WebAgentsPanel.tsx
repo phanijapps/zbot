@@ -5,7 +5,7 @@
 
 import { useState, useEffect } from "react";
 import { Bot, Plus, Trash2, Cpu, Thermometer, Hash, X, Loader2, Pencil } from "lucide-react";
-import { getTransport, type AgentResponse, type CreateAgentRequest, type ProviderResponse } from "@/services/transport";
+import { getTransport, type AgentResponse, type CreateAgentRequest, type ProviderResponse, getProviderDefaultModel } from "@/services/transport";
 import { AgentEditPanel } from "./AgentEditPanel";
 
 // ============================================================================
@@ -53,7 +53,7 @@ export function WebAgentsPanel() {
           setNewAgent(prev => ({
             ...prev,
             providerId: defaultProvider.id || "",
-            model: defaultProvider.models[0] || "",
+            model: getProviderDefaultModel(defaultProvider),
           }));
         }
       }
@@ -99,7 +99,7 @@ export function WebAgentsPanel() {
           displayName: "",
           description: "",
           providerId: defaultProvider?.id || "",
-          model: defaultProvider?.models[0] || "",
+          model: defaultProvider ? getProviderDefaultModel(defaultProvider) : "",
           temperature: 0.7,
           maxTokens: 4096,
         });
@@ -220,7 +220,7 @@ export function WebAgentsPanel() {
                         setNewAgent({
                           ...newAgent,
                           providerId: e.target.value,
-                          model: provider?.models[0] || "",
+                          model: provider ? getProviderDefaultModel(provider) : "",
                         });
                       }}
                       className="w-full bg-[var(--background)] border border-[var(--border)] rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent text-[var(--foreground)] text-sm"
