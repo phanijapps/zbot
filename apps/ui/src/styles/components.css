@@ -581,6 +581,10 @@
   margin-bottom: var(--spacing-4);
 }
 
+.form-group:last-child {
+  margin-bottom: 0;
+}
+
 .form-label {
   font-size: var(--text-sm);
   font-weight: 500;

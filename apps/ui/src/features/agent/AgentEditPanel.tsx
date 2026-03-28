@@ -5,7 +5,7 @@
 //   Basic | Model | Schedules | Advanced
 // ============================================================================
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect } from "react";
 import {
   Bot,
   Cpu,
@@ -18,9 +18,6 @@ import {
   Loader2,
   Brain,
   Mic,
-  Calendar,
-  Play,
-  Pause,
 } from "lucide-react";
 import {
   getTransport,
@@ -30,7 +27,6 @@ import {
   type ProviderResponse,
   type McpListResponse,
   type ModelRegistryResponse,
-  type CronJobResponse,
 } from "@/services/transport";
 import { Slideover } from "@/components/Slideover";
 import { ModelChip } from "@/shared/ui/ModelChip";
@@ -69,7 +65,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
 
   // Data for dropdowns
   const [mcps, setMcps] = useState<McpListResponse["servers"]>([]);
-  const [agentSchedules, setAgentSchedules] = useState<CronJobResponse[]>([]);
 
   // UI state
   const [isLoading, setIsLoading] = useState(true);
@@ -86,16 +81,9 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
     setIsLoading(true);
     try {
       const transport = await getTransport();
-      const [mcpsResult, schedulesResult] = await Promise.all([
-        transport.listMcps(),
-        transport.listCronJobs(),
-      ]);
-
+      const mcpsResult = await transport.listMcps();
       if (mcpsResult.success && mcpsResult.data) {
         setMcps(mcpsResult.data.servers || []);
-      }
-      if (schedulesResult.success && schedulesResult.data) {
-        setAgentSchedules(schedulesResult.data.filter((j) => j.agent_id === agent.id));
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load data");
@@ -133,20 +121,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
       setFormData({ ...formData, mcps: [...currentMcps, mcpId] });
     }
   };
-
-  const handleToggleSchedule = useCallback(async (job: CronJobResponse) => {
-    try {
-      const transport = await getTransport();
-      const result = job.enabled
-        ? await transport.disableCronJob(job.id)
-        : await transport.enableCronJob(job.id);
-      if (result.success && result.data) {
-        setAgentSchedules((prev) => prev.map((j) => (j.id === job.id ? result.data! : j)));
-      }
-    } catch {
-      // silently ignore toggle errors in inline view
-    }
-  }, []);
 
   if (isLoading) {
     return (
@@ -306,40 +280,6 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
             />
           </div>
         </div>
-      </section>
-
-      {/* ── Schedules targeting this agent ── */}
-      <section className="slideover__section">
-        <h3 style={{
-          fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)",
-          marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)",
-        }}>
-          <Calendar style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
-          Schedules
-        </h3>
-        {agentSchedules.length === 0 ? (
-          <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)", padding: "var(--spacing-3)", background: "var(--background-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>
-            No schedules target this agent.
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
-            {agentSchedules.map((job) => (
-              <div key={job.id} className="schedule-card" style={{ padding: "var(--spacing-3)" }}>
-                <div className={`schedule-card__icon ${job.enabled ? "schedule-card__icon--active" : "schedule-card__icon--paused"}`} style={{ width: 32, height: 32 }}>
-                  {job.enabled ? <Play style={{ width: 14, height: 14 }} /> : <Pause style={{ width: 14, height: 14 }} />}
-                </div>
-                <div className="schedule-card__info">
-                  <div className="schedule-card__name">{job.name}</div>
-                  <div className="schedule-card__cron">{job.schedule}</div>
-                </div>
-                <button
-                  className={`toggle-switch ${job.enabled ? "toggle-switch--on" : "toggle-switch--off"}`}
-                  onClick={() => handleToggleSchedule(job)}
-                />
-              </div>
-            ))}
-          </div>
-        )}
       </section>
 
       {/* ── Advanced ── */}
