@@ -7,11 +7,11 @@ import { useState, useEffect } from "react";
 import { Plug, Plus, Loader2 } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { ProviderResponse, ModelRegistryResponse } from "@/services/transport";
-import { ProvidersEmptyState } from "./ProvidersEmptyState";
-import { ProvidersGrid } from "./ProvidersGrid";
-import { ProviderSlideover } from "./ProviderSlideover";
-import type { ProviderPreset } from "./providerPresets";
-import { getAvailablePresets } from "./providerPresets";
+import { ProvidersEmptyState } from "@/features/settings/ProvidersEmptyState";
+import { ProvidersGrid } from "@/features/settings/ProvidersGrid";
+import { ProviderSlideover } from "@/features/settings/ProviderSlideover";
+import type { ProviderPreset } from "@/features/settings/providerPresets";
+import { getAvailablePresets } from "@/features/settings/providerPresets";
 
 // ============================================================================
 // Component

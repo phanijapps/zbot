@@ -4,7 +4,7 @@
 // ============================================================================
 
 import type { ProviderResponse, ModelRegistryResponse } from "@/services/transport";
-import { ModelChip } from "./ModelChip";
+import { ModelChip } from "@/shared/ui/ModelChip";
 
 interface ProviderCardProps {
   provider: ProviderResponse;

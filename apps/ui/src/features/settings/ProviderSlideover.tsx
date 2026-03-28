@@ -7,7 +7,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { X, Pencil, Loader2, AlertCircle, Plus, Play, Trash2 } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { ProviderResponse, ModelRegistryResponse } from "@/services/transport";
-import { ModelChip } from "./ModelChip";
+import { ModelChip } from "@/shared/ui/ModelChip";
 import type { ProviderPreset } from "./providerPresets";
 
 // ============================================================================

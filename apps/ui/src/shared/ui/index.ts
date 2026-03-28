@@ -45,3 +45,4 @@ export { ScrollArea, ScrollBar } from "./scroll-area";
 export { Separator } from "./separator";
 export { ModalOverlay } from "./modal-overlay";
 export { EmptyState } from "./EmptyState";
+export { ModelChip } from "./ModelChip";
