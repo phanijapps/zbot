@@ -53,6 +53,11 @@ export type {
   // Subscription types
   SubscriptionScope,
   SubscriptionOptions,
+  // Cron types
+  CronJobResponse,
+  CreateCronJobRequest,
+  UpdateCronJobRequest,
+  CronTriggerResult,
 } from "./types";
 
 export { getProviderDefaultModel } from "./types";
