@@ -132,7 +132,7 @@ CREATE TABLE session_episodes (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL,
     agent_id TEXT NOT NULL,
-    ward_id TEXT,                    -- nullable, same scoping as facts
+    ward_id TEXT NOT NULL DEFAULT '__global__',  -- sentinel value, same as memory_facts
     task_summary TEXT NOT NULL,       -- "Analyze SPY options chain for April expiry"
     outcome TEXT NOT NULL,            -- 'success', 'partial', 'failed', 'crashed'
     strategy_used TEXT,               -- "delegated to data-analyst for technicals, then research-agent for sentiment"
@@ -318,7 +318,7 @@ Given the session transcript, assess:
 4. Was the token cost reasonable for the task complexity? (efficient / acceptable / wasteful)
 ```
 
-This populates `session_episodes` (Section 2). No separate LLM call — one distillation pass extracts facts, entities, relationships, AND the episode.
+This populates `session_episodes` (Section 2). No separate LLM call — one distillation pass extracts facts, entities, relationships, AND the episode. Episodes are only written when distillation succeeds (`distillation_runs.status = 'success'`). A failed distillation produces no episode — the session remains eligible for retry, and the episode will be created on successful retry.
 
 #### 4.2 Feedback Loop
 
@@ -446,7 +446,7 @@ Powered by `distillation_runs` table and aggregate queries:
 - **Agent filter pills:** All Agents | root | data-analyst | research-agent
 - **Ward scope pills:** Global | finance-ward | agentzero-dev | ...
 - **Search:** entity name filter with highlight
-- Ward scope filter: `WHERE ward_id IS NULL OR ward_id = :selected_ward` + global entities with connections into that ward
+- Ward scope filter: Knowledge graph entities (`kg_entities`) don't have a `ward_id` column — ward filtering works by joining entities to their associated `memory_facts` via entity name, then filtering facts by `ward_id = '__global__' OR ward_id = :selected_ward`. Entities connected only to ward-local facts appear only in that ward's view; entities connected to global facts appear in all views.
 
 #### 6.5 API Endpoints
 
@@ -494,7 +494,7 @@ D3's transition system handles the "living brain" animations natively — pulsin
 2. `session_episodes` — episodic memory with outcomes and strategies
 
 ### Altered Tables
-1. `memory_facts` — add `ward_id TEXT` nullable column
+1. `memory_facts` — add `ward_id TEXT NOT NULL DEFAULT '__global__'`, update UNIQUE constraint to include ward_id
 
 ### New Config Files
 1. `~/Documents/zbot/config/recall_config.json` — optional, compiled defaults as fallback
