@@ -2981,3 +2981,247 @@
     transform: none;
   }
 }
+
+/* ═══════════════════════════════════════════════════════════
+   Observatory — Knowledge Graph Visualization
+   ═══════════════════════════════════════════════════════════ */
+
+.observatory {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.observatory__toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-bottom: 1px solid var(--border);
+  background: var(--background-surface);
+  gap: var(--spacing-3);
+  flex-shrink: 0;
+}
+
+.observatory__toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.observatory__toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+}
+
+.observatory__main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+.observatory__canvas {
+  flex: 1;
+  position: relative;
+  background: var(--background);
+}
+
+.observatory__canvas svg {
+  width: 100%;
+  height: 100%;
+}
+
+.observatory__sidebar {
+  width: 300px;
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  padding: var(--spacing-5);
+  background: var(--background-surface);
+  flex-shrink: 0;
+}
+
+.observatory__sidebar-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--spacing-4);
+}
+
+.observatory__sidebar-title {
+  font-size: var(--text-lg);
+  font-weight: 500;
+  color: var(--foreground);
+}
+
+.observatory__sidebar-section {
+  margin-bottom: var(--spacing-4);
+  padding-bottom: var(--spacing-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.observatory__sidebar-section:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+  padding-bottom: 0;
+}
+
+.observatory__sidebar-label {
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 1.5px;
+  color: var(--dim-foreground);
+  font-weight: 600;
+  margin-bottom: var(--spacing-2);
+}
+
+.observatory__health {
+  border-top: 1px solid var(--border);
+  padding: var(--spacing-3) var(--spacing-4);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-4);
+  flex-wrap: wrap;
+  flex-shrink: 0;
+  background: var(--background-surface);
+}
+
+.observatory__health-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+
+.observatory__health-value {
+  font-weight: 600;
+  color: var(--foreground);
+}
+
+.observatory__health-value--warning {
+  color: var(--warning);
+}
+
+.observatory__health-value--error {
+  color: var(--destructive);
+}
+
+.observatory__legend {
+  position: absolute;
+  bottom: var(--spacing-3);
+  left: var(--spacing-3);
+  display: flex;
+  gap: var(--spacing-3);
+  font-size: var(--text-xs);
+  padding: var(--spacing-2) var(--spacing-3);
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--muted-foreground);
+}
+
+.observatory__legend-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+}
+
+.observatory__legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+}
+
+.observatory__zoom-controls {
+  position: absolute;
+  bottom: var(--spacing-3);
+  right: var(--spacing-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-1);
+}
+
+.observatory__zoom-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--background-surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--muted-foreground);
+  transition: all 0.15s;
+}
+
+.observatory__zoom-btn:hover {
+  color: var(--foreground);
+  border-color: var(--border-hover);
+}
+
+/* Graph nodes */
+.graph-node {
+  cursor: pointer;
+  transition: opacity 0.2s;
+}
+
+.graph-node:hover {
+  opacity: 0.8;
+}
+
+.graph-node--person { fill: #6366f1; }
+.graph-node--concept { fill: #f59e0b; }
+.graph-node--agent,
+.graph-node--tool { fill: #10b981; }
+.graph-node--project { fill: #ef4444; }
+.graph-node--strategy { fill: #8b5cf6; }
+
+.graph-node--selected {
+  stroke: var(--primary);
+  stroke-width: 2px;
+}
+
+.graph-node--dimmed {
+  opacity: 0.15;
+}
+
+/* Graph edges */
+.graph-edge {
+  stroke: var(--border);
+}
+
+/* Graph labels */
+.graph-label {
+  fill: var(--foreground);
+  font-size: 10px;
+  pointer-events: none;
+  text-anchor: middle;
+  dominant-baseline: central;
+}
+
+.graph-label--dimmed {
+  opacity: 0.15;
+}
+
+/* Connection chip in entity detail sidebar */
+.observatory__connection {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  background: var(--background-elevated);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-xs);
+  color: var(--foreground);
+}
+
+.observatory__connection-type {
+  color: var(--muted-foreground);
+  font-weight: 500;
+}
+
+.observatory__connection-arrow {
+  color: var(--dim-foreground);
+}

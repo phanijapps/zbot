@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   Plug,
   Brain,
+  Network,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
@@ -25,6 +26,7 @@ import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPan
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { WebMemoryPanel } from "./features/memory";
+import { ObservatoryPage } from "./features/observatory";
 import { ChatSlider } from "./components/ChatSlider";
 import { ThemeToggle } from "./components/ThemeToggle";
 
@@ -172,6 +174,7 @@ function App() {
           <Route path="/chat" element={<WebOpsDashboard />} />
           <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/memory" element={<WebMemoryPanel />} />
+          <Route path="/observatory" element={<ObservatoryPage />} />
           <Route path="/agents" element={<WebAgentsPanel />} />
           <Route path="/integrations" element={<WebIntegrationsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
@@ -216,6 +219,7 @@ const navGroups: NavGroup[] = [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
+      { to: "/observatory", label: "Observatory", icon: Network },
     ],
   },
   {
