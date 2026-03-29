@@ -71,7 +71,7 @@ impl MemoryRepository {
             conn.execute(
                 "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, created_at, updated_at, expires_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
-                 ON CONFLICT(agent_id, scope, key) DO UPDATE SET
+                 ON CONFLICT(agent_id, scope, ward_id, key) DO UPDATE SET
                     content = excluded.content,
                     confidence = MAX(memory_facts.confidence, excluded.confidence),
                     mention_count = memory_facts.mention_count + 1,

@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 10;
+const SCHEMA_VERSION: i32 = 11;
 
 /// Run migrations for existing databases.
 ///
@@ -61,6 +61,80 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         );
         let _ = conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_outbox_created ON bridge_outbox(created_at)",
+            [],
+        );
+    }
+
+    // v10 → v11: Add distillation_runs, session_episodes tables; add ward_id to memory_facts
+    if version < 11 {
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS distillation_runs (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL,
+                facts_extracted INTEGER DEFAULT 0,
+                entities_extracted INTEGER DEFAULT 0,
+                relationships_extracted INTEGER DEFAULT 0,
+                episode_created INTEGER DEFAULT 0,
+                error TEXT,
+                retry_count INTEGER DEFAULT 0,
+                duration_ms INTEGER,
+                created_at TEXT NOT NULL
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_distillation_runs_status ON distillation_runs(status)",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS session_episodes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                ward_id TEXT NOT NULL DEFAULT '__global__',
+                task_summary TEXT NOT NULL,
+                outcome TEXT NOT NULL,
+                strategy_used TEXT,
+                key_learnings TEXT,
+                token_cost INTEGER,
+                embedding BLOB,
+                created_at TEXT NOT NULL
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_episodes_agent ON session_episodes(agent_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_episodes_ward ON session_episodes(ward_id)",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_session_episodes_outcome ON session_episodes(outcome)",
+            [],
+        );
+
+        // Add ward_id column to memory_facts
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN ward_id TEXT NOT NULL DEFAULT '__global__'",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_memory_facts_ward ON memory_facts(ward_id)",
+            [],
+        );
+        // Drop the old unique constraint (it was an inline UNIQUE, which SQLite
+        // implements as an auto-named index "sqlite_autoindex_memory_facts_1")
+        let _ = conn.execute(
+            "DROP INDEX IF EXISTS sqlite_autoindex_memory_facts_1",
+            [],
+        );
+        // Create the new unique constraint including ward_id
+        let _ = conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_facts_agent_scope_ward_key ON memory_facts(agent_id, scope, ward_id, key)",
             [],
         );
     }
@@ -275,10 +349,11 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             mention_count INTEGER NOT NULL DEFAULT 1,
             source_summary TEXT,
             embedding BLOB,
+            ward_id TEXT NOT NULL DEFAULT '__global__',
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at TEXT,
-            UNIQUE(agent_id, scope, key)
+            UNIQUE(agent_id, scope, ward_id, key)
         )",
         [],
     )?;
@@ -295,6 +370,11 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_memory_facts_updated ON memory_facts(updated_at)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_memory_facts_ward ON memory_facts(ward_id)",
         [],
     )?;
 
@@ -378,6 +458,68 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // DISTILLATION RUNS
+    // Tracks distillation health per session
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS distillation_runs (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL UNIQUE,
+            status TEXT NOT NULL,
+            facts_extracted INTEGER DEFAULT 0,
+            entities_extracted INTEGER DEFAULT 0,
+            relationships_extracted INTEGER DEFAULT 0,
+            episode_created INTEGER DEFAULT 0,
+            error TEXT,
+            retry_count INTEGER DEFAULT 0,
+            duration_ms INTEGER,
+            created_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_distillation_runs_status ON distillation_runs(status)",
+        [],
+    )?;
+
+    // =========================================================================
+    // SESSION EPISODES
+    // Episodic memory with execution outcomes
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS session_episodes (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            ward_id TEXT NOT NULL DEFAULT '__global__',
+            task_summary TEXT NOT NULL,
+            outcome TEXT NOT NULL,
+            strategy_used TEXT,
+            key_learnings TEXT,
+            token_cost INTEGER,
+            embedding BLOB,
+            created_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_session_episodes_agent ON session_episodes(agent_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_session_episodes_ward ON session_episodes(ward_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_session_episodes_outcome ON session_episodes(outcome)",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -393,4 +535,119 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rusqlite::Connection;
+
+    /// Helper: create a fresh in-memory database and initialize it.
+    fn setup_db() -> Connection {
+        let conn = Connection::open_in_memory().expect("open in-memory db");
+        initialize_database(&conn).expect("initialize_database");
+        conn
+    }
+
+    #[test]
+    fn test_migration_creates_distillation_runs_table() {
+        let conn = setup_db();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='distillation_runs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "distillation_runs table should exist");
+    }
+
+    #[test]
+    fn test_migration_creates_session_episodes_table() {
+        let conn = setup_db();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_episodes'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "session_episodes table should exist");
+    }
+
+    #[test]
+    fn test_memory_facts_has_ward_id_column() {
+        let conn = setup_db();
+        // Insert a row without specifying ward_id — it should default to '__global__'
+        conn.execute(
+            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, created_at, updated_at)
+             VALUES ('f1', 'agent1', 'agent', 'pref', 'color', 'blue', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert with default ward_id");
+
+        let ward_id: String = conn
+            .query_row(
+                "SELECT ward_id FROM memory_facts WHERE id = 'f1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(ward_id, "__global__", "default ward_id should be '__global__'");
+    }
+
+    #[test]
+    fn test_different_ward_ids_allow_same_key() {
+        let conn = setup_db();
+        // Insert fact with ward_id = 'ward_a'
+        conn.execute(
+            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
+             VALUES ('f1', 'agent1', 'agent', 'pref', 'color', 'blue', 'ward_a', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert ward_a");
+
+        // Insert same agent_id/scope/key but with ward_id = 'ward_b' — should succeed
+        conn.execute(
+            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
+             VALUES ('f2', 'agent1', 'agent', 'pref', 'color', 'red', 'ward_b', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert ward_b with same key should succeed");
+
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM memory_facts", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "two facts with different ward_ids should coexist");
+    }
+
+    #[test]
+    fn test_same_ward_id_same_key_conflicts() {
+        let conn = setup_db();
+        conn.execute(
+            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
+             VALUES ('f1', 'agent1', 'agent', 'pref', 'color', 'blue', 'ward_a', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert first");
+
+        // Same agent_id, scope, ward_id, key — should fail with UNIQUE constraint
+        let result = conn.execute(
+            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
+             VALUES ('f2', 'agent1', 'agent', 'pref', 'color', 'red', 'ward_a', datetime('now'), datetime('now'))",
+            [],
+        );
+        assert!(result.is_err(), "duplicate (agent_id, scope, ward_id, key) should be rejected");
+    }
+
+    #[test]
+    fn test_schema_version_is_11() {
+        let conn = setup_db();
+        let version: i32 = conn
+            .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(version, 11, "schema version should be 11");
+    }
 }
