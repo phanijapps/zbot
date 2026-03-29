@@ -151,6 +151,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/graph/:agent_id/search", get(graph::search_entities))
         .route("/api/graph/:agent_id/entities/:entity_id/neighbors", get(graph::get_entity_neighbors))
         .route("/api/graph/:agent_id/entities/:entity_id/subgraph", get(graph::get_entity_subgraph))
+        // Distillation endpoints
+        .route("/api/distillation/status", get(graph::distillation_status))
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)

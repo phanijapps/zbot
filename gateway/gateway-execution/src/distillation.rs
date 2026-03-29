@@ -24,7 +24,7 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{ConversationRepository, MemoryFact, MemoryRepository};
+use gateway_database::{ConversationRepository, DistillationRepository, DistillationRun, MemoryFact, MemoryRepository};
 use gateway_services::{ProviderService, VaultPaths};
 use knowledge_graph::{GraphStorage, Entity, EntityType, Relationship, RelationshipType};
 use serde::Deserialize;
@@ -36,6 +36,7 @@ pub struct SessionDistiller {
     conversation_repo: Arc<ConversationRepository>,
     memory_repo: Arc<MemoryRepository>,
     graph_storage: Option<Arc<GraphStorage>>,
+    distillation_repo: Option<Arc<DistillationRepository>>,
     paths: Arc<VaultPaths>,
 }
 
@@ -102,6 +103,7 @@ impl SessionDistiller {
         conversation_repo: Arc<ConversationRepository>,
         memory_repo: Arc<MemoryRepository>,
         graph_storage: Option<Arc<GraphStorage>>,
+        distillation_repo: Option<Arc<DistillationRepository>>,
         paths: Arc<VaultPaths>,
     ) -> Self {
         Self {
@@ -110,6 +112,7 @@ impl SessionDistiller {
             conversation_repo,
             memory_repo,
             graph_storage,
+            distillation_repo,
             paths,
         }
     }
@@ -145,42 +148,19 @@ impl SessionDistiller {
         }
     }
 
-    /// Resolve the default provider and create a lightweight LLM client for distillation.
-    fn create_llm_client(&self) -> Result<Arc<dyn LlmClient>, String> {
-        let providers = self.provider_service.list()
-            .map_err(|e| format!("Failed to list providers: {}", e))?;
-
-        let provider = providers.iter()
-            .find(|p| p.is_default)
-            .or_else(|| providers.first())
-            .ok_or_else(|| "No providers configured — cannot distill session".to_string())?;
-
-        let model = provider.default_model();
-
-        let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
-
-        let config = LlmConfig::new(
-            provider.base_url.clone(),
-            provider.api_key.clone(),
-            model.to_string(),
-            provider_id,
-        )
-        .with_temperature(0.3)
-        .with_max_tokens(4096);
-
-        let client = OpenAiClient::new(config)
-            .map_err(|e| format!("Failed to create distillation LLM client: {}", e))?;
-        Ok(Arc::new(client))
-    }
-
     /// Distill a completed session into memory facts.
     ///
-    /// Returns the number of facts upserted.
+    /// Returns the number of facts upserted. Records a `distillation_runs`
+    /// entry when the repository is available — optimistic-failure pattern:
+    /// insert with `status = 'failed'` up front, then update to `'success'`
+    /// or `'skipped'` when the outcome is known.
     pub async fn distill(
         &self,
         session_id: &str,
         agent_id: &str,
     ) -> Result<usize, String> {
+        let started = std::time::Instant::now();
+
         // 1. Load session messages
         let messages = self
             .conversation_repo
@@ -193,20 +173,34 @@ impl SessionDistiller {
                 message_count = messages.len(),
                 "Skipping distillation — too few messages"
             );
+            // Record as skipped
+            self.record_skipped(session_id);
             return Ok(0);
         }
+
+        // Insert optimistic-failure record before attempting distillation
+        self.record_pending(session_id);
 
         // 2. Build transcript for the LLM
         let transcript = build_transcript(&messages);
 
-        // 3. Call LLM for fact and entity extraction
-        let response = self.extract_all(&transcript).await?;
+        // 3. Call LLM for fact and entity extraction (with provider fallback)
+        let response = match self.extract_all(&transcript).await {
+            Ok(resp) => resp,
+            Err(e) => {
+                // The initial 'failed' record stays — update with error message
+                self.record_error(session_id, &e);
+                return Err(e);
+            }
+        };
 
         if response.facts.is_empty() && response.entities.is_empty() {
             tracing::info!(
                 session_id = %session_id,
                 "Distillation found nothing worth remembering"
             );
+            let duration_ms = started.elapsed().as_millis() as i64;
+            self.record_success(session_id, 0, 0, 0, false, duration_ms);
             return Ok(0);
         }
 
@@ -322,37 +316,170 @@ impl SessionDistiller {
             }
         }
 
+        let duration_ms = started.elapsed().as_millis() as i64;
+
+        // 6. Record success in distillation_runs
+        self.record_success(
+            session_id,
+            response.facts.len() as i32,
+            response.entities.len() as i32,
+            response.relationships.len() as i32,
+            false, // episode_created — will be set by episode extraction (Task 8)
+            duration_ms,
+        );
+
         tracing::info!(
             session_id = %session_id,
             upserted = upserted,
+            duration_ms = duration_ms,
             "Session distillation complete"
         );
 
         Ok(upserted)
     }
 
-    /// Call the LLM to extract facts, entities, and relationships.
-    async fn extract_all(&self, transcript: &str) -> Result<DistillationResponse, String> {
-        let llm_client = self.create_llm_client()?;
+    // =========================================================================
+    // Health-reporting helpers
+    // =========================================================================
 
-        // Load prompt from filesystem or use embedded default
+    /// Insert a pending/failed distillation run (optimistic failure).
+    fn record_pending(&self, session_id: &str) {
+        if let Some(repo) = &self.distillation_repo {
+            let run = DistillationRun {
+                id: format!("dr-{}", uuid::Uuid::new_v4()),
+                session_id: session_id.to_string(),
+                status: "failed".to_string(),
+                error: Some("Distillation in progress".to_string()),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                ..Default::default()
+            };
+            if let Err(e) = repo.insert(&run) {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to insert distillation run record");
+            }
+        }
+    }
+
+    /// Record a skipped distillation (too few messages).
+    fn record_skipped(&self, session_id: &str) {
+        if let Some(repo) = &self.distillation_repo {
+            let run = DistillationRun {
+                id: format!("dr-{}", uuid::Uuid::new_v4()),
+                session_id: session_id.to_string(),
+                status: "skipped".to_string(),
+                created_at: chrono::Utc::now().to_rfc3339(),
+                ..Default::default()
+            };
+            if let Err(e) = repo.insert(&run) {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record skipped distillation");
+            }
+        }
+    }
+
+    /// Update an existing distillation run to success.
+    fn record_success(
+        &self,
+        session_id: &str,
+        facts: i32,
+        entities: i32,
+        rels: i32,
+        episode_created: bool,
+        duration_ms: i64,
+    ) {
+        if let Some(repo) = &self.distillation_repo {
+            if let Err(e) = repo.update_success(session_id, facts, entities, rels, episode_created, duration_ms) {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation success");
+            }
+        }
+    }
+
+    /// Update an existing distillation run with an error message.
+    fn record_error(&self, session_id: &str, error: &str) {
+        if let Some(repo) = &self.distillation_repo {
+            if let Err(e) = repo.update_retry(session_id, "failed", 0, Some(error)) {
+                tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
+            }
+        }
+    }
+
+    /// Call the LLM to extract facts, entities, and relationships.
+    ///
+    /// Implements a provider fallback chain: tries the default provider first,
+    /// then iterates through remaining providers if the LLM call fails.
+    async fn extract_all(&self, transcript: &str) -> Result<DistillationResponse, String> {
+        let providers = self.provider_service.list()
+            .map_err(|e| format!("Failed to list providers: {}", e))?;
+
+        if providers.is_empty() {
+            return Err("No providers configured — cannot distill session".to_string());
+        }
+
+        // Load prompt once (shared across attempts)
         let system = self.load_distillation_prompt();
         let user = format!(
             "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, and relationships as JSON.",
             transcript
         );
 
-        let messages = vec![
-            ChatMessage::system(system),
-            ChatMessage::user(user),
-        ];
+        // Order: default provider first, then the rest
+        let default_idx = providers.iter().position(|p| p.is_default);
+        let ordered_indices: Vec<usize> = match default_idx {
+            Some(idx) => std::iter::once(idx)
+                .chain((0..providers.len()).filter(move |&i| i != idx))
+                .collect(),
+            None => (0..providers.len()).collect(),
+        };
 
-        let response = llm_client
-            .chat(messages, None)
-            .await
-            .map_err(|e| format!("LLM call failed during distillation: {}", e))?;
+        let mut last_error = String::new();
 
-        parse_distillation_response(&response.content)
+        for idx in ordered_indices {
+            let provider = &providers[idx];
+            let model = provider.default_model();
+            let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
+
+            let config = LlmConfig::new(
+                provider.base_url.clone(),
+                provider.api_key.clone(),
+                model.to_string(),
+                provider_id.clone(),
+            )
+            .with_temperature(0.3)
+            .with_max_tokens(4096);
+
+            let client = match OpenAiClient::new(config) {
+                Ok(c) => Arc::new(c) as Arc<dyn LlmClient>,
+                Err(e) => {
+                    last_error = format!("Provider '{}': client creation failed: {}", provider.name, e);
+                    tracing::warn!(
+                        provider = %provider.name,
+                        error = %e,
+                        "Distillation: failed to create LLM client, trying next provider"
+                    );
+                    continue;
+                }
+            };
+
+            let messages = vec![
+                ChatMessage::system(system.clone()),
+                ChatMessage::user(user.clone()),
+            ];
+
+            match client.chat(messages, None).await {
+                Ok(response) => {
+                    return parse_distillation_response(&response.content);
+                }
+                Err(e) => {
+                    last_error = format!("Provider '{}' ({}): LLM call failed: {}", provider.name, provider_id, e);
+                    tracing::warn!(
+                        provider = %provider.name,
+                        provider_id = %provider_id,
+                        error = %e,
+                        "Distillation LLM call failed, trying next provider"
+                    );
+                }
+            }
+        }
+
+        Err(format!("All providers failed for distillation. Last error: {}", last_error))
     }
 
     /// Embed a single text, with caching.

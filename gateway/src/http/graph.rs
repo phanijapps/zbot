@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use gateway_database::DistillationStats;
 use knowledge_graph::{Direction, Entity, GraphStats, NeighborInfo, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -448,4 +449,36 @@ pub struct SearchQuery {
     pub q: String,
     /// Maximum number of results
     pub limit: Option<usize>,
+}
+
+// ============================================================================
+// DISTILLATION STATUS
+// ============================================================================
+
+/// GET /api/distillation/status
+/// Get aggregate distillation statistics.
+pub async fn distillation_status(
+    State(state): State<AppState>,
+) -> Result<Json<DistillationStats>, (StatusCode, Json<ErrorResponse>)> {
+    let repo = match &state.distillation_repo {
+        Some(repo) => repo,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Distillation repository not available".to_string(),
+                }),
+            ));
+        }
+    };
+
+    match repo.get_stats() {
+        Ok(stats) => Ok(Json(stats)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get distillation stats: {}", e),
+            }),
+        )),
+    }
 }

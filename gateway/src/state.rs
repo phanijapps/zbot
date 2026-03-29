@@ -17,7 +17,7 @@ use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
-use gateway_database::MemoryRepository;
+use gateway_database::{DistillationRepository, MemoryRepository};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -75,6 +75,9 @@ pub struct AppState {
 
     /// Memory repository for accessing agent memory facts.
     pub memory_repo: Option<Arc<MemoryRepository>>,
+
+    /// Distillation repository for tracking distillation run outcomes.
+    pub distillation_repo: Option<Arc<DistillationRepository>>,
 
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
@@ -152,6 +155,7 @@ impl AppState {
 
         // Initialize memory evolution services
         let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
+        let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
 
         // Initialize knowledge graph service and storage
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
@@ -209,6 +213,7 @@ impl AppState {
             conversation_repo.clone(),
             memory_repo.clone(),
             graph_storage,
+            Some(distillation_repo.clone()),
             paths.clone(), // For loading distillation_prompt.md
         ));
 
@@ -274,6 +279,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            distillation_repo: Some(distillation_repo),
             graph_service,
         }
     }
@@ -338,6 +344,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            distillation_repo: None,
             graph_service: None,
         }
     }
@@ -405,6 +412,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            distillation_repo: None,
             graph_service: None,
         }
     }
