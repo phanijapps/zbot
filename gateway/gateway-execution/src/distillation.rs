@@ -619,6 +619,20 @@ impl SessionDistiller {
             }
         }
 
+        // Attempt failure clustering for failed/partial episodes
+        if extracted.outcome == "failed" || extracted.outcome == "partial" {
+            if let Err(e) = self
+                .try_cluster_failures(agent_id, &episode, &ward_id)
+                .await
+            {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "Failure clustering failed (non-fatal)"
+                );
+            }
+        }
+
         Ok(true)
     }
 
@@ -703,6 +717,97 @@ impl SessionDistiller {
             contradicted_by: None,
             created_at: now.to_string(),
             updated_at: now.to_string(),
+            expires_at: None,
+        };
+
+        self.memory_repo.upsert_memory_fact(&fact)?;
+
+        Ok(())
+    }
+
+    /// Attempt to cluster repeated failures and generate a correction fact.
+    ///
+    /// If 3+ similar failed/partial episodes exist for this agent, extract the
+    /// common failure pattern and upsert it as a `correction` memory fact.
+    async fn try_cluster_failures(
+        &self,
+        agent_id: &str,
+        episode: &SessionEpisode,
+        ward_id: &str,
+    ) -> Result<(), String> {
+        let episode_repo = match &self.episode_repo {
+            Some(repo) => repo,
+            None => return Ok(()),
+        };
+
+        // Embed the task summary for similarity search
+        let embedding = self.embed_text(&episode.task_summary).await;
+        let query_embedding = match embedding.as_deref() {
+            Some(emb) => emb,
+            None => return Ok(()), // No embedding — cannot search by similarity
+        };
+
+        // Search for similar episodes (wider threshold than strategy: 0.6 vs 0.7)
+        let similar = episode_repo.search_by_similarity(agent_id, query_embedding, 0.6, 20)?;
+
+        // Filter to only failed/partial episodes (excluding the one we just inserted)
+        let failed_similar: Vec<_> = similar
+            .into_iter()
+            .filter(|(ep, _score)| {
+                (ep.outcome == "failed" || ep.outcome == "partial")
+                    && ep.session_id != episode.session_id
+            })
+            .collect();
+
+        // Need at least 3 similar failed episodes to form a cluster
+        if failed_similar.len() < 3 {
+            return Ok(());
+        }
+
+        let cluster_size = failed_similar.len();
+
+        // Extract the common failure pattern from key_learnings
+        let latest_key_learning = episode
+            .key_learnings
+            .as_deref()
+            .or_else(|| {
+                failed_similar
+                    .first()
+                    .and_then(|(ep, _)| ep.key_learnings.as_deref())
+            })
+            .unwrap_or("Repeated failure without specific learning")
+            .to_string();
+
+        // Derive a sanitized key from the task summary
+        let task_type = sanitize_task_type(&episode.task_summary);
+        let fact_key = format!("correction.recurring.{}", task_type);
+        let now = chrono::Utc::now().to_rfc3339();
+
+        tracing::info!(
+            agent_id = %agent_id,
+            key = %fact_key,
+            cluster_size = cluster_size,
+            "Failure cluster detected from {} similar failed episodes",
+            cluster_size
+        );
+
+        // Upsert the correction as a memory fact
+        let fact = MemoryFact {
+            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            session_id: Some(episode.session_id.clone()),
+            agent_id: agent_id.to_string(),
+            scope: "agent".to_string(),
+            category: "correction".to_string(),
+            key: fact_key,
+            content: format!("Recurring failure ({} episodes): {}", cluster_size, latest_key_learning),
+            confidence: (0.85 + 0.02 * cluster_size as f64).min(0.98),
+            mention_count: cluster_size as i32,
+            source_summary: Some("Clustered from repeated failures".to_string()),
+            embedding: embedding.clone(),
+            ward_id: ward_id.to_string(),
+            contradicted_by: None,
+            created_at: now.clone(),
+            updated_at: now,
             expires_at: None,
         };
 
