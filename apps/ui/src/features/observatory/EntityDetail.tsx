@@ -45,8 +45,8 @@ export function EntityDetail({ entity, onClose }: EntityDetailProps) {
   if (!entity) return null;
 
   const props = entity.properties as Record<string, unknown> | undefined;
-  const firstSeen = props?.first_seen_at as string | undefined;
-  const lastSeen = props?.last_seen_at as string | undefined;
+  const firstSeen = entity.first_seen_at;
+  const lastSeen = entity.last_seen_at;
 
   return (
     <div className="observatory__sidebar">

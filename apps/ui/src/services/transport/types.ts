@@ -848,6 +848,8 @@ export interface GraphEntity {
   name: string;
   properties: Record<string, unknown>;
   mention_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
 }
 
 /** Graph relationship */

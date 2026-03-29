@@ -83,6 +83,8 @@ pub struct EntityResponse {
     pub name: String,
     pub properties: HashMap<String, serde_json::Value>,
     pub mention_count: i64,
+    pub first_seen_at: String,
+    pub last_seen_at: String,
 }
 
 impl From<Entity> for EntityResponse {
@@ -94,6 +96,8 @@ impl From<Entity> for EntityResponse {
             name: entity.name,
             properties: entity.properties,
             mention_count: entity.mention_count,
+            first_seen_at: entity.first_seen_at.to_rfc3339(),
+            last_seen_at: entity.last_seen_at.to_rfc3339(),
         }
     }
 }
