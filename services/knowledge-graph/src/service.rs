@@ -4,7 +4,7 @@
 
 use crate::error::GraphResult;
 use crate::storage::GraphStorage;
-use crate::types::{Direction, Entity, EntityWithConnections, GraphStats, Subgraph};
+use crate::types::{Direction, Entity, EntityWithConnections, GraphStats, Relationship, Subgraph};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -241,6 +241,11 @@ impl GraphService {
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
         self.storage.list_all_entities(ward_id, entity_type, limit).await
+    }
+
+    /// List all relationships across all agents.
+    pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
+        self.storage.list_all_relationships(limit).await
     }
 }
 

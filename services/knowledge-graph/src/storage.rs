@@ -684,6 +684,64 @@ impl GraphStorage {
         Ok(count as usize)
     }
 
+    /// List all relationships across all agents with pagination.
+    ///
+    /// Used by the Observatory "All Agents" mode to render edges.
+    pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
+        let conn = self.conn.lock().await;
+
+        let mut stmt = conn.prepare(
+            "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
+             FROM kg_relationships
+             ORDER BY mention_count DESC
+             LIMIT ?1"
+        ).map_err(|e| GraphError::Database(e))?;
+
+        let rows = stmt.query_map(params![limit as i64], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
+                row.get::<_, i64>(8)?,
+            ))
+        }).map_err(|e| GraphError::Database(e))?;
+
+        let mut relationships = Vec::new();
+        for row in rows {
+            let (id, agent_id, source_entity_id, target_entity_id, rel_type_str, properties_json, first_seen_at, last_seen_at, mention_count) = row?;
+
+            let relationship_type = RelationshipType::from_str(&rel_type_str);
+            let properties = if let Some(json) = properties_json {
+                serde_json::from_str(&json).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+
+            relationships.push(Relationship {
+                id,
+                agent_id,
+                source_entity_id,
+                target_entity_id,
+                relationship_type,
+                properties,
+                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                mention_count,
+            });
+        }
+
+        Ok(relationships)
+    }
+
     /// List entities across all agents with optional filters and pagination.
     ///
     /// Used by the Observatory "All Agents" mode.

@@ -647,6 +647,41 @@ pub async fn graph_stats(
     }))
 }
 
+/// GET /api/graph/all/relationships
+/// Cross-agent relationship listing for the Observatory "All Agents" mode.
+pub async fn all_relationships(
+    Query(query): Query<AllEntitiesQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<RelationshipListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let graph_service = match &state.graph_service {
+        Some(service) => service,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Knowledge graph service not available".to_string(),
+                }),
+            ));
+        }
+    };
+
+    match graph_service.list_all_relationships(query.limit).await {
+        Ok(relationships) => {
+            let total = relationships.len();
+            Ok(Json(RelationshipListResponse {
+                relationships: relationships.into_iter().map(RelationshipResponse::from).collect(),
+                total,
+            }))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to list all relationships: {}", e),
+            }),
+        )),
+    }
+}
+
 /// GET /api/graph/all/entities
 /// Cross-agent entity listing for the Observatory "All Agents" mode.
 pub async fn all_entities(

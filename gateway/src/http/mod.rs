@@ -147,6 +147,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))
+        .route("/api/graph/all/relationships", get(graph::all_relationships))
         .route("/api/graph/:agent_id/stats", get(graph::get_graph_stats))
         .route("/api/graph/:agent_id/entities", get(graph::list_entities))
         .route("/api/graph/:agent_id/relationships", get(graph::list_relationships))

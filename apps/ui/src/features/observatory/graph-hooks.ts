@@ -168,16 +168,16 @@ export function useGraphData(agentId?: string): GraphData {
           setEntities(entRes.data.entities);
           setRelationships(relRes.data.relationships);
         } else {
-          // Cross-agent: hit the new /api/graph/all/entities endpoint
-          const data = await fetchJson<GraphEntityListResponse>(
-            "/api/graph/all/entities?limit=200"
-          );
+          // Cross-agent: hit the /api/graph/all/* endpoints
+          const [entData, relData] = await Promise.all([
+            fetchJson<GraphEntityListResponse>("/api/graph/all/entities?limit=200"),
+            fetchJson<{ relationships: GraphRelationship[]; total: number }>(
+              "/api/graph/all/relationships?limit=500"
+            ),
+          ]);
           if (cancelled) return;
-          setEntities(data.entities);
-          // Cross-agent relationships aren't available via a single endpoint,
-          // so clear them. The Observatory page can load per-agent relationships
-          // when a specific agent is selected.
-          setRelationships([]);
+          setEntities(entData.entities);
+          setRelationships(relData.relationships);
         }
       } catch (err) {
         if (!cancelled) {
