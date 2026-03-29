@@ -2,11 +2,15 @@
 // LEARNING HEALTH BAR — Bottom status bar for Observatory
 // ============================================================================
 
-import { useGraphStats, useDistillationStatus } from "./graph-hooks";
+import { useGraphStats, useDistillationStatus, useBackfill } from "./graph-hooks";
 
 export function LearningHealthBar() {
   const { stats, loading: statsLoading } = useGraphStats();
-  const { status, loading: distLoading } = useDistillationStatus();
+  const { status, loading: distLoading, refetch: refetchStatus } = useDistillationStatus();
+
+  const { run, isRunning, isDone, progress, error: backfillError } = useBackfill(
+    refetchStatus
+  );
 
   if (statsLoading && distLoading) return null;
 
@@ -68,6 +72,31 @@ export function LearningHealthBar() {
           )}
         </>
       )}
+
+      {/* Backfill controls */}
+      <div className="observatory__health-item" style={{ marginLeft: "auto" }}>
+        {isRunning ? (
+          <span className="observatory__health-value">
+            Distilling {progress.current}/{progress.total}...
+          </span>
+        ) : isDone ? (
+          <span className="observatory__health-value">{"\u2713"} Done</span>
+        ) : backfillError ? (
+          <span className="observatory__health-value observatory__health-value--error">
+            Backfill failed
+          </span>
+        ) : null}
+
+        {!isDone && (
+          <button
+            className="btn btn--sm btn--secondary"
+            onClick={run}
+            disabled={isRunning}
+          >
+            Backfill
+          </button>
+        )}
+      </div>
     </div>
   );
 }

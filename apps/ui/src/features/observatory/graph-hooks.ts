@@ -101,6 +101,29 @@ async function fetchJson<T>(path: string): Promise<T> {
   }
 }
 
+async function postJson<T>(path: string): Promise<T> {
+  const base = await getBaseUrl();
+  // Distillation can be slow — use a generous 120 s timeout per session.
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 120_000);
+  try {
+    const res = await fetch(`${base}${path}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) {
+      const text = await res.text().catch(() => res.statusText);
+      throw new Error(text || `HTTP ${res.status}`);
+    }
+    return (await res.json()) as T;
+  } catch (err) {
+    clearTimeout(timeoutId);
+    throw err;
+  }
+}
+
 // ============================================================================
 // HOOKS
 // ============================================================================
@@ -211,6 +234,9 @@ export function useDistillationStatus() {
   const [status, setStatus] = useState<DistillationStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(0);
+
+  const refetch = useCallback(() => setTick((t) => t + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -232,9 +258,9 @@ export function useDistillationStatus() {
 
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [tick]);
 
-  return { status, loading, error };
+  return { status, loading, error, refetch };
 }
 
 /**
@@ -281,4 +307,75 @@ export function useEntityConnections(agentId: string, entityId: string) {
   }, [agentId, entityId]);
 
   return { data, loading, error };
+}
+
+// ============================================================================
+// BACKFILL HOOK
+// ============================================================================
+
+/** Shape returned by GET /api/distillation/undistilled */
+interface UndistilledSession {
+  session_id: string;
+  agent_id: string;
+}
+
+/** Progress state for the backfill operation. */
+export interface BackfillProgress {
+  current: number;
+  total: number;
+}
+
+/**
+ * Hook to drive bulk-distillation ("backfill") from the UI.
+ *
+ * Fetches undistilled sessions, then triggers distillation for each one
+ * sequentially, updating progress as it goes.
+ */
+export function useBackfill(onComplete?: () => void) {
+  const [isRunning, setIsRunning] = useState(false);
+  const [isDone, setIsDone] = useState(false);
+  const [progress, setProgress] = useState<BackfillProgress>({ current: 0, total: 0 });
+  const [error, setError] = useState<string | null>(null);
+
+  const run = useCallback(async () => {
+    setIsRunning(true);
+    setIsDone(false);
+    setError(null);
+    setProgress({ current: 0, total: 0 });
+
+    try {
+      const sessions = await fetchJson<UndistilledSession[]>(
+        "/api/distillation/undistilled"
+      );
+
+      if (sessions.length === 0) {
+        setIsDone(true);
+        setIsRunning(false);
+        onComplete?.();
+        return;
+      }
+
+      setProgress({ current: 0, total: sessions.length });
+
+      for (let i = 0; i < sessions.length; i++) {
+        try {
+          await postJson<unknown>(
+            `/api/distillation/trigger/${sessions[i].session_id}`
+          );
+        } catch {
+          // Individual failures are non-fatal — continue with next session.
+        }
+        setProgress({ current: i + 1, total: sessions.length });
+      }
+
+      setIsDone(true);
+      onComplete?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsRunning(false);
+    }
+  }, [onComplete]);
+
+  return { run, isRunning, isDone, progress, error };
 }
