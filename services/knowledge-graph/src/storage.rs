@@ -492,7 +492,7 @@ impl GraphStorage {
                         r.id, r.agent_id, r.source_entity_id, r.target_entity_id, r.relationship_type, r.properties, r.first_seen_at, r.last_seen_at, r.mention_count
                  FROM kg_entities e
                  INNER JOIN kg_relationships r ON r.target_entity_id = e.id
-                 WHERE r.agent_id = ?1 AND r.source_entity_id = ?2
+                 WHERE (r.agent_id = ?1 OR r.agent_id = '__global__') AND r.source_entity_id = ?2
                  ORDER BY r.mention_count DESC
                  LIMIT ?3"
             ).map_err(|e| GraphError::Database(e))?;
@@ -571,7 +571,7 @@ impl GraphStorage {
                         r.id, r.agent_id, r.source_entity_id, r.target_entity_id, r.relationship_type, r.properties, r.first_seen_at, r.last_seen_at, r.mention_count
                  FROM kg_entities e
                  INNER JOIN kg_relationships r ON r.source_entity_id = e.id
-                 WHERE r.agent_id = ?1 AND r.target_entity_id = ?2
+                 WHERE (r.agent_id = ?1 OR r.agent_id = '__global__') AND r.target_entity_id = ?2
                  ORDER BY r.mention_count DESC
                  LIMIT ?3"
             ).map_err(|e| GraphError::Database(e))?;
