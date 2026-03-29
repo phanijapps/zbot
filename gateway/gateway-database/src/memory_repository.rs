@@ -29,6 +29,8 @@ pub struct MemoryFact {
     /// Raw f32 embedding bytes (little-endian). `None` if not yet embedded.
     #[serde(skip)]
     pub embedding: Option<Vec<f32>>,
+    /// Ward (sandbox) this fact belongs to. `"__global__"` means shared across all wards.
+    pub ward_id: String,
     pub created_at: String,
     pub updated_at: String,
     pub expires_at: Option<String>,
@@ -69,8 +71,8 @@ impl MemoryRepository {
 
         self.db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, created_at, updated_at, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)
+                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
                  ON CONFLICT(agent_id, scope, ward_id, key) DO UPDATE SET
                     content = excluded.content,
                     confidence = MAX(memory_facts.confidence, excluded.confidence),
@@ -91,6 +93,7 @@ impl MemoryRepository {
                     fact.mention_count,
                     fact.source_summary,
                     embedding_blob,
+                    fact.ward_id,
                     fact.created_at,
                     fact.updated_at,
                     fact.expires_at,
@@ -110,7 +113,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(s) = scope {
                 (
-                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                      FROM memory_facts
                      WHERE agent_id = ?1 AND scope = ?2
                      ORDER BY updated_at DESC
@@ -123,7 +126,7 @@ impl MemoryRepository {
                 )
             } else {
                 (
-                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                      FROM memory_facts
                      WHERE agent_id = ?1
                      ORDER BY updated_at DESC
@@ -158,7 +161,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                        mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                  FROM memory_facts
                  WHERE id = ?1"
             )?;
@@ -187,7 +190,7 @@ impl MemoryRepository {
                 match (category, scope) {
                     (Some(cat), Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2 AND scope = ?3
                          ORDER BY updated_at DESC
@@ -202,7 +205,7 @@ impl MemoryRepository {
                     ),
                     (Some(cat), None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2
                          ORDER BY updated_at DESC
@@ -216,7 +219,7 @@ impl MemoryRepository {
                     ),
                     (None, Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1 AND scope = ?2
                          ORDER BY updated_at DESC
@@ -230,7 +233,7 @@ impl MemoryRepository {
                     ),
                     (None, None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1
                          ORDER BY updated_at DESC
@@ -272,28 +275,61 @@ impl MemoryRepository {
     // =========================================================================
 
     /// Search memory facts using FTS5 BM25 keyword matching.
+    ///
+    /// When `ward_id` is `Some(w)`, results are filtered to facts belonging to
+    /// the `__global__` ward **or** the specified ward. When `None`, all wards
+    /// are returned (no ward filtering).
     pub fn search_memory_facts_fts(
         &self,
         query: &str,
         agent_id: &str,
         limit: usize,
+        ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
         self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
-                        mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                        mf.embedding, mf.created_at, mf.updated_at, mf.expires_at,
-                        rank
-                 FROM memory_facts_fts fts
-                 JOIN memory_facts mf ON mf.rowid = fts.rowid
-                 WHERE memory_facts_fts MATCH ?1 AND mf.agent_id = ?2
-                 ORDER BY rank
-                 LIMIT ?3"
-            )?;
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = ward_id {
+                (
+                    "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
+                            mf.content, mf.confidence, mf.mention_count, mf.source_summary,
+                            mf.embedding, mf.ward_id, mf.created_at, mf.updated_at, mf.expires_at,
+                            rank
+                     FROM memory_facts_fts fts
+                     JOIN memory_facts mf ON mf.rowid = fts.rowid
+                     WHERE memory_facts_fts MATCH ?1 AND mf.agent_id = ?2
+                       AND (mf.ward_id = '__global__' OR mf.ward_id = ?3)
+                     ORDER BY rank
+                     LIMIT ?4".to_string(),
+                    vec![
+                        Box::new(query.to_string()),
+                        Box::new(agent_id.to_string()),
+                        Box::new(w.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            } else {
+                (
+                    "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
+                            mf.content, mf.confidence, mf.mention_count, mf.source_summary,
+                            mf.embedding, mf.ward_id, mf.created_at, mf.updated_at, mf.expires_at,
+                            rank
+                     FROM memory_facts_fts fts
+                     JOIN memory_facts mf ON mf.rowid = fts.rowid
+                     WHERE memory_facts_fts MATCH ?1 AND mf.agent_id = ?2
+                     ORDER BY rank
+                     LIMIT ?3".to_string(),
+                    vec![
+                        Box::new(query.to_string()),
+                        Box::new(agent_id.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            };
 
-            let rows = stmt.query_map(params![query, agent_id, limit as i64], |row| {
+            let mut stmt = conn.prepare(&sql)?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| {
                 let fact = row_to_memory_fact(row)?;
-                let rank: f64 = row.get(14)?;
+                let rank: f64 = row.get(15)?;
                 // FTS5 rank is negative (lower = better). Normalize to 0..1 range.
                 let bm25_score = (-rank).min(30.0) / 30.0;
                 Ok(ScoredFact {
@@ -323,14 +359,15 @@ impl MemoryRepository {
         limit: usize,
         vector_weight: f64,
         bm25_weight: f64,
+        ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
         // Step 1: FTS5 keyword results
-        let fts_results = self.search_memory_facts_fts(query_text, agent_id, 30)
+        let fts_results = self.search_memory_facts_fts(query_text, agent_id, 30, ward_id)
             .unwrap_or_default();
 
         // Step 2: Vector results (if embedding provided)
         let vec_results = if let Some(qe) = query_embedding {
-            self.search_memory_facts_vector(qe, agent_id, 30)?
+            self.search_memory_facts_vector(qe, agent_id, 30, ward_id)?
         } else {
             Vec::new()
         };
@@ -394,21 +431,45 @@ impl MemoryRepository {
     ///
     /// Loads all embeddings for the agent and computes cosine similarity in Rust.
     /// This is brute-force but fast for <10K facts (~2-5ms).
+    ///
+    /// When `ward_id` is `Some(w)`, results are filtered to facts belonging to
+    /// the `__global__` ward **or** the specified ward. When `None`, all wards
+    /// are returned (no ward filtering).
     fn search_memory_facts_vector(
         &self,
         query_embedding: &[f32],
         agent_id: &str,
         limit: usize,
+        ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
         self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        mention_count, source_summary, embedding, created_at, updated_at, expires_at
-                 FROM memory_facts
-                 WHERE agent_id = ?1 AND embedding IS NOT NULL"
-            )?;
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = ward_id {
+                (
+                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                            mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
+                     FROM memory_facts
+                     WHERE agent_id = ?1 AND embedding IS NOT NULL
+                       AND (ward_id = '__global__' OR ward_id = ?2)".to_string(),
+                    vec![
+                        Box::new(agent_id.to_string()),
+                        Box::new(w.to_string()),
+                    ],
+                )
+            } else {
+                (
+                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                            mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
+                     FROM memory_facts
+                     WHERE agent_id = ?1 AND embedding IS NOT NULL".to_string(),
+                    vec![
+                        Box::new(agent_id.to_string()),
+                    ],
+                )
+            };
 
-            let rows = stmt.query_map(params![agent_id], |row| row_to_memory_fact(row))?;
+            let mut stmt = conn.prepare(&sql)?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
 
             let mut scored: Vec<ScoredFact> = rows
                 .filter_map(|r| r.ok())
@@ -500,7 +561,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                        mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                  FROM memory_facts
                  WHERE agent_id = ?1 AND confidence >= ?2
                  AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -542,7 +603,7 @@ impl MemoryRepository {
                 match (agent_id, category, scope) {
                     (Some(aid), Some(cat), Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2 AND scope = ?3
                          ORDER BY updated_at DESC
@@ -557,7 +618,7 @@ impl MemoryRepository {
                     ),
                     (Some(aid), Some(cat), None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2
                          ORDER BY updated_at DESC
@@ -571,7 +632,7 @@ impl MemoryRepository {
                     ),
                     (Some(aid), None, Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1 AND scope = ?2
                          ORDER BY updated_at DESC
@@ -585,7 +646,7 @@ impl MemoryRepository {
                     ),
                     (Some(aid), None, None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE agent_id = ?1
                          ORDER BY updated_at DESC
@@ -598,7 +659,7 @@ impl MemoryRepository {
                     ),
                     (None, Some(cat), Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE category = ?1 AND scope = ?2
                          ORDER BY updated_at DESC
@@ -612,7 +673,7 @@ impl MemoryRepository {
                     ),
                     (None, Some(cat), None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE category = ?1
                          ORDER BY updated_at DESC
@@ -625,7 +686,7 @@ impl MemoryRepository {
                     ),
                     (None, None, Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          WHERE scope = ?1
                          ORDER BY updated_at DESC
@@ -638,7 +699,7 @@ impl MemoryRepository {
                     ),
                     (None, None, None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, created_at, updated_at, expires_at
                          FROM memory_facts
                          ORDER BY updated_at DESC
                          LIMIT ?1 OFFSET ?2".to_string(),
@@ -699,9 +760,10 @@ fn row_to_memory_fact(row: &rusqlite::Row) -> Result<MemoryFact, rusqlite::Error
         mention_count: row.get(8)?,
         source_summary: row.get(9)?,
         embedding,
-        created_at: row.get(11)?,
-        updated_at: row.get(12)?,
-        expires_at: row.get(13)?,
+        ward_id: row.get(11)?,
+        created_at: row.get(12)?,
+        updated_at: row.get(13)?,
+        expires_at: row.get(14)?,
     })
 }
 
@@ -775,6 +837,7 @@ mod tests {
             mention_count: 1,
             source_summary: None,
             embedding: None,
+            ward_id: "__global__".to_string(),
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
             expires_at: None,
@@ -857,7 +920,7 @@ mod tests {
         repo.upsert_memory_fact(&make_fact("agent-1", "editor.pref", "Prefers VS Code for editing", "preference")).unwrap();
         repo.upsert_memory_fact(&make_fact("agent-1", "lang.main", "Primary language is Rust", "decision")).unwrap();
 
-        let results = repo.search_memory_facts_fts("Rust", "agent-1", 10).unwrap();
+        let results = repo.search_memory_facts_fts("Rust", "agent-1", 10, None).unwrap();
         assert!(results.len() >= 2, "Should find 'Rust' in at least 2 facts, got {}", results.len());
     }
 
@@ -878,7 +941,7 @@ mod tests {
         // Search with query embedding close to fact1
         let query = vec![0.9, 0.1, 0.0];
         let results = repo.search_memory_facts_hybrid(
-            "hello", Some(&query), "agent-1", 10, 0.7, 0.3,
+            "hello", Some(&query), "agent-1", 10, 0.7, 0.3, None,
         ).unwrap();
 
         assert!(!results.is_empty(), "Should find at least one result");

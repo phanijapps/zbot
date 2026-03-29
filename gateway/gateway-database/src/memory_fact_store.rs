@@ -90,6 +90,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             mention_count: 1,
             source_summary: None,
             embedding,
+            ward_id: "__global__".to_string(),
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
@@ -123,6 +124,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             limit,
             0.7, // vector weight
             0.3, // bm25 weight
+            None, // ward_id — no ward filtering from trait method
         )?;
 
         let items: Vec<Value> = results
@@ -164,6 +166,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             limit * 2,
             0.7, // vector weight
             0.3, // bm25 weight
+            None, // ward_id — no ward filtering from trait method
         )?;
 
         // Also fetch high-confidence facts (>= 0.9) — always relevant
