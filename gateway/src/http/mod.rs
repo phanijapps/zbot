@@ -144,7 +144,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
         .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
         .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
-        // Knowledge Graph endpoints
+        // Knowledge Graph endpoints (cross-agent observatory routes first)
+        .route("/api/graph/stats", get(graph::graph_stats))
+        .route("/api/graph/all/entities", get(graph::all_entities))
         .route("/api/graph/:agent_id/stats", get(graph::get_graph_stats))
         .route("/api/graph/:agent_id/entities", get(graph::list_entities))
         .route("/api/graph/:agent_id/relationships", get(graph::list_relationships))
@@ -153,6 +155,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/graph/:agent_id/entities/:entity_id/subgraph", get(graph::get_entity_subgraph))
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
+        .route("/api/distillation/undistilled", get(graph::undistilled_sessions))
+        .route("/api/distillation/trigger/:session_id", post(graph::trigger_distillation))
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)

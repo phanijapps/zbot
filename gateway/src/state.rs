@@ -79,6 +79,12 @@ pub struct AppState {
     /// Distillation repository for tracking distillation run outcomes.
     pub distillation_repo: Option<Arc<DistillationRepository>>,
 
+    /// Session distiller for triggering on-demand distillation (e.g., backfill).
+    pub distiller: Option<Arc<SessionDistiller>>,
+
+    /// Episode repository for accessing session episodes.
+    pub episode_repo: Option<Arc<EpisodeRepository>>,
+
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
 
@@ -215,6 +221,8 @@ impl AppState {
         // also needs it so the memory fact store can generate embeddings.
         let runner_embedding_client = embedding_client.clone();
 
+        let episode_repo_ref = episode_repo.clone();
+
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
             embedding_client,
@@ -225,6 +233,9 @@ impl AppState {
             Some(episode_repo),
             paths.clone(), // For loading distillation_prompt.md
         ));
+
+        // Keep a handle for on-demand distillation (backfill, trigger)
+        let distiller_ref = distiller.clone();
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -289,6 +300,8 @@ impl AppState {
             config_dir,
             memory_repo: Some(memory_repo),
             distillation_repo: Some(distillation_repo),
+            distiller: Some(distiller_ref),
+            episode_repo: Some(episode_repo_ref),
             graph_service,
         }
     }
@@ -354,6 +367,8 @@ impl AppState {
             config_dir,
             memory_repo: Some(memory_repo),
             distillation_repo: None,
+            distiller: None,
+            episode_repo: None,
             graph_service: None,
         }
     }
@@ -422,6 +437,8 @@ impl AppState {
             config_dir,
             memory_repo: Some(memory_repo),
             distillation_repo: None,
+            distiller: None,
+            episode_repo: None,
             graph_service: None,
         }
     }

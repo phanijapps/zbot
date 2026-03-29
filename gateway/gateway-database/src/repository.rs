@@ -240,6 +240,24 @@ impl ConversationRepository {
         })
     }
 
+    /// Get the root_agent_id for a session.
+    ///
+    /// Returns `None` if the session doesn't exist.
+    pub fn get_session_agent_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        self.db.with_connection(|conn| {
+            let result = conn.query_row(
+                "SELECT root_agent_id FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, String>(0),
+            );
+            match result {
+                Ok(agent_id) => Ok(Some(agent_id)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
     /// Convert session messages to ChatMessage format for LLM.
     ///
     /// Handles role='tool' messages with tool_call_id, and assistant messages

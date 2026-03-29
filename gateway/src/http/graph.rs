@@ -8,7 +8,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_database::DistillationStats;
+use gateway_database::{DistillationStats, UndistilledSession};
 use knowledge_graph::{Direction, Entity, GraphStats, NeighborInfo, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -451,6 +451,32 @@ pub struct SearchQuery {
     pub limit: Option<usize>,
 }
 
+/// Query parameters for cross-agent entity listing.
+#[derive(Debug, Deserialize)]
+pub struct AllEntitiesQuery {
+    /// Filter by ward/agent ID
+    pub ward_id: Option<String>,
+    /// Filter by entity type
+    pub entity_type: Option<String>,
+    /// Maximum number of results
+    #[serde(default = "default_all_entities_limit")]
+    pub limit: usize,
+}
+
+fn default_all_entities_limit() -> usize {
+    200
+}
+
+/// Aggregate graph statistics for the Observatory health bar.
+#[derive(Debug, Serialize)]
+pub struct AggregateGraphStats {
+    pub entities: usize,
+    pub relationships: usize,
+    pub facts: usize,
+    pub episodes: i64,
+    pub distillation: Option<DistillationStats>,
+}
+
 // ============================================================================
 // DISTILLATION STATUS
 // ============================================================================
@@ -478,6 +504,186 @@ pub async fn distillation_status(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(ErrorResponse {
                 error: format!("Failed to get distillation stats: {}", e),
+            }),
+        )),
+    }
+}
+
+/// GET /api/distillation/undistilled
+/// Returns undistilled sessions (session_id + agent_id pairs).
+pub async fn undistilled_sessions(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<UndistilledSession>>, (StatusCode, Json<ErrorResponse>)> {
+    let repo = match &state.distillation_repo {
+        Some(repo) => repo,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Distillation repository not available".to_string(),
+                }),
+            ));
+        }
+    };
+
+    match repo.get_undistilled_sessions() {
+        Ok(sessions) => Ok(Json(sessions)),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get undistilled sessions: {}", e),
+            }),
+        )),
+    }
+}
+
+/// Response for the trigger distillation endpoint.
+#[derive(Debug, Serialize)]
+pub struct TriggerDistillationResponse {
+    pub session_id: String,
+    pub status: String,
+    pub facts_upserted: usize,
+    pub error: Option<String>,
+}
+
+/// POST /api/distillation/trigger/:session_id
+/// Trigger distillation for a specific session.
+pub async fn trigger_distillation(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<TriggerDistillationResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let distiller = match &state.distiller {
+        Some(d) => d.clone(),
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Distillation service not available".to_string(),
+                }),
+            ));
+        }
+    };
+
+    // Look up the root_agent_id for this session from the database
+    let agent_id = match state.conversations.get_session_agent_id(&session_id) {
+        Ok(Some(aid)) => aid,
+        Ok(None) => {
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(ErrorResponse {
+                    error: format!("Session '{}' not found", session_id),
+                }),
+            ));
+        }
+        Err(e) => {
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Failed to look up session: {}", e),
+                }),
+            ));
+        }
+    };
+
+    match distiller.distill(&session_id, &agent_id).await {
+        Ok(facts_upserted) => Ok(Json(TriggerDistillationResponse {
+            session_id,
+            status: "success".to_string(),
+            facts_upserted,
+            error: None,
+        })),
+        Err(e) => Ok(Json(TriggerDistillationResponse {
+            session_id,
+            status: "failed".to_string(),
+            facts_upserted: 0,
+            error: Some(e),
+        })),
+    }
+}
+
+// ============================================================================
+// OBSERVATORY ENDPOINTS
+// ============================================================================
+
+/// GET /api/graph/stats
+/// Aggregate graph statistics for the Observatory health bar.
+pub async fn graph_stats(
+    State(state): State<AppState>,
+) -> Result<Json<AggregateGraphStats>, (StatusCode, Json<ErrorResponse>)> {
+    // Entity + relationship counts from graph service
+    let (entities, relationships) = match &state.graph_service {
+        Some(service) => {
+            let e = service.count_all_entities().await.unwrap_or(0);
+            let r = service.count_all_relationships().await.unwrap_or(0);
+            (e, r)
+        }
+        None => (0, 0),
+    };
+
+    // Fact count from memory repo
+    let facts = match &state.memory_repo {
+        Some(repo) => repo.count_all_memory_facts(None).unwrap_or(0),
+        None => 0,
+    };
+
+    // Episode count from episode repo
+    let episodes = match &state.episode_repo {
+        Some(repo) => repo.count().unwrap_or(0),
+        None => 0,
+    };
+
+    // Distillation stats
+    let distillation = match &state.distillation_repo {
+        Some(repo) => repo.get_stats().ok(),
+        None => None,
+    };
+
+    Ok(Json(AggregateGraphStats {
+        entities,
+        relationships,
+        facts,
+        episodes,
+        distillation,
+    }))
+}
+
+/// GET /api/graph/all/entities
+/// Cross-agent entity listing for the Observatory "All Agents" mode.
+pub async fn all_entities(
+    Query(query): Query<AllEntitiesQuery>,
+    State(state): State<AppState>,
+) -> Result<Json<EntityListResponse>, (StatusCode, Json<ErrorResponse>)> {
+    let graph_service = match &state.graph_service {
+        Some(service) => service,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse {
+                    error: "Knowledge graph service not available".to_string(),
+                }),
+            ));
+        }
+    };
+
+    match graph_service
+        .list_all_entities(
+            query.ward_id.as_deref(),
+            query.entity_type.as_deref(),
+            query.limit,
+        )
+        .await
+    {
+        Ok(entities) => {
+            let total = entities.len();
+            Ok(Json(EntityListResponse {
+                entities: entities.into_iter().map(EntityResponse::from).collect(),
+                total,
+            }))
+        }
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to list all entities: {}", e),
             }),
         )),
     }

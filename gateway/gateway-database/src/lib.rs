@@ -17,5 +17,5 @@ pub use connection::DatabaseManager;
 pub use repository::{ConversationRepository, Message};
 pub use memory_repository::{MemoryRepository, MemoryFact, ScoredFact};
 pub use memory_fact_store::GatewayMemoryFactStore;
-pub use distillation_repository::{DistillationRepository, DistillationRun, DistillationStats};
+pub use distillation_repository::{DistillationRepository, DistillationRun, DistillationStats, UndistilledSession};
 pub use episode_repository::{EpisodeRepository, SessionEpisode};

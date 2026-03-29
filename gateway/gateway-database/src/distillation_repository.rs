@@ -29,6 +29,13 @@ pub struct DistillationRun {
     pub created_at: String,
 }
 
+/// A session that has not yet been distilled, with its root agent ID.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UndistilledSession {
+    pub session_id: String,
+    pub agent_id: String,
+}
+
 /// Aggregate statistics across all distillation runs.
 #[derive(Debug, Serialize, Default)]
 pub struct DistillationStats {
@@ -172,6 +179,27 @@ impl DistillationRepository {
             )?;
 
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
+    /// Get undistilled sessions with their root agent IDs.
+    pub fn get_undistilled_sessions(&self) -> Result<Vec<UndistilledSession>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT s.id, s.root_agent_id
+                 FROM sessions s
+                 LEFT JOIN distillation_runs dr ON s.id = dr.session_id
+                 WHERE dr.id IS NULL
+                 ORDER BY s.created_at ASC",
+            )?;
+
+            let rows = stmt.query_map([], |row| {
+                Ok(UndistilledSession {
+                    session_id: row.get(0)?,
+                    agent_id: row.get(1)?,
+                })
+            })?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
