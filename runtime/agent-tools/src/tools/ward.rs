@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use zero_core::{FileSystemContext, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
 /// AGENTS.md file name - living readme for agent executions
 const WARD_AGENTS_MD: &str = "AGENTS.md";
@@ -25,13 +25,14 @@ const WARD_AGENTS_MD: &str = "AGENTS.md";
 /// - `info`: Detailed info about a specific ward
 pub struct WardTool {
     fs: Arc<dyn FileSystemContext>,
+    fact_store: Option<Arc<dyn MemoryFactStore>>,
 }
 
 impl WardTool {
-    /// Create a new WardTool with file system context.
+    /// Create a new WardTool with file system context and optional fact store.
     #[must_use]
-    pub fn new(fs: Arc<dyn FileSystemContext>) -> Self {
-        Self { fs }
+    pub fn new(fs: Arc<dyn FileSystemContext>, fact_store: Option<Arc<dyn MemoryFactStore>>) -> Self {
+        Self { fs, fact_store }
     }
 
     /// List files in a ward directory (non-recursive, top-level only).
@@ -130,6 +131,47 @@ r#"# {name}
 
         if let Err(e) = std::fs::write(&agents_md_path, content) {
             tracing::warn!("Failed to create AGENTS.md in ward '{}': {}", ward_name, e);
+        }
+    }
+
+    /// Recall facts relevant to the ward being entered.
+    ///
+    /// Best-effort: if no fact store is configured, or the recall fails,
+    /// returns None and the ward switch still succeeds.
+    async fn recall_ward_facts(&self, ward_name: &str, ctx: &Arc<dyn ToolContext>) -> Option<Value> {
+        let store = self.fact_store.as_ref()?;
+
+        let agent_id = ctx
+            .get_state("app:agent_id")
+            .and_then(|v| v.as_str().map(String::from))
+            .or_else(|| {
+                ctx.get_state("app:root_agent_id")
+                    .and_then(|v| v.as_str().map(String::from))
+            })?;
+
+        let query = format!("ward {} context patterns corrections", ward_name);
+        match store.recall_facts_prioritized(&agent_id, &query, 5).await {
+            Ok(result) => {
+                let count = result.get("count").and_then(|c| c.as_u64()).unwrap_or(0);
+                if count > 0 {
+                    tracing::info!(
+                        "Ward-entry recall for '{}': {} facts loaded",
+                        ward_name,
+                        count
+                    );
+                    Some(result)
+                } else {
+                    None
+                }
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Ward-entry recall failed for '{}': {} (non-fatal)",
+                    ward_name,
+                    e
+                );
+                None
+            }
         }
     }
 
@@ -275,15 +317,24 @@ impl Tool for WardTool {
 
                 tracing::info!("Ward switched to '{}' (created: {})", name, created);
 
+                // Best-effort recall of ward-scoped knowledge
+                let ward_knowledge = self.recall_ward_facts(name, &ctx).await;
+
                 // Return result with __ward_changed__ marker for the executor
-                Ok(json!({
+                let mut result = json!({
                     "__ward_changed__": true,
                     "ward_id": name,
                     "action": if created { "created" } else { "switched" },
                     "files": files,
                     "file_count": files.len(),
                     "agents_md": agents_md,
-                }))
+                });
+
+                if let Some(knowledge) = ward_knowledge {
+                    result["ward_knowledge"] = knowledge;
+                }
+
+                Ok(result)
             }
 
             "list" => {
@@ -397,7 +448,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs);
+        let tool = WardTool::new(fs, None);
         let ward_dir = dir.path().join("wards").join("test");
         std::fs::create_dir_all(&ward_dir).unwrap();
 
@@ -411,7 +462,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs);
+        let tool = WardTool::new(fs, None);
         let ward_dir = dir.path().join("wards").join("test");
         std::fs::create_dir_all(&ward_dir).unwrap();
 
@@ -436,7 +487,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs);
+        let tool = WardTool::new(fs, None);
 
         std::fs::write(
             dir.path().join("AGENTS.md"),
@@ -454,7 +505,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs);
+        let tool = WardTool::new(fs, None);
 
         let desc = tool.ward_description(dir.path());
         assert!(desc.is_none());
@@ -500,7 +551,7 @@ mod tests {
         let fs = Arc::new(TestFs {
             base: dir.path().to_path_buf(),
         });
-        let tool = WardTool::new(fs);
+        let tool = WardTool::new(fs, None);
 
         std::fs::write(dir.path().join("AGENTS.md"), "# My Project\n\nTest content").unwrap();
 

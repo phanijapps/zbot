@@ -140,9 +140,9 @@ pub fn core_tools(
         // First-class file creation/editing/deletion via patch format
         Arc::new(ApplyPatchTool::new(fs.clone())),
         // Persistent memory (with optional DB-backed fact store)
-        Arc::new(MemoryTool::new(fs.clone(), fact_store)),
-        // Ward management (named project directories)
-        Arc::new(WardTool::new(fs.clone())),
+        Arc::new(MemoryTool::new(fs.clone(), fact_store.clone())),
+        // Ward management (named project directories, with recall on entry)
+        Arc::new(WardTool::new(fs.clone(), fact_store)),
         // Lightweight plan tracking
         Arc::new(UpdatePlanTool::new()),
         // DAG workflow engine for multi-step orchestration
