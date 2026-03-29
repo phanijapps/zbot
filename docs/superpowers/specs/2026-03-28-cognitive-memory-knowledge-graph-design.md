@@ -525,6 +525,181 @@ All database operations use existing `rusqlite`. All embedding operations use ex
 
 ---
 
+## Addendum: Correctness Hardening (from model council review)
+
+Added 2026-03-29 after cross-model review. These address correctness-under-failure gaps identified by stress-testing the design with an external model council.
+
+### Section 7: Ward-Entry Recall Trigger
+
+#### Problem
+When the agent enters a ward (via the `ward` tool), it should immediately recall that ward's knowledge. Currently recall only fires at session start, delegation spawn, and every N turns. If the agent enters a ward at turn 2 and recall doesn't fire until turn 5, it makes 3 turns of decisions without ward-specific context.
+
+#### Solution
+
+Hook into the `ward` tool execution. When the tool switches to a new ward, trigger a targeted recall scoped to that ward:
+
+```
+Ward tool fires (action: switch/enter)
+  → Extract ward_id from tool result
+  → Call recall.recall(agent_id, ward_context_query, limit) with ward_id filter
+  → Inject result as system message (same as mid-session recall)
+  → Add injected fact keys to the novelty dedup set
+```
+
+This is the same mechanism as mid-session recall but event-triggered instead of turn-triggered. It uses the existing `MemoryRecall` service and recall priority engine — no new infrastructure.
+
+#### Implementation
+
+Two options (prefer A):
+
+**A) Tool-level hook:** In `runtime/agent-tools/src/tools/ward.rs`, after a successful ward switch, call the recall service directly. The ward tool already has access to the execution context.
+
+**B) Middleware hook:** Register a post-tool-execution middleware that checks if the tool was `ward` and triggers recall. More decoupled but adds indirection.
+
+#### Files Changed
+- `runtime/agent-tools/src/tools/ward.rs` — add recall trigger after ward switch
+- Pass `MemoryRecall` reference to the ward tool (or via tool context)
+
+#### Forward Path to C
+Ward-entry recall is the first "event-driven recall trigger." The same pattern extends to other high-value events: plan change, failure detection, final synthesis.
+
+---
+
+### Section 8: Contradiction Detection on Memory Write
+
+#### Problem
+When a new fact is upserted, the system uses `ON CONFLICT(agent_id, scope, ward_id, key) DO UPDATE` — same-key updates overwrite cleanly. But two DIFFERENT keys can describe contradictory information at high confidence:
+
+- `domain.finance.spy.outlook` → "SPY oversold, buy signal" (conf 0.90)
+- `domain.finance.spy.valuation` → "SPY overvalued at 85th percentile P/E" (conf 0.95)
+
+Both coexist. The agent recalls both and must reconcile in-context. For a financial analysis agent, contradictory knowledge is dangerous — it can produce incoherent recommendations.
+
+#### Solution
+
+On every `upsert_memory_fact`, run a lightweight contradiction check:
+
+1. **Find semantically similar facts:** Query `search_memory_facts_vector(new_fact.content_embedding, agent_id, threshold=0.8, limit=5)` — find facts with high cosine similarity to the new fact's content.
+
+2. **Check for contradiction signals:** For each similar fact with a DIFFERENT key:
+   - If the new fact's category is `correction` and the similar fact's category is `domain`/`pattern` → the correction likely overrides. Reduce the old fact's confidence by 0.2.
+   - If both are same category with high similarity but different content → flag as potential contradiction.
+
+3. **Mark contradictions:** Add a `contradicted_by` field (nullable TEXT) to `memory_facts`. When a contradiction is detected:
+   - Set `contradicted_by = new_fact.key` on the old fact
+   - Reduce old fact's confidence by 0.15
+   - Log: `tracing::info!("Contradiction detected: '{}' may contradict '{}'", new_key, old_key)`
+
+4. **Recall behavior:** Facts with `contradicted_by IS NOT NULL` get a 0.7x multiplier in the recall priority engine (add to `recall_config.json` as `contradiction_penalty: 0.7`). They still appear but ranked lower.
+
+This is conservative — it doesn't delete facts, just reduces confidence and flags the conflict. The agent sees both facts but the newer/correcting one ranks higher.
+
+#### Schema Change
+
+```sql
+ALTER TABLE memory_facts ADD COLUMN contradicted_by TEXT;
+```
+
+Add to `recall_config.json` defaults:
+```json
+{
+  "contradiction_penalty": 0.7,
+  "contradiction_similarity_threshold": 0.8
+}
+```
+
+#### Files Changed
+- `gateway/gateway-database/src/schema.rs` — migration v12: add `contradicted_by` column
+- `gateway/gateway-database/src/memory_repository.rs` — add `contradicted_by` to MemoryFact, update queries
+- `gateway/gateway-database/src/memory_fact_store.rs` — add contradiction check in `save_fact()`
+- `gateway/gateway-services/src/recall_config.rs` — add contradiction config fields
+- `gateway/gateway-execution/src/recall.rs` — apply contradiction penalty in scoring
+
+#### Forward Path to C
+Contradiction detection is the foundation for "belief revision" — when the agent encounters conflicting evidence, it can reason about which belief to keep. Combined with provisional flags (future), this creates a self-correcting knowledge base.
+
+---
+
+### Section 9: Failure Clustering in Episodes
+
+#### Problem
+The agent tracks individual episode outcomes (success/partial/failed) but doesn't cluster them. "5 of 8 PowerShell sessions failed because the agent ran bash commands" is a pattern that should be surfaced automatically and fed back into the agent's behavior — not just stored as separate episodes.
+
+#### Solution
+
+Add a periodic failure analysis step during distillation. After creating a new episode with outcome `failed` or `partial`:
+
+1. **Query similar failed episodes:** `episode_repo.search_by_similarity(agent_id, &task_embedding, 0.6, 20)` — find episodes with similar task summaries.
+
+2. **Filter to failures:** Keep only `outcome == 'failed'` or `outcome == 'partial'`.
+
+3. **If 3+ similar failures exist:** Extract the common failure pattern:
+   - Collect all `key_learnings` from the cluster
+   - Write/upsert a `correction` fact:
+     - Key: `correction.recurring.{sanitized_pattern}`
+     - Content: Summarized failure pattern (from the most recent episode's key_learnings + count)
+     - Confidence: `0.85 + (0.02 * cluster_size)` capped at 0.98
+   - This correction fact gets the highest priority weight (1.5x) in recall
+
+4. **Surface in Observatory:** Add a "Recurring Issues" section to the Learning Health Bar showing the top failure clusters.
+
+#### Example
+
+After 5 sessions where PowerShell syntax errors occur:
+```
+correction.recurring.powershell_syntax → "Recurring failure (5 episodes): Agent uses bash syntax
+(||, &&) in PowerShell environment. Use try/catch and semicolons instead." (conf: 0.95)
+```
+
+This fact gets 1.5x priority boost in recall. Next time the agent enters a session, it sees this correction FIRST.
+
+#### Implementation
+
+The failure clustering runs inside `distillation.rs` after episode creation — same location as strategy emergence (Section 9 in original spec) but for failures instead of successes. Mirror the strategy emergence pattern:
+
+- Strategy emergence: 2+ similar successes → write `strategy` fact
+- Failure clustering: 3+ similar failures → write `correction` fact
+
+#### Files Changed
+- `gateway/gateway-execution/src/distillation.rs` — add `try_cluster_failures()` after episode creation
+- `apps/ui/src/features/observatory/LearningHealthBar.tsx` — add recurring issues section (future UI pass)
+
+#### Forward Path to C
+Failure clustering is the input for "self-correcting behavior." Combined with the meta-cognitive loop (episodic recall), the agent not only avoids past failures but understands WHY they failed and adjusts proactively. This is the foundation for the robustness dashboard in the Observatory.
+
+---
+
+## Updated Schema Changes Summary
+
+### New Tables (original)
+1. `distillation_runs` — distillation health tracking and retry
+2. `session_episodes` — episodic memory with outcomes and strategies
+
+### Altered Tables (updated)
+1. `memory_facts` — add `ward_id TEXT NOT NULL DEFAULT '__global__'` (v11), add `contradicted_by TEXT` (v12)
+
+### New Config Fields (addendum)
+Added to `recall_config.json` defaults:
+```json
+{
+  "contradiction_penalty": 0.7,
+  "contradiction_similarity_threshold": 0.8
+}
+```
+
+---
+
+## Updated Priority Order
+
+| # | Section | Effort | Impact |
+|---|---|---|---|
+| 1-6 | Original spec (pipeline fix, memory tiers, recall, scoring, backfill, Observatory) | Done | Foundation |
+| 7 | Ward-entry recall trigger | Small | High — prevents blind decisions on ward entry |
+| 8 | Contradiction detection on write | Medium | High — prevents knowledge drift in financial domain |
+| 9 | Failure clustering in episodes | Medium | High — surfaces repeated failure patterns automatically |
+
+---
+
 ## What Stays the Same
 
 - Hybrid search algorithm (FTS5 + vector cosine similarity)

@@ -1602,3 +1602,326 @@ Refresh /observatory — should now show entities, relationships, and a populate
 git add -A
 git commit -m "feat: cognitive memory & knowledge graph — complete implementation"
 ```
+
+---
+
+## Chunk 8: Correctness Hardening (Addendum)
+
+Added after model council review. These are surgical improvements that harden the system for correctness under failure.
+
+### Task 23: Ward-Entry Recall Trigger
+
+**Files:**
+- Modify: `runtime/agent-tools/src/tools/ward.rs`
+
+- [ ] **Step 1: Read the ward tool implementation**
+
+Read `runtime/agent-tools/src/tools/ward.rs` to understand:
+- How ward switching works
+- What context/state the tool has access to
+- Where the "ward switched successfully" result is returned
+
+- [ ] **Step 2: Add MemoryRecall to ward tool context**
+
+The ward tool needs access to `MemoryRecall` to trigger recall on ward entry. Check how other tools receive service references (look at how the memory tool gets `MemoryFactStore`). Follow the same pattern to pass `MemoryRecall` to the ward tool.
+
+- [ ] **Step 3: Trigger recall after ward switch**
+
+After a successful ward switch (the tool returns a success result):
+
+```rust
+// After ward switch succeeds:
+if let Some(recall) = &self.memory_recall {
+    let ward_id = new_ward_name;
+    let query = format!("ward {} project context", ward_id);
+    match recall.recall(&agent_id, &query, Some(ward_id), 5).await {
+        Ok(result) if !result.facts.is_empty() => {
+            // Inject as system message via execution context
+            // The tool result can include a "recall_context" field
+            // that the executor injects as a system message
+            tracing::info!(
+                ward = %ward_id,
+                facts = result.facts.len(),
+                "Ward-entry recall injected {} facts",
+                result.facts.len()
+            );
+        }
+        _ => {} // No facts for this ward yet — that's fine
+    }
+}
+```
+
+The exact injection mechanism depends on how the tool communicates back to the executor. Options:
+- Append recall context to the tool result text
+- Use a side-channel (if the tool has access to the message history)
+- Return a structured result that the executor parses
+
+Read the executor's tool result handling to determine the best approach.
+
+- [ ] **Step 4: Verify**
+
+Run: `cargo check --workspace`
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add runtime/agent-tools/src/tools/ward.rs
+git commit -m "feat(recall): trigger ward-scoped recall on ward entry"
+```
+
+---
+
+### Task 24: Schema Migration v12 — Contradiction Support
+
+**Files:**
+- Modify: `gateway/gateway-database/src/schema.rs`
+
+- [ ] **Step 1: Add migration v12**
+
+Increment `SCHEMA_VERSION` to 12. Add migration block:
+
+```rust
+if version < 12 {
+    let _ = conn.execute(
+        "ALTER TABLE memory_facts ADD COLUMN contradicted_by TEXT",
+        [],
+    );
+}
+```
+
+Also update the initial `CREATE TABLE memory_facts` to include `contradicted_by TEXT`.
+
+- [ ] **Step 2: Add test**
+
+```rust
+#[test]
+fn test_migration_v12_adds_contradicted_by() {
+    let conn = Connection::open_in_memory().unwrap();
+    initialize_database(&conn).unwrap();
+    let has_col: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('memory_facts') WHERE name='contradicted_by'",
+        [], |row| row.get::<_, i64>(0),
+    ).unwrap() > 0;
+    assert!(has_col);
+}
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `cargo test --package gateway-database schema -- --nocapture`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add gateway/gateway-database/src/schema.rs
+git commit -m "feat(db): schema v12 — add contradicted_by column to memory_facts"
+```
+
+---
+
+### Task 25: Contradiction Detection on Write
+
+**Files:**
+- Modify: `gateway/gateway-database/src/memory_repository.rs`
+- Modify: `gateway/gateway-database/src/memory_fact_store.rs`
+- Modify: `gateway/gateway-services/src/recall_config.rs`
+- Modify: `gateway/gateway-execution/src/recall.rs`
+
+- [ ] **Step 1: Add contradiction config to RecallConfig**
+
+In `recall_config.rs`, add to the struct and defaults:
+```rust
+pub contradiction_penalty: f64,              // default: 0.7
+pub contradiction_similarity_threshold: f64,  // default: 0.8
+```
+
+- [ ] **Step 2: Add contradicted_by to MemoryFact struct**
+
+In `memory_repository.rs`, add `pub contradicted_by: Option<String>` to `MemoryFact`. Update `row_to_memory_fact` and all queries.
+
+- [ ] **Step 3: Implement contradiction check in memory_fact_store**
+
+In `memory_fact_store.rs`, after a successful `upsert_memory_fact`:
+
+```rust
+// Check for contradictions with semantically similar facts
+if let Some(embedding) = &fact_embedding {
+    let similar = self.memory_repo.search_memory_facts_vector(
+        embedding, agent_id, 0.8, 5, None
+    )?;
+    for similar_fact in &similar {
+        if similar_fact.key != new_fact.key && similar_fact.category == new_fact.category {
+            // Potential contradiction — reduce old fact's confidence
+            self.memory_repo.mark_contradicted(
+                &similar_fact.id, &new_fact.key
+            )?;
+            tracing::info!(
+                old_key = %similar_fact.key,
+                new_key = %new_fact.key,
+                "Contradiction detected — reduced confidence on '{}'",
+                similar_fact.key
+            );
+        }
+    }
+}
+```
+
+- [ ] **Step 4: Add mark_contradicted to MemoryRepository**
+
+```rust
+pub fn mark_contradicted(&self, fact_id: &str, contradicted_by: &str) -> Result<(), String> {
+    self.db.with_connection(|conn| {
+        conn.execute(
+            "UPDATE memory_facts SET contradicted_by = ?1, confidence = MAX(0.1, confidence - 0.15) WHERE id = ?2",
+            params![contradicted_by, fact_id],
+        )?;
+        Ok(())
+    })
+}
+```
+
+- [ ] **Step 5: Apply contradiction penalty in recall scoring**
+
+In `recall.rs`, after category weight and ward affinity:
+```rust
+if fact.contradicted_by.is_some() {
+    scored_fact.score *= self.config.contradiction_penalty;
+}
+```
+
+- [ ] **Step 6: Verify**
+
+Run: `cargo test --package gateway-database -- --nocapture`
+Run: `cargo check --workspace`
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add gateway/gateway-database/src/memory_repository.rs gateway/gateway-database/src/memory_fact_store.rs gateway/gateway-services/src/recall_config.rs gateway/gateway-execution/src/recall.rs gateway/gateway-database/src/schema.rs
+git commit -m "feat(memory): add contradiction detection — flag and penalize conflicting facts"
+```
+
+---
+
+### Task 26: Failure Clustering in Episodes
+
+**Files:**
+- Modify: `gateway/gateway-execution/src/distillation.rs`
+
+- [ ] **Step 1: Add try_cluster_failures after episode creation**
+
+In `distillation.rs`, after `store_episode()` when the episode outcome is `failed` or `partial`:
+
+```rust
+if episode.outcome == "failed" || episode.outcome == "partial" {
+    if let Err(e) = self.try_cluster_failures(agent_id, &episode, ward_id).await {
+        tracing::warn!(error = %e, "Failure clustering failed (non-fatal)");
+    }
+}
+```
+
+- [ ] **Step 2: Implement try_cluster_failures**
+
+```rust
+async fn try_cluster_failures(
+    &self,
+    agent_id: &str,
+    episode: &ExtractedEpisode,
+    ward_id: &str,
+) -> Result<(), String> {
+    let episode_repo = self.episode_repo.as_ref()
+        .ok_or("No episode repository")?;
+
+    // Embed the task summary
+    let embedding = self.embed_text(&episode.task_summary).await
+        .ok_or("Failed to embed task summary")?;
+
+    // Find similar episodes
+    let similar = episode_repo.search_by_similarity(agent_id, &embedding, 0.6, 20)?;
+
+    // Filter to failures only (excluding the current episode)
+    let failures: Vec<_> = similar.iter()
+        .filter(|(ep, _score)| ep.outcome == "failed" || ep.outcome == "partial")
+        .collect();
+
+    if failures.len() < 3 {
+        return Ok(()); // Not enough failures to cluster
+    }
+
+    // Extract common pattern from key_learnings
+    let learnings: Vec<&str> = failures.iter()
+        .filter_map(|(ep, _)| ep.key_learnings.as_deref())
+        .collect();
+
+    let pattern_summary = if let Some(latest) = learnings.first() {
+        format!("Recurring failure ({} episodes): {}", failures.len(), latest)
+    } else {
+        return Ok(());
+    };
+
+    // Write correction fact
+    let key = format!("correction.recurring.{}", sanitize_task_type(&episode.task_summary));
+    let confidence = (0.85 + 0.02 * failures.len() as f64).min(0.98);
+
+    let fact = MemoryFact {
+        id: format!("fact-{}", uuid::Uuid::new_v4()),
+        agent_id: agent_id.to_string(),
+        scope: "agent".to_string(),
+        ward_id: ward_id.to_string(),
+        category: "correction".to_string(),
+        key,
+        content: pattern_summary,
+        confidence,
+        mention_count: failures.len() as i32,
+        source_summary: Some("Clustered from repeated failures".to_string()),
+        embedding: Some(embedding),
+        ..Default::default()
+    };
+
+    self.memory_repo.upsert_memory_fact(&fact)?;
+    tracing::info!(
+        cluster_size = failures.len(),
+        key = %fact.key,
+        "Failure cluster detected — wrote correction fact"
+    );
+
+    Ok(())
+}
+```
+
+- [ ] **Step 3: Verify**
+
+Run: `cargo check --workspace`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add gateway/gateway-execution/src/distillation.rs
+git commit -m "feat(distillation): add failure clustering — auto-generate corrections from repeated failures"
+```
+
+---
+
+### Task 27: End-to-End Verification (Addendum)
+
+- [ ] **Step 1: Run full workspace tests**
+
+Run: `cargo test --workspace --lib --bins --tests`
+
+- [ ] **Step 2: Verify contradiction detection**
+
+Insert two contradictory facts via API or test, verify that the older one gets `contradicted_by` set and confidence reduced.
+
+- [ ] **Step 3: Verify failure clustering**
+
+Check that after 3+ similar failed episodes, a `correction.recurring.*` fact exists in memory_facts.
+
+- [ ] **Step 4: Verify ward-entry recall**
+
+Switch to a ward that has facts, verify recall fires and facts are available in context.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git commit -m "feat: correctness hardening — ward recall, contradiction detection, failure clustering"
+```
