@@ -461,7 +461,7 @@ impl SessionDistiller {
         // Load prompt once (shared across attempts)
         let system = self.load_distillation_prompt();
         let user = format!(
-            "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, and an episode assessment as JSON.",
+            "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, and an episode assessment. Respond with ONLY the JSON object, nothing else.",
             transcript
         );
 
@@ -510,7 +510,38 @@ impl SessionDistiller {
 
             match client.chat(messages, None).await {
                 Ok(response) => {
-                    return parse_distillation_response(&response.content);
+                    let content = &response.content;
+                    tracing::debug!(
+                        provider = %provider.name,
+                        response_len = content.len(),
+                        "Distillation LLM responded ({} chars)",
+                        content.len()
+                    );
+                    match parse_distillation_response(content) {
+                        Ok(parsed) => {
+                            tracing::info!(
+                                provider = %provider.name,
+                                facts = parsed.facts.len(),
+                                entities = parsed.entities.len(),
+                                relationships = parsed.relationships.len(),
+                                has_episode = parsed.episode.is_some(),
+                                "Distillation parsed successfully"
+                            );
+                            return Ok(parsed);
+                        }
+                        Err(parse_err) => {
+                            // Log the raw response so we can debug what the LLM returned
+                            let preview = if content.len() > 800 { &content[..800] } else { content.as_str() };
+                            tracing::warn!(
+                                provider = %provider.name,
+                                error = %parse_err,
+                                response_preview = %preview,
+                                "Distillation response could not be parsed — trying next provider"
+                            );
+                            last_error = format!("Provider '{}': parse failed: {}", provider.name, parse_err);
+                            continue; // Try next provider — a different model might produce parseable JSON
+                        }
+                    }
                 }
                 Err(e) => {
                     last_error = format!("Provider '{}' ({}): LLM call failed: {}", provider.name, provider_id, e);
@@ -736,29 +767,91 @@ fn build_transcript(messages: &[gateway_database::Message]) -> String {
         let role = match msg.role.as_str() {
             "user" => "USER",
             "assistant" => "ASSISTANT",
-            "system" => "SYSTEM",
-            "tool" => "TOOL",
+            "system" => continue, // Skip system messages — they're instructions, not conversation
+            "tool" => "TOOL_RESULT",
             _ => &msg.role,
         };
 
-        // Truncate very long messages for the distillation context
-        let content = if msg.content.len() > 500 {
-            format!("{}... [truncated, {} chars total]", zero_core::truncate_str(&msg.content, 500), msg.content.len())
+        // For tool results, extract the meaningful content, not raw JSON
+        let content = if msg.role == "tool" {
+            summarize_tool_result(&msg.content)
+        } else if msg.content.len() > 1000 {
+            format!("{}... [truncated, {} chars total]", zero_core::truncate_str(&msg.content, 1000), msg.content.len())
         } else {
             msg.content.clone()
         };
 
-        // Include tool info if present
+        // For assistant messages with tool calls, show what tools were called
         let tool_info = if let Some(tc) = &msg.tool_calls {
-            format!(" [tool_calls: {}]", truncate_json(tc, 200))
+            match serde_json::from_str::<Vec<serde_json::Value>>(tc) {
+                Ok(calls) => {
+                    let names: Vec<String> = calls.iter()
+                        .filter_map(|c| c.get("tool_name").or(c.get("name")).and_then(|n| n.as_str()).map(String::from))
+                        .collect();
+                    if names.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" [called: {}]", names.join(", "))
+                    }
+                }
+                Err(_) => String::new(),
+            }
         } else {
             String::new()
         };
+
+        // Skip empty content (sometimes tool call messages have "[tool calls]" as placeholder)
+        if content.is_empty() || content == "[tool calls]" {
+            if !tool_info.is_empty() {
+                parts.push(format!("ASSISTANT:{}", tool_info));
+            }
+            continue;
+        }
 
         parts.push(format!("{}: {}{}", role, content, tool_info));
     }
 
     parts.join("\n\n")
+}
+
+/// Summarize a tool result for the distillation transcript.
+/// Extracts meaningful content from JSON tool responses, reducing noise.
+fn summarize_tool_result(content: &str) -> String {
+    // Try to parse as JSON and extract key fields
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(content) {
+        if let Some(obj) = val.as_object() {
+            // Common tool result patterns
+            if let Some(stdout) = obj.get("stdout").and_then(|v| v.as_str()) {
+                let exit_code = obj.get("exit_code").and_then(|v| v.as_i64()).unwrap_or(-1);
+                let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+                let mut result = format!("[exit_code: {}]", exit_code);
+                if !stdout.trim().is_empty() {
+                    let truncated = if stdout.len() > 500 { &stdout[..500] } else { stdout };
+                    result.push_str(&format!(" {}", truncated.trim()));
+                }
+                if !stderr.trim().is_empty() && exit_code != 0 {
+                    let truncated = if stderr.len() > 300 { &stderr[..300] } else { stderr };
+                    result.push_str(&format!(" STDERR: {}", truncated.trim()));
+                }
+                return result;
+            }
+            // Delegation result
+            if let Some(message) = obj.get("message").and_then(|v| v.as_str()) {
+                return format!("[delegation result] {}", if message.len() > 500 { &message[..500] } else { message });
+            }
+            // Ward change
+            if obj.get("__ward_changed__").is_some() {
+                let action = obj.get("action").and_then(|v| v.as_str()).unwrap_or("changed");
+                return format!("[ward {}]", action);
+            }
+        }
+    }
+    // Fallback: truncate raw content
+    if content.len() > 500 {
+        format!("{}... [truncated]", zero_core::truncate_str(content, 500))
+    } else {
+        content.to_string()
+    }
 }
 
 /// Truncate a JSON string to a max length for display.
@@ -776,8 +869,16 @@ fn truncate_json(json_str: &str, max_len: usize) -> String {
 /// - A JSON object: `{"facts": [...], "entities": [...], "relationships": [...]}`
 /// - Just a JSON array of facts (backward compat): `[{...}, ...]`
 /// - JSON wrapped in markdown code block
+/// - JSON with surrounding explanation text
+///
+/// Returns Err if the response cannot be parsed at all — this is a real failure,
+/// not "nothing worth remembering".
 fn parse_distillation_response(content: &str) -> Result<DistillationResponse, String> {
     let trimmed = content.trim();
+
+    if trimmed.is_empty() {
+        return Err("LLM returned empty response".to_string());
+    }
 
     // Try parsing as full distillation response (object with facts/entities/relationships)
     if let Ok(resp) = serde_json::from_str::<DistillationResponse>(trimmed) {
@@ -810,30 +911,83 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
         });
     }
 
-    // Return empty if unparseable
-    tracing::debug!("Could not parse distillation response, treating as empty");
-    Ok(DistillationResponse {
-        facts: Vec::new(),
-        entities: Vec::new(),
-        relationships: Vec::new(),
-        episode: None,
-    })
+    // Try a lenient parse — maybe the LLM returned valid JSON but with extra/different field names
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(&json_str) {
+        return parse_distillation_from_value(&val);
+    }
+
+    // All parsing failed — this is a real error, not "nothing to extract"
+    let preview = if trimmed.len() > 500 { &trimmed[..500] } else { trimmed };
+    Err(format!("Failed to parse distillation response. Preview: {}", preview))
+}
+
+/// Try to extract a DistillationResponse from an arbitrary JSON Value.
+/// Handles cases where the LLM uses slightly different field names or structures.
+fn parse_distillation_from_value(val: &serde_json::Value) -> Result<DistillationResponse, String> {
+    let obj = val.as_object().ok_or("Response is not a JSON object")?;
+
+    let facts: Vec<ExtractedFact> = obj.get("facts")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let entities: Vec<ExtractedEntity> = obj.get("entities")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let relationships: Vec<ExtractedRelationship> = obj.get("relationships")
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+
+    let episode: Option<ExtractedEpisode> = obj.get("episode")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
+    if facts.is_empty() && entities.is_empty() && episode.is_none() {
+        // The JSON parsed but all arrays were empty or had incompatible fields
+        // Log what was actually in the JSON to help debug
+        let keys: Vec<&String> = obj.keys().collect();
+        tracing::warn!(
+            keys = ?keys,
+            "Parsed JSON but extracted nothing — check if LLM used unexpected field names"
+        );
+    }
+
+    Ok(DistillationResponse { facts, entities, relationships, episode })
 }
 
 /// Extract JSON content from text that may contain markdown code blocks.
 fn extract_json_from_content(content: &str) -> String {
-    // Try array brackets first (more common for facts-only responses)
-    if let Some(start) = content.find('[') {
-        if let Some(end) = content.rfind(']') {
-            return content[start..=end].to_string();
+    // 1. Try markdown code blocks first: ```json ... ``` or ``` ... ```
+    let code_block_patterns = ["```json\n", "```json\r\n", "```JSON\n", "```\n", "```\r\n"];
+    for pattern in &code_block_patterns {
+        if let Some(start) = content.find(pattern) {
+            let json_start = start + pattern.len();
+            if let Some(end) = content[json_start..].find("```") {
+                let extracted = content[json_start..json_start + end].trim();
+                if !extracted.is_empty() {
+                    return extracted.to_string();
+                }
+            }
         }
     }
-    // Then try object brackets (for full distillation response)
+
+    // 2. Try object brackets (full distillation response — most common expected format)
     if let Some(start) = content.find('{') {
         if let Some(end) = content.rfind('}') {
-            return content[start..=end].to_string();
+            if end > start {
+                return content[start..=end].to_string();
+            }
         }
     }
+
+    // 3. Try array brackets (facts-only backward compat)
+    if let Some(start) = content.find('[') {
+        if let Some(end) = content.rfind(']') {
+            if end > start {
+                return content[start..=end].to_string();
+            }
+        }
+    }
+
     content.to_string()
 }
 
@@ -841,6 +995,8 @@ fn extract_json_from_content(content: &str) -> String {
 /// The default distillation prompt (embedded fallback).
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
 const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, and an episode assessment worth remembering for FUTURE sessions.
+
+IMPORTANT: Respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON. Your entire response must be parseable JSON.
 
 Return a JSON object with three arrays and one optional episode object:
 
@@ -917,7 +1073,11 @@ When a session analyzes or works with files in a ward (workspace), include a `do
 - Only extract facts useful in FUTURE sessions. Skip ephemeral details (one-off questions, transient errors, session-specific data).
 - Confidence: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred from context.
 - If nothing worth remembering, return {"facts": [], "entities": [], "relationships": []}.
-- Prefer fewer high-quality extractions over many low-value ones."#;
+- Prefer fewer high-quality extractions over many low-value ones.
+
+## Output Format
+
+CRITICAL: Your ENTIRE response must be a single valid JSON object. Do NOT include any text, explanation, or markdown formatting. Start your response with { and end with }."#;
 
 // ============================================================================
 // TESTS
@@ -963,13 +1123,16 @@ mod tests {
 
     #[test]
     fn test_parse_facts_unparseable() {
-        let resp = parse_distillation_response("No facts to extract from this session.").unwrap();
-        assert!(resp.facts.is_empty());
+        // Unparseable text should now return Err, not Ok(empty)
+        let result = parse_distillation_response("No facts to extract from this session.");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("Failed to parse"));
     }
 
     #[test]
     fn test_parse_facts_with_surrounding_text() {
-        let text = "Here are the extracted facts:\n[{\"category\": \"pattern\", \"key\": \"pattern.workflow.test_before_commit\", \"content\": \"Always run tests before committing\", \"confidence\": 0.8}]\nDone.";
+        // JSON embedded in surrounding text should still be extracted
+        let text = "Here are the extracted facts:\n{\"facts\": [{\"category\": \"pattern\", \"key\": \"pattern.workflow.test_before_commit\", \"content\": \"Always run tests before committing\", \"confidence\": 0.8}], \"entities\": [], \"relationships\": []}\nDone.";
         let resp = parse_distillation_response(text).unwrap();
         assert_eq!(resp.facts.len(), 1);
         assert_eq!(resp.facts[0].category, "pattern");
@@ -977,7 +1140,7 @@ mod tests {
 
     #[test]
     fn test_build_transcript_truncates() {
-        let long_content = "x".repeat(1000);
+        let long_content = "x".repeat(2000);
         let messages = vec![gateway_database::Message {
             id: "msg-1".to_string(),
             execution_id: Some("exec-1".to_string()),
@@ -985,7 +1148,7 @@ mod tests {
             role: "user".to_string(),
             content: long_content,
             created_at: "2024-01-01T00:00:00Z".to_string(),
-            token_count: 250,
+            token_count: 500,
             tool_calls: None,
             tool_results: None,
             tool_call_id: None,
@@ -993,7 +1156,7 @@ mod tests {
 
         let transcript = build_transcript(&messages);
         assert!(transcript.contains("truncated"));
-        assert!(transcript.len() < 2000);
+        assert!(transcript.len() < 3000); // Truncated at 1000 chars + prefix
     }
 
     #[test]
