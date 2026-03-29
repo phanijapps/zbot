@@ -549,7 +549,12 @@ impl MemoryTool {
         }
     }
 
-    /// Recall relevant facts using hybrid search via the DB-backed fact store.
+    /// Recall relevant facts using prioritized hybrid search via the DB-backed fact store.
+    ///
+    /// When the DB-backed store is available, uses `recall_facts_prioritized` which
+    /// applies category weights (corrections > strategies > user prefs > ...) to
+    /// surface the most important facts first. Falls back to flat scoring if
+    /// the store doesn't support prioritization.
     async fn action_recall(&self, agent_id: &str, args: &Value) -> Result<Value> {
         let query = args
             .get("query")
@@ -561,21 +566,38 @@ impl MemoryTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as usize;
 
-        // Use DB-backed fact store if available
+        // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
             Some(store) => {
                 store
-                    .recall_facts(agent_id, query, limit)
+                    .recall_facts_prioritized(agent_id, query, limit)
                     .await
                     .map_err(|e| ZeroError::Tool(e))
             }
             None => {
-                // Fallback: search KV store
+                // Fallback: search KV store with category-aware ordering
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
                 let store = self.load_store_at_path(&kv_path)?;
 
                 let query_lower = query.to_lowercase();
-                let results: Vec<Value> = store
+
+                // Category priority weights for KV fallback ordering
+                let category_weight = |tags: &[String]| -> f64 {
+                    for tag in tags {
+                        match tag.as_str() {
+                            "correction" => return 1.5,
+                            "strategy" => return 1.4,
+                            "user" => return 1.3,
+                            "instruction" => return 1.2,
+                            "domain" => return 1.0,
+                            "pattern" => return 0.9,
+                            _ => {}
+                        }
+                    }
+                    1.0
+                };
+
+                let mut matches: Vec<(f64, &String, &MemoryEntry)> = store
                     .entries
                     .iter()
                     .filter(|(k, entry)| {
@@ -583,13 +605,26 @@ impl MemoryTool {
                             || entry.value.to_lowercase().contains(&query_lower)
                             || entry.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
                     })
-                    .take(limit)
                     .map(|(key, entry)| {
+                        let weight = category_weight(&entry.tags);
+                        (weight, key, entry)
+                    })
+                    .collect();
+
+                // Sort by category weight descending
+                matches.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                matches.truncate(limit);
+
+                let results: Vec<Value> = matches
+                    .iter()
+                    .map(|(weight, key, entry)| {
                         json!({
                             "key": key,
                             "content": entry.value,
                             "tags": entry.tags,
+                            "score": weight,
                             "source": "kv_store",
+                            "prioritized": true,
                         })
                     })
                     .collect();
@@ -599,6 +634,7 @@ impl MemoryTool {
                     "results": results,
                     "count": results.len(),
                     "source": "kv_store",
+                    "prioritized": true,
                 }))
             }
         }

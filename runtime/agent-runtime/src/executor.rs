@@ -20,6 +20,8 @@
 #![warn(clippy::all)]
 
 use std::collections::{HashSet, VecDeque};
+use std::pin::Pin;
+use std::future::Future;
 use std::sync::Arc;
 use serde_json::{json, Value};
 
@@ -34,6 +36,35 @@ use crate::middleware::traits::MiddlewareContext;
 use crate::middleware::token_counter::estimate_total_tokens;
 use zero_core::event::EventActions;
 use zero_core::ToolContext as ZeroToolContext;
+
+// ============================================================================
+// MID-SESSION RECALL HOOK
+// ============================================================================
+
+/// Result returned by the mid-session recall hook.
+///
+/// Contains novel facts formatted as a system message and the keys of those
+/// facts so the caller can track already-injected keys.
+#[derive(Debug, Clone)]
+pub struct RecallHookResult {
+    /// Formatted system message to inject (empty if nothing novel)
+    pub system_message: String,
+    /// Keys of the facts that were included (for dedup tracking)
+    pub fact_keys: Vec<String>,
+}
+
+/// A callback invoked by the executor every N turns to refresh memory recall.
+///
+/// The hook receives:
+/// - `latest_user_message`: the most recent user message for query context
+/// - `already_injected_keys`: keys of facts already injected in this session
+///
+/// Returns a `RecallHookResult` with a formatted message and new keys.
+pub type RecallHook = Box<
+    dyn Fn(&str, &HashSet<String>) -> Pin<Box<dyn Future<Output = Result<RecallHookResult, String>> + Send>>
+        + Send
+        + Sync
+>;
 
 /// Result from tool execution including any actions set by the tool
 struct ToolExecutionResult {
@@ -177,6 +208,12 @@ pub struct AgentExecutor {
     tool_registry: Arc<ToolRegistry>,
     mcp_manager: Arc<McpManager>,
     middleware_pipeline: Arc<MiddlewarePipeline>,
+    /// Optional mid-session recall hook invoked every N turns.
+    recall_hook: Option<Arc<RecallHook>>,
+    /// How often (in turns) to run mid-session recall. 0 = disabled.
+    recall_every_n_turns: u32,
+    /// Keys of facts already injected at session start (seeds the dedup set).
+    recall_initial_keys: HashSet<String>,
 }
 
 impl AgentExecutor {
@@ -201,12 +238,33 @@ impl AgentExecutor {
             tool_registry,
             mcp_manager,
             middleware_pipeline,
+            recall_hook: None,
+            recall_every_n_turns: 0,
+            recall_initial_keys: HashSet::new(),
         })
     }
 
     /// Set the middleware pipeline
     pub fn set_middleware_pipeline(&mut self, pipeline: Arc<MiddlewarePipeline>) {
         self.middleware_pipeline = pipeline;
+    }
+
+    /// Configure mid-session recall.
+    ///
+    /// The `hook` is called every `every_n_turns` iterations with the latest
+    /// user message and the set of already-injected fact keys. Novel facts
+    /// are injected as a system message.
+    ///
+    /// `initial_keys` seeds the dedup set from facts injected at session start.
+    pub fn set_recall_hook(
+        &mut self,
+        hook: RecallHook,
+        every_n_turns: u32,
+        initial_keys: HashSet<String>,
+    ) {
+        self.recall_hook = Some(Arc::new(hook));
+        self.recall_every_n_turns = every_n_turns;
+        self.recall_initial_keys = initial_keys;
     }
 
     /// Get the middleware pipeline
@@ -329,6 +387,10 @@ impl AgentExecutor {
 
         // Track whether the turn budget nudge has been sent (max 1)
         let mut turn_budget_nudge_sent = false;
+
+        // Track which fact keys have been injected via recall (initial + mid-session).
+        // Seeded from initial recall keys; extended by mid-session recall hook results.
+        let mut recall_injected_keys = self.recall_initial_keys.clone();
 
         // Create shared tool context that persists across all tool calls in this execution.
         // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
@@ -457,6 +519,55 @@ impl AgentExecutor {
                         messages_after = current_messages.len(),
                         "Context compacted"
                     );
+                }
+            }
+
+            // Mid-session recall: every N turns, fetch novel facts and inject as
+            // a system message so the agent benefits from memory even during long
+            // multi-turn sessions.
+            if self.recall_every_n_turns > 0
+                && progress_tracker.total_iterations > 0
+                && progress_tracker.total_iterations % self.recall_every_n_turns == 0
+            {
+                if let Some(hook) = &self.recall_hook {
+                    // Find the latest user message for query context
+                    let latest_user_msg = current_messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == "user")
+                        .map(|m| m.content.clone())
+                        .unwrap_or_default();
+
+                    let hook_clone = Arc::clone(hook);
+                    match hook_clone(&latest_user_msg, &recall_injected_keys).await {
+                        Ok(result) if !result.system_message.is_empty() => {
+                            current_messages.push(ChatMessage::system(
+                                result.system_message,
+                            ));
+                            // Track newly injected keys for future dedup
+                            for key in result.fact_keys {
+                                recall_injected_keys.insert(key);
+                            }
+                            tracing::info!(
+                                turn = progress_tracker.total_iterations,
+                                total_keys = recall_injected_keys.len(),
+                                "Mid-session recall injected novel facts"
+                            );
+                        }
+                        Ok(_) => {
+                            tracing::debug!(
+                                turn = progress_tracker.total_iterations,
+                                "Mid-session recall: no novel facts"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                turn = progress_tracker.total_iterations,
+                                error = %e,
+                                "Mid-session recall failed"
+                            );
+                        }
+                    }
                 }
             }
 

@@ -101,7 +101,7 @@ pub use middleware::{
 };
 
 pub use executor::{
-    AgentExecutor, ExecutorConfig, ExecutorError, create_executor
+    AgentExecutor, ExecutorConfig, ExecutorError, RecallHook, RecallHookResult, create_executor
 };
 
 pub use logging::{

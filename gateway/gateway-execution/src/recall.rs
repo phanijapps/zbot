@@ -20,7 +20,8 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
-use gateway_database::{MemoryRepository, ScoredFact};
+use gateway_database::{EpisodeRepository, MemoryRepository, ScoredFact, SessionEpisode};
+use gateway_services::RecallConfig;
 use knowledge_graph::{GraphService, EntityWithConnections};
 #[cfg(test)]
 use gateway_database::MemoryFact;
@@ -30,6 +31,8 @@ use gateway_database::MemoryFact;
 pub struct RecallResult {
     /// Scored facts from memory search
     pub facts: Vec<ScoredFact>,
+    /// Relevant past episodes from episodic recall
+    pub episodes: Vec<SessionEpisode>,
     /// Graph context for entities mentioned in facts (if graph service available)
     pub graph_context: Option<GraphContext>,
     /// Pre-formatted output string
@@ -48,6 +51,8 @@ pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     memory_repo: Arc<MemoryRepository>,
     graph_service: Option<Arc<GraphService>>,
+    config: Arc<RecallConfig>,
+    episode_repo: Option<Arc<EpisodeRepository>>,
 }
 
 impl MemoryRecall {
@@ -55,11 +60,14 @@ impl MemoryRecall {
     pub fn new(
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
         memory_repo: Arc<MemoryRepository>,
+        config: Arc<RecallConfig>,
     ) -> Self {
         Self {
             embedding_client,
             memory_repo,
             graph_service: None,
+            config,
+            episode_repo: None,
         }
     }
 
@@ -68,12 +76,20 @@ impl MemoryRecall {
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
         memory_repo: Arc<MemoryRepository>,
         graph_service: Arc<GraphService>,
+        config: Arc<RecallConfig>,
     ) -> Self {
         Self {
             embedding_client,
             memory_repo,
             graph_service: Some(graph_service),
+            config,
+            episode_repo: None,
         }
+    }
+
+    /// Set the episode repository for episodic recall.
+    pub fn set_episode_repo(&mut self, repo: Arc<EpisodeRepository>) {
+        self.episode_repo = Some(repo);
     }
 
     /// Set the graph service for enriched recall.
@@ -83,29 +99,31 @@ impl MemoryRecall {
 
     /// Recall relevant facts for a given agent and user message.
     ///
-    /// Returns scored facts sorted by relevance (highest first).
+    /// Returns scored facts sorted by relevance (highest first), with
+    /// category weights and optional ward affinity boost applied.
     pub async fn recall(
         &self,
         agent_id: &str,
         user_message: &str,
         limit: usize,
+        ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
         // 1. Embed the user message for vector search
         let query_embedding = self.embed_query(user_message).await;
 
-        // 2. Run hybrid search (FTS5 + vector)
+        // 2. Run hybrid search (FTS5 + vector) using config weights
         let hybrid_results = self.memory_repo.search_memory_facts_hybrid(
             user_message,
             query_embedding.as_deref(),
             agent_id,
             limit * 2, // Fetch more than needed, we'll merge and trim
-            0.7,       // vector weight
-            0.3,       // bm25 weight
+            self.config.vector_weight,
+            self.config.bm25_weight,
         )?;
 
         // 3. Also fetch high-confidence facts (always relevant)
         let high_conf_facts = self.memory_repo
-            .get_high_confidence_facts(agent_id, 0.9, limit)
+            .get_high_confidence_facts(agent_id, self.config.high_confidence_threshold, limit)
             .unwrap_or_default();
 
         // 4. Merge, dedup by key, take top-K
@@ -129,6 +147,28 @@ impl MemoryRecall {
             }
         }
 
+        // 5. Apply category weights from config
+        for sf in &mut results {
+            let category_weight = self.config.category_weight(&sf.fact.category);
+            sf.score *= category_weight;
+        }
+
+        // 6. Apply ward affinity boost — facts whose key starts with the
+        //    ward prefix get a relevance boost (ward_id filtering in the DB
+        //    is not yet available — Task 21 will add ward_id to MemoryFact).
+        if let Some(current_ward) = ward_id {
+            if !current_ward.is_empty() && current_ward != "scratch" {
+                let ward_prefix = format!("{}/", current_ward);
+                for sf in &mut results {
+                    if sf.fact.key.starts_with(&ward_prefix)
+                        || sf.fact.category == "ward"
+                    {
+                        sf.score *= self.config.ward_affinity_boost;
+                    }
+                }
+            }
+        }
+
         // Sort by score descending and take top-K
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(limit);
@@ -136,18 +176,20 @@ impl MemoryRecall {
         Ok(results)
     }
 
-    /// Recall relevant facts enriched with knowledge graph context.
+    /// Recall relevant facts enriched with knowledge graph context and episodes.
     ///
     /// This method extends the basic recall with related entities from the
-    /// knowledge graph, providing richer context for the agent.
+    /// knowledge graph and relevant past episodes, providing richer context
+    /// for the agent. Output is capped at `config.max_recall_tokens`.
     pub async fn recall_with_graph(
         &self,
         agent_id: &str,
         user_message: &str,
         limit: usize,
+        ward_id: Option<&str>,
     ) -> Result<RecallResult, String> {
-        // 1. Standard fact search
-        let facts = self.recall(agent_id, user_message, limit).await?;
+        // 1. Standard fact search with priority scoring
+        let facts = self.recall(agent_id, user_message, limit, ward_id).await?;
 
         // 2. Extract potential entity names from facts
         let entity_names = extract_entity_names_from_facts(&facts);
@@ -163,11 +205,42 @@ impl MemoryRecall {
             None
         };
 
-        // 4. Format combined result
-        let formatted = format_combined_recall(&facts, &graph_context);
+        // 4. Episodic recall — search past episodes by vector similarity
+        let episodes = if let Some(ref episode_repo) = self.episode_repo {
+            let query_embedding = self.embed_query(user_message).await;
+            if let Some(ref emb) = query_embedding {
+                match episode_repo.search_by_similarity(
+                    agent_id,
+                    emb,
+                    0.5,
+                    self.config.max_episodes,
+                ) {
+                    Ok(scored_episodes) => {
+                        scored_episodes.into_iter().map(|(ep, _score)| ep).collect()
+                    }
+                    Err(e) => {
+                        tracing::warn!("Episode recall failed: {}", e);
+                        Vec::new()
+                    }
+                }
+            } else {
+                Vec::new()
+            }
+        } else {
+            Vec::new()
+        };
+
+        // 5. Format combined result with token budget
+        let formatted = format_prioritized_recall(
+            &facts,
+            &episodes,
+            &graph_context,
+            self.config.max_recall_tokens,
+        );
 
         Ok(RecallResult {
             facts,
+            episodes,
             graph_context,
             formatted,
         })
@@ -253,6 +326,116 @@ pub fn format_combined_recall(facts: &[ScoredFact], graph_context: &Option<Graph
                 }
 
                 output.push('\n');
+            }
+        }
+    }
+
+    output
+}
+
+/// Format recalled facts, episodes, and graph context into structured sections
+/// with a token budget. Trims lowest-scored items first to stay within budget.
+///
+/// Estimates ~4 characters per token for budget enforcement.
+pub fn format_prioritized_recall(
+    facts: &[ScoredFact],
+    episodes: &[SessionEpisode],
+    graph_context: &Option<GraphContext>,
+    max_tokens: usize,
+) -> String {
+    if facts.is_empty() && episodes.is_empty() && graph_context.is_none() {
+        return String::new();
+    }
+
+    let max_chars = max_tokens * 4;
+
+    // Separate corrections/preferences (high-priority) from domain context
+    let mut corrections: Vec<&ScoredFact> = Vec::new();
+    let mut domain: Vec<&ScoredFact> = Vec::new();
+
+    for sf in facts {
+        match sf.fact.category.as_str() {
+            "correction" | "user" | "instruction" | "strategy" => corrections.push(sf),
+            _ => domain.push(sf),
+        }
+    }
+
+    let mut output = String::new();
+    output.push_str("## Recalled Knowledge\n");
+
+    // Section 1: Corrections & Preferences (highest priority)
+    if !corrections.is_empty() {
+        output.push_str("### Corrections & Preferences\n");
+        for sf in &corrections {
+            let line = format!(
+                "- [{}] {} (confidence: {:.2})\n",
+                sf.fact.category, sf.fact.content, sf.fact.confidence
+            );
+            if output.len() + line.len() > max_chars {
+                break;
+            }
+            output.push_str(&line);
+        }
+    }
+
+    // Section 2: Relevant Past Experiences (episodes)
+    if !episodes.is_empty() && output.len() < max_chars {
+        output.push_str("### Relevant Past Experiences\n");
+        for ep in episodes {
+            let strategy = ep.strategy_used.as_deref().unwrap_or("unknown");
+            let tokens = ep.token_cost.unwrap_or(0);
+            let date = ep.created_at.split('T').next().unwrap_or(&ep.created_at);
+            let line = format!(
+                "- {} ({}): {} — {}, {} tokens\n",
+                ep.task_summary, date, ep.outcome.to_uppercase(), strategy, tokens
+            );
+            if output.len() + line.len() > max_chars {
+                break;
+            }
+            output.push_str(&line);
+        }
+    }
+
+    // Section 3: Domain Context (remaining facts)
+    if !domain.is_empty() && output.len() < max_chars {
+        output.push_str("### Domain Context\n");
+        for sf in &domain {
+            let line = format!(
+                "- [{}] {} (confidence: {:.2})\n",
+                sf.fact.category, sf.fact.content, sf.fact.confidence
+            );
+            if output.len() + line.len() > max_chars {
+                break;
+            }
+            output.push_str(&line);
+        }
+    }
+
+    // Section 4: Graph entities (lowest priority, fills remaining budget)
+    if let Some(ref ctx) = graph_context {
+        if !ctx.entities.is_empty() && output.len() < max_chars {
+            output.push_str("### Related Entities\n");
+            for entity_conn in &ctx.entities {
+                let mut line = format!(
+                    "- **{}** ({})",
+                    entity_conn.entity.name,
+                    entity_conn.entity.entity_type.as_str()
+                );
+                if !entity_conn.outgoing.is_empty() {
+                    let rels: Vec<String> = entity_conn
+                        .outgoing
+                        .iter()
+                        .map(|(rel, target)| {
+                            format!("{} -> {}", rel.relationship_type.as_str(), target.name)
+                        })
+                        .collect();
+                    line.push_str(&format!(": {}", rels.join(", ")));
+                }
+                line.push('\n');
+                if output.len() + line.len() > max_chars {
+                    break;
+                }
+                output.push_str(&line);
             }
         }
     }

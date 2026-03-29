@@ -3,6 +3,7 @@
 // Implements MemoryFactStore trait using MemoryRepository + EmbeddingClient
 // ============================================================================
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -143,6 +144,98 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             "results": items,
             "count": items.len(),
             "source": "memory_db",
+        }))
+    }
+
+    async fn recall_facts_prioritized(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Value, String> {
+        // Generate embedding for the query
+        let query_embedding = self.embed_text(query).await;
+
+        // Fetch more results than needed so we can re-rank
+        let mut results = self.memory_repo.search_memory_facts_hybrid(
+            query,
+            query_embedding.as_deref(),
+            agent_id,
+            limit * 2,
+            0.7, // vector weight
+            0.3, // bm25 weight
+        )?;
+
+        // Also fetch high-confidence facts (>= 0.9) — always relevant
+        let high_conf_facts = self.memory_repo
+            .get_high_confidence_facts(agent_id, 0.9, limit)
+            .unwrap_or_default();
+
+        // Merge, dedup by key
+        let mut seen_keys = std::collections::HashSet::new();
+        let mut merged = Vec::new();
+        for sf in results.drain(..) {
+            if seen_keys.insert(sf.fact.key.clone()) {
+                merged.push(sf);
+            }
+        }
+        for fact in high_conf_facts {
+            if seen_keys.insert(fact.key.clone()) {
+                merged.push(crate::memory_repository::ScoredFact {
+                    score: fact.confidence,
+                    fact,
+                });
+            }
+        }
+
+        // Apply category priority weights (same as system-level recall)
+        let category_weights: HashMap<&str, f64> = HashMap::from([
+            ("correction", 1.5),
+            ("strategy", 1.4),
+            ("user", 1.3),
+            ("instruction", 1.2),
+            ("domain", 1.0),
+            ("pattern", 0.9),
+            ("ward", 0.8),
+            ("skill", 0.7),
+            ("agent", 0.7),
+        ]);
+
+        for sf in &mut merged {
+            let weight = category_weights
+                .get(sf.fact.category.as_str())
+                .copied()
+                .unwrap_or(1.0);
+            sf.score *= weight;
+        }
+
+        // Sort by weighted score descending
+        merged.sort_by(|a, b| {
+            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+        });
+        merged.truncate(limit);
+
+        let items: Vec<Value> = merged
+            .iter()
+            .map(|sf| {
+                json!({
+                    "key": sf.fact.key,
+                    "category": sf.fact.category,
+                    "content": sf.fact.content,
+                    "confidence": sf.fact.confidence,
+                    "score": sf.score,
+                    "source": "memory_db",
+                    "prioritized": true,
+                })
+            })
+            .collect();
+
+        Ok(json!({
+            "query": query,
+            "results": items,
+            "count": items.len(),
+            "source": "memory_db",
+            "prioritized": true,
         }))
     }
 }

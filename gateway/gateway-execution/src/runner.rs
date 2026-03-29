@@ -217,6 +217,7 @@ impl ExecutionRunner {
         let delegation_semaphore = self.delegation_semaphore.clone();
         let memory_repo = self.memory_repo.clone();
         let embedding_client = self.embedding_client.clone();
+        let memory_recall = self.memory_recall.clone();
 
         tokio::spawn(async move {
             // Per-session tracking: only one delegation active per session at a time
@@ -257,6 +258,7 @@ impl ExecutionRunner {
                 embedding_client: &Option<
                     Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>,
                 >,
+                memory_recall: &Option<Arc<super::recall::MemoryRecall>>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -278,6 +280,7 @@ impl ExecutionRunner {
                 let delegation_semaphore = delegation_semaphore.clone();
                 let memory_repo = memory_repo.clone();
                 let embedding_client = embedding_client.clone();
+                let memory_recall = memory_recall.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -301,6 +304,7 @@ impl ExecutionRunner {
                         permit,
                         memory_repo,
                         embedding_client,
+                        memory_recall,
                     )
                     .await;
 
@@ -348,6 +352,7 @@ impl ExecutionRunner {
                                 &delegation_tx, &log_service, &state_service,
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
+                                &memory_recall,
                                 done_tx.clone(),
                             );
                         }
@@ -374,6 +379,7 @@ impl ExecutionRunner {
                                     &delegation_tx, &log_service, &state_service,
                                     &workspace_cache, &delegation_semaphore,
                                     &memory_repo, &embedding_client,
+                                    &memory_recall,
                                     done_tx.clone(),
                                 );
                             }
@@ -569,6 +575,8 @@ impl ExecutionRunner {
             .unwrap_or_default();
 
         // Smart recall: inject relevant facts at session start (only for fresh sessions)
+        // Track which fact keys were injected so mid-session recall can dedup.
+        let mut initial_recall_keys = std::collections::HashSet::new();
         if history.is_empty() {
             if let Some(recall) = &self.memory_recall {
                 // Enrich recall query with ward context for domain-scoped results
@@ -578,13 +586,18 @@ impl ExecutionRunner {
                 } else {
                     format!("{} {}", ward_context, message)
                 };
-                match recall.recall_with_graph(&config.agent_id, &recall_query, 10).await {
-                    Ok(result) if !result.facts.is_empty() => {
+                match recall.recall_with_graph(&config.agent_id, &recall_query, 10, setup.ward_id.as_deref()).await {
+                    Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+                        // Seed dedup set from initial recall
+                        for sf in &result.facts {
+                            initial_recall_keys.insert(sf.fact.key.clone());
+                        }
                         history.insert(0, ChatMessage::system(result.formatted));
                         tracing::info!(
                             agent_id = %config.agent_id,
                             fact_count = result.facts.len(),
-                            "Injected recalled memory facts"
+                            episode_count = result.episodes.len(),
+                            "Injected recalled memory facts and episodes"
                         );
                     }
                     Ok(_) => {} // No facts recalled
@@ -596,7 +609,7 @@ impl ExecutionRunner {
         }
 
         // Create executor (restore ward_id from existing session if available)
-        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message)).await {
+        let mut executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message)).await {
             Ok(e) => e,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
@@ -604,6 +617,71 @@ impl ExecutionRunner {
                 return Err(e);
             }
         };
+
+        // Wire up mid-session recall hook if recall is available
+        {
+            let recall_config = gateway_services::RecallConfig::load_from_path(&self.paths.vault_dir());
+            let mid_cfg = &recall_config.mid_session_recall;
+
+            if mid_cfg.enabled && mid_cfg.every_n_turns > 0 {
+                if let Some(recall) = &self.memory_recall {
+                    let recall_clone = Arc::clone(recall);
+                    let agent_id_for_hook = config.agent_id.clone();
+                    let ward_id_for_hook = setup.ward_id.clone();
+                    let max_facts = recall_config.max_facts;
+                    let min_novelty = mid_cfg.min_novelty_score;
+
+                    let hook: agent_runtime::RecallHook = Box::new(move |latest_msg: &str, already_injected: &std::collections::HashSet<String>| {
+                        let recall = Arc::clone(&recall_clone);
+                        let agent_id = agent_id_for_hook.clone();
+                        let ward_id = ward_id_for_hook.clone();
+                        let already = already_injected.clone();
+                        let msg = latest_msg.to_string();
+
+                        Box::pin(async move {
+                            // Run recall with latest user message
+                            let facts = recall.recall(&agent_id, &msg, max_facts, ward_id.as_deref()).await?;
+
+                            // Filter to novel facts not already injected, above novelty threshold
+                            let novel: Vec<_> = facts.into_iter()
+                                .filter(|sf| !already.contains(&sf.fact.key))
+                                .filter(|sf| sf.score >= min_novelty)
+                                .collect();
+
+                            if novel.is_empty() {
+                                return Ok(agent_runtime::RecallHookResult {
+                                    system_message: String::new(),
+                                    fact_keys: Vec::new(),
+                                });
+                            }
+
+                            // Format as a mid-session recall message
+                            let mut lines = Vec::with_capacity(novel.len() + 1);
+                            lines.push("## Mid-Session Recall (new relevant facts)".to_string());
+                            let mut keys = Vec::new();
+                            for sf in &novel {
+                                lines.push(format!(
+                                    "- [{}] {} (confidence: {:.2})",
+                                    sf.fact.category, sf.fact.content, sf.fact.confidence
+                                ));
+                                keys.push(sf.fact.key.clone());
+                            }
+
+                            Ok(agent_runtime::RecallHookResult {
+                                system_message: lines.join("\n"),
+                                fact_keys: keys,
+                            })
+                        })
+                    });
+
+                    executor.set_recall_hook(hook, mid_cfg.every_n_turns as u32, initial_recall_keys);
+                    tracing::info!(
+                        every_n_turns = mid_cfg.every_n_turns,
+                        "Mid-session recall hook configured"
+                    );
+                }
+            }
+        }
 
         // Inject mandatory first action for graph tasks with placeholder specs
         if let Some(ref ward_id) = setup.ward_id {
@@ -1410,12 +1488,32 @@ async fn invoke_continuation(
         .map(|messages| conversation_repo.session_messages_to_chat_format(&messages))
         .unwrap_or_default();
 
-    // Recall domain-relevant facts for continuation context
+    // Look up active ward from session (needed for recall ward affinity)
+    let session_ward_id = state_service
+        .get_session(session_id)
+        .ok()
+        .flatten()
+        .and_then(|s| s.ward_id);
+
+    // Recall domain-relevant facts for continuation context.
+    // Use the last user message from history as the recall query (instead of a
+    // hardcoded placeholder) so the recalled facts are relevant to the actual task.
+    let continuation_recall_query = history
+        .iter()
+        .rev()
+        .find(|m| m.role == "user")
+        .map(|m| m.content.clone())
+        .unwrap_or_else(|| "continuation recall".to_string());
+
     if let Some(recall) = &memory_recall {
-        match recall.recall_with_graph(root_agent_id, "[continuation - recall recent learnings]", 5).await {
-            Ok(result) if !result.facts.is_empty() => {
+        match recall.recall_with_graph(root_agent_id, &continuation_recall_query, 5, session_ward_id.as_deref()).await {
+            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
                 history.insert(0, ChatMessage::system(result.formatted));
-                tracing::info!(fact_count = result.facts.len(), "Recalled facts for continuation");
+                tracing::info!(
+                    fact_count = result.facts.len(),
+                    episode_count = result.episodes.len(),
+                    "Recalled facts and episodes for continuation"
+                );
             }
             Ok(_) => {}
             Err(e) => tracing::warn!("Continuation recall failed: {}", e),
@@ -1436,13 +1534,6 @@ async fn invoke_continuation(
     // Collect available agents and skills
     let available_agents = collect_agents_summary(&agent_service).await;
     let available_skills = collect_skills_summary(&skill_service).await;
-
-    // Look up active ward from session
-    let session_ward_id = state_service
-        .get_session(session_id)
-        .ok()
-        .flatten()
-        .and_then(|s| s.ward_id);
 
     // Auto-update ward AGENTS.md before continuation
     if let Some(ref ward_id) = session_ward_id {

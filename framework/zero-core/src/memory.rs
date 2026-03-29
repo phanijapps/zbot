@@ -39,4 +39,20 @@ pub trait MemoryFactStore: Send + Sync {
         query: &str,
         limit: usize,
     ) -> Result<Value, String>;
+
+    /// Recall facts with priority scoring applied (category weights, etc.).
+    ///
+    /// This is the upgraded version of `recall_facts` that applies the same
+    /// priority engine used by system-level recall: corrections first,
+    /// strategies second, user preferences third, etc.
+    ///
+    /// Default implementation falls back to `recall_facts`.
+    async fn recall_facts_prioritized(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Value, String> {
+        self.recall_facts(agent_id, query, limit).await
+    }
 }

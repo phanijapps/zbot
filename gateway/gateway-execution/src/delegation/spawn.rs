@@ -16,12 +16,15 @@ use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
 
+use agent_runtime::ChatMessage;
+
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
     WorkspaceCache,
 };
+use crate::recall::MemoryRecall;
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
     start_execution,
@@ -57,6 +60,7 @@ pub async fn spawn_delegated_agent(
     delegation_permit: Option<OwnedSemaphorePermit>,
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    memory_recall: Option<Arc<MemoryRecall>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session = execution_state::Session::new_child(
@@ -203,6 +207,37 @@ pub async fn spawn_delegated_agent(
         }
     };
 
+    // Delegation recall: inject relevant knowledge for the child agent
+    let initial_history = if let Some(recall) = &memory_recall {
+        match recall.recall_with_graph(
+            &request.child_agent_id,
+            &request.task,
+            5,
+            session_ward_id.as_deref(),
+        ).await {
+            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+                tracing::info!(
+                    child_agent = %request.child_agent_id,
+                    fact_count = result.facts.len(),
+                    episode_count = result.episodes.len(),
+                    "Injected recalled knowledge for delegated agent"
+                );
+                vec![ChatMessage::system(result.formatted)]
+            }
+            Ok(_) => Vec::new(),
+            Err(e) => {
+                tracing::warn!(
+                    child_agent = %request.child_agent_id,
+                    error = %e,
+                    "Delegation recall failed"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     // Create execution handle
     let max_iter = request.max_iterations.unwrap_or(25);
     let handle = ExecutionHandle::new(max_iter);
@@ -231,6 +266,7 @@ pub async fn spawn_delegated_agent(
         state_service,
         paths,
         delegation_permit,
+        initial_history,
     );
 
     tracing::info!(
@@ -260,6 +296,7 @@ fn spawn_execution_task(
     state_service: Arc<StateService<DatabaseManager>>,
     paths: SharedVaultPaths,
     delegation_permit: Option<OwnedSemaphorePermit>,
+    initial_history: Vec<ChatMessage>,
 ) {
     let agent_id = request.child_agent_id.clone();
     let task_msg = request.task.clone();
@@ -311,7 +348,7 @@ fn spawn_execution_task(
         let mut turn_text = String::new();
 
         let result = executor
-            .execute_stream(&task_msg, &[], |event| {
+            .execute_stream(&task_msg, &initial_history, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }

@@ -187,22 +187,29 @@ impl AppState {
             }
         };
 
-        // Create memory recall with optional graph enrichment
-        let memory_recall = match &graph_service {
+        // Load recall configuration (compiled defaults merged with optional user overrides)
+        let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(paths.vault_dir()));
+
+        // Create memory recall with optional graph enrichment and episodic recall
+        let mut memory_recall_inner = match &graph_service {
             Some(gs) => {
-                Arc::new(MemoryRecall::with_graph(
+                MemoryRecall::with_graph(
                     embedding_client.clone(),
                     memory_repo.clone(),
                     gs.clone(),
-                ))
+                    recall_config.clone(),
+                )
             }
             None => {
-                Arc::new(MemoryRecall::new(
+                MemoryRecall::new(
                     embedding_client.clone(),
                     memory_repo.clone(),
-                ))
+                    recall_config.clone(),
+                )
             }
         };
+        memory_recall_inner.set_episode_repo(episode_repo.clone());
+        let memory_recall = Arc::new(memory_recall_inner);
 
         // Clone embedding client before it's moved into distiller — the runner
         // also needs it so the memory fact store can generate embeddings.
