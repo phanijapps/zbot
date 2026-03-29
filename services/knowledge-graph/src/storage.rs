@@ -38,26 +38,36 @@ impl GraphStorage {
     pub async fn store_knowledge(&self, agent_id: &str, knowledge: ExtractedKnowledge) -> GraphResult<()> {
         let conn = self.conn.lock().await;
 
-        // Store entities
+        // Store entities and build ID mapping (new_id → actual_id)
+        // When an entity deduplicates, the actual_id is the existing entity's ID
+        let mut entity_id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for entity in knowledge.entities {
-            store_entity(&conn, agent_id, entity)?;
+            let original_id = entity.id.clone();
+            let actual_id = store_entity(&conn, agent_id, entity)?;
+            entity_id_map.insert(original_id, actual_id);
         }
 
-        // Store relationships
-        for relationship in knowledge.relationships {
+        // Store relationships, remapping entity IDs through the dedup map
+        for mut relationship in knowledge.relationships {
+            if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
+                relationship.source_entity_id = mapped.clone();
+            }
+            if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
+                relationship.target_entity_id = mapped.clone();
+            }
             store_relationship(&conn, agent_id, relationship)?;
         }
 
         Ok(())
     }
 
-    /// Get all entities for an agent
+    /// Get all entities for an agent (includes __global__ entities)
     pub async fn get_entities(&self, agent_id: &str) -> GraphResult<Vec<Entity>> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
-             FROM kg_entities WHERE agent_id = ?1"
+             FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'"
         ).map_err(|e| GraphError::Database(e))?;
 
         let rows = stmt.query_map(params![agent_id], |row| {
@@ -103,13 +113,13 @@ impl GraphStorage {
         Ok(entities)
     }
 
-    /// Get all relationships for an agent
+    /// Get all relationships for an agent (includes __global__ relationships)
     pub async fn get_relationships(&self, agent_id: &str) -> GraphResult<Vec<Relationship>> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
-             FROM kg_relationships WHERE agent_id = ?1"
+             FROM kg_relationships WHERE agent_id = ?1 OR agent_id = '__global__'"
         ).map_err(|e| GraphError::Database(e))?;
 
         let rows = stmt.query_map(params![agent_id], |row| {
@@ -157,14 +167,14 @@ impl GraphStorage {
         Ok(relationships)
     }
 
-    /// Search entities by name
+    /// Search entities by name (includes __global__ entities)
     pub async fn search_entities(&self, agent_id: &str, query: &str) -> GraphResult<Vec<Entity>> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_entities
-             WHERE agent_id = ?1 AND name LIKE ?2
+             WHERE (agent_id = ?1 OR agent_id = '__global__') AND name LIKE ?2
              ORDER BY mention_count DESC"
         ).map_err(|e| GraphError::Database(e))?;
 
@@ -259,13 +269,13 @@ impl GraphStorage {
         let sql = if entity_type.is_some() {
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_entities
-             WHERE agent_id = ?1 AND entity_type = ?2
+             WHERE (agent_id = ?1 OR agent_id = '__global__') AND entity_type = ?2
              ORDER BY mention_count DESC
              LIMIT ?3 OFFSET ?4"
         } else {
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_entities
-             WHERE agent_id = ?1
+             WHERE agent_id = ?1 OR agent_id = '__global__'
              ORDER BY mention_count DESC
              LIMIT ?2 OFFSET ?3"
         };
@@ -338,13 +348,13 @@ impl GraphStorage {
         let sql = if relationship_type.is_some() {
             "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_relationships
-             WHERE agent_id = ?1 AND relationship_type = ?2
+             WHERE (agent_id = ?1 OR agent_id = '__global__') AND relationship_type = ?2
              ORDER BY mention_count DESC
              LIMIT ?3 OFFSET ?4"
         } else {
             "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_relationships
-             WHERE agent_id = ?1
+             WHERE agent_id = ?1 OR agent_id = '__global__'
              ORDER BY mention_count DESC
              LIMIT ?2 OFFSET ?3"
         };
@@ -416,7 +426,7 @@ impl GraphStorage {
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_entities
-             WHERE agent_id = ?1 AND name = ?2 COLLATE NOCASE
+             WHERE (agent_id = ?1 OR agent_id = '__global__') AND name = ?2 COLLATE NOCASE
              LIMIT 1"
         ).map_err(|e| GraphError::Database(e))?;
 
@@ -641,7 +651,7 @@ impl GraphStorage {
         let conn = self.conn.lock().await;
 
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM kg_entities WHERE agent_id = ?1",
+            "SELECT COUNT(*) FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'",
             params![agent_id],
             |row| row.get(0),
         ).map_err(|e| GraphError::Database(e))?;
@@ -654,7 +664,7 @@ impl GraphStorage {
         let conn = self.conn.lock().await;
 
         let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM kg_relationships WHERE agent_id = ?1",
+            "SELECT COUNT(*) FROM kg_relationships WHERE agent_id = ?1 OR agent_id = '__global__'",
             params![agent_id],
             |row| row.get(0),
         ).map_err(|e| GraphError::Database(e))?;
@@ -930,12 +940,28 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
     Ok(())
 }
 
-/// Store an entity (upsert based on agent_id + entity_type + name)
-fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResult<()> {
+/// Store an entity with cross-agent dedup.
+///
+/// Returns the actual entity ID used (either the existing entity's ID if
+/// deduped, or the new entity's ID if inserted). The caller uses this to
+/// remap relationship references.
+fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResult<String> {
     let entity_type_str = entity.entity_type.as_str();
     let properties_json = serde_json::to_string(&entity.properties)
         .unwrap_or_else(|_| "".to_string());
 
+    // Check for existing entity with same name + type across ALL agents
+    if let Some(existing_id) = find_entity_by_name_global(conn, &entity.name, entity_type_str)? {
+        // Bump existing entity — dedup
+        conn.execute(
+            "UPDATE kg_entities SET mention_count = mention_count + 1, last_seen_at = ?1, properties = ?2 WHERE id = ?3",
+            params![entity.last_seen_at.to_rfc3339(), properties_json, existing_id],
+        ).map_err(GraphError::Database)?;
+        return Ok(existing_id);
+    }
+
+    // New entity — insert with agent_id = '__global__' for cross-agent visibility
+    let new_id = entity.id.clone();
     conn.execute(
         "INSERT INTO kg_entities (id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
@@ -944,8 +970,8 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
             mention_count = mention_count + 1,
             properties = excluded.properties",
         params![
-            entity.id,
-            agent_id,
+            new_id,
+            "__global__",
             entity_type_str,
             entity.name,
             properties_json,
@@ -955,13 +981,27 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
         ],
     ).map_err(|e| GraphError::Database(e))?;
 
-    Ok(())
+    Ok(new_id)
+}
+
+/// Find an existing entity by name + type across ALL agents (case-insensitive).
+fn find_entity_by_name_global(conn: &Connection, name: &str, entity_type: &str) -> GraphResult<Option<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT id FROM kg_entities WHERE name = ?1 COLLATE NOCASE AND entity_type = ?2 LIMIT 1"
+    ).map_err(GraphError::Database)?;
+
+    match stmt.query_row(params![name, entity_type], |row| row.get::<_, String>(0)) {
+        Ok(id) => Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+        Err(e) => Err(GraphError::Database(e)),
+    }
 }
 
 /// Find an existing entity by agent_id + name (case-insensitive).
+/// Also checks `__global__` entities since store_entity now deduplicates cross-agent.
 fn find_entity_by_name(conn: &Connection, agent_id: &str, name: &str) -> GraphResult<Option<String>> {
     let mut stmt = conn.prepare(
-        "SELECT id FROM kg_entities WHERE agent_id = ?1 AND name = ?2 COLLATE NOCASE LIMIT 1"
+        "SELECT id FROM kg_entities WHERE (agent_id = ?1 OR agent_id = '__global__') AND name = ?2 COLLATE NOCASE LIMIT 1"
     ).map_err(GraphError::Database)?;
 
     match stmt.query_row(params![agent_id, name], |row| row.get::<_, String>(0)) {
@@ -1187,7 +1227,7 @@ mod tests {
         assert_eq!(storage.count_entities("agent1").await.unwrap(), 2);
         assert_eq!(storage.count_relationships("agent1").await.unwrap(), 1);
 
-        // Different agent should have 0
-        assert_eq!(storage.count_entities("agent2").await.unwrap(), 0);
+        // Different agent also sees __global__ entities
+        assert_eq!(storage.count_entities("agent2").await.unwrap(), 2);
     }
 }
