@@ -334,6 +334,12 @@ impl Tool for WardTool {
                     result["ward_knowledge"] = knowledge;
                 }
 
+                // Nudge the agent to recall ward-specific knowledge
+                result["recall_nudge"] = json!(format!(
+                    "[Recall] You entered ward '{}'. Use the memory tool to recall ward-specific knowledge before proceeding.",
+                    name
+                ));
+
                 Ok(result)
             }
 

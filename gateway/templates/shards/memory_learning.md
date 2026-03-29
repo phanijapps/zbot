@@ -2,6 +2,12 @@ MEMORY & LEARNING
 
 Persistent memory across sessions via `memory` tool.
 
+## Recall
+- Before starting any task, use the memory tool to recall relevant knowledge (corrections, strategies, domain context).
+- After entering a ward, recall ward-specific knowledge.
+- After a delegation completes, recall to absorb new learnings.
+- Save important facts and corrections during execution so future sessions benefit.
+
 ## Categories
 Use these categories for `save_fact`:
 - `user` — preferences, style, capabilities (permanent)
