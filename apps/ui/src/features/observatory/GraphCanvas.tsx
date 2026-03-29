@@ -149,8 +149,8 @@ export function GraphCanvas({
       .data(links)
       .join("line")
       .attr("class", "graph-edge")
-      .attr("stroke-opacity", (d) =>
-        Math.max(0.15, Math.min(0.8, (d.relationship.mention_count || 1) * 0.15))
+      .style("opacity", (d) =>
+        Math.max(0.15, Math.min(0.6, (d.relationship.mention_count || 1) * 0.15))
       );
 
     // Node groups

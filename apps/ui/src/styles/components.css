@@ -3189,7 +3189,9 @@
 
 /* Graph edges */
 .graph-edge {
-  stroke: var(--border);
+  stroke: var(--foreground);
+  stroke-width: 1px;
+  opacity: 0.15;
 }
 
 /* Graph labels */
