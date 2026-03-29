@@ -24,7 +24,7 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{ConversationRepository, DistillationRepository, DistillationRun, MemoryFact, MemoryRepository};
+use gateway_database::{ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact, MemoryRepository, SessionEpisode};
 use gateway_services::{ProviderService, VaultPaths};
 use knowledge_graph::{GraphStorage, Entity, EntityType, Relationship, RelationshipType};
 use serde::Deserialize;
@@ -37,6 +37,7 @@ pub struct SessionDistiller {
     memory_repo: Arc<MemoryRepository>,
     graph_storage: Option<Arc<GraphStorage>>,
     distillation_repo: Option<Arc<DistillationRepository>>,
+    episode_repo: Option<Arc<EpisodeRepository>>,
     paths: Arc<VaultPaths>,
 }
 
@@ -69,7 +70,17 @@ struct ExtractedRelationship {
     relationship_type: String,
 }
 
-/// Full distillation response including facts, entities, and relationships.
+/// An episode assessment extracted by the distillation LLM call.
+#[derive(Debug, Clone, Deserialize)]
+struct ExtractedEpisode {
+    task_summary: String,
+    /// One of: 'success', 'partial', 'failed'
+    outcome: String,
+    strategy_used: Option<String>,
+    key_learnings: Option<String>,
+}
+
+/// Full distillation response including facts, entities, relationships, and episode.
 #[derive(Debug, Clone, Deserialize)]
 struct DistillationResponse {
     #[serde(default)]
@@ -78,6 +89,8 @@ struct DistillationResponse {
     entities: Vec<ExtractedEntity>,
     #[serde(default)]
     relationships: Vec<ExtractedRelationship>,
+    #[serde(default)]
+    episode: Option<ExtractedEpisode>,
 }
 
 fn default_confidence() -> f64 {
@@ -104,6 +117,7 @@ impl SessionDistiller {
         memory_repo: Arc<MemoryRepository>,
         graph_storage: Option<Arc<GraphStorage>>,
         distillation_repo: Option<Arc<DistillationRepository>>,
+        episode_repo: Option<Arc<EpisodeRepository>>,
         paths: Arc<VaultPaths>,
     ) -> Self {
         Self {
@@ -113,6 +127,7 @@ impl SessionDistiller {
             memory_repo,
             graph_storage,
             distillation_repo,
+            episode_repo,
             paths,
         }
     }
@@ -194,7 +209,7 @@ impl SessionDistiller {
             }
         };
 
-        if response.facts.is_empty() && response.entities.is_empty() {
+        if response.facts.is_empty() && response.entities.is_empty() && response.episode.is_none() {
             tracing::info!(
                 session_id = %session_id,
                 "Distillation found nothing worth remembering"
@@ -316,21 +331,50 @@ impl SessionDistiller {
             }
         }
 
+        // 6. Store episode if extracted
+        let mut episode_created = false;
+        if let Some(ref extracted_episode) = response.episode {
+            match self.store_episode(session_id, agent_id, extracted_episode, &now).await {
+                Ok(true) => {
+                    episode_created = true;
+                    tracing::info!(
+                        session_id = %session_id,
+                        outcome = %extracted_episode.outcome,
+                        "Episode created from distillation"
+                    );
+                }
+                Ok(false) => {
+                    tracing::debug!(
+                        session_id = %session_id,
+                        "Episode extraction skipped — no episode repository"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        session_id = %session_id,
+                        error = %e,
+                        "Failed to store episode — continuing with distillation"
+                    );
+                }
+            }
+        }
+
         let duration_ms = started.elapsed().as_millis() as i64;
 
-        // 6. Record success in distillation_runs
+        // 7. Record success in distillation_runs
         self.record_success(
             session_id,
             response.facts.len() as i32,
             response.entities.len() as i32,
             response.relationships.len() as i32,
-            false, // episode_created — will be set by episode extraction (Task 8)
+            episode_created,
             duration_ms,
         );
 
         tracing::info!(
             session_id = %session_id,
             upserted = upserted,
+            episode_created = episode_created,
             duration_ms = duration_ms,
             "Session distillation complete"
         );
@@ -416,7 +460,7 @@ impl SessionDistiller {
         // Load prompt once (shared across attempts)
         let system = self.load_distillation_prompt();
         let user = format!(
-            "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, and relationships as JSON.",
+            "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, and an episode assessment as JSON.",
             transcript
         );
 
@@ -482,6 +526,160 @@ impl SessionDistiller {
         Err(format!("All providers failed for distillation. Last error: {}", last_error))
     }
 
+    // =========================================================================
+    // Episode storage and strategy emergence
+    // =========================================================================
+
+    /// Store an extracted episode and attempt strategy emergence.
+    ///
+    /// Returns `Ok(true)` if the episode was stored, `Ok(false)` if no repo,
+    /// or `Err` on failure.
+    async fn store_episode(
+        &self,
+        session_id: &str,
+        agent_id: &str,
+        extracted: &ExtractedEpisode,
+        now: &str,
+    ) -> Result<bool, String> {
+        let episode_repo = match &self.episode_repo {
+            Some(repo) => repo,
+            None => return Ok(false),
+        };
+
+        // Look up ward_id from the sessions table
+        let ward_id = self
+            .conversation_repo
+            .get_session_ward_id(session_id)
+            .unwrap_or(None)
+            .unwrap_or_else(|| "__global__".to_string());
+
+        // Embed the task summary for similarity search
+        let embedding = self.embed_text(&extracted.task_summary).await;
+
+        let episode = SessionEpisode {
+            id: format!("ep-{}", uuid::Uuid::new_v4()),
+            session_id: session_id.to_string(),
+            agent_id: agent_id.to_string(),
+            ward_id: ward_id.clone(),
+            task_summary: extracted.task_summary.clone(),
+            outcome: extracted.outcome.clone(),
+            strategy_used: extracted.strategy_used.clone(),
+            key_learnings: extracted.key_learnings.clone(),
+            token_cost: None,
+            embedding: embedding.clone(),
+            created_at: now.to_string(),
+        };
+
+        episode_repo.insert(&episode)?;
+
+        // Attempt strategy emergence for successful episodes
+        if extracted.outcome == "success" {
+            if let Err(e) = self
+                .try_emerge_strategy(agent_id, &ward_id, &episode, embedding.as_deref(), now)
+                .await
+            {
+                tracing::warn!(
+                    session_id = %session_id,
+                    error = %e,
+                    "Strategy emergence failed — non-fatal"
+                );
+            }
+        }
+
+        Ok(true)
+    }
+
+    /// Attempt to emerge a strategy from repeated successful episodes.
+    ///
+    /// If 2+ similar successful episodes exist for this agent, extract the
+    /// common strategy pattern and upsert it as a `strategy` memory fact.
+    async fn try_emerge_strategy(
+        &self,
+        agent_id: &str,
+        ward_id: &str,
+        episode: &SessionEpisode,
+        embedding: Option<&[f32]>,
+        now: &str,
+    ) -> Result<(), String> {
+        let episode_repo = match &self.episode_repo {
+            Some(repo) => repo,
+            None => return Ok(()),
+        };
+
+        let query_embedding = match embedding {
+            Some(emb) => emb,
+            None => return Ok(()), // No embedding — cannot search by similarity
+        };
+
+        // Search for similar episodes
+        let similar = episode_repo.search_by_similarity(agent_id, query_embedding, 0.7, 10)?;
+
+        // Filter to only successful episodes (excluding the one we just inserted)
+        let successful_similar: Vec<_> = similar
+            .into_iter()
+            .filter(|(ep, _score)| ep.outcome == "success" && ep.id != episode.id)
+            .collect();
+
+        // Need at least 2 similar successful episodes (the new one + 2 existing = pattern)
+        if successful_similar.len() < 2 {
+            return Ok(());
+        }
+
+        // Extract strategy: use the most recent episode's strategy_used
+        let strategy_description = episode
+            .strategy_used
+            .as_deref()
+            .or_else(|| {
+                successful_similar
+                    .first()
+                    .and_then(|(ep, _)| ep.strategy_used.as_deref())
+            })
+            .unwrap_or("Repeated successful approach")
+            .to_string();
+
+        // Derive a sanitized key from the task summary
+        let task_type = sanitize_task_type(&episode.task_summary);
+        let fact_key = format!("strategy.{}", task_type);
+
+        tracing::info!(
+            agent_id = %agent_id,
+            key = %fact_key,
+            similar_count = successful_similar.len(),
+            "Strategy emerged from {} similar successful episodes",
+            successful_similar.len()
+        );
+
+        // Upsert the strategy as a memory fact
+        let fact = MemoryFact {
+            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            session_id: Some(episode.session_id.clone()),
+            agent_id: agent_id.to_string(),
+            scope: "agent".to_string(),
+            category: "strategy".to_string(),
+            key: fact_key,
+            content: strategy_description,
+            confidence: 0.92,
+            mention_count: 1,
+            source_summary: Some(format!(
+                "Emerged from {} similar successful episodes in ward '{}'",
+                successful_similar.len() + 1,
+                ward_id,
+            )),
+            embedding: embedding.map(|e| e.to_vec()),
+            created_at: now.to_string(),
+            updated_at: now.to_string(),
+            expires_at: None,
+        };
+
+        self.memory_repo.upsert_memory_fact(&fact)?;
+
+        Ok(())
+    }
+
+    // =========================================================================
+    // Embedding
+    // =========================================================================
+
     /// Embed a single text, with caching.
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
@@ -508,6 +706,24 @@ impl SessionDistiller {
             }
         }
     }
+}
+
+/// Derive a sanitized task type from a task summary for use as a fact key.
+///
+/// Takes the first few words, lowercases them, replaces spaces and dots with
+/// underscores, and caps length to keep the key concise.
+fn sanitize_task_type(task_summary: &str) -> String {
+    task_summary
+        .to_lowercase()
+        .split_whitespace()
+        .take(4)
+        .collect::<Vec<_>>()
+        .join("_")
+        .replace('.', "_")
+        .chars()
+        .filter(|c| c.is_alphanumeric() || *c == '_')
+        .take(40)
+        .collect()
 }
 
 /// Build a compact transcript from session messages.
@@ -572,6 +788,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
             facts,
             entities: Vec::new(),
             relationships: Vec::new(),
+            episode: None,
         });
     }
 
@@ -587,6 +804,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
             facts,
             entities: Vec::new(),
             relationships: Vec::new(),
+            episode: None,
         });
     }
 
@@ -596,6 +814,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
         facts: Vec::new(),
         entities: Vec::new(),
         relationships: Vec::new(),
+        episode: None,
     })
 }
 
@@ -619,9 +838,9 @@ fn extract_json_from_content(content: &str) -> String {
 /// The distillation prompt sent as a system message.
 /// The default distillation prompt (embedded fallback).
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
-const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, and relationships worth remembering for FUTURE sessions.
+const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, and an episode assessment worth remembering for FUTURE sessions.
 
-Return a JSON object with three arrays:
+Return a JSON object with three arrays and one optional episode object:
 
 {
   "facts": [
@@ -632,16 +851,33 @@ Return a JSON object with three arrays:
   ],
   "relationships": [
     {"source": "entity name", "target": "entity name", "type": "relationship_type"}
-  ]
+  ],
+  "episode": {
+    "task_summary": "What the user was trying to accomplish (1-2 sentences)",
+    "outcome": "success|partial|failed",
+    "strategy_used": "What approach was taken (e.g., 'delegated to data-analyst for technicals')",
+    "key_learnings": "What went well or poorly (1-2 sentences)"
+  }
 }
 
-## Fact Categories (5 types)
+## Episode Assessment
+
+Assess the session as a whole and return an "episode" object:
+- task_summary: What was the user trying to accomplish? (1-2 sentences)
+- outcome: Did the agent complete the goal? One of: success, partial, failed
+- strategy_used: What approach was taken? (e.g., "delegated to data-analyst for technicals", "direct code generation", "multi-step research then implementation")
+- key_learnings: What went well or poorly? (1-2 sentences)
+
+If the session is too short or unclear to assess, omit the episode field.
+
+## Fact Categories (6 types)
 
 - `user` — user preferences, style, capabilities (e.g., coding style, language preferences, expertise areas)
 - `pattern` — how-to knowledge, error workarounds, successful workflows (e.g., build steps, debug techniques)
 - `domain` — domain knowledge with hierarchical keys (e.g., `domain.finance.lmnd.outlook`, `domain.rust.async_patterns`)
 - `instruction` — standing orders, workflow rules (e.g., "always use X", "never do Y", "run tests before commit")
 - `correction` — corrections to agent behavior (e.g., "don't suggest X because Y", mistakes and lessons learned)
+- `strategy` — successful approaches for recurring task types (e.g., "for data analysis tasks, delegate to data-analyst subagent")
 
 ## Key Format
 
@@ -763,5 +999,80 @@ mod tests {
         let json = r#"[{"category": "domain", "key": "domain.zbot.project_name", "content": "Project is called AgentZero"}]"#;
         let resp = parse_distillation_response(json).unwrap();
         assert_eq!(resp.facts[0].confidence, 0.8);
+    }
+
+    #[test]
+    fn test_parse_response_with_episode() {
+        let json = r#"{
+            "facts": [{"category": "domain", "key": "domain.test", "content": "Test fact", "confidence": 0.9}],
+            "entities": [],
+            "relationships": [],
+            "episode": {
+                "task_summary": "User asked to analyze portfolio data",
+                "outcome": "success",
+                "strategy_used": "delegated to data-analyst for technicals",
+                "key_learnings": "CSV parsing worked well with pandas"
+            }
+        }"#;
+        let resp = parse_distillation_response(json).unwrap();
+        assert_eq!(resp.facts.len(), 1);
+        let ep = resp.episode.unwrap();
+        assert_eq!(ep.outcome, "success");
+        assert_eq!(ep.task_summary, "User asked to analyze portfolio data");
+        assert_eq!(ep.strategy_used.as_deref(), Some("delegated to data-analyst for technicals"));
+        assert_eq!(ep.key_learnings.as_deref(), Some("CSV parsing worked well with pandas"));
+    }
+
+    #[test]
+    fn test_parse_response_without_episode() {
+        let json = r#"{"facts": [], "entities": [], "relationships": []}"#;
+        let resp = parse_distillation_response(json).unwrap();
+        assert!(resp.episode.is_none());
+    }
+
+    #[test]
+    fn test_parse_response_episode_partial_fields() {
+        let json = r#"{
+            "facts": [],
+            "entities": [],
+            "relationships": [],
+            "episode": {
+                "task_summary": "Quick question about Rust",
+                "outcome": "partial"
+            }
+        }"#;
+        let resp = parse_distillation_response(json).unwrap();
+        let ep = resp.episode.unwrap();
+        assert_eq!(ep.outcome, "partial");
+        assert!(ep.strategy_used.is_none());
+        assert!(ep.key_learnings.is_none());
+    }
+
+    #[test]
+    fn test_sanitize_task_type_basic() {
+        assert_eq!(sanitize_task_type("Analyze portfolio data"), "analyze_portfolio_data");
+    }
+
+    #[test]
+    fn test_sanitize_task_type_long_summary() {
+        assert_eq!(
+            sanitize_task_type("User asked the agent to analyze their entire stock portfolio and generate a report"),
+            "user_asked_the_agent"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_task_type_with_dots() {
+        assert_eq!(sanitize_task_type("Fix config.toml parsing"), "fix_config_toml_parsing");
+    }
+
+    #[test]
+    fn test_sanitize_task_type_special_chars() {
+        assert_eq!(sanitize_task_type("Build & deploy (v2)"), "build__deploy_v2");
+    }
+
+    #[test]
+    fn test_sanitize_task_type_empty() {
+        assert_eq!(sanitize_task_type(""), "");
     }
 }

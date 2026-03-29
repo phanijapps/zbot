@@ -222,6 +222,24 @@ impl ConversationRepository {
         })
     }
 
+    /// Get the ward_id for a session (from the sessions table).
+    ///
+    /// Returns `None` if the session has no ward or the session doesn't exist.
+    pub fn get_session_ward_id(&self, session_id: &str) -> Result<Option<String>, String> {
+        self.db.with_connection(|conn| {
+            let result = conn.query_row(
+                "SELECT ward_id FROM sessions WHERE id = ?1",
+                params![session_id],
+                |row| row.get::<_, Option<String>>(0),
+            );
+            match result {
+                Ok(ward_id) => Ok(ward_id),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
     /// Convert session messages to ChatMessage format for LLM.
     ///
     /// Handles role='tool' messages with tool_call_id, and assistant messages
