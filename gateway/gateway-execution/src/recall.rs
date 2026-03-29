@@ -757,4 +757,118 @@ mod tests {
         assert!(formatted.contains("## Recalled Memory"));
         assert!(!formatted.contains("## Related Entities"));
     }
+
+    #[test]
+    fn test_format_prioritized_recall_empty() {
+        let result = format_prioritized_recall(&[], &[], &None, 3000);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_format_prioritized_recall_sections() {
+        let facts = vec![
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "f-1".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "correction".to_string(),
+                    key: "fix.typo".to_string(),
+                    content: "Always use kebab-case for file names".to_string(),
+                    confidence: 0.95,
+                    mention_count: 2,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 1.4,
+            },
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "f-2".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "domain".to_string(),
+                    key: "db.info".to_string(),
+                    content: "Database uses WAL mode".to_string(),
+                    confidence: 0.80,
+                    mention_count: 1,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 0.7,
+            },
+        ];
+
+        let episodes = vec![
+            SessionEpisode {
+                id: "ep-1".to_string(),
+                session_id: "sess-1".to_string(),
+                agent_id: "agent-1".to_string(),
+                ward_id: "__global__".to_string(),
+                task_summary: "Fixed database migration".to_string(),
+                outcome: "success".to_string(),
+                strategy_used: Some("direct".to_string()),
+                key_learnings: None,
+                token_cost: Some(1200),
+                embedding: None,
+                created_at: "2026-03-28T10:00:00Z".to_string(),
+            },
+        ];
+
+        let formatted = format_prioritized_recall(&facts, &episodes, &None, 3000);
+
+        // Should have all sections
+        assert!(formatted.contains("## Recalled Knowledge"));
+        assert!(formatted.contains("### Corrections & Preferences"));
+        assert!(formatted.contains("[correction]"));
+        assert!(formatted.contains("kebab-case"));
+        assert!(formatted.contains("### Relevant Past Experiences"));
+        assert!(formatted.contains("Fixed database migration"));
+        assert!(formatted.contains("SUCCESS"));
+        assert!(formatted.contains("1200 tokens"));
+        assert!(formatted.contains("### Domain Context"));
+        assert!(formatted.contains("[domain]"));
+        assert!(formatted.contains("WAL mode"));
+    }
+
+    #[test]
+    fn test_format_prioritized_recall_token_budget() {
+        // Create a fact with very long content
+        let facts = vec![
+            ScoredFact {
+                fact: MemoryFact {
+                    id: "f-1".to_string(),
+                    session_id: None,
+                    agent_id: "agent-1".to_string(),
+                    scope: "agent".to_string(),
+                    category: "correction".to_string(),
+                    key: "fix.something".to_string(),
+                    content: "x".repeat(500),
+                    confidence: 0.95,
+                    mention_count: 1,
+                    source_summary: None,
+                    embedding: None,
+                    created_at: String::new(),
+                    updated_at: String::new(),
+                    expires_at: None,
+                },
+                score: 1.0,
+            },
+        ];
+
+        // Set a very tight token budget (50 tokens = 200 chars)
+        let formatted = format_prioritized_recall(&facts, &[], &None, 50);
+
+        // The output should be limited — the 500-char content should NOT fit
+        // within a 200-char budget (50 tokens * 4 chars)
+        assert!(formatted.len() <= 250); // Some header overhead allowed
+    }
 }
