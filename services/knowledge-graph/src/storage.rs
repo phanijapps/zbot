@@ -492,12 +492,12 @@ impl GraphStorage {
                         r.id, r.agent_id, r.source_entity_id, r.target_entity_id, r.relationship_type, r.properties, r.first_seen_at, r.last_seen_at, r.mention_count
                  FROM kg_entities e
                  INNER JOIN kg_relationships r ON r.target_entity_id = e.id
-                 WHERE (r.agent_id = ?1 OR r.agent_id = '__global__') AND r.source_entity_id = ?2
+                 WHERE r.source_entity_id = ?1
                  ORDER BY r.mention_count DESC
-                 LIMIT ?3"
+                 LIMIT ?2"
             ).map_err(|e| GraphError::Database(e))?;
 
-            let rows = stmt.query_map(params![agent_id, entity_id, limit as i64], |row| {
+            let rows = stmt.query_map(params![entity_id, limit as i64], |row| {
                 Ok((
                     // Entity fields
                     row.get::<_, String>(0)?,
@@ -571,12 +571,12 @@ impl GraphStorage {
                         r.id, r.agent_id, r.source_entity_id, r.target_entity_id, r.relationship_type, r.properties, r.first_seen_at, r.last_seen_at, r.mention_count
                  FROM kg_entities e
                  INNER JOIN kg_relationships r ON r.source_entity_id = e.id
-                 WHERE (r.agent_id = ?1 OR r.agent_id = '__global__') AND r.target_entity_id = ?2
+                 WHERE r.target_entity_id = ?1
                  ORDER BY r.mention_count DESC
-                 LIMIT ?3"
+                 LIMIT ?2"
             ).map_err(|e| GraphError::Database(e))?;
 
-            let rows = stmt.query_map(params![agent_id, entity_id, limit as i64], |row| {
+            let rows = stmt.query_map(params![entity_id, limit as i64], |row| {
                 Ok((
                     // Entity fields
                     row.get::<_, String>(0)?,
