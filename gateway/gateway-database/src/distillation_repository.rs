@@ -175,7 +175,7 @@ impl DistillationRepository {
                  FROM sessions s
                  LEFT JOIN distillation_runs dr ON s.id = dr.session_id
                  WHERE dr.id IS NULL
-                 ORDER BY s.created_at ASC",
+                 ORDER BY (s.parent_session_id IS NULL) DESC, s.created_at ASC",
             )?;
 
             let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
@@ -191,7 +191,7 @@ impl DistillationRepository {
                  FROM sessions s
                  LEFT JOIN distillation_runs dr ON s.id = dr.session_id
                  WHERE dr.id IS NULL
-                 ORDER BY s.created_at ASC",
+                 ORDER BY (s.parent_session_id IS NULL) DESC, s.created_at ASC",
             )?;
 
             let rows = stmt.query_map([], |row| {
