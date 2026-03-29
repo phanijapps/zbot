@@ -661,6 +661,119 @@ impl GraphStorage {
 
         Ok(count as usize)
     }
+
+    /// Count all entities across all agents.
+    pub async fn count_all_entities(&self) -> GraphResult<usize> {
+        let conn = self.conn.lock().await;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM kg_entities",
+            [],
+            |row| row.get(0),
+        ).map_err(|e| GraphError::Database(e))?;
+        Ok(count as usize)
+    }
+
+    /// Count all relationships across all agents.
+    pub async fn count_all_relationships(&self) -> GraphResult<usize> {
+        let conn = self.conn.lock().await;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM kg_relationships",
+            [],
+            |row| row.get(0),
+        ).map_err(|e| GraphError::Database(e))?;
+        Ok(count as usize)
+    }
+
+    /// List entities across all agents with optional filters and pagination.
+    ///
+    /// Used by the Observatory "All Agents" mode.
+    pub async fn list_all_entities(
+        &self,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        let conn = self.conn.lock().await;
+
+        // Build dynamic SQL based on filters
+        let mut conditions: Vec<String> = Vec::new();
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+
+        if let Some(wid) = ward_id {
+            conditions.push(format!("agent_id = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(wid.to_string()));
+        }
+        if let Some(et) = entity_type {
+            conditions.push(format!("entity_type = ?{}", param_values.len() + 1));
+            param_values.push(Box::new(et.to_string()));
+        }
+
+        let where_clause = if conditions.is_empty() {
+            String::new()
+        } else {
+            format!("WHERE {}", conditions.join(" AND "))
+        };
+
+        let sql = format!(
+            "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
+             FROM kg_entities
+             {}
+             ORDER BY mention_count DESC
+             LIMIT ?{}",
+            where_clause,
+            param_values.len() + 1,
+        );
+
+        param_values.push(Box::new(limit as i64));
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let mut stmt = conn.prepare(&sql).map_err(|e| GraphError::Database(e))?;
+
+        let parse_entity = |row: &rusqlite::Row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, String>(5)?,
+                row.get::<_, String>(6)?,
+                row.get::<_, i64>(7)?,
+            ))
+        };
+
+        let rows = stmt.query_map(params_refs.as_slice(), parse_entity)
+            .map_err(|e| GraphError::Database(e))?;
+
+        let mut entities = Vec::new();
+        for row_result in rows {
+            let (id, agent_id, entity_type_str, name, properties_json, first_seen_at, last_seen_at, mention_count) = row_result?;
+
+            let entity_type = EntityType::from_str(&entity_type_str);
+            let properties = if let Some(json) = properties_json {
+                serde_json::from_str(&json).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+
+            entities.push(Entity {
+                id,
+                agent_id,
+                entity_type,
+                name,
+                properties,
+                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                mention_count,
+            });
+        }
+
+        Ok(entities)
+    }
 }
 
 /// Initialize the knowledge graph database schema
