@@ -806,6 +806,7 @@ export interface MemoryFact {
   confidence: number;
   mention_count: number;
   source_summary?: string;
+  contradicted_by?: string;
   created_at: string;
   updated_at: string;
 }

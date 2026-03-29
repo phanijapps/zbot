@@ -45,6 +45,8 @@ pub struct RecallConfig {
     pub max_facts: usize,
     pub max_episodes: usize,
     pub high_confidence_threshold: f64,
+    /// Multiplier applied to the recall score of contradicted facts (0.0–1.0).
+    pub contradiction_penalty: f64,
     pub mid_session_recall: MidSessionRecallConfig,
 }
 
@@ -71,6 +73,7 @@ impl Default for RecallConfig {
             max_facts: 10,
             max_episodes: 3,
             high_confidence_threshold: 0.9,
+            contradiction_penalty: 0.7,
             mid_session_recall: MidSessionRecallConfig::default(),
         }
     }

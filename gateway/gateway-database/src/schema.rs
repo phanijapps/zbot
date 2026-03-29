@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 11;
+const SCHEMA_VERSION: i32 = 12;
 
 /// Run migrations for existing databases.
 ///
@@ -135,6 +135,14 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         // Create the new unique constraint including ward_id
         let _ = conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_facts_agent_scope_ward_key ON memory_facts(agent_id, scope, ward_id, key)",
+            [],
+        );
+    }
+
+    // v11 → v12: Add contradicted_by column to memory_facts
+    if version < 12 {
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN contradicted_by TEXT",
             [],
         );
     }
@@ -350,6 +358,7 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             source_summary TEXT,
             embedding BLOB,
             ward_id TEXT NOT NULL DEFAULT '__global__',
+            contradicted_by TEXT,
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at TEXT,
@@ -641,13 +650,50 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_version_is_11() {
+    fn test_schema_version_is_12() {
         let conn = setup_db();
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 11, "schema version should be 11");
+        assert_eq!(version, 12, "schema version should be 12");
+    }
+
+    #[test]
+    fn test_memory_facts_has_contradicted_by_column() {
+        let conn = setup_db();
+        // Insert a row — contradicted_by defaults to NULL
+        conn.execute(
+            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, created_at, updated_at)
+             VALUES ('f_contra', 'agent1', 'agent', 'pref', 'color', 'blue', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert with default contradicted_by");
+
+        let contradicted_by: Option<String> = conn
+            .query_row(
+                "SELECT contradicted_by FROM memory_facts WHERE id = 'f_contra'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(contradicted_by.is_none(), "default contradicted_by should be NULL");
+
+        // Update contradicted_by
+        conn.execute(
+            "UPDATE memory_facts SET contradicted_by = 'other.key' WHERE id = 'f_contra'",
+            [],
+        )
+        .expect("update contradicted_by");
+
+        let contradicted_by: Option<String> = conn
+            .query_row(
+                "SELECT contradicted_by FROM memory_facts WHERE id = 'f_contra'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(contradicted_by, Some("other.key".to_string()));
     }
 }

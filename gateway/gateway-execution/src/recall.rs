@@ -170,6 +170,13 @@ impl MemoryRecall {
             }
         }
 
+        // 7. Penalize contradicted facts
+        for sf in &mut results {
+            if sf.fact.contradicted_by.is_some() {
+                sf.score *= self.config.contradiction_penalty;
+            }
+        }
+
         // Sort by score descending and take top-K
         results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
         results.truncate(limit);
@@ -571,6 +578,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -591,6 +599,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -624,6 +633,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -644,6 +654,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -683,6 +694,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -720,6 +732,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -751,6 +764,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -789,6 +803,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -809,6 +824,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
@@ -867,6 +883,7 @@ mod tests {
                     source_summary: None,
                     embedding: None,
                     ward_id: "__global__".to_string(),
+                    contradicted_by: None,
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,

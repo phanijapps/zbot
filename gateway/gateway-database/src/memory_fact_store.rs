@@ -89,14 +89,49 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             confidence,
             mention_count: 1,
             source_summary: None,
-            embedding,
+            embedding: embedding.clone(),
             ward_id: "__global__".to_string(),
+            contradicted_by: None,
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;
+
+        // Best-effort contradiction detection: if the new fact has an embedding,
+        // search for semantically similar facts with a DIFFERENT key but same
+        // category and mark them as contradicted.
+        if let Some(ref emb) = embedding {
+            if let Ok(similar_facts) = self.memory_repo.search_similar_facts(
+                emb,
+                agent_id,
+                0.8,  // high threshold to avoid false positives
+                5,
+                None, // no ward filtering
+            ) {
+                for sf in similar_facts {
+                    if sf.fact.key != key && sf.fact.category == category {
+                        if let Err(e) = self.memory_repo.mark_contradicted(&sf.fact.id, key) {
+                            tracing::warn!(
+                                fact_id = %sf.fact.id,
+                                contradicted_by = %key,
+                                "Failed to mark fact as contradicted: {}",
+                                e
+                            );
+                        } else {
+                            tracing::info!(
+                                fact_id = %sf.fact.id,
+                                fact_key = %sf.fact.key,
+                                contradicted_by = %key,
+                                similarity = %sf.score,
+                                "Marked fact as contradicted by newer fact"
+                            );
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(json!({
             "success": true,
