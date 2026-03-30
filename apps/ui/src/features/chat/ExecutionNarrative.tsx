@@ -146,6 +146,30 @@ export function ExecutionNarrative({ blocks }: ExecutionNarrativeProps) {
         }
       })}
 
+      {/* Thinking indicator — shows when running and last block is user or no response yet */}
+      {blocks.length > 0 && !blocks.some(b => b.type === 'response' && b.isStreaming) && (
+        (() => {
+          const lastBlock = blocks[blocks.length - 1];
+          const isWaiting = lastBlock?.type === 'user' ||
+            (lastBlock?.type === 'tool' && !lastBlock.data.output) ||
+            (lastBlock?.type === 'delegation' && lastBlock.data.status === 'active');
+          if (!isWaiting) return null;
+          return (
+            <div className="thinking-indicator">
+              <div className="thinking-indicator__dots">
+                <span className="thinking-indicator__dot" />
+                <span className="thinking-indicator__dot" />
+                <span className="thinking-indicator__dot" />
+              </div>
+              <span className="thinking-indicator__text">
+                {lastBlock?.type === 'delegation' ? 'Subagent working...' :
+                 lastBlock?.type === 'tool' ? 'Running...' : 'Thinking...'}
+              </span>
+            </div>
+          );
+        })()
+      )}
+
       {/* Scroll anchor */}
       <div ref={bottomRef} />
     </div>

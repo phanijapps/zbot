@@ -47,6 +47,9 @@ export function SessionBar({
       <div className={statusClass} />
       <span className="session-bar__title">{title || "New Session"}</span>
       <span className="session-bar__badge">{agentId}</span>
+      {status === "running" && (
+        <span style={{ fontSize: "var(--text-xs)", color: "var(--success)", fontWeight: 500 }}>Processing...</span>
+      )}
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
