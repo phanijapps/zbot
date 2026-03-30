@@ -75,6 +75,12 @@ enum Commands {
         #[command(subcommand)]
         action: DistillAction,
     },
+
+    /// Session management
+    Sessions {
+        #[command(subcommand)]
+        action: SessionAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -93,6 +99,21 @@ enum DistillAction {
         /// Max concurrent distillation calls
         #[arg(long, default_value = "2")]
         concurrency: usize,
+    },
+}
+
+#[derive(Subcommand)]
+enum SessionAction {
+    /// Archive old session transcripts to compressed files
+    Archive {
+        /// Archive sessions older than this many days
+        #[arg(long, default_value = "7")]
+        older_than: u32,
+    },
+    /// Restore an archived session
+    Restore {
+        /// Session ID to restore
+        session_id: String,
     },
 }
 
@@ -146,6 +167,15 @@ async fn main() -> Result<()> {
         Some(Commands::Distill { action }) => match action {
             DistillAction::Backfill { concurrency } => {
                 run_distill_backfill(&gateway_url, concurrency).await?;
+            }
+        },
+
+        Some(Commands::Sessions { action }) => match action {
+            SessionAction::Archive { older_than } => {
+                run_session_archive(&gateway_url, older_than).await?;
+            }
+            SessionAction::Restore { session_id } => {
+                run_session_restore(&gateway_url, &session_id).await?;
             }
         },
 
@@ -394,6 +424,129 @@ async fn run_distill_backfill(gateway_url: &str, _concurrency: usize) -> Result<
 
     println!();
     println!("Backfill complete: {} succeeded, {} failed", success_count, fail_count);
+
+    Ok(())
+}
+
+// ============================================================================
+// Session Archive / Restore
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct ArchiveResultEntry {
+    session_id: String,
+    messages_archived: usize,
+    logs_archived: usize,
+    file_size: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct ArchiveResponse {
+    archived: usize,
+    results: Vec<ArchiveResultEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct RestoreResponse {
+    session_id: String,
+    records_restored: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct SessionErrorResponse {
+    error: String,
+}
+
+async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {
+    let client = reqwest::Client::new();
+
+    let health_resp = client
+        .get(format!("{}/api/health", gateway_url))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await;
+
+    if health_resp.is_err() {
+        eprintln!("Error: Gateway daemon is not running");
+        eprintln!("Start it with: cargo run -p daemon");
+        std::process::exit(1);
+    }
+
+    println!("Archiving sessions older than {} days...", older_than);
+
+    let resp = client
+        .post(format!("{}/api/sessions/archive", gateway_url))
+        .json(&serde_json::json!({ "older_than_days": older_than }))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("Archive failed (HTTP {}): {}", status, body);
+        std::process::exit(1);
+    }
+
+    let body: ArchiveResponse = resp.json().await?;
+
+    if body.archived == 0 {
+        println!("No sessions eligible for archival.");
+        return Ok(());
+    }
+
+    println!("Archived {} session(s):\n", body.archived);
+    for result in &body.results {
+        let short_id = if result.session_id.len() > 8 {
+            &result.session_id[..8]
+        } else {
+            &result.session_id
+        };
+        println!(
+            "  {} - {} messages, {} logs, {} bytes",
+            short_id, result.messages_archived, result.logs_archived, result.file_size
+        );
+    }
+
+    Ok(())
+}
+
+async fn run_session_restore(gateway_url: &str, session_id: &str) -> Result<()> {
+    let client = reqwest::Client::new();
+
+    let health_resp = client
+        .get(format!("{}/api/health", gateway_url))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await;
+
+    if health_resp.is_err() {
+        eprintln!("Error: Gateway daemon is not running");
+        eprintln!("Start it with: cargo run -p daemon");
+        std::process::exit(1);
+    }
+
+    let short_id = if session_id.len() > 8 {
+        &session_id[..8]
+    } else {
+        session_id
+    };
+
+    println!("Restoring session {}...", short_id);
+
+    let resp = client
+        .post(format!("{}/api/sessions/restore/{}", gateway_url, session_id))
+        .send()
+        .await?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        eprintln!("Restore failed (HTTP {}): {}", status, body);
+        std::process::exit(1);
+    }
+
+    let body: RestoreResponse = resp.json().await?;
+    println!("Restored {} records for session {}", body.records_restored, short_id);
 
     Ok(())
 }

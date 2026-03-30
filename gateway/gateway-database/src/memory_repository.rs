@@ -286,6 +286,26 @@ impl MemoryRepository {
         })
     }
 
+    /// Archive a fact by moving it from `memory_facts` to `memory_facts_archive`.
+    ///
+    /// Performs an atomic INSERT-then-DELETE within a single connection so the
+    /// fact is never lost. Used by the pruning subsystem to keep the active
+    /// store lean without discarding data.
+    pub fn archive_fact(&self, fact_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO memory_facts_archive
+                 SELECT id, agent_id, scope, category, key, content, confidence, ward_id,
+                        mention_count, source_summary, embedding, contradicted_by,
+                        created_at, updated_at, datetime('now')
+                 FROM memory_facts WHERE id = ?1",
+                params![fact_id],
+            )?;
+            conn.execute("DELETE FROM memory_facts WHERE id = ?1", params![fact_id])?;
+            Ok(())
+        })
+    }
+
     /// Search for facts similar to the given embedding, filtered by minimum similarity threshold.
     ///
     /// Returns facts with cosine similarity >= `min_similarity`. Used for contradiction detection.

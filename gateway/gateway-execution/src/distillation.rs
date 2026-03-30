@@ -381,6 +381,27 @@ impl SessionDistiller {
             "Session distillation complete"
         );
 
+        // 8. Sync ward knowledge file (best-effort)
+        let ward_id = self
+            .conversation_repo
+            .get_session_ward_id(session_id)
+            .unwrap_or(None);
+
+        if let Some(ref wid) = ward_id {
+            if wid != "__global__" && wid != "scratch" {
+                let ward_path = self.paths.wards_dir().join(wid);
+                if ward_path.exists() {
+                    if let Err(e) = crate::ward_sync::generate_ward_knowledge_file(
+                        &ward_path,
+                        wid,
+                        &self.memory_repo,
+                    ) {
+                        tracing::warn!(ward = %wid, error = %e, "Ward file sync failed");
+                    }
+                }
+            }
+        }
+
         Ok(upserted)
     }
 

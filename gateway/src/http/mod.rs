@@ -17,6 +17,7 @@ mod models;
 mod openapi;
 mod plugins;
 mod providers;
+mod sessions;
 mod settings;
 mod skills;
 mod tools;
@@ -144,6 +145,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
         .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
         .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
+        // Session archive endpoints
+        .route("/api/sessions/archive", post(sessions::archive_sessions))
+        .route("/api/sessions/restore/:id", post(sessions::restore_session))
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))
