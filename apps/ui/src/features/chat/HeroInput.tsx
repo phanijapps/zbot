@@ -1,28 +1,24 @@
+// ============================================================================
+// HERO INPUT
+// Beautiful centered input for new sessions — the landing experience.
+// Shows when there are no blocks and status is idle.
+// On send, triggers the same sendMessage as MissionControl's ChatInput.
+// ============================================================================
+
 import { useState, useRef, useCallback } from "react";
 import { Paperclip, ImagePlus, ArrowUp } from "lucide-react";
+import type { UploadedFile } from "./ChatInput";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-export interface UploadedFile {
-  /** Server-assigned file ID */
-  id: string;
-  /** Original filename */
-  name: string;
-  /** MIME type */
-  mimeType: string;
-  /** File size in bytes */
-  size: number;
-}
-
-export interface ChatInputProps {
+interface HeroInputProps {
   onSend: (message: string, attachments: UploadedFile[]) => void;
-  disabled: boolean;
 }
 
 // ============================================================================
-// File Upload Helper
+// File Upload Helper (same as ChatInput)
 // ============================================================================
 
 async function uploadFile(file: File): Promise<UploadedFile> {
@@ -37,14 +33,21 @@ async function uploadFile(file: File): Promise<UploadedFile> {
 }
 
 // ============================================================================
+// Suggestions
+// ============================================================================
+
+const SUGGESTIONS = [
+  "Analyze recent trends",
+  "Write a report",
+  "Debug an issue",
+  "Summarize a document",
+];
+
+// ============================================================================
 // Component
 // ============================================================================
 
-/**
- * ChatInput - textarea with Enter-to-send, Shift+Enter for newlines,
- * attachment buttons, and pending file chips.
- */
-export function ChatInput({ onSend, disabled }: ChatInputProps) {
+export function HeroInput({ onSend }: HeroInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -53,15 +56,13 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = text.trim().length > 0 || attachments.length > 0;
-  const isDisabled = disabled || uploading;
+  const isDisabled = uploading;
 
   const handleSend = useCallback(() => {
     if (!canSend || isDisabled) return;
     onSend(text.trim(), attachments);
     setText("");
     setAttachments([]);
-    // Refocus textarea after send
-    textareaRef.current?.focus();
   }, [canSend, isDisabled, text, attachments, onSend]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -90,47 +91,58 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
-  return (
-    <div>
-      {/* Pending attachment chips */}
-      {attachments.length > 0 && (
-        <div className="chat-input__chips">
-          {attachments.map((a) => (
-            <span key={a.id} className="chat-input__chip">
-              {a.name}
-              <span
-                className="chat-input__chip-remove"
-                onClick={() => removeAttachment(a.id)}
-              >
-                x
-              </span>
-            </span>
-          ))}
-        </div>
-      )}
+  const handleSuggestionClick = (suggestion: string) => {
+    setText(suggestion);
+    textareaRef.current?.focus();
+  };
 
-      {/* Input container with buttons inside */}
-      <div className="chat-input__container">
+  return (
+    <div className="hero-input">
+      {/* Brand */}
+      <div className="hero-input__brand">
+        <div className="hero-input__logo">z</div>
+        <span className="hero-input__name">z-Bot</span>
+      </div>
+
+      {/* Input container */}
+      <div className="hero-input__container">
+        {/* Pending attachment chips */}
+        {attachments.length > 0 && (
+          <div className="hero-input__chips">
+            {attachments.map((a) => (
+              <span key={a.id} className="chat-input__chip">
+                {a.name}
+                <span
+                  className="chat-input__chip-remove"
+                  onClick={() => removeAttachment(a.id)}
+                >
+                  x
+                </span>
+              </span>
+            ))}
+          </div>
+        )}
+
         <textarea
           ref={textareaRef}
-          className="chat-input__field"
+          className="hero-input__field"
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="Type a message..."
+          placeholder="What would you like to work on?"
           disabled={isDisabled}
           rows={1}
         />
 
-        {/* Actions positioned inside the field */}
-        <div className="chat-input__actions">
+        {/* Action buttons inside the field */}
+        <div className="hero-input__actions">
           <button
-            className="chat-input__action-btn"
+            className="hero-input__action-btn"
             title="Attach file"
             onClick={() => fileInputRef.current?.click()}
             disabled={isDisabled}
           >
-            <Paperclip style={{ width: 16, height: 16 }} />
+            <Paperclip style={{ width: 18, height: 18 }} />
           </button>
           <input
             ref={fileInputRef}
@@ -144,12 +156,12 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           />
 
           <button
-            className="chat-input__action-btn"
+            className="hero-input__action-btn"
             title="Attach image"
             onClick={() => imageInputRef.current?.click()}
             disabled={isDisabled}
           >
-            <ImagePlus style={{ width: 16, height: 16 }} />
+            <ImagePlus style={{ width: 18, height: 18 }} />
           </button>
           <input
             ref={imageInputRef}
@@ -164,21 +176,34 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           />
 
           <button
-            className="chat-input__send"
+            className="hero-input__send"
             onClick={handleSend}
             disabled={!canSend || isDisabled}
             title="Send message"
           >
-            <ArrowUp style={{ width: 16, height: 16 }} />
+            <ArrowUp style={{ width: 18, height: 18 }} />
           </button>
         </div>
       </div>
 
       {uploading && (
-        <div className="chat-input__uploading">
+        <div className="chat-input__uploading" style={{ marginTop: 8 }}>
           Uploading...
         </div>
       )}
+
+      {/* Quick-action suggestions */}
+      <div className="hero-input__suggestions">
+        {SUGGESTIONS.map((s) => (
+          <button
+            key={s}
+            className="hero-input__suggestion"
+            onClick={() => handleSuggestionClick(s)}
+          >
+            {s}
+          </button>
+        ))}
+      </div>
     </div>
   );
 }

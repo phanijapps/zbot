@@ -1,6 +1,7 @@
 // ============================================================================
 // MISSION CONTROL
 // Full-page execution theater: SessionBar + Narrative + Sidebar + Input
+// Shows HeroInput when idle with no blocks, full layout otherwise.
 // ============================================================================
 
 import { useMissionControl } from "./mission-hooks";
@@ -8,6 +9,7 @@ import { SessionBar } from "./SessionBar";
 import { ExecutionNarrative } from "./ExecutionNarrative";
 import { IntelligenceFeed } from "./IntelligenceFeed";
 import { ChatInput } from "./ChatInput";
+import { HeroInput } from "./HeroInput";
 
 // ============================================================================
 // Component
@@ -15,6 +17,7 @@ import { ChatInput } from "./ChatInput";
 
 /**
  * MissionControl — composes all Mission Control sub-components:
+ *   - HeroInput (landing state — no blocks, idle)
  *   - SessionBar (top bar with status, title, metrics)
  *   - ExecutionNarrative (scrollable block list)
  *   - IntelligenceFeed (right sidebar)
@@ -23,6 +26,12 @@ import { ChatInput } from "./ChatInput";
 export function MissionControl() {
   const { state, sendMessage, stopAgent } = useMissionControl();
 
+  // No blocks and idle — show the beautiful landing input
+  if (state.blocks.length === 0 && state.status === "idle") {
+    return <HeroInput onSend={sendMessage} />;
+  }
+
+  // Active session — full execution theater
   const isDisabled = state.status === "running";
 
   return (
