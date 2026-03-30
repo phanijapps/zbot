@@ -811,6 +811,17 @@ impl ExecutionRunner {
                     None,
                     None,
                 );
+
+                // Log the response for session replay
+                let response_log = api_logs::ExecutionLog::new(
+                    &execution_id,
+                    &session_id,
+                    &agent_id,
+                    api_logs::LogLevel::Info,
+                    api_logs::LogCategory::Response,
+                    &accumulated_response,
+                );
+                batch_writer.log(response_log);
             }
 
             // Handle completion
