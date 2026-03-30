@@ -4,7 +4,7 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
-use knowledge_graph::{GraphStorage, GraphService};
+use knowledge_graph::{GraphStorage, GraphService, SqliteGraphTraversal};
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
@@ -17,7 +17,7 @@ use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
-use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository};
+use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -215,6 +215,20 @@ impl AppState {
             }
         };
         memory_recall_inner.set_episode_repo(episode_repo.clone());
+
+        // Wire recall log for tracking recalled facts per session (enables predictive recall)
+        let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
+        memory_recall_inner.set_recall_log(recall_log);
+
+        // Wire graph traversal engine for graph-driven expansion in recall
+        if let Some(ref gs) = graph_storage {
+            let traversal = Arc::new(SqliteGraphTraversal::new(
+                gs.clone(),
+                recall_config.graph_traversal.hop_decay,
+            ));
+            memory_recall_inner.set_traversal(traversal);
+        }
+
         let memory_recall = Arc::new(memory_recall_inner);
 
         // Clone embedding client before it's moved into distiller — the runner

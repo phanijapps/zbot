@@ -1415,7 +1415,7 @@ async fn invoke_continuation(
         .unwrap_or_else(|| "continuation recall".to_string());
 
     if let Some(recall) = &memory_recall {
-        match recall.recall_with_graph(root_agent_id, &continuation_recall_query, 5, session_ward_id.as_deref()).await {
+        match recall.recall_with_graph(root_agent_id, &continuation_recall_query, 5, session_ward_id.as_deref(), Some(session_id)).await {
             Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
                 history.insert(0, ChatMessage::system(result.formatted));
                 tracing::info!(

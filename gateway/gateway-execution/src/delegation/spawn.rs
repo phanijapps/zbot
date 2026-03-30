@@ -214,6 +214,7 @@ pub async fn spawn_delegated_agent(
             &request.task,
             5,
             session_ward_id.as_deref(),
+            Some(&request.session_id),
         ).await {
             Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
                 tracing::info!(

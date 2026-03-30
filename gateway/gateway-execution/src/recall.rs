@@ -20,9 +20,9 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
-use gateway_database::{EpisodeRepository, MemoryRepository, ScoredFact, SessionEpisode};
+use gateway_database::{EpisodeRepository, MemoryRepository, RecallLogRepository, ScoredFact, SessionEpisode};
 use gateway_services::RecallConfig;
-use knowledge_graph::{GraphService, EntityWithConnections};
+use knowledge_graph::{GraphService, GraphTraversal, EntityWithConnections};
 #[cfg(test)]
 use gateway_database::MemoryFact;
 
@@ -51,8 +51,10 @@ pub struct MemoryRecall {
     embedding_client: Option<Arc<dyn EmbeddingClient>>,
     memory_repo: Arc<MemoryRepository>,
     graph_service: Option<Arc<GraphService>>,
+    traversal: Option<Arc<dyn GraphTraversal>>,
     config: Arc<RecallConfig>,
     episode_repo: Option<Arc<EpisodeRepository>>,
+    recall_log: Option<Arc<RecallLogRepository>>,
 }
 
 impl MemoryRecall {
@@ -66,8 +68,10 @@ impl MemoryRecall {
             embedding_client,
             memory_repo,
             graph_service: None,
+            traversal: None,
             config,
             episode_repo: None,
+            recall_log: None,
         }
     }
 
@@ -82,8 +86,10 @@ impl MemoryRecall {
             embedding_client,
             memory_repo,
             graph_service: Some(graph_service),
+            traversal: None,
             config,
             episode_repo: None,
+            recall_log: None,
         }
     }
 
@@ -95,6 +101,16 @@ impl MemoryRecall {
     /// Set the graph service for enriched recall.
     pub fn set_graph_service(&mut self, service: Arc<GraphService>) {
         self.graph_service = Some(service);
+    }
+
+    /// Set the graph traversal engine for graph-driven expansion.
+    pub fn set_traversal(&mut self, t: Arc<dyn GraphTraversal>) {
+        self.traversal = Some(t);
+    }
+
+    /// Set the recall log repository for tracking recalled facts per session.
+    pub fn set_recall_log(&mut self, repo: Arc<RecallLogRepository>) {
+        self.recall_log = Some(repo);
     }
 
     /// Recall relevant facts for a given agent and user message.
@@ -187,7 +203,27 @@ impl MemoryRecall {
             }
         }
 
-        // 7. Penalize contradicted facts
+        // 7. Apply temporal decay — older facts score lower based on per-category half-lives
+        if self.config.temporal_decay.enabled {
+            for sf in &mut results {
+                // Skill/agent indices don't decay (re-indexed each session)
+                if sf.fact.category == "skill" || sf.fact.category == "agent" {
+                    continue;
+                }
+                let half_life = self.config.temporal_decay.half_life_days
+                    .get(&sf.fact.category)
+                    .copied()
+                    .unwrap_or(30.0);
+                let last_seen = chrono::DateTime::parse_from_rfc3339(&sf.fact.updated_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now());
+                let decay = temporal_decay(last_seen, half_life);
+                let mention_boost = 1.0 + (sf.fact.mention_count as f64).max(1.0).log2();
+                sf.score *= decay * mention_boost;
+            }
+        }
+
+        // 8. Penalize contradicted facts
         for sf in &mut results {
             if sf.fact.contradicted_by.is_some() {
                 sf.score *= self.config.contradiction_penalty;
@@ -206,15 +242,24 @@ impl MemoryRecall {
     /// This method extends the basic recall with related entities from the
     /// knowledge graph and relevant past episodes, providing richer context
     /// for the agent. Output is capped at `config.max_recall_tokens`.
+    ///
+    /// `session_id` is used for two purposes:
+    /// 1. Log which facts were recalled (for future predictive recall)
+    /// 2. Find similar past sessions to boost correlated facts
     pub async fn recall_with_graph(
         &self,
         agent_id: &str,
         user_message: &str,
         limit: usize,
         ward_id: Option<&str>,
+        session_id: Option<&str>,
     ) -> Result<RecallResult, String> {
         // 1. Standard fact search with priority scoring
-        let facts = self.recall(agent_id, user_message, limit, ward_id).await?;
+        let mut facts = self.recall(agent_id, user_message, limit, ward_id).await?;
+
+        // Build seen_keys from recalled facts so graph expansion doesn't duplicate
+        let mut seen_keys: std::collections::HashSet<String> =
+            facts.iter().map(|sf| sf.fact.key.clone()).collect();
 
         // 2. Extract potential entity names from facts
         let entity_names = extract_entity_names_from_facts(&facts);
@@ -255,7 +300,115 @@ impl MemoryRecall {
             Vec::new()
         };
 
-        // 5. Format combined result with token budget
+        // 5. Graph expansion: discover related facts via entity connections
+        let mut graph_facts: Vec<ScoredFact> = Vec::new();
+        if self.config.graph_traversal.enabled {
+            if let Some(ref traversal) = self.traversal {
+                // Extract entity names from top recalled facts
+                let entity_names: Vec<String> = facts.iter()
+                    .take(5)
+                    .flat_map(|sf| extract_potential_entity_names(&sf.fact.key, &sf.fact.content))
+                    .collect();
+
+                let name_refs: Vec<&str> = entity_names.iter().map(|s| s.as_str()).collect();
+
+                if !name_refs.is_empty() {
+                    match traversal.connected_entities(
+                        &name_refs,
+                        self.config.graph_traversal.max_hops,
+                        20,
+                    ).await {
+                        Ok(nodes) => {
+                            // For each discovered entity, search for related facts
+                            let mut seen_graph_keys = std::collections::HashSet::new();
+                            for node in &nodes {
+                                if let Ok(related) = self.memory_repo.search_memory_facts_fts(
+                                    &node.entity_name, agent_id, 2, ward_id,
+                                ) {
+                                    for sf in related {
+                                        if seen_graph_keys.insert(sf.fact.key.clone())
+                                            && !seen_keys.contains(&sf.fact.key)
+                                        {
+                                            graph_facts.push(ScoredFact {
+                                                score: sf.score * node.relevance,
+                                                fact: sf.fact,
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!("Graph traversal failed: {}", e),
+                    }
+                }
+            }
+        }
+
+        // Merge graph-discovered facts into results (capped)
+        graph_facts.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        graph_facts.truncate(self.config.graph_traversal.max_graph_facts);
+        for sf in graph_facts {
+            if seen_keys.insert(sf.fact.key.clone()) {
+                facts.push(sf);
+            }
+        }
+
+        // 6. Predictive recall — boost facts that were recalled in similar past successful sessions
+        if self.config.predictive_recall.enabled {
+            if let (Some(ref episode_repo), Some(ref recall_log)) = (&self.episode_repo, &self.recall_log) {
+                let query_embedding = self.embed_query(user_message).await;
+                if let Some(ref emb) = query_embedding {
+                    match episode_repo.search_by_similarity(
+                        agent_id, emb, 0.5,
+                        self.config.predictive_recall.max_episodes_to_check,
+                    ) {
+                        Ok(similar) => {
+                            let success_ids: Vec<&str> = similar.iter()
+                                .filter(|(ep, _)| ep.outcome == "success")
+                                .map(|(ep, _)| ep.session_id.as_str())
+                                .collect();
+
+                            if !success_ids.is_empty() {
+                                if let Ok(key_counts) = recall_log.get_keys_for_sessions(&success_ids) {
+                                    let min_count = self.config.predictive_recall.min_similar_successes;
+                                    let boost = self.config.predictive_recall.predictive_boost;
+                                    let mut boosted = 0usize;
+                                    for sf in &mut facts {
+                                        if let Some(&count) = key_counts.get(&sf.fact.key) {
+                                            if count >= min_count {
+                                                sf.score *= boost;
+                                                boosted += 1;
+                                            }
+                                        }
+                                    }
+                                    if boosted > 0 {
+                                        tracing::debug!(
+                                            boosted_count = boosted,
+                                            success_sessions = success_ids.len(),
+                                            "Predictive recall boosted facts"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        Err(e) => tracing::warn!("Predictive recall failed: {}", e),
+                    }
+                }
+            }
+        }
+
+        // Re-sort after predictive boost and truncate to limit
+        facts.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        facts.truncate(limit);
+
+        // 7. Log recalled fact keys for this session (enables future predictive recall)
+        if let (Some(sid), Some(ref recall_log)) = (session_id, &self.recall_log) {
+            for sf in &facts {
+                let _ = recall_log.log_recall(sid, &sf.fact.key);
+            }
+        }
+
+        // 8. Format combined result with token budget
         let formatted = format_prioritized_recall(
             &facts,
             &episodes,
@@ -483,6 +636,40 @@ pub fn format_prioritized_recall(
     }
 
     output
+}
+
+/// Compute temporal decay for a fact based on its last-seen timestamp.
+///
+/// Uses the formula `1 / (1 + age/half_life)`, which yields:
+/// - 1.0 for a fact seen just now
+/// - 0.5 for a fact whose age equals the half-life
+/// - Monotonically decreasing toward 0 for very old facts
+fn temporal_decay(last_seen: chrono::DateTime<chrono::Utc>, half_life_days: f64) -> f64 {
+    let age_days = (chrono::Utc::now() - last_seen).num_days().max(0) as f64;
+    1.0 / (1.0 + (age_days / half_life_days))
+}
+
+/// Extract potential entity names from a fact key and content.
+///
+/// Used by graph expansion to find entity names to seed traversal from.
+/// Extracts meaningful key segments and capitalized words from content.
+fn extract_potential_entity_names(key: &str, content: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    // Extract from key segments (e.g., "domain.finance.spy" → "spy", "finance")
+    for part in key.split('.') {
+        if part.len() > 2 && part != "domain" && part != "pattern" && part != "correction" {
+            names.push(part.to_string());
+        }
+    }
+    // Extract capitalized words from content as potential entity names
+    for word in content.split_whitespace() {
+        let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
+        if clean.len() > 2 && clean.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+            names.push(clean.to_string());
+        }
+    }
+    names.dedup();
+    names
 }
 
 /// Extract potential entity names from fact content.
@@ -935,5 +1122,42 @@ mod tests {
         // The output should be limited — the 500-char content should NOT fit
         // within a 200-char budget (50 tokens * 4 chars)
         assert!(formatted.len() <= 250); // Some header overhead allowed
+    }
+
+    #[test]
+    fn test_temporal_decay_fresh() {
+        let now = chrono::Utc::now();
+        let decay = temporal_decay(now, 30.0);
+        assert!((decay - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_temporal_decay_at_half_life() {
+        let half_life_ago = chrono::Utc::now() - chrono::Duration::days(30);
+        let decay = temporal_decay(half_life_ago, 30.0);
+        assert!((decay - 0.5).abs() < 0.05);
+    }
+
+    #[test]
+    fn test_temporal_decay_old() {
+        let old = chrono::Utc::now() - chrono::Duration::days(180);
+        let decay = temporal_decay(old, 30.0);
+        assert!(decay < 0.2); // Very old = very low
+    }
+
+    #[test]
+    fn test_extract_potential_entity_names() {
+        let names = extract_potential_entity_names(
+            "domain.finance.spy",
+            "SPY is an ETF tracking the S&P 500",
+        );
+        // Should extract key segments
+        assert!(names.contains(&"finance".to_string()));
+        assert!(names.contains(&"spy".to_string()));
+        // Should extract capitalized words from content
+        assert!(names.contains(&"SPY".to_string()));
+        assert!(names.contains(&"ETF".to_string()));
+        // Should skip short segments and common key prefixes
+        assert!(!names.contains(&"domain".to_string()));
     }
 }
