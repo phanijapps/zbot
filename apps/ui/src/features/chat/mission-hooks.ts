@@ -361,9 +361,10 @@ export function useMissionControl() {
               if (typeof s === "string") {
                 steps.push({ text: s, status: "pending" as StepStatus });
               } else if (typeof s === "object" && s) {
+                const obj = s as Record<string, unknown>;
                 steps.push({
-                  text: ((s as Record<string, unknown>).text ?? (s as Record<string, unknown>).description ?? "") as string,
-                  status: ((s as Record<string, unknown>).status ?? "pending") as StepStatus,
+                  text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
+                  status: (obj.status ?? "pending") as StepStatus,
                 });
               }
             }
@@ -882,6 +883,41 @@ export function useMissionControl() {
               const title = (args?.title ?? args?.name ?? "") as string;
               if (title) setSessionTitle(title);
               continue; // Don't render as a tool block
+            }
+
+            // update_plan tool = plan block
+            if (toolName === "update_plan") {
+              const args = meta?.args as Record<string, unknown> | undefined;
+              const rawSteps = args?.steps ?? args?.plan ?? args?.content;
+              const steps: Array<{ text: string; status: string }> = [];
+              if (Array.isArray(rawSteps)) {
+                for (const s of rawSteps) {
+                  if (typeof s === "string") {
+                    steps.push({ text: s, status: "pending" });
+                  } else if (typeof s === "object" && s) {
+                    const obj = s as Record<string, unknown>;
+                    steps.push({
+                      text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
+                      status: (obj.status ?? "pending") as string,
+                    });
+                  }
+                }
+              }
+              if (steps.length > 0) {
+                // Map statuses: completed→done, in_progress→active, pending→pending
+                const mapped = steps.map((s) => ({
+                  text: s.text,
+                  status: (s.status === "completed" ? "done" : s.status === "in_progress" ? "active" : "pending") as "done" | "active" | "pending",
+                }));
+                setPlan(mapped);
+                loadedBlocks.push({
+                  id: log.id,
+                  type: "plan",
+                  timestamp: log.timestamp,
+                  data: { steps: mapped },
+                });
+              }
+              continue;
             }
 
             // respond tool = agent's final response
