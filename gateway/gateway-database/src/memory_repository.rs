@@ -609,6 +609,35 @@ impl MemoryRepository {
         })
     }
 
+    /// Get top facts for a specific category, ordered by confidence then recency.
+    ///
+    /// Used to always-inject corrections into recall (regardless of query
+    /// similarity) and for capability gap detection (skill/agent categories).
+    pub fn get_facts_by_category(
+        &self,
+        agent_id: &str,
+        category: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                 FROM memory_facts
+                 WHERE agent_id = ?1 AND category = ?2
+                   AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 ORDER BY confidence DESC, updated_at DESC
+                 LIMIT ?3"
+            )?;
+
+            let rows = stmt.query_map(
+                params![agent_id, category, limit as i64],
+                |row| row_to_memory_fact(row),
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Count total memory facts for an agent.
     pub fn count_memory_facts(&self, agent_id: &str) -> Result<usize, String> {
         self.db.with_connection(|conn| {

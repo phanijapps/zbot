@@ -127,6 +127,13 @@ impl MemoryRecall {
             .get_high_confidence_facts(agent_id, self.config.high_confidence_threshold, limit)
             .unwrap_or_default();
 
+        // 3b. Always include top corrections — they're universally applicable
+        //     regardless of query similarity (e.g., "don't use bash in PowerShell"
+        //     won't match a query about stock analysis, but is still critical).
+        let corrections = self.memory_repo
+            .get_facts_by_category(agent_id, "correction", 5)
+            .unwrap_or_default();
+
         // 4. Merge, dedup by key, take top-K
         let mut seen_keys = std::collections::HashSet::new();
         let mut results: Vec<ScoredFact> = Vec::new();
@@ -143,6 +150,16 @@ impl MemoryRecall {
             if seen_keys.insert(fact.key.clone()) {
                 results.push(ScoredFact {
                     score: fact.confidence,
+                    fact,
+                });
+            }
+        }
+
+        // Add corrections with pre-boost (category weight 1.5x applied later too)
+        for fact in corrections {
+            if seen_keys.insert(fact.key.clone()) {
+                results.push(ScoredFact {
+                    score: fact.confidence * 1.5,
                     fact,
                 });
             }
@@ -357,26 +374,43 @@ pub fn format_prioritized_recall(
 
     let max_chars = max_tokens * 4;
 
-    // Separate corrections/preferences (high-priority) from domain context
-    let mut corrections: Vec<&ScoredFact> = Vec::new();
+    // Separate corrections (hard rules) from preferences and domain context
+    let mut rules: Vec<&ScoredFact> = Vec::new();
+    let mut preferences: Vec<&ScoredFact> = Vec::new();
     let mut domain: Vec<&ScoredFact> = Vec::new();
 
     for sf in facts {
         match sf.fact.category.as_str() {
-            "correction" | "user" | "instruction" | "strategy" => corrections.push(sf),
+            "correction" => rules.push(sf),
+            "user" | "instruction" | "strategy" => preferences.push(sf),
             _ => domain.push(sf),
         }
     }
 
     let mut output = String::new();
-    output.push_str("## Recalled Knowledge\n");
 
-    // Section 1: Corrections & Preferences (highest priority)
-    if !corrections.is_empty() {
-        output.push_str("### Corrections & Preferences\n");
-        for sf in &corrections {
+    // Section 1: Rules (corrections) — FIRST, strongest language
+    // These come before everything else so the LLM processes them first.
+    if !rules.is_empty() {
+        output.push_str("## Rules (from past corrections — ALWAYS follow these)\n");
+        for sf in &rules {
+            let line = format!("- {}\n", sf.fact.content);
+            if output.len() + line.len() > max_chars {
+                break;
+            }
+            output.push_str(&line);
+        }
+        output.push('\n');
+    }
+
+    output.push_str("## Recalled Context\n");
+
+    // Section 2: Preferences & Instructions (high-priority but softer than rules)
+    if !preferences.is_empty() && output.len() < max_chars {
+        output.push_str("### Preferences & Instructions\n");
+        for sf in &preferences {
             let line = format!(
-                "- [{}] {} (confidence: {:.2})\n",
+                "- [{}] {} ({:.2})\n",
                 sf.fact.category, sf.fact.content, sf.fact.confidence
             );
             if output.len() + line.len() > max_chars {
@@ -386,9 +420,9 @@ pub fn format_prioritized_recall(
         }
     }
 
-    // Section 2: Relevant Past Experiences (episodes)
+    // Section 3: Relevant Past Experiences (episodes)
     if !episodes.is_empty() && output.len() < max_chars {
-        output.push_str("### Relevant Past Experiences\n");
+        output.push_str("### Past Experiences\n");
         for ep in episodes {
             let strategy = ep.strategy_used.as_deref().unwrap_or("unknown");
             let tokens = ep.token_cost.unwrap_or(0);
@@ -404,12 +438,12 @@ pub fn format_prioritized_recall(
         }
     }
 
-    // Section 3: Domain Context (remaining facts)
+    // Section 4: Domain Context (remaining facts)
     if !domain.is_empty() && output.len() < max_chars {
-        output.push_str("### Domain Context\n");
+        output.push_str("### Domain Knowledge\n");
         for sf in &domain {
             let line = format!(
-                "- [{}] {} (confidence: {:.2})\n",
+                "- [{}] {} ({:.2})\n",
                 sf.fact.category, sf.fact.content, sf.fact.confidence
             );
             if output.len() + line.len() > max_chars {
@@ -419,7 +453,7 @@ pub fn format_prioritized_recall(
         }
     }
 
-    // Section 4: Graph entities (lowest priority, fills remaining budget)
+    // Section 5: Graph entities (lowest priority, fills remaining budget)
     if let Some(ref ctx) = graph_context {
         if !ctx.entities.is_empty() && output.len() < max_chars {
             output.push_str("### Related Entities\n");
@@ -851,16 +885,19 @@ mod tests {
 
         let formatted = format_prioritized_recall(&facts, &episodes, &None, 3000);
 
-        // Should have all sections
-        assert!(formatted.contains("## Recalled Knowledge"));
-        assert!(formatted.contains("### Corrections & Preferences"));
-        assert!(formatted.contains("[correction]"));
+        // Rules section comes first with correction content (no category prefix)
+        assert!(formatted.contains("## Rules (from past corrections"));
         assert!(formatted.contains("kebab-case"));
-        assert!(formatted.contains("### Relevant Past Experiences"));
+        // Corrections should NOT have [correction] prefix — they're rules now
+        assert!(!formatted.contains("[correction]"));
+
+        // Recalled Context section
+        assert!(formatted.contains("## Recalled Context"));
+        assert!(formatted.contains("### Past Experiences"));
         assert!(formatted.contains("Fixed database migration"));
         assert!(formatted.contains("SUCCESS"));
         assert!(formatted.contains("1200 tokens"));
-        assert!(formatted.contains("### Domain Context"));
+        assert!(formatted.contains("### Domain Knowledge"));
         assert!(formatted.contains("[domain]"));
         assert!(formatted.contains("WAL mode"));
     }

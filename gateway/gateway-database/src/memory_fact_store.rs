@@ -209,6 +209,13 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             .get_high_confidence_facts(agent_id, 0.9, limit)
             .unwrap_or_default();
 
+        // Always include top corrections — they're universally applicable
+        // regardless of query similarity (e.g., "don't use bash in PowerShell"
+        // won't match a query about stock analysis, but is still critical).
+        let corrections = self.memory_repo
+            .get_facts_by_category(agent_id, "correction", 5)
+            .unwrap_or_default();
+
         // Merge, dedup by key
         let mut seen_keys = std::collections::HashSet::new();
         let mut merged = Vec::new();
@@ -221,6 +228,15 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             if seen_keys.insert(fact.key.clone()) {
                 merged.push(crate::memory_repository::ScoredFact {
                     score: fact.confidence,
+                    fact,
+                });
+            }
+        }
+        // Add corrections with pre-boost (category weight 1.5x applied later too)
+        for fact in corrections {
+            if seen_keys.insert(fact.key.clone()) {
+                merged.push(crate::memory_repository::ScoredFact {
+                    score: fact.confidence * 1.5,
                     fact,
                 });
             }
@@ -253,6 +269,72 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         });
         merged.truncate(limit);
 
+        // --- Format output with Rules section for corrections ---
+        let mut rules: Vec<&crate::memory_repository::ScoredFact> = Vec::new();
+        let mut context: Vec<&crate::memory_repository::ScoredFact> = Vec::new();
+
+        for sf in &merged {
+            match sf.fact.category.as_str() {
+                "correction" => rules.push(sf),
+                _ => context.push(sf),
+            }
+        }
+
+        let mut formatted = String::new();
+
+        // Rules section comes FIRST — imperative language
+        if !rules.is_empty() {
+            formatted.push_str("## Rules (from past corrections — ALWAYS follow these)\n");
+            for sf in &rules {
+                formatted.push_str(&format!("- {}\n", sf.fact.content));
+            }
+            formatted.push('\n');
+        }
+
+        // Regular recalled context
+        if !context.is_empty() {
+            formatted.push_str("## Recalled Context\n");
+            for sf in &context {
+                formatted.push_str(&format!(
+                    "- [{}] {} ({:.2})\n",
+                    sf.fact.category, sf.fact.content, sf.fact.confidence
+                ));
+            }
+        }
+
+        // --- Capability gap detection ---
+        // Check if any of the returned results include skill/agent categories.
+        // If none do, the query is likely outside known capabilities.
+        let has_skill_or_agent = merged.iter().any(|sf| {
+            sf.fact.category == "skill" || sf.fact.category == "agent"
+        });
+
+        if !has_skill_or_agent {
+            // Fetch top skills and agents by confidence for the gap section
+            let top_skills = self.memory_repo
+                .get_facts_by_category(agent_id, "skill", 3)
+                .unwrap_or_default();
+            let top_agents = self.memory_repo
+                .get_facts_by_category(agent_id, "agent", 3)
+                .unwrap_or_default();
+
+            // Only show capability gap if there ARE known capabilities to suggest
+            if !top_skills.is_empty() || !top_agents.is_empty() {
+                formatted.push_str("\n## Capability Gap\n");
+                formatted.push_str("No matching skills or agents found for this request.\n");
+                formatted.push_str("Closest available capabilities:\n");
+
+                for skill in &top_skills {
+                    formatted.push_str(&format!("- skill: {} ({})\n", skill.key, skill.content));
+                }
+                for agent in &top_agents {
+                    formatted.push_str(&format!("- agent: {} ({})\n", agent.key, agent.content));
+                }
+
+                formatted.push_str("\nConsider creating a plan to build the missing capability, or inform the user about current limitations.\n");
+            }
+        }
+
         let items: Vec<Value> = merged
             .iter()
             .map(|sf| {
@@ -274,6 +356,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             "count": items.len(),
             "source": "memory_db",
             "prioritized": true,
+            "formatted": formatted,
         }))
     }
 }
