@@ -5,13 +5,13 @@
 // ============================================================================
 
 use std::io::{Read as IoRead, Write as IoWrite};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use flate2::read::GzDecoder;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use gateway_database::{ConversationRepository, DatabaseManager};
+use gateway_database::DatabaseManager;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +43,6 @@ struct ArchiveLine {
 /// Archives completed session transcripts (messages + execution logs) to
 /// compressed JSONL files and removes them from SQLite.
 pub struct SessionArchiver {
-    conversation_repo: Arc<ConversationRepository>,
     db: Arc<DatabaseManager>,
     archive_path: PathBuf,
 }
@@ -54,12 +53,10 @@ impl SessionArchiver {
     /// `archive_path` is the directory where `.jsonl.gz` files will be written.
     /// It will be created on first archive if it doesn't exist.
     pub fn new(
-        conversation_repo: Arc<ConversationRepository>,
         db: Arc<DatabaseManager>,
         archive_path: PathBuf,
     ) -> Self {
         Self {
-            conversation_repo,
             db,
             archive_path,
         }

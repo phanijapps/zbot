@@ -448,13 +448,9 @@ struct ArchiveResponse {
 
 #[derive(serde::Deserialize)]
 struct RestoreResponse {
+    #[allow(dead_code)]
     session_id: String,
     records_restored: usize,
-}
-
-#[derive(serde::Deserialize)]
-struct SessionErrorResponse {
-    error: String,
 }
 
 async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {

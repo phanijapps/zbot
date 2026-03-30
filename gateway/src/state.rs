@@ -202,7 +202,6 @@ impl AppState {
         // Create session archiver for offloading old transcripts to compressed files
         let archive_path = paths.data_dir().join(&recall_config.session_offload.archive_path);
         let session_archiver = Arc::new(SessionArchiver::new(
-            conversation_repo.clone(),
             db_manager.clone(),
             archive_path,
         ));
