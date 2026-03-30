@@ -214,12 +214,20 @@ export function useMissionControl() {
       // Token streaming
       // ------------------------------------------------------------------
       case "token": {
-        streamingBufferRef.current += event.delta as string;
-        if (rafIdRef.current === null) {
-          rafIdRef.current = requestAnimationFrame(flushTokenBuffer);
+        const delta = (event.delta ?? event.content ?? "") as string;
+        if (delta) {
+          streamingBufferRef.current += delta;
+          if (rafIdRef.current === null) {
+            rafIdRef.current = requestAnimationFrame(flushTokenBuffer);
+          }
         }
-        if (typeof event.total_tokens === "number") {
-          setTokenCount(event.total_tokens as number);
+        // Track tokens from any available field
+        const totalTok = (event.total_tokens ?? event.tokens_in ?? event.token_count) as number | undefined;
+        if (typeof totalTok === "number" && totalTok > 0) {
+          setTokenCount(totalTok);
+        } else {
+          // Increment by 1 per token event as fallback
+          setTokenCount((prev) => prev + 1);
         }
         break;
       }
@@ -262,16 +270,33 @@ export function useMissionControl() {
         // update_plan — type: 'plan'
         if (toolName === "update_plan") {
           const steps: PlanStep[] = [];
-          const rawSteps = (args.steps ?? args.plan ?? []) as Array<{ text?: string; status?: string }>;
+          // Try structured steps first, then parse from plan text
+          const rawSteps = args.steps ?? args.plan ?? args.content ?? "";
           if (Array.isArray(rawSteps)) {
             for (const s of rawSteps) {
-              steps.push({
-                text: (s.text ?? "") as string,
-                status: (s.status ?? "pending") as StepStatus,
-              });
+              if (typeof s === "string") {
+                steps.push({ text: s, status: "pending" as StepStatus });
+              } else if (typeof s === "object" && s) {
+                steps.push({
+                  text: ((s as Record<string, unknown>).text ?? (s as Record<string, unknown>).description ?? "") as string,
+                  status: ((s as Record<string, unknown>).status ?? "pending") as StepStatus,
+                });
+              }
+            }
+          } else if (typeof rawSteps === "string" && rawSteps.trim()) {
+            // Parse plan text: split by newlines, treat each line as a step
+            const lines = rawSteps.split("\n").filter((l: string) => l.trim());
+            for (const line of lines) {
+              const trimmed = line.replace(/^[\s\-\*\d.]+/, "").trim();
+              if (trimmed) {
+                const isDone = line.includes("[x]") || line.includes("✓");
+                steps.push({ text: trimmed, status: isDone ? "done" as StepStatus : "pending" as StepStatus });
+              }
             }
           }
-          setPlan(steps);
+          if (steps.length > 0) {
+            setPlan(steps);
+          }
           const blockId = crypto.randomUUID();
           if (toolCallId) toolCallBlockMapRef.current.set(toolCallId, blockId);
           setBlocks((prev) => [
@@ -280,7 +305,7 @@ export function useMissionControl() {
               id: blockId,
               type: "plan",
               timestamp: now(),
-              data: { steps },
+              data: { steps: steps.length > 0 ? steps : [{ text: "Planning...", status: "active" as StepStatus }] },
             },
           ]);
           break;
@@ -352,16 +377,17 @@ export function useMissionControl() {
               // Extract facts for sidebar
               try {
                 const parsed = JSON.parse(result);
-                if (Array.isArray(parsed.facts)) {
-                  setRecalledFacts((prev) => {
-                    const newFacts: RecalledFact[] = parsed.facts.map((f: Record<string, unknown>) => ({
+                // The recall tool returns { results: [...], formatted: "..." }
+                const facts = parsed.results ?? parsed.facts ?? [];
+                if (Array.isArray(facts) && facts.length > 0) {
+                  setRecalledFacts(
+                    facts.map((f: Record<string, unknown>) => ({
                       key: (f.key ?? "") as string,
                       content: (f.content ?? "") as string,
                       category: (f.category ?? "") as string,
                       confidence: (f.confidence ?? 0) as number,
-                    }));
-                    return [...prev, ...newFacts];
-                  });
+                    }))
+                  );
                 }
               } catch { /* ignore parse failure */ }
             } else if (block.type === "tool") {
@@ -375,11 +401,13 @@ export function useMissionControl() {
               };
               // Check for ward data in tool result
               const toolName = block.data.toolName as string;
-              if (toolName === "set_ward" || toolName === "enter_ward") {
+              if (toolName === "ward" || toolName === "set_ward" || toolName === "enter_ward") {
                 try {
                   const parsed = JSON.parse(result);
-                  if (parsed.name && parsed.content) {
-                    setActiveWard({ name: parsed.name, content: parsed.content });
+                  if (parsed.__ward_changed__ || parsed.action === "switched") {
+                    const wardName = (parsed.ward_name ?? parsed.name ?? "unknown") as string;
+                    const wardContent = (parsed.agents_md ?? parsed.content ?? "") as string;
+                    setActiveWard({ name: wardName, content: wardContent.slice(0, 300) });
                   }
                 } catch { /* not ward JSON, ignore */ }
               }
@@ -581,6 +609,25 @@ export function useMissionControl() {
         setStatus("error");
         stopDurationTimer();
         setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
+        break;
+      }
+
+      // Handle system messages (delegation callbacks, continuation triggers)
+      case "system_message":
+      case "message": {
+        const content = (event.content ?? event.message ?? "") as string;
+        if (content) {
+          setBlocks((prev) => [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              type: "response",
+              timestamp: now(),
+              data: { content, timestamp: now() },
+              isStreaming: false,
+            },
+          ]);
+        }
         break;
       }
 
