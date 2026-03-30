@@ -1177,10 +1177,33 @@ export function useRecentSessions() {
       try {
         const transport = await getTransport();
         const res = await transport.listLogSessions({ limit: 10 });
-        if (!cancelled && res.success && res.data) {
-          // Filter to root sessions only (no parent)
-          setSessions(res.data.filter((s) => !s.parent_session_id));
-        }
+        if (cancelled || !res.success || !res.data) return;
+
+        // Filter to root sessions only (no parent)
+        const rootSessions = res.data.filter((s) => !s.parent_session_id);
+
+        // Enrich untitled sessions by fetching logs for set_session_title tool calls
+        const enriched = await Promise.all(
+          rootSessions.map(async (s) => {
+            if (s.title) return s;
+            try {
+              const detail = await transport.getLogSession(s.session_id);
+              if (!detail.success || !detail.data?.logs) return s;
+              for (const log of detail.data.logs) {
+                if (log.category !== "tool_call") continue;
+                const meta = log.metadata as Record<string, unknown> | undefined;
+                if ((meta?.tool_name as string) === "set_session_title") {
+                  const args = meta?.args as Record<string, unknown> | undefined;
+                  const title = (args?.title ?? args?.name ?? "") as string;
+                  if (title) return { ...s, title };
+                }
+              }
+            } catch { /* ignore */ }
+            return s;
+          }),
+        );
+
+        if (!cancelled) setSessions(enriched);
       } catch (err) {
         console.error("[useRecentSessions] Failed to load sessions:", err);
       }
