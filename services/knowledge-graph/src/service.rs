@@ -4,7 +4,7 @@
 
 use crate::error::GraphResult;
 use crate::storage::GraphStorage;
-use crate::types::{Direction, Entity, EntityWithConnections, GraphStats, Subgraph};
+use crate::types::{Direction, Entity, EntityWithConnections, GraphStats, Relationship, Subgraph};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -221,6 +221,31 @@ impl GraphService {
         limit: usize,
     ) -> GraphResult<Vec<crate::types::NeighborInfo>> {
         self.storage.get_neighbors(agent_id, entity_id, direction, limit).await
+    }
+
+    /// Count all entities across all agents.
+    pub async fn count_all_entities(&self) -> GraphResult<usize> {
+        self.storage.count_all_entities().await
+    }
+
+    /// Count all relationships across all agents.
+    pub async fn count_all_relationships(&self) -> GraphResult<usize> {
+        self.storage.count_all_relationships().await
+    }
+
+    /// List entities across all agents with optional filters.
+    pub async fn list_all_entities(
+        &self,
+        ward_id: Option<&str>,
+        entity_type: Option<&str>,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        self.storage.list_all_entities(ward_id, entity_type, limit).await
+    }
+
+    /// List all relationships across all agents.
+    pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
+        self.storage.list_all_relationships(limit).await
     }
 }
 

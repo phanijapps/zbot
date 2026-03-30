@@ -12,8 +12,11 @@ use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
 use std::collections::HashMap;
+use std::path::Path;
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, OwnedSemaphorePermit, RwLock};
+
+use agent_runtime::ChatMessage;
 
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
@@ -21,6 +24,7 @@ use crate::invoke::{
     spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
     WorkspaceCache,
 };
+use crate::recall::MemoryRecall;
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
     start_execution,
@@ -53,6 +57,10 @@ pub async fn spawn_delegated_agent(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
     workspace_cache: WorkspaceCache,
+    delegation_permit: Option<OwnedSemaphorePermit>,
+    memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
+    embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+    memory_recall: Option<Arc<MemoryRecall>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session = execution_state::Session::new_child(
@@ -100,6 +108,7 @@ pub async fn spawn_delegated_agent(
         &request.parent_agent_id,
         &child_conversation_id, // legacy conversation_id
     );
+    let delegation_context = delegation_context.with_child_conversation_id(child_conversation_id.clone());
     let delegation_context = if let Some(ctx) = request.context.clone() {
         delegation_context.with_context(ctx)
     } else {
@@ -126,7 +135,7 @@ pub async fn spawn_delegated_agent(
 
     // Load agent and provider using AgentLoader
     let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
-    let (agent, provider) = match agent_loader.load(&request.child_agent_id).await {
+    let (agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
         Ok(result) => result,
         Err(e) => {
             // Mark the pre-created execution as crashed so session can complete
@@ -151,17 +160,38 @@ pub async fn spawn_delegated_agent(
         .flatten()
         .and_then(|s| s.ward_id);
 
+    // Build model registry for capability lookups
+    let bundled_models = gateway_templates::Templates::get("models_registry.json")
+        .map(|f| f.data.to_vec())
+        .unwrap_or_default();
+    let model_registry = Arc::new(gateway_services::models::ModelRegistry::load(
+        &bundled_models,
+        &paths.vault_dir(),
+    ));
+
     // Build executor using ExecutorBuilder
-    let builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
-        .with_workspace_cache(workspace_cache);
+    let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
+        .with_workspace_cache(workspace_cache)
+        .with_model_registry(model_registry)
+        .with_delegated(true);
+
+    // Build fact store for subagent (so save_fact uses DB, not file fallback)
+    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {
+        Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), embedding_client.clone()))
+            as Arc<dyn zero_core::MemoryFactStore>
+    });
+    if let Some(fs) = fact_store {
+        builder = builder.with_fact_store(fs);
+    }
+
     let executor = match builder
         .build(
             &agent,
             &provider,
             &child_conversation_id,
             &request.session_id,
-            available_agents,
-            available_skills,
+            &available_agents,
+            &available_skills,
             None,
             &mcp_service,
             session_ward_id.as_deref(),
@@ -177,8 +207,40 @@ pub async fn spawn_delegated_agent(
         }
     };
 
+    // Delegation recall: inject relevant knowledge for the child agent
+    let initial_history = if let Some(recall) = &memory_recall {
+        match recall.recall_with_graph(
+            &request.child_agent_id,
+            &request.task,
+            5,
+            session_ward_id.as_deref(),
+        ).await {
+            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+                tracing::info!(
+                    child_agent = %request.child_agent_id,
+                    fact_count = result.facts.len(),
+                    episode_count = result.episodes.len(),
+                    "Injected recalled knowledge for delegated agent"
+                );
+                vec![ChatMessage::system(result.formatted)]
+            }
+            Ok(_) => Vec::new(),
+            Err(e) => {
+                tracing::warn!(
+                    child_agent = %request.child_agent_id,
+                    error = %e,
+                    "Delegation recall failed"
+                );
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     // Create execution handle
-    let handle = ExecutionHandle::new(20);
+    let max_iter = request.max_iterations.unwrap_or(25);
+    let handle = ExecutionHandle::new(max_iter);
     let handle_clone = handle.clone();
 
     // Store handle
@@ -202,6 +264,9 @@ pub async fn spawn_delegated_agent(
         delegation_tx,
         log_service,
         state_service,
+        paths,
+        delegation_permit,
+        initial_history,
     );
 
     tracing::info!(
@@ -229,6 +294,9 @@ fn spawn_execution_task(
     delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
+    paths: SharedVaultPaths,
+    delegation_permit: Option<OwnedSemaphorePermit>,
+    initial_history: Vec<ChatMessage>,
 ) {
     let agent_id = request.child_agent_id.clone();
     let task_msg = request.task.clone();
@@ -236,6 +304,11 @@ fn spawn_execution_task(
     let parent_execution_id = request.parent_execution_id.clone();
 
     tokio::spawn(async move {
+        // Hold the delegation permit for the duration of the task.
+        // When this task completes (or is dropped), the permit is released,
+        // allowing another queued delegation to proceed.
+        let _delegation_permit = delegation_permit;
+
         // Create batch writer with conversation repo for session message streaming
         let batch_writer = spawn_batch_writer_with_repo(
             state_service.clone(),
@@ -275,7 +348,7 @@ fn spawn_execution_task(
         let mut turn_text = String::new();
 
         let result = executor
-            .execute_stream(&task_msg, &[], |event| {
+            .execute_stream(&task_msg, &initial_history, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }
@@ -378,6 +451,17 @@ fn spawn_execution_task(
                 .await;
             }
             Err(e) => {
+                // Build structured crash report with plan status and ward files
+                let crash_report = build_crash_report(
+                    &agent_id,
+                    &e.to_string(),
+                    &conversation_repo,
+                    &child_session_id,
+                    &state_service,
+                    &session_id,
+                    &paths,
+                );
+
                 handle_execution_failure(
                     &conversation_repo,
                     &state_service,
@@ -389,10 +473,15 @@ fn spawn_execution_task(
                     &agent_id,
                     &conv_id,
                     &parent_execution_id,
-                    &e.to_string(),
+                    &crash_report,
                 )
                 .await;
             }
+        }
+
+        // Mark child session as completed (prevents orphaned "running" sessions)
+        if let Err(e) = state_service.complete_session(&child_session_id) {
+            tracing::warn!(child_session_id = %child_session_id, "Failed to complete child session: {}", e);
         }
     });
 }
@@ -583,4 +672,132 @@ async fn handle_execution_failure(
     }
 
     delegation_registry.remove(execution_id);
+}
+
+/// Build a structured crash report with plan status and ward file listing.
+///
+/// When a subagent fails, this provides the parent agent with actionable
+/// intelligence about what was accomplished before the crash, enabling
+/// better retry strategies.
+fn build_crash_report(
+    agent_id: &str,
+    error: &str,
+    conversation_repo: &ConversationRepository,
+    child_session_id: &str,
+    state_service: &StateService<DatabaseManager>,
+    parent_session_id: &str,
+    paths: &SharedVaultPaths,
+) -> String {
+    let mut report = format!(
+        "DELEGATION FAILED: {}\n\nERROR: {}\n",
+        agent_id, error
+    );
+
+    // Try to extract plan status from child session messages.
+    // Plan updates appear as tool results containing JSON with `__plan_update: true`.
+    let mut found_plan = false;
+    if let Ok(messages) = conversation_repo.get_session_conversation(child_session_id, 200) {
+        // Scan tool-result messages for plan updates (last one is most recent)
+        let plan_messages: Vec<_> = messages
+            .iter()
+            .filter(|m| m.content.contains("__plan_update"))
+            .collect();
+
+        if let Some(last_plan_msg) = plan_messages.last() {
+            if let Ok(plan_data) = serde_json::from_str::<serde_json::Value>(&last_plan_msg.content)
+            {
+                if let Some(steps) = plan_data.get("plan").and_then(|p| p.as_array()) {
+                    let completed: Vec<_> = steps
+                        .iter()
+                        .filter(|s| {
+                            s.get("status").and_then(|v| v.as_str()) == Some("completed")
+                        })
+                        .filter_map(|s| s.get("step").and_then(|v| v.as_str()))
+                        .collect();
+                    let pending: Vec<_> = steps
+                        .iter()
+                        .filter(|s| {
+                            s.get("status").and_then(|v| v.as_str()) != Some("completed")
+                        })
+                        .filter_map(|s| s.get("step").and_then(|v| v.as_str()))
+                        .collect();
+
+                    found_plan = true;
+                    if !completed.is_empty() {
+                        report.push_str("\nCOMPLETED STEPS:\n");
+                        for s in &completed {
+                            report.push_str(&format!("  [done] {}\n", s));
+                        }
+                    }
+                    if !pending.is_empty() {
+                        report.push_str("\nREMAINING STEPS:\n");
+                        for s in &pending {
+                            report.push_str(&format!("  [todo] {}\n", s));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !found_plan {
+        report.push_str("\nPARTIAL WORK COMPLETED:\nNo plan was created\n");
+    }
+
+    // List files in the ward (if one is active for this session)
+    if let Ok(Some(session)) = state_service.get_session(parent_session_id) {
+        if let Some(ward_id) = &session.ward_id {
+            let ward_dir = paths.ward_dir(ward_id);
+            if ward_dir.exists() {
+                if let Ok(entries) = walkdir_simple(&ward_dir) {
+                    if !entries.is_empty() {
+                        report.push_str("\nFILES IN WARD:\n");
+                        for entry in entries.iter().take(20) {
+                            report.push_str(&format!("  {}\n", entry));
+                        }
+                        if entries.len() > 20 {
+                            report.push_str(&format!(
+                                "  ... and {} more files\n",
+                                entries.len() - 20
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    report.push_str(
+        "\nSUGGESTION: Break remaining work into smaller, focused tasks. \
+         Existing files can be reused.\n",
+    );
+    report
+}
+
+/// Simple recursive directory listing that skips hidden files and common noise.
+fn walkdir_simple(dir: &Path) -> std::io::Result<Vec<String>> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = path
+            .strip_prefix(dir)
+            .unwrap_or(&path)
+            .to_string_lossy()
+            .to_string();
+        if name.starts_with('.') || name.contains("__pycache__") {
+            continue;
+        }
+        if path.is_file() {
+            files.push(name);
+        } else if path.is_dir() {
+            if let Ok(sub_files) = walkdir_simple(&path) {
+                for sf in sub_files {
+                    files.push(format!("{}/{}", name, sf));
+                }
+            }
+        }
+    }
+    files.sort();
+    Ok(files)
 }

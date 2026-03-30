@@ -55,7 +55,8 @@ pub fn format_callback_message(
     };
 
     format!(
-        "## From {}\n\n{}\n\n---\n_Conversation: `{}`_",
+        "## From {}\n\n{}\n\n---\n_Conversation: `{}`_\n\n\
+         [Recall] Delegation completed. Consider recalling to absorb any new learnings.",
         agent_display_name, response_content, conversation_id
     )
 }

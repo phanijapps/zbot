@@ -75,6 +75,10 @@ impl Tool for DelegateTool {
                     "type": "boolean",
                     "default": false,
                     "description": "If true, wait for the subagent to complete before continuing. Default is fire-and-forget."
+                },
+                "max_iterations": {
+                    "type": "integer",
+                    "description": "Maximum number of iterations the subagent can run. Defaults to 25 if not specified."
                 }
             },
             "required": ["agent_id", "task"]
@@ -121,6 +125,11 @@ impl Tool for DelegateTool {
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
+        let max_iterations = args
+            .get("max_iterations")
+            .and_then(|v| v.as_u64())
+            .map(|v| v as u32);
+
         // Get parent context from state
         let parent_agent_id = ctx
             .get_state("agent_id")
@@ -132,6 +141,39 @@ impl Tool for DelegateTool {
             return Err(zero_core::ZeroError::Tool(
                 "Cannot delegate to yourself. Use a different agent or handle the task directly.".to_string()
             ));
+        }
+
+        // Guard: Only one delegation at a time per session.
+        // Atomic claim — first concurrent delegate_to_agent wins, rest return "queued".
+        if !ctx.try_claim("app:delegation_active") {
+            return Ok(json!({
+                "status": "queued",
+                "message": "You already have an active delegation. Wait for it to complete — the system will resume you automatically. Do NOT delegate another step until you see the result."
+            }));
+        }
+
+        // Guard: Block ad-hoc delegations when placeholder specs exist.
+        // Only planning subagent delegations are allowed (task contains "planning" or "Spec writer").
+        let has_placeholders = ctx
+            .get_state("app:has_placeholder_specs")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        let is_delegated = ctx
+            .get_state("app:is_delegated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if has_placeholders && !is_delegated {
+            let task_lower = task.to_lowercase();
+            let is_planning_task = task_lower.contains("planning subagent")
+                || task_lower.contains("spec writer")
+                || task_lower.contains("plan, not execute")
+                || task_lower.contains("fill") && task_lower.contains("spec");
+            if !is_planning_task {
+                return Ok(json!({
+                    "status": "redirect",
+                    "message": "Placeholder specs exist in the ward. Delegate to a planning subagent (code-agent) to fill them first. Do not delegate ad-hoc tasks."
+                }));
+            }
         }
 
         let parent_conversation_id = ctx
@@ -146,13 +188,22 @@ impl Tool for DelegateTool {
             uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
         );
 
+        // Enrich task with platform hint so subagents use correct shell syntax
+        let platform_hint = match std::env::consts::OS {
+            "windows" => "\n\n[PLATFORM: Windows / PowerShell. Do NOT use bash syntax (head, &&, cat, heredocs). Use Get-Content, ';', python.]",
+            "macos" => "\n\n[PLATFORM: macOS / zsh.]",
+            _ => "\n\n[PLATFORM: Linux / bash.]",
+        };
+        let enriched_task = format!("{}{}", task, platform_hint);
+
         // Set delegation action for the executor to pick up
         let mut actions = ctx.actions();
         actions.delegate = Some(zero_core::event::DelegateAction {
             agent_id: target_agent_id.to_string(),
-            task: task.to_string(),
+            task: enriched_task,
             context,
             wait_for_result,
+            max_iterations,
         });
         ctx.set_actions(actions);
 

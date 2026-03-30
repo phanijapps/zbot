@@ -4,6 +4,7 @@
 // ============================================================================
 
 import type { LucideIcon } from "lucide-react";
+import type { ReactNode } from "react";
 
 interface EmptyStateProps {
   /** Icon to display (from lucide-react) */
@@ -17,6 +18,8 @@ interface EmptyStateProps {
     label: string;
     onClick: () => void;
   };
+  /** Optional hint displayed below the action */
+  hint?: ReactNode;
   /** Size variant */
   size?: "sm" | "md" | "lg";
 }
@@ -26,6 +29,7 @@ export function EmptyState({
   title,
   description,
   action,
+  hint,
   size = "md",
 }: EmptyStateProps) {
   const sizeConfig = {
@@ -62,6 +66,7 @@ export function EmptyState({
           {action.label}
         </button>
       )}
+      {hint && <div className="empty-state__hint">{hint}</div>}
     </div>
   );
 }

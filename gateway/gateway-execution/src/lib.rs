@@ -32,6 +32,7 @@ pub mod lifecycle;
 pub mod recall;
 pub mod resource_provider;
 pub mod runner;
+pub mod middleware;
 
 // Re-export public types
 pub use config::{ExecutionConfig, GatewayFileSystem};
@@ -50,6 +51,6 @@ pub use lifecycle::{
 pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use runner::ExecutionRunner;
 pub use distillation::SessionDistiller;
-pub use recall::{MemoryRecall, RecallResult, GraphContext, format_recalled_facts, format_combined_recall};
+pub use recall::{MemoryRecall, RecallResult, GraphContext, format_recalled_facts, format_combined_recall, format_prioritized_recall};
 pub use composite_provider::CompositeResourceProvider;
 pub use resource_provider::GatewayResourceProvider;

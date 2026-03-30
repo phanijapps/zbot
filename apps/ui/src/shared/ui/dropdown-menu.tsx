@@ -55,7 +55,7 @@ function DropdownMenuItem({
       data-inset={inset}
       data-variant={variant}
       className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-gray-200 outline-none select-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-white/10 hover:text-white focus:bg-white/10 focus:text-white data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-gray-400",
+        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-sm text-[var(--foreground)] outline-none select-none transition-colors data-[disabled]:pointer-events-none data-[disabled]:opacity-50 hover:bg-[var(--muted)] hover:text-[var(--foreground)] focus:bg-[var(--muted)] focus:text-[var(--foreground)] data-[inset]:pl-8 [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-[var(--muted-foreground)]",
         variant === "destructive" && "text-red-400 hover:text-red-300 hover:bg-red-500/10 focus:text-red-300 focus:bg-red-500/10",
         className,
       )}

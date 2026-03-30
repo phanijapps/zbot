@@ -186,6 +186,7 @@ export interface ProviderResponse {
   baseUrl: string;
   models: string[];
   embeddingModels?: string[];
+  defaultModel?: string;
   verified?: boolean;
   isDefault?: boolean;
   createdAt?: string;
@@ -199,6 +200,7 @@ export interface CreateProviderRequest {
   baseUrl: string;
   models: string[];
   embeddingModels?: string[];
+  defaultModel?: string;
 }
 
 export interface UpdateProviderRequest {
@@ -208,6 +210,12 @@ export interface UpdateProviderRequest {
   baseUrl?: string;
   models?: string[];
   embeddingModels?: string[];
+  defaultModel?: string;
+}
+
+/** Get the default model for a provider response. */
+export function getProviderDefaultModel(provider: ProviderResponse): string {
+  return provider.defaultModel || provider.models[0] || "";
 }
 
 export interface ProviderTestResult {
@@ -215,6 +223,41 @@ export interface ProviderTestResult {
   message: string;
   models?: string[];
 }
+
+// ============================================================================
+// Model Registry Types
+// ============================================================================
+
+export interface ModelProfile {
+  name: string;
+  provider: string;
+  capabilities: ModelCapabilities;
+  context: ContextWindow;
+  embedding?: EmbeddingSpec;
+}
+
+export interface ModelCapabilities {
+  tools: boolean;
+  vision: boolean;
+  thinking: boolean;
+  embeddings: boolean;
+  voice: boolean;
+  imageGeneration: boolean;
+  videoGeneration: boolean;
+}
+
+export interface ContextWindow {
+  input: number;
+  output: number | null;
+}
+
+export interface EmbeddingSpec {
+  dimensions: number;
+  maxDimensions?: number;
+}
+
+/** Full registry response: model ID → profile */
+export type ModelRegistryResponse = Record<string, ModelProfile>;
 
 // ============================================================================
 // MCP Types
@@ -272,15 +315,20 @@ export interface McpTestResult {
 // ============================================================================
 
 export interface ToolSettings {
-  grep: boolean;
-  glob: boolean;
+  /** Enable python tool (run Python scripts) */
   python: boolean;
-  /** Enable web_fetch tool (disabled by default - large responses can cause context explosion) */
+  /** Enable web_fetch tool (HTTP requests — large responses can cause context explosion) */
   webFetch: boolean;
-  loadSkill: boolean;
+  /** Enable UI tools (request_input, show_content) */
   uiTools: boolean;
+  /** Enable create_agent tool */
   createAgent: boolean;
+  /** Enable introspection tools (list_tools, list_mcps) */
   introspection: boolean;
+  /** Enable file tools (read, write, edit, glob) as separate tools */
+  fileTools: boolean;
+  /** Enable heavyweight todos tool (SQLite-like task persistence) */
+  todos: boolean;
   /** Offload large tool results to filesystem instead of keeping in context */
   offloadLargeResults: boolean;
   /** Token threshold for offloading (default: 5000 tokens ≈ 20000 chars) */
@@ -632,6 +680,27 @@ export interface SubscriptionOptions {
 }
 
 // ============================================================================
+// Plugin Types
+// ============================================================================
+
+/** Plugin status from GET /api/plugins */
+export interface PluginInfo {
+  id: string;
+  name: string;
+  version: string;
+  description: string;
+  state: "running" | "stopped" | "failed" | "starting";
+  auto_restart: boolean;
+  enabled: boolean;
+  error?: string;
+}
+
+export interface PluginsResponse {
+  plugins: PluginInfo[];
+  total: number;
+}
+
+// ============================================================================
 // Bridge Worker Types
 // ============================================================================
 
@@ -737,6 +806,7 @@ export interface MemoryFact {
   confidence: number;
   mention_count: number;
   source_summary?: string;
+  contradicted_by?: string;
   created_at: string;
   updated_at: string;
 }
@@ -778,6 +848,8 @@ export interface GraphEntity {
   name: string;
   properties: Record<string, unknown>;
   mention_count: number;
+  first_seen_at: string;
+  last_seen_at: string;
 }
 
 /** Graph relationship */

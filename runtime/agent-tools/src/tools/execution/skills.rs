@@ -12,6 +12,8 @@ use serde_json::{json, Value};
 use zero_core::{Tool, ToolContext, Result};
 use zero_core::FileSystemContext;
 
+use crate::tools::guards::has_placeholder_specs;
+
 // ============================================================================
 // SKILL STATE TYPES
 // ============================================================================
@@ -188,6 +190,13 @@ impl Tool for LoadSkillTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        if has_placeholder_specs(ctx.as_ref()) {
+            return Ok(json!({
+                "status": "redirect",
+                "message": "Placeholder specs exist in your ward's specs/ folder. Delegate to a planning subagent to fill them first. Skills needed are listed in each spec file."
+            }));
+        }
+
         // Check if loading main skill file or specific file
         let has_skill = args.get("skill").and_then(|v| v.as_str()).is_some();
         let has_file = args.get("file").and_then(|v| v.as_str()).is_some();

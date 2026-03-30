@@ -34,6 +34,29 @@ pub struct Provider {
     pub is_default: bool,
     #[serde(rename = "createdAt", skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Maximum concurrent LLM requests for this provider (default: 3).
+    /// Set lower for rate-limited providers (e.g., 1 for free tiers).
+    #[serde(rename = "maxConcurrentRequests", skip_serializing_if = "Option::is_none")]
+    pub max_concurrent_requests: Option<u32>,
+    /// Context window size in tokens. Overrides the hardcoded model lookup.
+    /// Set this when using models not in the built-in lookup table.
+    #[serde(rename = "contextWindow", skip_serializing_if = "Option::is_none")]
+    pub context_window: Option<u64>,
+    /// Default model for this provider. Used when creating root or specialist agents
+    /// that don't specify a model. Falls back to `models[0]` if not set.
+    #[serde(rename = "defaultModel", skip_serializing_if = "Option::is_none")]
+    pub default_model: Option<String>,
+}
+
+impl Provider {
+    /// Get the default model for this provider.
+    /// Priority: explicit `defaultModel` → first entry in `models` → `"gpt-4o"`.
+    pub fn default_model(&self) -> &str {
+        self.default_model
+            .as_deref()
+            .or_else(|| self.models.first().map(|s| s.as_str()))
+            .unwrap_or("gpt-4o")
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]

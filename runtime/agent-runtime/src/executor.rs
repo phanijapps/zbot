@@ -20,6 +20,8 @@
 #![warn(clippy::all)]
 
 use std::collections::{HashSet, VecDeque};
+use std::pin::Pin;
+use std::future::Future;
 use std::sync::Arc;
 use serde_json::{json, Value};
 
@@ -34,6 +36,35 @@ use crate::middleware::traits::MiddlewareContext;
 use crate::middleware::token_counter::estimate_total_tokens;
 use zero_core::event::EventActions;
 use zero_core::ToolContext as ZeroToolContext;
+
+// ============================================================================
+// MID-SESSION RECALL HOOK
+// ============================================================================
+
+/// Result returned by the mid-session recall hook.
+///
+/// Contains novel facts formatted as a system message and the keys of those
+/// facts so the caller can track already-injected keys.
+#[derive(Debug, Clone)]
+pub struct RecallHookResult {
+    /// Formatted system message to inject (empty if nothing novel)
+    pub system_message: String,
+    /// Keys of the facts that were included (for dedup tracking)
+    pub fact_keys: Vec<String>,
+}
+
+/// A callback invoked by the executor every N turns to refresh memory recall.
+///
+/// The hook receives:
+/// - `latest_user_message`: the most recent user message for query context
+/// - `already_injected_keys`: keys of facts already injected in this session
+///
+/// Returns a `RecallHookResult` with a formatted message and new keys.
+pub type RecallHook = Box<
+    dyn Fn(&str, &HashSet<String>) -> Pin<Box<dyn Future<Output = Result<RecallHookResult, String>> + Send>>
+        + Send
+        + Sync
+>;
 
 /// Result from tool execution including any actions set by the tool
 struct ToolExecutionResult {
@@ -177,6 +208,12 @@ pub struct AgentExecutor {
     tool_registry: Arc<ToolRegistry>,
     mcp_manager: Arc<McpManager>,
     middleware_pipeline: Arc<MiddlewarePipeline>,
+    /// Optional mid-session recall hook invoked every N turns.
+    recall_hook: Option<Arc<RecallHook>>,
+    /// How often (in turns) to run mid-session recall. 0 = disabled.
+    recall_every_n_turns: u32,
+    /// Keys of facts already injected at session start (seeds the dedup set).
+    recall_initial_keys: HashSet<String>,
 }
 
 impl AgentExecutor {
@@ -201,12 +238,33 @@ impl AgentExecutor {
             tool_registry,
             mcp_manager,
             middleware_pipeline,
+            recall_hook: None,
+            recall_every_n_turns: 0,
+            recall_initial_keys: HashSet::new(),
         })
     }
 
     /// Set the middleware pipeline
     pub fn set_middleware_pipeline(&mut self, pipeline: Arc<MiddlewarePipeline>) {
         self.middleware_pipeline = pipeline;
+    }
+
+    /// Configure mid-session recall.
+    ///
+    /// The `hook` is called every `every_n_turns` iterations with the latest
+    /// user message and the set of already-injected fact keys. Novel facts
+    /// are injected as a system message.
+    ///
+    /// `initial_keys` seeds the dedup set from facts injected at session start.
+    pub fn set_recall_hook(
+        &mut self,
+        hook: RecallHook,
+        every_n_turns: u32,
+        initial_keys: HashSet<String>,
+    ) {
+        self.recall_hook = Some(Arc::new(hook));
+        self.recall_every_n_turns = every_n_turns;
+        self.recall_initial_keys = initial_keys;
     }
 
     /// Get the middleware pipeline
@@ -330,6 +388,10 @@ impl AgentExecutor {
         // Track whether the turn budget nudge has been sent (max 1)
         let mut turn_budget_nudge_sent = false;
 
+        // Track which fact keys have been injected via recall (initial + mid-session).
+        // Seeded from initial recall keys; extended by mid-session recall hook results.
+        let mut recall_injected_keys = self.recall_initial_keys.clone();
+
         // Create shared tool context that persists across all tool calls in this execution.
         // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
         // that other tools and middleware can access throughout the execution loop.
@@ -342,6 +404,17 @@ impl AgentExecutor {
 
         loop {
             progress_tracker.tick();
+
+            // Reset delegation claim at the start of each turn.
+            // This allows root to delegate again after a previous delegation completes.
+            // try_claim checks for Bool(true); setting to Bool(false) releases the claim.
+            {
+                use zero_core::CallbackContext;
+                shared_tool_context.set_state(
+                    "app:delegation_active".to_string(),
+                    Value::Bool(false),
+                );
+            }
 
             // Turn budget: soft nudge then hard stop
             if self.config.max_turns > 0 && progress_tracker.total_iterations >= self.config.max_turns {
@@ -449,6 +522,60 @@ impl AgentExecutor {
                 }
             }
 
+            // Mid-session recall: every N turns, fetch novel facts and inject as
+            // a system message so the agent benefits from memory even during long
+            // multi-turn sessions.
+            if self.recall_every_n_turns > 0
+                && progress_tracker.total_iterations > 0
+                && progress_tracker.total_iterations % self.recall_every_n_turns == 0
+            {
+                if let Some(hook) = &self.recall_hook {
+                    // Find the latest user message for query context
+                    let latest_user_msg = current_messages
+                        .iter()
+                        .rev()
+                        .find(|m| m.role == "user")
+                        .map(|m| m.content.clone())
+                        .unwrap_or_default();
+
+                    let hook_clone = Arc::clone(hook);
+                    match hook_clone(&latest_user_msg, &recall_injected_keys).await {
+                        Ok(result) if !result.system_message.is_empty() => {
+                            current_messages.push(ChatMessage::system(
+                                result.system_message,
+                            ));
+                            // Track newly injected keys for future dedup
+                            for key in result.fact_keys {
+                                recall_injected_keys.insert(key);
+                            }
+                            tracing::info!(
+                                turn = progress_tracker.total_iterations,
+                                total_keys = recall_injected_keys.len(),
+                                "Mid-session recall injected novel facts"
+                            );
+                        }
+                        Ok(_) => {
+                            tracing::debug!(
+                                turn = progress_tracker.total_iterations,
+                                "Mid-session recall: no novel facts"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                turn = progress_tracker.total_iterations,
+                                error = %e,
+                                "Mid-session recall failed"
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Sanitize messages to remove orphaned tool messages before LLM call.
+            // This prevents API errors when compaction or summarization splits
+            // assistant+tool pairs.
+            sanitize_messages(&mut current_messages);
+
             // Real streaming via chat_stream() with mpsc channel bridge.
             // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
             // including intermediate text that accompanies tool calls.
@@ -543,17 +670,12 @@ impl AgentExecutor {
             }
 
             // Handle tool calls
-            // Add the assistant message with TRUNCATED tool calls to prevent context explosion
-            let truncated_tool_calls: Vec<ToolCall> = tool_calls.iter().map(|tc| {
-                // Truncate arguments to prevent exponential context growth
-                let truncated_args = truncate_tool_args(&tc.arguments, 500);
-                ToolCall::new(tc.id.clone(), tc.name.clone(), truncated_args)
-            }).collect();
-
+            // Store the assistant message with ORIGINAL tool calls (not truncated).
+            // Truncation caused the LLM to copy garbled text on retries.
             current_messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: response.content.clone(),
-                tool_calls: Some(truncated_tool_calls),
+                tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
             });
 
@@ -620,7 +742,9 @@ impl AgentExecutor {
                                 task: delegate.task.clone(),
                                 context: delegate.context.clone(),
                                 wait_for_result: delegate.wait_for_result,
+                                max_iterations: delegate.max_iterations,
                             });
+                            // Delegation claim is set atomically by the delegate tool via try_claim
                         }
 
                         // Check for generative UI markers
@@ -707,6 +831,23 @@ impl AgentExecutor {
                                         ward_id: ward_id.to_string(),
                                     });
                                 }
+                            }
+
+                            // Check for plan_update marker
+                            if parsed.get("__plan_update")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
+                                let explanation = parsed.get("explanation")
+                                    .and_then(|v| v.as_str())
+                                    .map(|s| s.to_string());
+
+                                on_event(StreamEvent::ActionPlanUpdate {
+                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                    plan,
+                                    explanation,
+                                });
                             }
                         }
 
@@ -1452,13 +1593,18 @@ pub async fn create_executor(
 
 /// Compact messages to reduce context size when approaching token limits.
 ///
-/// Strategy: keep system messages, keep last N tool call/result pairs,
+/// Strategy: keep system messages, keep last N messages (with pair integrity),
 /// insert a summarization placeholder for trimmed history.
+///
+/// IMPORTANT: assistant+tool_call / tool_response pairs are treated as atomic
+/// units. If an assistant message with tool_calls is kept, all its tool
+/// responses are kept too. If a tool response would be trimmed, its parent
+/// assistant message is also trimmed.
 fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-    const KEEP_RECENT: usize = 20; // Keep last 20 messages
+    const KEEP_RECENT: usize = 20;
 
     if messages.len() <= KEEP_RECENT + 2 {
-        return messages; // Nothing to compact
+        return messages;
     }
 
     let mut compacted = Vec::new();
@@ -1474,15 +1620,31 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         }
     }
 
-    // Preserve the first non-system message (original user request) so the agent
-    // never loses what it was asked to do.
+    // Preserve the first non-system message (original user request)
     let first_user_msg = messages[non_system_start..].iter().find(|m| m.role == "user");
     if let Some(user_msg) = first_user_msg {
         compacted.push(user_msg.clone());
     }
 
-    // Insert compaction notice
-    let trimmed_count = messages.len() - non_system_start - KEEP_RECENT;
+    // Find a clean split point that doesn't break assistant+tool pairs.
+    // Start from the target split point and walk forward until we find
+    // a boundary that's NOT inside a tool_call/tool_response group.
+    let target_start = messages.len().saturating_sub(KEEP_RECENT);
+    let mut split_at = target_start;
+
+    // Walk forward to find a clean boundary
+    for i in target_start..messages.len() {
+        let msg = &messages[i];
+        // A clean boundary is: a user message, or an assistant message WITHOUT tool_call_id
+        // (i.e., not a tool response, and not mid-pair)
+        if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
+            split_at = i;
+            break;
+        }
+        // If it's a tool message, we're inside a pair — keep walking
+    }
+
+    let trimmed_count = split_at.saturating_sub(non_system_start);
     if trimmed_count > 0 {
         compacted.push(ChatMessage::user(format!(
             "[SYSTEM: Context compacted. {} earlier messages were trimmed to stay within \
@@ -1491,11 +1653,55 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         )));
     }
 
-    // Keep the most recent messages
-    let recent_start = messages.len().saturating_sub(KEEP_RECENT);
-    compacted.extend(messages[recent_start..].iter().cloned());
+    // Keep messages from split point onward
+    compacted.extend(messages[split_at..].iter().cloned());
 
     compacted
+}
+
+/// Sanitize messages to ensure tool call/result pairs are valid.
+///
+/// Removes orphaned `tool` messages whose `tool_call_id` doesn't match
+/// any `tool_calls` entry in a preceding `assistant` message.
+/// This prevents API errors: "Messages with role 'tool' must be a response
+/// to a preceding message with 'tool_calls'"
+fn sanitize_messages(messages: &mut Vec<ChatMessage>) {
+    // Collect all valid tool_call_ids from assistant messages
+    let mut valid_tool_call_ids = HashSet::new();
+    for msg in messages.iter() {
+        if msg.role == "assistant" {
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    valid_tool_call_ids.insert(tc.id.clone());
+                }
+            }
+        }
+    }
+
+    // Remove orphaned tool messages
+    let original_len = messages.len();
+    messages.retain(|msg| {
+        if msg.role == "tool" {
+            if let Some(ref tool_call_id) = msg.tool_call_id {
+                if !valid_tool_call_ids.contains(tool_call_id) {
+                    tracing::warn!(
+                        tool_call_id = %tool_call_id,
+                        "Removing orphaned tool message — no matching assistant tool_call found"
+                    );
+                    return false;
+                }
+            }
+        }
+        true
+    });
+
+    if messages.len() < original_len {
+        tracing::warn!(
+            removed = original_len - messages.len(),
+            "Sanitized {} orphaned tool messages from context",
+            original_len - messages.len()
+        );
+    }
 }
 
 /// Truncate tool arguments to prevent context explosion.
@@ -1517,7 +1723,7 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
                 if s.len() > 200 {
                     truncated.insert(
                         key.clone(),
-                        Value::String(format!("{}... [truncated, {} chars]", &s[..200], s.len())),
+                        Value::String(format!("{}... [truncated, {} chars]", zero_core::truncate_str(s, 200), s.len())),
                     );
                 } else {
                     truncated.insert(key.clone(), value.clone());

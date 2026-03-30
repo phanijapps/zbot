@@ -52,7 +52,7 @@
 |------|------|---------|
 | Global Shared | `agents_data/shared/*.json` | user_info, workspace, patterns, session_summaries |
 | Agent | `agents_data/{agent_id}/memory.json` | Per-agent private context |
-| Ward | `wards/{ward_id}/.ward_memory.json` | Project-specific context |
+| Ward | `wards/{ward_id}/AGENTS.md` | Project-specific context (ward memory) |
 | Session | `agent_data/{session_id}/` | Ephemeral: attachments, scratchpad |
 
 File locking (fs2 crate) protects shared memory from concurrent access.
@@ -159,6 +159,89 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Problem**: External services (Slack, Discord) have transient connection issues; plugins shouldn't require manual intervention.
 **Decision**: `auto_restart: true` (default) with configurable `restart_delay_ms` (default 5000). Failed plugins restart automatically after delay.
 **Rationale**: Hands-off operation. For intentional stops, auto_restart is skipped. Log messages indicate restart reason.
+
+### Resource Indexing: Lazy On-Demand
+**Problem**: Skills and agents need semantic search, but scanning directories at startup is wasteful.
+**Decision**: Indexing happens on-demand when `index_resources` tool is called. First discovery falls back to disk scan if no index exists.
+**Rationale**: Avoids startup overhead. Users/agents explicitly trigger reindex when they know files have changed. Mtime tracking enables staleness detection without full reindex.
+
+### Resource Indexing: Dual Storage (Memory + Graph)
+**Problem**: Semantic search needs text embeddings, but relationship queries need structured graph data.
+**Decision**: Store skills/agents in both MemoryFactStore (for semantic search via BM25 + embeddings) and KnowledgeGraphStore (for entity relationships).
+**Rationale**: Each storage is optimized for its access pattern. Memory provides hybrid search. Graph provides relationship traversal. Storing in both enables rich discovery without sacrificing performance.
+
+### Intent Analysis: Autonomous Middleware (Not a Tool, Not Pre-Collected Arrays)
+**Problem**: Earlier versions tried two approaches that both failed: (1) a tool the agent was supposed to call (but it was never registered), and (2) pre-collecting all resources into arrays to pass to the LLM (wasted tokens on irrelevant resources).
+**Decision**: Intent analysis is an autonomous middleware that indexes resources into `memory_facts` with local embeddings, performs semantic search, and sends only top-N relevant resources to the LLM. Not a tool agents call. Not a full catalog dump.
+**Rationale**: Autonomous indexing + semantic search means the LLM only sees relevant resources (8 skills, 5 agents, 5 wards max). No wasted tokens. No registration issues. Middleware runs before the root agent's first LLM call — transparent and automatic. See `memory-bank/intent-analysis.md` for full documentation.
+
+### Modular System Prompt Config (SOUL.md, OS.md, Overridable Shards)
+**Problem**: A single `INSTRUCTIONS.md` file mixed identity, platform commands, and behavior rules. No way to override individual shards without forking the embedded defaults.
+**Decision**: Split system prompt into modular config files at `~/Documents/zbot/config/`:
+- `SOUL.md` — agent identity/personality
+- `INSTRUCTIONS.md` — execution rules
+- `OS.md` — auto-generated platform-specific commands (Windows/Mac/Linux)
+- `shards/` — overridable shards (defaults written to disk on first run)
+- `distillation_prompt.md` — customizable distillation prompt
+**Rationale**: Users can customize any piece independently. OS-specific commands are auto-generated (no manual maintenance). Shards can be overridden by placing a file with the same name in `config/shards/`. Extra user shards are automatically included. Assembly: `gateway/gateway-templates/src/lib.rs`.
+
+### ThrottledLlmClient: Per-Provider Concurrent Request Limiting
+**Problem**: Multiple concurrent delegations + root agent can burst many simultaneous LLM calls to the same provider, triggering 429 rate limits.
+**Decision**: Wrap LLM clients with `ThrottledLlmClient` that uses a shared `tokio::sync::Semaphore` per provider. All executors sharing the same provider share the semaphore.
+**Rationale**: Simple, composable. Configured via `maxConcurrentRequests` in `providers.json` (default: 3). Wrapping chain: `OpenAiClient -> RetryingLlmClient -> ThrottledLlmClient`. Implementation: `runtime/agent-runtime/src/llm/throttle.rs`.
+
+### Model Capabilities Registry: Data-Driven Over Hardcoded
+**Problem**: Model context windows were hardcoded in a match statement (`get_model_context_window`). No capability metadata — agents could enable thinking on models that don't support it. Adding new models required code changes.
+**Decision**: Three-layer model registry: bundled JSON (embedded in binary) > local overrides (`config/models.json`) > unknown-model fallback. Each model has capabilities (tools, vision, thinking, embeddings, voice, imageGeneration, videoGeneration) and context window (input/output tokens).
+**Rationale**: Data-driven — new models added without code changes. Local overrides for custom/private models. Bundled registry updated with releases. Executor validates `thinking_enabled` against model capabilities (warn + disable). Context window resolution replaces hardcoded lookup. Implementation: `gateway/gateway-services/src/models.rs`, `gateway/templates/models_registry.json`.
+
+### Provider Default Model: Explicit Over Positional
+**Problem**: Default model was `provider.models[0]` — an implicit positional convention. Reordering the models array silently changed which model every agent used.
+**Decision**: Added `defaultModel` field to Provider struct. Priority: explicit `defaultModel` > first in `models` array > `"gpt-4o"` fallback.
+**Rationale**: Explicit is always better than implicit. Users can set their preferred default without worrying about array order. Implementation: `gateway/gateway-services/src/providers.rs`.
+
+### Settings UI: Deprecate Optional Tool Toggles
+**Problem**: Optional tool toggles (python, webFetch, todos, fileTools, uiTools, createAgent) confused non-technical users. Most didn't work correctly — TS types referenced non-existent backend keys (`grep`, `glob`, `loadSkill`). The toggles gave a false sense of control.
+**Decision**: Remove the Optional Tools section from the Settings UI. Keep introspection enabled via `settings.json`. Backend `ToolSettings` struct unchanged — tools can still be enabled programmatically or via direct JSON editing. UI focuses on the two settings that actually matter: context protection (offload) and logging.
+**Rationale**: Simpler surface for non-technical users. The tools that matter (shell, apply_patch, memory, ward) are always on. The deprecated toggles were rarely used and poorly implemented.
+
+### Providers Page: Card Grid Over Split Panel
+**Problem**: The original split-panel layout (sidebar list + detail pane) was a developer tool pattern. No inline editing, no guided setup, no capability visibility. Non-technical users didn't know what to do.
+**Decision**: Card grid with responsive 2-column layout. Each card shows provider name, status badge (Connected/Not tested/Active), model chips with capability badges. Click opens a slide-over detail panel with view/edit toggle. Empty state shows Top-3 preset cards (OpenAI, Anthropic, Ollama) with inline "type API key and connect" flow.
+**Rationale**: Cards give visual overview. Inline connect reduces the happy path to 2 clicks. Slide-over preserves context (grid visible behind). View/Edit toggle prevents accidental changes. 9 provider presets with pre-filled baseUrl and models. Implementation: `apps/ui/src/features/settings/` (moved from integrations during UI revamp).
+
+### UI Revamp: 7 Pages → 3 Consolidated Pages
+**Problem**: UI had 7+ separate pages (Settings, Providers, MCPs, Skills, Agents, Workers, Schedules) with inconsistent layouts, no help text, and jargon-heavy labels. Non-technical users couldn't navigate.
+**Decision**: Consolidate into 3 tabbed pages:
+- **Settings** (Providers | General | Logging) — system setup, providers as default tab
+- **Agents** (My Agents | Skills Library | Schedules) — agent management with card grid
+- **Integrations** (Tool Servers | Plugins & Workers) — MCPs renamed to "Tool Servers", workers+plugins unified
+**Rationale**: Maps to user mental model: Setup → Build → Connect. Tabs reduce navigation decisions. Every section gets contextual help text and rich empty states for onboarding. Card grid + slide-over pattern used consistently across all pages.
+
+### UI Revamp: Design System — Warm Editorial Palette
+**Problem**: Existing UI used generic system fonts and basic colors. No distinctive visual identity.
+**Decision**: Warm copper accent (`#c8956c` dark, `#a07d52` light), cream/charcoal backgrounds, sidebar always dark in both themes. CSS custom properties for full themability. Backwards-compat aliases for all replaced tokens during migration.
+**Rationale**: User preferred existing font stack over Fraunces serif for headings. Sidebar-always-dark provides visual anchor. Token aliases prevent silent CSS breakage. Implementation: `apps/ui/src/styles/theme.css`, `components.css`.
+
+### Plugins vs Workers: Separate APIs, Shared Runtime
+**Problem**: Plugins (auto-discovered from `~/Documents/zbot/plugins/`) and bridge workers (WebSocket-connected) both appear in `/api/bridge/workers` when running, causing the UI to show plugins as workers.
+**Decision**: Use `/api/plugins` as source of truth for plugin listing (state, version, auto_restart, config). Enrich with bridge worker data (capabilities, resources) when plugin is connected. Filter bridge workers list to exclude entries matching known plugin IDs.
+**Rationale**: Plugin `adapter_id` equals plugin `id` (e.g. `"slack"`, NOT `"plugin:slack"`). A running plugin appears in both APIs. UI must deduplicate. Implementation: `apps/ui/src/features/integrations/WebIntegrationsPanel.tsx`.
+
+### Score Threshold + Per-Category Caps for Semantic Search
+**Problem**: Sending all indexed resources to the LLM wastes tokens on irrelevant results and produces noisy recommendations.
+**Decision**: Apply a minimum relevance score threshold (0.15) and per-category caps (8 skills, 5 agents, 5 wards) when selecting resources for intent analysis.
+**Rationale**: Recall 50 results from `memory_facts`, filter by score, cap per category. LLM sees only relevant resources. Thresholds tuned empirically — 0.15 filters noise without losing useful matches.
+
+### Child Session Lifecycle Fix
+**Problem**: Delegated subagent sessions were left in `running` state after completion, creating orphan sessions.
+**Decision**: Child sessions are now explicitly marked `completed` when the subagent finishes execution.
+**Rationale**: Clean lifecycle prevents orphaned sessions from accumulating in the database. Combined with delegation semaphore (max 3 concurrent) to prevent resource exhaustion.
+
+### Session Distillation: Lower Threshold, Broader Trigger
+**Problem**: Distillation only fired after `invoke()` and required 10+ messages, missing useful short sessions and continuation sessions.
+**Decision**: Fire distillation after both `invoke()` and `invoke_continuation()`. Lower min messages threshold from 10 to 4.
+**Rationale**: Many useful sessions are short (4-6 messages). Continuation sessions often contain important follow-up decisions. Distillation prompt is customizable via `config/distillation_prompt.md`.
 
 ## Patterns We Did NOT Adopt
 

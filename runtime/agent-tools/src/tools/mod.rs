@@ -12,6 +12,7 @@ mod memory;
 mod introspection;
 mod ward;
 mod connectors;
+pub(crate) mod guards;
 
 use std::sync::Arc;
 
@@ -22,6 +23,8 @@ use zero_core::MemoryFactStore;
 
 pub use file::{ReadTool, WriteTool, EditTool};
 pub use search::{GrepTool, GlobTool};
+pub use execution::ApplyPatchTool;
+pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
 pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
@@ -43,8 +46,9 @@ pub use connectors::QueryResourceTool;
 ///
 /// These settings control which optional tools are enabled beyond the core set.
 ///
-/// Core tools (always enabled, shell-first):
-/// - shell: Primary execution — commands, file I/O, apply_patch interceptor
+/// Core tools (always enabled):
+/// - shell: Primary execution — commands
+/// - apply_patch: File creation/editing/deletion via patch format
 /// - memory: Persist/recall information
 /// - ward: Project directory management
 /// - update_plan: Lightweight task checklist
@@ -112,13 +116,14 @@ fn default_offload_enabled() -> bool {
 // BUILT-IN TOOLS FACTORY
 // ============================================================================
 
-/// Get core tools — the minimal, high-signal set (7 tools).
+/// Get core tools — the minimal, high-signal set (8 tools).
 ///
-/// Shell-first approach: shell handles commands, file I/O, and apply_patch interception.
+/// Shell for commands, apply_patch for file operations.
 /// Separate read/write/edit/glob tools are optional (moved to optional_tools).
 ///
 /// Core tools:
-/// - shell: Primary execution — commands, file creation, reading, apply_patch
+/// - shell: Primary execution — commands
+/// - apply_patch: File creation/editing/deletion via patch format
 /// - memory: Persistent KV store
 /// - ward: Project directory management
 /// - update_plan: Lightweight task checklist
@@ -130,14 +135,18 @@ pub fn core_tools(
     fact_store: Option<Arc<dyn MemoryFactStore>>,
 ) -> Vec<Arc<dyn Tool>> {
     vec![
-        // Primary execution tool (with apply_patch interception)
+        // Primary execution tool
         Arc::new(ShellTool::new()),
+        // First-class file creation/editing/deletion via patch format
+        Arc::new(ApplyPatchTool::new(fs.clone())),
         // Persistent memory (with optional DB-backed fact store)
-        Arc::new(MemoryTool::new(fs.clone(), fact_store)),
-        // Ward management (named project directories)
-        Arc::new(WardTool::new(fs.clone())),
+        Arc::new(MemoryTool::new(fs.clone(), fact_store.clone())),
+        // Ward management (named project directories, with recall on entry)
+        Arc::new(WardTool::new(fs.clone(), fact_store)),
         // Lightweight plan tracking
         Arc::new(UpdatePlanTool::new()),
+        // DAG workflow engine for multi-step orchestration
+        Arc::new(ExecutionGraphTool::new()),
         // Skill discovery (high priority - encourages delegation)
         Arc::new(ListSkillsTool::new(fs.clone())),
         Arc::new(LoadSkillTool::new(fs.clone())),

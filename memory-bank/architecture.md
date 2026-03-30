@@ -56,8 +56,23 @@
 │  ~/Documents/zbot/                                                       │
 │  ├── conversations.db          # SQLite: conversations, messages,       │
 │  │                              #   memory_facts, embedding_cache       │
-│  ├── settings.json             # Application settings (tools, logs)     │
-│  ├── INSTRUCTIONS.md           # Custom system prompt (auto-created)    │
+│  ├── data/                                                               │
+│  │   ├── conversations.db     # SQLite: conversations, messages,       │
+│  │   │                        #   memory_facts, embedding_cache        │
+│  │   └── knowledge_graph.db   # SQLite: entities, relationships        │
+│  ├── config/                   # System prompt + app config             │
+│  │   ├── settings.json        #   App settings (offload, logs)         │
+│  │   ├── providers.json       #   LLM provider credentials             │
+│  │   ├── models.json          #   Model capability overrides (optional)│
+│  │   ├── SOUL.md               #   Agent identity/personality           │
+│  │   ├── INSTRUCTIONS.md       #   Execution rules                     │
+│  │   ├── OS.md                 #   Platform-specific commands (auto)    │
+│  │   ├── distillation_prompt.md#   Customizable distillation prompt     │
+│  │   ├── mcps.json             #   MCP server configurations            │
+│  │   └── shards/               #   Overridable prompt shards            │
+│  │       ├── tooling_skills.md #     Skills-first approach              │
+│  │       ├── memory_learning.md#     Memory patterns                    │
+│  │       └── planning_autonomy.md#   Planning and autonomy              │
 │  ├── logs/                     # Daemon log files (when enabled)        │
 │  │   └── zerod.YYYY-MM-DD.log  #   Rolling log files                    │
 │  ├── agents/{name}/            # Agent configurations                   │
@@ -74,11 +89,9 @@
 │  │   ├── .venv/                #   Shared Python venv for all wards     │
 │  │   ├── scratch/              #   Default ward for quick tasks         │
 │  │   └── {ward-name}/          #   Agent-named project directories      │
-│  │       └── .ward_memory.json #     Per-ward context                   │
+│  │       └── AGENTS.md        #     Per-ward context (ward memory)      │
 │  ├── skills/{name}/            # Skill definitions                      │
 │  │   └── SKILL.md              #   Instructions + frontmatter           │
-│  ├── providers.json            # LLM provider configurations            │
-│  ├── mcps.json                 # MCP server configurations              │
 │  ├── connectors.json           # Connector configurations               │
 │  ├── cron_jobs.json            # Scheduled job configurations           │
 │  ├── plugins/                  # Node.js plugin directories             │
@@ -107,6 +120,59 @@
 | Embeddings | fastembed (local ONNX) | Default: all-MiniLM-L6-v2 (384d), zero cost |
 | Serialization | serde + serde_json | JSON handling |
 | Logging | tracing + tracing-subscriber + tracing-appender | Structured logging with file rotation |
+
+## Model Capabilities Registry
+
+Models are tracked in a registry with capability metadata and context window sizes. Three-layer resolution:
+
+1. **Local overrides** (`config/models.json`) — user-editable, highest priority
+2. **Bundled registry** (`gateway/templates/models_registry.json`) — embedded in binary, 50+ models
+3. **Unknown model fallback** — conservative defaults (tools: true, 8K context)
+
+### ModelProfile Structure
+
+```json
+{
+  "glm-5.1": {
+    "name": "GLM-5.1",
+    "provider": "zhipu",
+    "capabilities": {
+      "tools": true, "vision": true, "thinking": true,
+      "embeddings": false, "voice": false,
+      "imageGeneration": false, "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 16384 }
+  }
+}
+```
+
+### Capabilities
+
+| Capability | Description |
+|------------|-------------|
+| `tools` | Function/tool calling support |
+| `vision` | Image input support |
+| `thinking` | Extended reasoning/chain-of-thought |
+| `embeddings` | Vector embedding model (not chat) |
+| `voice` | Audio input/output |
+| `imageGeneration` | Image generation (DALL-E style) |
+| `videoGeneration` | Video generation/processing |
+
+### How It's Used
+
+- **ExecutorBuilder**: Resolves context window from registry (replaces hardcoded lookup). Validates `thinking_enabled` against model capabilities.
+- **Delegation spawn**: Validates subagent model supports `tools` capability.
+- **UI**: Model dropdowns show capability badges (wrench, eye, brain, speaker) with tooltips.
+- **API**: `GET /api/models` returns the full merged registry.
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-services/src/models.rs` | ModelProfile, ModelCapabilities, ModelRegistry service |
+| `gateway/templates/models_registry.json` | Bundled catalog (50+ models across 9 providers) |
+| `gateway/src/http/models.rs` | REST API endpoints |
+| `gateway/gateway-execution/src/invoke/executor.rs` | Context window resolution + thinking validation |
 
 ## Logging Configuration
 
@@ -195,7 +261,7 @@ zerod --log-level debug
 | `gateway/gateway-services/src/settings.rs` | `AppSettings` with `logs` field, CRUD methods |
 | `gateway/src/http/settings.rs` | HTTP endpoints for log settings |
 | `apps/daemon/src/main.rs` | Logging initialization with settings.json + CLI merge |
-| `apps/ui/src/App.tsx` | Web UI settings panel with log configuration |
+| `apps/ui/src/features/settings/WebSettingsPanel.tsx` | Settings page (context protection, logging) |
 
 ## Crate Structure
 
@@ -260,7 +326,7 @@ gateway/
 ├── gateway-database/    # DatabaseManager, pool, schema, ConversationRepository
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
-├── gateway-services/    # AgentService, ProviderService, McpService, SkillService, SettingsService
+├── gateway-services/    # AgentService, ProviderService, ModelRegistry, McpService, SkillService, SettingsService
 ├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller, MemoryRecall
 ├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
 ├── gateway-cron/        # CronJobConfig, CronService
@@ -325,6 +391,22 @@ pub trait LlmClient: Send + Sync {
     ) -> Result<()>;
 }
 ```
+
+### LLM Client Wrapping Chain
+
+The LLM client is wrapped in a chain of decorators for reliability and rate limiting:
+
+```
+OpenAiClient → RetryingLlmClient → ThrottledLlmClient
+```
+
+| Layer | Purpose | File |
+|-------|---------|------|
+| `OpenAiClient` | Raw OpenAI-compatible API calls | `runtime/agent-runtime/src/llm/openai.rs` |
+| `RetryingLlmClient` | Automatic retry on transient errors | `runtime/agent-runtime/src/llm/retry.rs` |
+| `ThrottledLlmClient` | Per-provider concurrent request limiting | `runtime/agent-runtime/src/llm/throttle.rs` |
+
+The `ThrottledLlmClient` uses a shared `tokio::sync::Semaphore` per provider. All executors for the same provider share the same semaphore, preventing burst 429 rate limits. Configured via `maxConcurrentRequests` in `providers.json` (default: 3).
 
 ## Session Management Architecture
 
@@ -417,6 +499,18 @@ ROOT SESSION (parent_session_id = NULL)
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Delegation
+
+When the root agent delegates to a subagent, the following constraints apply:
+
+| Aspect | Behavior |
+|--------|----------|
+| **Concurrency limit** | Max 3 concurrent delegations via `tokio::sync::Semaphore` |
+| **Child session lifecycle** | Child sessions are marked `completed` when subagent finishes (no orphans) |
+| **Subagent context** | Subagents receive `fact_store` with embeddings (no file fallback) |
+| **LLM throttle** | Subagents share the provider's `ThrottledLlmClient` semaphore |
+| **Intent analysis** | Subagents skip intent analysis (root-agent only) |
 
 ### Session vs Execution vs Conversation
 
@@ -867,7 +961,7 @@ CREATE TABLE embedding_cache (
 - `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
 - `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
 - `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
-- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (auto-extract facts + entities)
+- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (fires after both `invoke()` and `invoke_continuation()`, min 4 messages, extracts facts + entities + relationships)
 - `gateway/gateway-execution/src/recall.rs` — MemoryRecall (inject facts at session start)
 - `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
 
@@ -953,53 +1047,232 @@ CREATE INDEX idx_messages_session_created ON messages(session_id, created_at);
 | `create_agent` | Create new agents | Moderate |
 | `introspection` | Agent introspection (list_tools, list_mcps) | Safe |
 
-## System Prompt Architecture
+## Resource Indexing System
 
-The system prompt is composed of a base template plus automatically injected shards:
+Skills and agents are indexed for semantic search and relationship tracking. The system uses a **lazy indexing** approach — indexing happens on-demand, not at startup.
+
+### Index Storage
+
+| Storage | Purpose | Persistence |
+|---------|---------|-------------|
+| **Memory Fact Store** | Semantic search (BM25 + vector embeddings) | SQLite + FTS5 + embeddings |
+| **Knowledge Graph** | Entity/relationship storage | SQLite via GraphStorage |
+| **Context State Cache** | Fast lookup during session | Per-session (index:skills, index:agents) |
+
+### Indexing Flow
 
 ```
+index_resources called (or first discovery)
+     │
+     ▼
 ┌─────────────────────────────────────────┐
-│ INSTRUCTIONS.md (user-customizable)     │
+│ 1. Scan skills_dir/ for SKILL.md files  │
+│    → Parse frontmatter                  │
+│    → Build SkillMetadata                │
 │                                         │
-│ Your custom agent instructions...       │
-├─────────────────────────────────────────┤
-│ # --- SYSTEM INJECTED ---               │
-├─────────────────────────────────────────┤
-│ ENVIRONMENT                             │
-│ - OS: windows (x86_64)                  │
-│ - Shell: PowerShell/cmd syntax          │
-├─────────────────────────────────────────┤
-│ SAFETY (shard)                          │
-│ - Never exfiltrate secrets              │
-│ - Confirm before dangerous operations   │
-├─────────────────────────────────────────┤
-│ TOOLING & SKILLS (shard)                │
-│ - Skills-first approach                 │
-│ - Delegation patterns                   │
-├─────────────────────────────────────────┤
-│ MEMORY & LEARNING (shard)               │
-│ - Shared memory usage                   │
-│ - Pattern recording                     │
+│ 2. Scan agents_dir/ for config.yaml     │
+│    → Parse YAML                         │
+│    → Build AgentMetadata                │
+│                                         │
+│ 3. Store in Memory Fact Store           │
+│    → Category: "skill" or "agent"       │
+│    → Key: "skill:{name}" or "agent:{name}"  │
+│    → Content: name + description + keywords   │
+│                                         │
+│ 4. Store in Knowledge Graph             │
+│    → Entity type: "skill" or "agent"    │
+│    → Properties: description, tools, etc.│
+│                                         │
+│ 5. Cache mtimes in context state        │
+│    → index:skills_mtimes                │
+│    → index:agents_mtimes                │
 └─────────────────────────────────────────┘
 ```
 
+### Discovery Flow
+
+Resources are discovered through two paths:
+
+**Intent analysis middleware** (autonomous, pre-execution):
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Index all resources into memory_facts (idempotent upsert)   │
+│    → Skills, agents, wards indexed with local embeddings       │
+│                                                                 │
+│ 2. Semantic search via recall_facts("root", message, 50)       │
+│    → Filter by score ≥ 0.15                                    │
+│    → Cap: 8 skills, 5 agents, 5 wards                          │
+│                                                                 │
+│ 3. Top-N results sent to LLM for analysis                      │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Tool-based discovery** (list_skills, list_agents):
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ 1. Try cached index from context state                          │
+│    → index:skills, index:agents                                 │
+│                                                                 │
+│ 2. Fall back to disk scan                                       │
+│    → Parse SKILL.md/config.yaml on-demand                       │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### When Indexing Happens
+
+| Trigger | Behavior |
+|---------|----------|
+| Intent analysis middleware | Indexes skills, agents, wards into `memory_facts` every root session (idempotent upsert) |
+| `index_resources()` tool called | Full reindex (or force=true for stale) |
+| File modification detected | Staleness check during next indexing |
+
+### Error Recovery
+
+When `load_skill` or agent loading fails:
+1. File not found → Remove from index automatically
+2. Corrupted file → Suggest `index_resources(force=true)`
+
+## Intent Analysis System
+
+Intent analysis is an **autonomous pre-execution middleware** — not a tool agents call. It indexes resources into `memory_facts` with local embeddings (fastembed), performs semantic search, sends only top-N relevant resources to a single LLM call, and injects the result as a `## Intent Analysis` section into the system prompt. See `memory-bank/intent-analysis.md` for full documentation.
+
+Implementation: `gateway/gateway-execution/src/middleware/intent_analysis.rs`
+
+### Architecture
+
+| Aspect | Design |
+|--------|--------|
+| **Trigger** | Middleware, before root agent's first LLM call |
+| **Scope** | Root agent only — subagents and continuations skip it |
+| **Resource Discovery** | Autonomous: indexes skills/agents/wards into `memory_facts`, searches semantically |
+| **LLM Input** | Top-N relevant resources only (not full catalog) |
+| **Filtering** | Score threshold (0.15), per-category caps (8 skills, 5 agents, 5 wards) |
+| **Side Effects** | None — injects guidance text, does not load skills or delegate |
+| **Agent Visibility** | Sees `## Intent Analysis` section in system prompt from turn one |
+
+### Flow
+
+```
+User Message
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 1: Index resources (idempotent upsert)                 │
+│   Skills → memory_facts (category:"skill")                  │
+│   Agents → memory_facts (category:"agent")                  │
+│   Wards  → memory_facts (category:"ward", reads AGENTS.md) │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 2: Semantic search (recall_facts with fastembed)        │
+│   Fetch top 50, filter by score ≥ 0.15                      │
+│   Cap: 8 skills, 5 agents, 5 wards                          │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 3: LLM call with top-N resources                       │
+│   Output: IntentAnalysis { primary_intent, hidden_intents,  │
+│     recommended_skills, recommended_agents,                  │
+│     ward_recommendation { action, ward_name, subdirectory,  │
+│                           structure, reason },               │
+│     execution_strategy { approach, graph, explanation },     │
+│     rewritten_prompt }                                       │
+└─────────────────────────────────────────────────────────────┘
+     │
+     (parse failed? skip enrichment, continue with base prompt)
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ inject_intent_context()                                     │
+│  Appends "## Intent Analysis" section to system prompt      │
+└─────────────────────────────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Executor starts with enriched system prompt                 │
+│  - No conditional dispatch code in runner                   │
+│  - LLM reads the section and decides how to proceed         │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Key Behavioral Contract
+
+- Enrichment is automatic and transparent — agents do not call `analyze_intent`
+- Resource discovery is autonomous — indexes into `memory_facts`, searches via embeddings
+- Hidden intents are actionable instructions, not category labels
+- Runner contains no conditional logic based on analysis output — LLM decides
+- Recommended skills/agents are guidance; agent retains full autonomy
+- Ward recommendation includes directory structure for domain-level workspaces
+
+## System Prompt Architecture
+
+The system prompt is assembled from modular config files at `~/Documents/zbot/config/`. Each file is created from an embedded starter template on first run and is user-customizable. Assembly is handled by `gateway/gateway-templates/src/lib.rs`.
+
+```
+┌─────────────────────────────────────────┐
+│ SOUL.md — Agent identity/personality    │
+│                                         │
+│ Who the agent is, its personality...    │
+├─────────────────────────────────────────┤
+│ INSTRUCTIONS.md — Execution rules       │
+│                                         │
+│ How the agent should behave...          │
+├─────────────────────────────────────────┤
+│ OS.md — Platform-specific commands      │
+│ (auto-generated for current OS)         │
+│                                         │
+│ - Windows: PowerShell/cmd syntax        │
+│ - macOS: Unix shell + brew              │
+│ - Linux: Unix shell + package managers  │
+├─────────────────────────────────────────┤
+│ # --- SYSTEM SHARDS ---                 │
+├─────────────────────────────────────────┤
+│ tooling_skills.md (shard)               │
+│ - Skills-first approach                 │
+│ - Delegation patterns                   │
+├─────────────────────────────────────────┤
+│ memory_learning.md (shard)              │
+│ - Shared memory usage                   │
+│ - Pattern recording                     │
+├─────────────────────────────────────────┤
+│ planning_autonomy.md (shard)            │
+│ - Planning and autonomous execution     │
+├─────────────────────────────────────────┤
+│ (any extra user shards in config/shards)│
+└─────────────────────────────────────────┘
+```
+
+### Assembly Order
+
+1. **`config/SOUL.md`** — Agent identity/personality (created from `soul_starter.md` if missing)
+2. **`config/INSTRUCTIONS.md`** — Execution rules (created from `instructions_starter.md` if missing)
+3. **`config/OS.md`** — Platform-specific commands (auto-generated for current OS if missing)
+4. **Shards** — `config/shards/{name}.md` overrides embedded defaults; extra user files included too
+
 ### Shards
 
-Required shards are automatically appended to custom instructions:
+Required shards are loaded from `config/shards/` if present, otherwise from embedded defaults. Users can override any shard by placing a file with the same name in the shards directory.
 
 | Shard | Purpose |
 |-------|---------|
-| `safety` | Security rules (secrets, confirmations) |
 | `tooling_skills` | Skills-first approach, delegation |
 | `memory_learning` | Shared memory patterns |
+| `planning_autonomy` | Planning and autonomous execution |
 
-### Environment Injection
+Extra `.md` files placed in `config/shards/` are automatically included after the required shards.
 
-OS and architecture are detected at runtime and injected:
-- **Windows**: PowerShell/cmd syntax hints
-- **macOS/Linux**: Unix shell syntax hints
+### Distillation Prompt
 
-This ensures the agent uses correct shell commands for the platform.
+The distillation prompt is customizable via `config/distillation_prompt.md`. If the file does not exist, the embedded default is written to disk on first run. This allows users to tune what facts, entities, and relationships are extracted during session distillation.
+
+### Key Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-templates/src/lib.rs` | Prompt assembly logic |
+| `gateway/templates/` | Embedded starter templates (compiled in) |
+| `~/Documents/zbot/config/` | User-customizable config files |
 
 ## Connectors
 

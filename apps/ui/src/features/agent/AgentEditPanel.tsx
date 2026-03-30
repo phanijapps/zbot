@@ -1,20 +1,18 @@
 // ============================================================================
 // AGENT EDIT PANEL
 // Slide-over panel for editing agent configuration
+// Uses the shared Slideover component with sections:
+//   Basic | Model | Schedules | Advanced
 // ============================================================================
 
 import { useState, useEffect } from "react";
 import {
   Bot,
-  X,
-  Save,
-  ArrowLeft,
   Cpu,
   Thermometer,
   Hash,
   FileText,
   Server,
-  Zap,
   ChevronDown,
   ChevronRight,
   Loader2,
@@ -23,12 +21,15 @@ import {
 } from "lucide-react";
 import {
   getTransport,
+  getProviderDefaultModel,
   type AgentResponse,
   type UpdateAgentRequest,
   type ProviderResponse,
-  type SkillResponse,
   type McpListResponse,
+  type ModelRegistryResponse,
 } from "@/services/transport";
+import { Slideover } from "@/components/Slideover";
+import { ModelChip } from "@/shared/ui/ModelChip";
 
 // ============================================================================
 // Types
@@ -36,6 +37,8 @@ import {
 
 interface AgentEditPanelProps {
   agent: AgentResponse;
+  providers: ProviderResponse[];
+  modelRegistry: ModelRegistryResponse;
   onClose: () => void;
   onSave: () => void;
 }
@@ -44,7 +47,7 @@ interface AgentEditPanelProps {
 // Component
 // ============================================================================
 
-export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) {
+export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSave }: AgentEditPanelProps) {
   // Form state
   const [formData, setFormData] = useState<UpdateAgentRequest>({
     displayName: agent.displayName,
@@ -61,8 +64,6 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
   });
 
   // Data for dropdowns
-  const [providers, setProviders] = useState<ProviderResponse[]>([]);
-  const [skills, setSkills] = useState<SkillResponse[]>([]);
   const [mcps, setMcps] = useState<McpListResponse["servers"]>([]);
 
   // UI state
@@ -71,27 +72,16 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
   const [error, setError] = useState<string | null>(null);
   const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  // Load providers, skills, and MCPs
+  // Load skills, MCPs, and schedules for this agent
   useEffect(() => {
     loadData();
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const loadData = async () => {
     setIsLoading(true);
     try {
       const transport = await getTransport();
-      const [providersResult, skillsResult, mcpsResult] = await Promise.all([
-        transport.listProviders(),
-        transport.listSkills(),
-        transport.listMcps(),
-      ]);
-
-      if (providersResult.success && providersResult.data) {
-        setProviders(providersResult.data);
-      }
-      if (skillsResult.success && skillsResult.data) {
-        setSkills(skillsResult.data);
-      }
+      const mcpsResult = await transport.listMcps();
       if (mcpsResult.success && mcpsResult.data) {
         setMcps(mcpsResult.data.servers || []);
       }
@@ -132,320 +122,280 @@ export function AgentEditPanel({ agent, onClose, onSave }: AgentEditPanelProps) 
     }
   };
 
-  const toggleSkill = (skillId: string) => {
-    const currentSkills = formData.skills || [];
-    if (currentSkills.includes(skillId)) {
-      setFormData({ ...formData, skills: currentSkills.filter((id) => id !== skillId) });
-    } else {
-      setFormData({ ...formData, skills: [...currentSkills, skillId] });
-    }
-  };
-
   if (isLoading) {
     return (
-      <div className="fixed inset-0 bg-black/50 z-50 flex justify-end">
-        <div className="w-full max-w-2xl bg-[var(--background)] flex items-center justify-center">
-          <Loader2 className="w-6 h-6 text-[var(--primary)] animate-spin" />
+      <Slideover
+        open={true}
+        onClose={onClose}
+        title="Loading..."
+        icon={<Bot style={{ width: 18, height: 18 }} />}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: "var(--spacing-12)" }}>
+          <Loader2 style={{ width: 24, height: 24, animation: "spin 1s linear infinite" }} />
         </div>
-      </div>
+      </Slideover>
     );
   }
 
   return (
-    <div className="fixed inset-0 bg-black/50 z-50 flex justify-end">
-      <div className="w-full max-w-2xl bg-[var(--background)] flex flex-col shadow-2xl">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[var(--border)]">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={onClose}
-              className="p-1.5 hover:bg-[var(--muted)] rounded-lg transition-colors text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+    <Slideover
+      open={true}
+      onClose={onClose}
+      title={agent.displayName || agent.name}
+      subtitle={agent.id}
+      icon={<Bot style={{ width: 18, height: 18 }} />}
+      footer={
+        <>
+          <button className="btn btn--secondary btn--md" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn btn--primary btn--md"
+            onClick={handleSave}
+            disabled={isSaving}
+          >
+            {isSaving ? "Saving..." : "Save Changes"}
+          </button>
+        </>
+      }
+    >
+      {/* Error message */}
+      {error && (
+        <div className="alert alert--error" style={{ marginBottom: "var(--spacing-4)" }}>
+          {error}
+        </div>
+      )}
+
+      {/* ── Basic ── */}
+      <section className="slideover__section">
+        <h3 style={{ fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)", marginBottom: "var(--spacing-3)" }}>
+          Basic Information
+        </h3>
+        <div className="form-group">
+          <label className="form-label">Display Name</label>
+          <input
+            className="form-input"
+            type="text"
+            value={formData.displayName || ""}
+            onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
+            placeholder="My Agent"
+          />
+        </div>
+        <div className="form-group">
+          <label className="form-label">Description</label>
+          <textarea
+            className="form-textarea"
+            value={formData.description || ""}
+            onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+            rows={2}
+            placeholder="What does this agent do?"
+          />
+        </div>
+      </section>
+
+      {/* ── Model ── */}
+      <section className="slideover__section">
+        <h3 style={{
+          fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)",
+          marginBottom: "var(--spacing-3)", display: "flex", alignItems: "center", gap: "var(--spacing-2)",
+        }}>
+          <Cpu style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
+          Model Configuration
+        </h3>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-3)" }}>
+          <div className="form-group">
+            <label className="form-label">Provider</label>
+            <select
+              className="form-select"
+              value={formData.providerId || ""}
+              onChange={(e) => {
+                const provider = providers.find((p) => p.id === e.target.value);
+                setFormData({
+                  ...formData,
+                  providerId: e.target.value,
+                  model: provider ? getProviderDefaultModel(provider) : "",
+                });
+              }}
             >
-              <ArrowLeft className="w-4 h-4" />
-            </button>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-[var(--primary)] flex items-center justify-center">
-                <Bot className="w-4 h-4 text-white" />
-              </div>
-              <div>
-                <h2 className="text-base font-semibold text-[var(--foreground)]">Edit Agent</h2>
-                <p className="text-xs text-[var(--muted-foreground)]">{agent.id}</p>
-              </div>
-            </div>
+              {providers.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </select>
           </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={onClose}
-              className="px-3 py-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
+          <div className="form-group">
+            <label className="form-label">Model</label>
+            <select
+              className="form-select"
+              value={formData.model || ""}
+              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
             >
-              Cancel
-            </button>
-            <button
-              onClick={handleSave}
-              disabled={isSaving}
-              className="inline-flex items-center gap-1.5 bg-[var(--primary)] hover:bg-[var(--primary)]/90 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors"
-            >
-              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-              Save
-            </button>
+              {selectedProvider?.models.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              )) || <option value="">Select a provider first</option>}
+            </select>
+            {formData.model && modelRegistry[formData.model] && (
+              <div style={{ marginTop: "var(--spacing-2)" }}>
+                <ModelChip
+                  modelId={formData.model}
+                  profile={modelRegistry[formData.model]}
+                  showContext
+                />
+              </div>
+            )}
           </div>
         </div>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-3)", marginTop: "var(--spacing-3)" }}>
+          <div className="form-group">
+            <label className="form-label" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-1)" }}>
+              <Thermometer style={{ width: 14, height: 14 }} />
+              Temperature
+            </label>
+            <div style={{ display: "flex", alignItems: "center", gap: "var(--spacing-3)" }}>
+              <input
+                type="range"
+                min="0"
+                max="2"
+                step="0.1"
+                value={formData.temperature || 0.7}
+                onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
+                style={{ flex: 1 }}
+              />
+              <span style={{ fontSize: "var(--text-sm)", color: "var(--foreground)", width: 40, textAlign: "right" }}>
+                {formData.temperature?.toFixed(1) || "0.7"}
+              </span>
+            </div>
+          </div>
+          <div className="form-group">
+            <label className="form-label" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-1)" }}>
+              <Hash style={{ width: 14, height: 14 }} />
+              Max Tokens
+            </label>
+            <input
+              className="form-input"
+              type="number"
+              value={formData.maxTokens || 4096}
+              onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
+              min="1"
+              max="128000"
+            />
+          </div>
+        </div>
+      </section>
 
-        {/* Error message */}
-        {error && (
-          <div className="mx-6 mt-4 p-3 bg-[var(--destructive)]/10 text-[var(--destructive)] rounded-lg flex items-center justify-between text-sm">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="hover:opacity-70">
-              <X className="w-4 h-4" />
-            </button>
+      {/* ── Advanced ── */}
+      <section>
+        <button
+          onClick={() => setAdvancedOpen(!advancedOpen)}
+          style={{
+            display: "flex", alignItems: "center", gap: "var(--spacing-2)",
+            fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--foreground)",
+            background: "none", border: "none", cursor: "pointer", padding: 0,
+            fontFamily: "var(--font-body)",
+          }}
+        >
+          {advancedOpen ? <ChevronDown style={{ width: 16, height: 16 }} /> : <ChevronRight style={{ width: 16, height: 16 }} />}
+          Advanced Options
+        </button>
+
+        {advancedOpen && (
+          <div style={{ marginTop: "var(--spacing-3)", display: "flex", flexDirection: "column", gap: "var(--spacing-3)" }}>
+            {/* Thinking toggle */}
+            <div
+              className="skill-toggle"
+              onClick={() => setFormData({ ...formData, thinkingEnabled: !formData.thinkingEnabled })}
+            >
+              <button
+                className={`toggle-switch ${formData.thinkingEnabled ? "toggle-switch--on" : "toggle-switch--off"}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFormData({ ...formData, thinkingEnabled: !formData.thinkingEnabled });
+                }}
+              />
+              <Brain style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
+              <div className="skill-toggle__info">
+                <div className="skill-toggle__name">Thinking Enabled</div>
+                <div className="skill-toggle__desc">Allow the model to show reasoning steps</div>
+              </div>
+            </div>
+
+            {/* Voice toggle */}
+            <div
+              className="skill-toggle"
+              onClick={() => setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled })}
+            >
+              <button
+                className={`toggle-switch ${formData.voiceRecordingEnabled ? "toggle-switch--on" : "toggle-switch--off"}`}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled });
+                }}
+              />
+              <Mic style={{ width: 16, height: 16, color: "var(--muted-foreground)" }} />
+              <div className="skill-toggle__info">
+                <div className="skill-toggle__name">Voice Recording</div>
+                <div className="skill-toggle__desc">Enable voice input for this agent</div>
+              </div>
+            </div>
+
+            {/* System Prompt */}
+            <div className="form-group">
+              <label className="form-label" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-1)" }}>
+                <FileText style={{ width: 14, height: 14 }} />
+                System Prompt
+              </label>
+              <textarea
+                className="form-textarea"
+                value={formData.instructions || ""}
+                onChange={(e) => setFormData({ ...formData, instructions: e.target.value })}
+                rows={10}
+                placeholder="System instructions for the agent..."
+                style={{ fontFamily: "var(--font-mono)" }}
+              />
+            </div>
+
+            {/* MCP Servers */}
+            <div className="form-group">
+              <label className="form-label" style={{ display: "flex", alignItems: "center", gap: "var(--spacing-1)" }}>
+                <Server style={{ width: 14, height: 14 }} />
+                MCP Servers
+              </label>
+              {mcps.length === 0 ? (
+                <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)", padding: "var(--spacing-3)", background: "var(--background-elevated)", borderRadius: "var(--radius-md)", border: "1px solid var(--border)" }}>
+                  No MCP servers configured
+                </p>
+              ) : (
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-2)" }}>
+                  {mcps.map((mcp) => {
+                    const isOn = (formData.mcps || []).includes(mcp.id);
+                    return (
+                      <div
+                        key={mcp.id}
+                        className={`skill-toggle ${isOn ? "skill-toggle--on" : ""}`}
+                        onClick={() => toggleMcp(mcp.id)}
+                      >
+                        <button
+                          className={`toggle-switch ${isOn ? "toggle-switch--on" : "toggle-switch--off"}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            toggleMcp(mcp.id);
+                          }}
+                        />
+                        <div className="skill-toggle__info">
+                          <div className="skill-toggle__name">{mcp.name}</div>
+                          <div className="skill-toggle__desc">{mcp.description}</div>
+                        </div>
+                        <span style={{ fontSize: "var(--text-xs)", color: "var(--dim-foreground)", background: "var(--background-elevated)", padding: "2px 6px", borderRadius: "var(--radius-sm)" }}>
+                          {mcp.type}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         )}
-
-        {/* Form */}
-        <div className="flex-1 overflow-auto p-6 space-y-6">
-          {/* Basic Info */}
-          <section>
-            <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3">Basic Information</h3>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-sm text-[var(--muted-foreground)] mb-1.5">Display Name</label>
-                <input
-                  type="text"
-                  value={formData.displayName || ""}
-                  onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
-                  className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent"
-                  placeholder="My Agent"
-                />
-              </div>
-              <div>
-                <label className="block text-sm text-[var(--muted-foreground)] mb-1.5">Description</label>
-                <textarea
-                  value={formData.description || ""}
-                  onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                  rows={2}
-                  className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent resize-none"
-                  placeholder="What does this agent do?"
-                />
-              </div>
-            </div>
-          </section>
-
-          {/* Model Configuration */}
-          <section>
-            <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3 flex items-center gap-2">
-              <Cpu className="w-4 h-4 text-[var(--muted-foreground)]" />
-              Model Configuration
-            </h3>
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-[var(--muted-foreground)] mb-1.5">Provider</label>
-                  <select
-                    value={formData.providerId || ""}
-                    onChange={(e) => {
-                      const provider = providers.find((p) => p.id === e.target.value);
-                      setFormData({
-                        ...formData,
-                        providerId: e.target.value,
-                        model: provider?.models[0] || "",
-                      });
-                    }}
-                    className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent"
-                  >
-                    {providers.map((provider) => (
-                      <option key={provider.id} value={provider.id}>
-                        {provider.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--muted-foreground)] mb-1.5">Model</label>
-                  <select
-                    value={formData.model || ""}
-                    onChange={(e) => setFormData({ ...formData, model: e.target.value })}
-                    className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent"
-                  >
-                    {selectedProvider?.models.map((model) => (
-                      <option key={model} value={model}>
-                        {model}
-                      </option>
-                    )) || <option value="">Select a provider first</option>}
-                  </select>
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-sm text-[var(--muted-foreground)] mb-1.5 flex items-center gap-1.5">
-                    <Thermometer className="w-3.5 h-3.5" />
-                    Temperature
-                  </label>
-                  <div className="flex items-center gap-3">
-                    <input
-                      type="range"
-                      min="0"
-                      max="2"
-                      step="0.1"
-                      value={formData.temperature || 0.7}
-                      onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
-                      className="flex-1 accent-[var(--primary)]"
-                    />
-                    <span className="text-sm text-[var(--foreground)] w-10 text-right">
-                      {formData.temperature?.toFixed(1) || "0.7"}
-                    </span>
-                  </div>
-                </div>
-                <div>
-                  <label className="block text-sm text-[var(--muted-foreground)] mb-1.5 flex items-center gap-1.5">
-                    <Hash className="w-3.5 h-3.5" />
-                    Max Tokens
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.maxTokens || 4096}
-                    onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
-                    className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent"
-                    min="1"
-                    max="128000"
-                  />
-                </div>
-              </div>
-            </div>
-          </section>
-
-          {/* System Prompt */}
-          <section>
-            <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3 flex items-center gap-2">
-              <FileText className="w-4 h-4 text-[var(--muted-foreground)]" />
-              System Prompt
-            </h3>
-            <textarea
-              value={formData.instructions || ""}
-              onChange={(e) => setFormData({ ...formData, instructions: e.target.value })}
-              rows={10}
-              className="w-full bg-[var(--card)] border border-[var(--border)] rounded-lg px-3 py-2 text-sm text-[var(--foreground)] focus:outline-none focus:ring-2 focus:ring-[var(--primary)] focus:border-transparent resize-none font-mono"
-              placeholder="System instructions for the agent..."
-            />
-          </section>
-
-          {/* MCPs */}
-          <section>
-            <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3 flex items-center gap-2">
-              <Server className="w-4 h-4 text-[var(--muted-foreground)]" />
-              MCP Servers
-            </h3>
-            {mcps.length === 0 ? (
-              <p className="text-sm text-[var(--muted-foreground)] bg-[var(--card)] rounded-lg p-3 border border-[var(--border)]">
-                No MCP servers configured
-              </p>
-            ) : (
-              <div className="space-y-1.5">
-                {mcps.map((mcp) => (
-                  <label
-                    key={mcp.id}
-                    className="flex items-center gap-3 p-2.5 bg-[var(--card)] rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={(formData.mcps || []).includes(mcp.id)}
-                      onChange={() => toggleMcp(mcp.id)}
-                      className="w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-[var(--foreground)]">{mcp.name}</div>
-                      <div className="text-xs text-[var(--muted-foreground)] truncate">{mcp.description}</div>
-                    </div>
-                    <span className="text-xs text-[var(--muted-foreground)] bg-[var(--muted)] px-1.5 py-0.5 rounded">
-                      {mcp.type}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Skills */}
-          <section>
-            <h3 className="text-sm font-semibold text-[var(--foreground)] mb-3 flex items-center gap-2">
-              <Zap className="w-4 h-4 text-[var(--warning)]" />
-              Skills
-            </h3>
-            {skills.length === 0 ? (
-              <p className="text-sm text-[var(--muted-foreground)] bg-[var(--card)] rounded-lg p-3 border border-[var(--border)]">
-                No skills configured
-              </p>
-            ) : (
-              <div className="space-y-1.5">
-                {skills.map((skill) => (
-                  <label
-                    key={skill.id}
-                    className="flex items-center gap-3 p-2.5 bg-[var(--card)] rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-colors"
-                  >
-                    <input
-                      type="checkbox"
-                      checked={(formData.skills || []).includes(skill.id)}
-                      onChange={() => toggleSkill(skill.id)}
-                      className="w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-[var(--foreground)]">{skill.displayName}</div>
-                      <div className="text-xs text-[var(--muted-foreground)] truncate">{skill.description}</div>
-                    </div>
-                    <span className="text-xs text-[var(--muted-foreground)] bg-[var(--muted)] px-1.5 py-0.5 rounded">
-                      {skill.category}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            )}
-          </section>
-
-          {/* Advanced Options */}
-          <section>
-            <button
-              onClick={() => setAdvancedOpen(!advancedOpen)}
-              className="flex items-center gap-2 text-sm font-semibold text-[var(--foreground)] hover:text-[var(--primary)] transition-colors w-full"
-            >
-              {advancedOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-              Advanced Options
-            </button>
-            {advancedOpen && (
-              <div className="mt-3 space-y-3 pl-6">
-                <label className="flex items-center gap-3 p-2.5 bg-[var(--card)] rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={formData.thinkingEnabled || false}
-                    onChange={(e) => setFormData({ ...formData, thinkingEnabled: e.target.checked })}
-                    className="w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                  />
-                  <Brain className="w-4 h-4 text-[var(--muted-foreground)]" />
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-[var(--foreground)]">Thinking Enabled</div>
-                    <div className="text-xs text-[var(--muted-foreground)]">
-                      Allow the model to show reasoning steps
-                    </div>
-                  </div>
-                </label>
-                <label className="flex items-center gap-3 p-2.5 bg-[var(--card)] rounded-lg border border-[var(--border)] cursor-pointer hover:border-[var(--primary)]/50 transition-colors">
-                  <input
-                    type="checkbox"
-                    checked={formData.voiceRecordingEnabled || false}
-                    onChange={(e) => setFormData({ ...formData, voiceRecordingEnabled: e.target.checked })}
-                    className="w-4 h-4 rounded border-[var(--border)] text-[var(--primary)] focus:ring-[var(--primary)]"
-                  />
-                  <Mic className="w-4 h-4 text-[var(--muted-foreground)]" />
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-[var(--foreground)]">Voice Recording</div>
-                    <div className="text-xs text-[var(--muted-foreground)]">
-                      Enable voice input for this agent
-                    </div>
-                  </div>
-                </label>
-              </div>
-            )}
-          </section>
-        </div>
-      </div>
-    </div>
+      </section>
+    </Slideover>
   );
 }

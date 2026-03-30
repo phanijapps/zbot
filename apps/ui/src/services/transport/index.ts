@@ -22,6 +22,9 @@ export type {
   CreateProviderRequest,
   UpdateProviderRequest,
   ProviderTestResult,
+  ModelRegistryResponse,
+  ModelProfile,
+  ModelCapabilities,
   HealthResponse,
   StatusResponse,
   EventCallback,
@@ -50,7 +53,17 @@ export type {
   // Subscription types
   SubscriptionScope,
   SubscriptionOptions,
+  // Plugin types
+  PluginInfo,
+  PluginsResponse,
+  // Cron types
+  CronJobResponse,
+  CreateCronJobRequest,
+  UpdateCronJobRequest,
+  CronTriggerResult,
 } from "./types";
+
+export { getProviderDefaultModel } from "./types";
 
 // ============================================================================
 // Default Configuration
@@ -139,10 +152,6 @@ export async function initializeTransport(config?: Partial<TransportConfig>): Pr
 
   await globalTransport.initialize(finalConfig);
   initialized = true;
-
-  console.log(`[Transport] Initialized`);
-  console.log(`[Transport] HTTP: ${finalConfig.httpUrl}`);
-  console.log(`[Transport] WebSocket: ${finalConfig.wsUrl}`);
 
   return globalTransport;
 }

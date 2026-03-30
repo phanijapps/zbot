@@ -908,6 +908,18 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             conversation_id,
             seq: None,
         }),
+
+        // Plan update from update_plan tool
+        GatewayEvent::PlanUpdate {
+            session_id, execution_id, plan, explanation, conversation_id,
+        } => Some(ServerMessage::PlanUpdate {
+            session_id,
+            execution_id,
+            plan,
+            explanation,
+            conversation_id,
+            seq: None,
+        }),
     }
 }
 

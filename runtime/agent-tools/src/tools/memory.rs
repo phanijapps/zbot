@@ -79,13 +79,11 @@ impl MemoryTool {
     ///
     /// - `scope="agent"` (default): `agents_data/{agent_id}/memory.json`
     /// - `scope="shared"`: `agents_data/shared/{file}.json`
-    /// - `scope="ward"`: `wards/{ward_id}/.ward_memory.json`
     fn resolve_memory_path(
         &self,
         agent_id: &str,
         scope: &str,
         file: Option<&str>,
-        ward_id: Option<&str>,
     ) -> Result<PathBuf> {
         match scope {
             "shared" => {
@@ -110,18 +108,6 @@ impl MemoryTool {
                             .join(format!("{}.json", file))
                     })
                     .ok_or_else(|| ZeroError::Tool("No vault path configured".to_string()))
-            }
-            "ward" => {
-                let ward_id = ward_id.ok_or_else(|| {
-                    ZeroError::Tool(
-                        "No active ward. Use ward(action=\"use\") first.".to_string(),
-                    )
-                })?;
-
-                self.fs
-                    .ward_dir(ward_id)
-                    .map(|dir| dir.join(".ward_memory.json"))
-                    .ok_or_else(|| ZeroError::Tool("Ward dir unavailable".to_string()))
             }
             "agent" | _ => self
                 .fs
@@ -204,7 +190,7 @@ impl Tool for MemoryTool {
         Actions: get/set/delete/list/search (key-value store), \
         save_fact (structured fact with category/key/content/confidence — automatically embedded for semantic search), \
         recall (hybrid semantic + keyword search over saved facts). \
-        Scopes: 'agent' (default), 'shared' (cross-session), 'ward' (per-project). \
+        Scopes: 'agent' (default), 'shared' (cross-session). \
         Shared memory requires a 'file' parameter: user_info, workspace, patterns, or session_summaries."
     }
 
@@ -219,7 +205,7 @@ impl Tool for MemoryTool {
                 },
                 "category": {
                     "type": "string",
-                    "enum": ["preference", "decision", "pattern", "entity", "instruction", "correction"],
+                    "enum": ["user", "pattern", "domain", "instruction", "correction"],
                     "description": "Fact category (for save_fact action)"
                 },
                 "content": {
@@ -236,9 +222,9 @@ impl Tool for MemoryTool {
                 },
                 "scope": {
                     "type": "string",
-                    "enum": ["agent", "shared", "ward"],
+                    "enum": ["agent", "shared"],
                     "default": "agent",
-                    "description": "Memory scope: 'agent' (per-agent), 'shared' (cross-session), 'ward' (current project)"
+                    "description": "Memory scope: 'agent' (per-agent), 'shared' (cross-session)"
                 },
                 "file": {
                     "type": "string",
@@ -299,11 +285,6 @@ impl Tool for MemoryTool {
             .unwrap_or("agent");
         let file = args.get("file").and_then(|v| v.as_str());
 
-        // Get ward_id from context state (set by ward tool)
-        let ward_id = ctx
-            .get_state("ward_id")
-            .and_then(|v| v.as_str().map(String::from));
-
         // Resolve memory path (only needed for KV actions, not save_fact/recall)
         let action = args
             .get("action")
@@ -312,7 +293,7 @@ impl Tool for MemoryTool {
 
         match action {
             "get" | "set" | "delete" | "list" | "search" => {
-                let path = self.resolve_memory_path(&agent_id, scope, file, ward_id.as_deref())?;
+                let path = self.resolve_memory_path(&agent_id, scope, file)?;
                 match action {
                     "get" => self.action_get(&path, &args).await,
                     "set" => self.action_set(&path, &args).await,
@@ -470,7 +451,7 @@ impl MemoryTool {
                 json!({
                     "key": key,
                     "value_preview": if entry.value.len() > 100 {
-                        format!("{}...", &entry.value[..100])
+                        format!("{}...", zero_core::truncate_str(&entry.value, 100))
                     } else {
                         entry.value.clone()
                     },
@@ -512,7 +493,7 @@ impl MemoryTool {
             .unwrap_or(0.8);
 
         // Validate
-        let valid_categories = ["preference", "decision", "pattern", "entity", "instruction", "correction"];
+        let valid_categories = ["user", "pattern", "domain", "instruction", "correction"];
         if !valid_categories.contains(&category) {
             return Err(ZeroError::Tool(format!(
                 "Invalid category '{}'. Valid: {}",
@@ -537,7 +518,7 @@ impl MemoryTool {
             }
             None => {
                 // Fallback: store in legacy KV file
-                let kv_path = self.resolve_memory_path(agent_id, "agent", None, None)?;
+                let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
                 let mut store = self.load_store_at_path(&kv_path)?;
 
                 let fact_key = format!("fact:{}", key);
@@ -568,7 +549,12 @@ impl MemoryTool {
         }
     }
 
-    /// Recall relevant facts using hybrid search via the DB-backed fact store.
+    /// Recall relevant facts using prioritized hybrid search via the DB-backed fact store.
+    ///
+    /// When the DB-backed store is available, uses `recall_facts_prioritized` which
+    /// applies category weights (corrections > strategies > user prefs > ...) to
+    /// surface the most important facts first. Falls back to flat scoring if
+    /// the store doesn't support prioritization.
     async fn action_recall(&self, agent_id: &str, args: &Value) -> Result<Value> {
         let query = args
             .get("query")
@@ -580,21 +566,38 @@ impl MemoryTool {
             .and_then(|v| v.as_u64())
             .unwrap_or(5) as usize;
 
-        // Use DB-backed fact store if available
+        // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
             Some(store) => {
                 store
-                    .recall_facts(agent_id, query, limit)
+                    .recall_facts_prioritized(agent_id, query, limit)
                     .await
                     .map_err(|e| ZeroError::Tool(e))
             }
             None => {
-                // Fallback: search KV store
-                let kv_path = self.resolve_memory_path(agent_id, "agent", None, None)?;
+                // Fallback: search KV store with category-aware ordering
+                let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
                 let store = self.load_store_at_path(&kv_path)?;
 
                 let query_lower = query.to_lowercase();
-                let results: Vec<Value> = store
+
+                // Category priority weights for KV fallback ordering
+                let category_weight = |tags: &[String]| -> f64 {
+                    for tag in tags {
+                        match tag.as_str() {
+                            "correction" => return 1.5,
+                            "strategy" => return 1.4,
+                            "user" => return 1.3,
+                            "instruction" => return 1.2,
+                            "domain" => return 1.0,
+                            "pattern" => return 0.9,
+                            _ => {}
+                        }
+                    }
+                    1.0
+                };
+
+                let mut matches: Vec<(f64, &String, &MemoryEntry)> = store
                     .entries
                     .iter()
                     .filter(|(k, entry)| {
@@ -602,13 +605,26 @@ impl MemoryTool {
                             || entry.value.to_lowercase().contains(&query_lower)
                             || entry.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
                     })
-                    .take(limit)
                     .map(|(key, entry)| {
+                        let weight = category_weight(&entry.tags);
+                        (weight, key, entry)
+                    })
+                    .collect();
+
+                // Sort by category weight descending
+                matches.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+                matches.truncate(limit);
+
+                let results: Vec<Value> = matches
+                    .iter()
+                    .map(|(weight, key, entry)| {
                         json!({
                             "key": key,
                             "content": entry.value,
                             "tags": entry.tags,
+                            "score": weight,
                             "source": "kv_store",
+                            "prioritized": true,
                         })
                     })
                     .collect();
@@ -618,6 +634,7 @@ impl MemoryTool {
                     "results": results,
                     "count": results.len(),
                     "source": "kv_store",
+                    "prioritized": true,
                 }))
             }
         }
@@ -731,7 +748,7 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs, None);
 
-        let path = tool.resolve_memory_path("test-agent", "agent", None, None).unwrap();
+        let path = tool.resolve_memory_path("test-agent", "agent", None).unwrap();
         assert!(path.ends_with("agents_data/test-agent/memory.json"));
     }
 
@@ -742,7 +759,7 @@ mod tests {
         let tool = MemoryTool::new(fs, None);
 
         let path = tool
-            .resolve_memory_path("test-agent", "shared", Some("patterns"), None)
+            .resolve_memory_path("test-agent", "shared", Some("patterns"))
             .unwrap();
         assert!(path.ends_with("agents_data/shared/patterns.json"));
     }
@@ -753,7 +770,7 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs, None);
 
-        let result = tool.resolve_memory_path("test-agent", "shared", None, None);
+        let result = tool.resolve_memory_path("test-agent", "shared", None);
         assert!(result.is_err());
         assert!(result
             .unwrap_err()
@@ -767,7 +784,7 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs, None);
 
-        let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"), None);
+        let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"));
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Invalid shared file"));
     }
@@ -779,7 +796,7 @@ mod tests {
         let tool = MemoryTool::new(fs, None);
 
         for file in SHARED_FILES {
-            let result = tool.resolve_memory_path("test-agent", "shared", Some(file), None);
+            let result = tool.resolve_memory_path("test-agent", "shared", Some(file));
             assert!(result.is_ok(), "Failed for file: {}", file);
         }
     }

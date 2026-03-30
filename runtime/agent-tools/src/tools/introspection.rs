@@ -8,6 +8,8 @@ use serde_json::{json, Value};
 use std::sync::Arc;
 use zero_core::{FileSystemContext, Tool, ToolContext, Result};
 
+use super::guards::has_placeholder_specs;
+
 // ============================================================================
 // LIST SKILLS TOOL
 // ============================================================================
@@ -45,6 +47,13 @@ impl Tool for ListSkillsTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
+        if has_placeholder_specs(ctx.as_ref()) {
+            return Ok(json!({
+                "status": "redirect",
+                "message": "Placeholder specs exist in your ward's specs/ folder. Delegate to a planning subagent to fill them before loading skills. Skills are listed in each spec file."
+            }));
+        }
+
         // Get list of currently loaded skills from context state
         let loaded_skills: Vec<String> = ctx.get_state("skill:loaded_skills")
             .and_then(|v| serde_json::from_value(v).ok())

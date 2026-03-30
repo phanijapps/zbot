@@ -148,7 +148,7 @@ impl<D: DbProvider> LogService<D> {
 
         // Truncate result for storage
         let truncated_result = if result.len() > 1000 {
-            format!("{}...(truncated)", &result[..1000])
+            format!("{}...(truncated)", &result[..result.floor_char_boundary(1000)])
         } else {
             result.to_string()
         };

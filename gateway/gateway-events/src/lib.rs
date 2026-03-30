@@ -240,6 +240,16 @@ pub enum GatewayEvent {
         ward_id: String,
     },
 
+    /// Agent's plan was updated via update_plan tool.
+    PlanUpdate {
+        session_id: String,
+        execution_id: String,
+        plan: Value,
+        explanation: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        conversation_id: Option<String>,
+    },
+
     /// Executor auto-extended iterations because the agent is making progress.
     IterationsExtended {
         session_id: String,
@@ -282,6 +292,7 @@ impl GatewayEvent {
             Self::Heartbeat { .. } => None,
             Self::SessionContinuationReady { root_agent_id, .. } => Some(root_agent_id),
             Self::WardChanged { .. } => None,
+            Self::PlanUpdate { .. } => None,
             Self::IterationsExtended { .. } => None,
         }
     }
@@ -312,6 +323,7 @@ impl GatewayEvent {
             Self::Heartbeat { session_id, .. } => Some(session_id),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
             Self::WardChanged { session_id, .. } => Some(session_id),
+            Self::PlanUpdate { session_id, .. } => Some(session_id),
             Self::IterationsExtended { session_id, .. } => Some(session_id),
         }
     }
@@ -349,6 +361,7 @@ impl GatewayEvent {
                 root_execution_id, ..
             } => Some(root_execution_id),
             Self::WardChanged { execution_id, .. } => Some(execution_id),
+            Self::PlanUpdate { execution_id, .. } => Some(execution_id),
             Self::IterationsExtended { execution_id, .. } => Some(execution_id),
         }
     }
@@ -383,6 +396,7 @@ impl GatewayEvent {
             Self::Heartbeat { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
             Self::WardChanged { .. } => None,
+            Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
         }
     }

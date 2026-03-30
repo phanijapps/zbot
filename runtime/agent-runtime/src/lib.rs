@@ -67,9 +67,9 @@ pub use types::{
 };
 
 pub use llm::{
-    LlmClient, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
+    LlmClient, LlmError, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
     ToolCallChunk, ChatResponse, TokenUsage,
-    RetryingLlmClient, RetryPolicy,
+    RetryingLlmClient, RetryPolicy, ThrottledLlmClient,
     EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError,
     OpenAiEmbeddingClient, LocalEmbeddingClient, content_hash,
 };
@@ -101,7 +101,7 @@ pub use middleware::{
 };
 
 pub use executor::{
-    AgentExecutor, ExecutorConfig, ExecutorError, create_executor
+    AgentExecutor, ExecutorConfig, ExecutorError, RecallHook, RecallHookResult, create_executor
 };
 
 pub use logging::{

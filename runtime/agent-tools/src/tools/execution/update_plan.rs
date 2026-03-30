@@ -11,6 +11,8 @@ use serde_json::{json, Value};
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
 
+use crate::tools::guards::has_placeholder_specs;
+
 // ============================================================================
 // UPDATE PLAN TOOL
 // ============================================================================
@@ -39,7 +41,7 @@ impl Tool for UpdatePlanTool {
     }
 
     fn description(&self) -> &str {
-        "Track task progress with a lightweight checklist. Each step has a status: pending, in_progress, or completed. Use for complex tasks (5+ steps). Skip for simple tasks."
+        "Track task progress with a lightweight checklist. Each step has a status: pending, in_progress, completed, or failed. Use for complex tasks (5+ steps). Skip for simple tasks."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -62,7 +64,7 @@ impl Tool for UpdatePlanTool {
                             },
                             "status": {
                                 "type": "string",
-                                "enum": ["pending", "in_progress", "completed"],
+                                "enum": ["pending", "in_progress", "completed", "failed"],
                                 "description": "Current status of this step"
                             }
                         },
@@ -75,6 +77,13 @@ impl Tool for UpdatePlanTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
+        if has_placeholder_specs(ctx.as_ref()) {
+            return Ok(json!({
+                "status": "redirect",
+                "message": "Placeholder specs exist in your ward's specs/ folder. Delegate to a planning subagent to fill them instead of creating your own plan."
+            }));
+        }
+
         // Check for error markers from truncated/malformed tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
             let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
@@ -90,17 +99,74 @@ impl Tool for UpdatePlanTool {
             return Err(ZeroError::Tool("Plan cannot be empty".to_string()));
         }
 
-        // Store the plan in session state for UI rendering
-        ctx.set_state("app:plan".to_string(), args.clone());
+        // Part B: Check for plan replacement (existing plan with progress being fully reset)
+        let mut replacement_warning = None;
+        if let Some(existing) = ctx.get_state("app:plan") {
+            if let Some(existing_steps) = existing.get("plan").and_then(|p| p.as_array()) {
+                let has_progress = existing_steps.iter().any(|s| {
+                    let st = s.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                    st == "completed" || st == "failed"
+                });
+                if has_progress {
+                    if let Some(new_steps) = args.get("plan").and_then(|p| p.as_array()) {
+                        let all_pending = new_steps.iter().all(|s| {
+                            s.get("status").and_then(|v| v.as_str()) == Some("pending")
+                        });
+                        if all_pending {
+                            replacement_warning = Some(
+                                "Warning: You are replacing a plan that had completed/failed steps. \
+                                 Update step statuses instead of creating a new plan."
+                            );
+                            tracing::warn!("Plan replacement detected — existing plan had progress");
+                        }
+                    }
+                }
+            }
+        }
 
-        tracing::debug!("Plan updated: {} steps", plan.len());
+        // Part C: Subagent plan cap — delegated executors limited to 5 steps
+        let mut truncation_warning = None;
+        let is_delegated = ctx.get_state("app:is_delegated")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
-        // Return minimal response — fire-and-forget
-        Ok(json!({
+        let mut plan_args = args.clone();
+        if is_delegated {
+            if let Some(plan_array) = plan_args.get_mut("plan").and_then(|p| p.as_array_mut()) {
+                if plan_array.len() > 5 {
+                    let original_len = plan_array.len();
+                    plan_array.truncate(5);
+                    truncation_warning = Some(format!(
+                        "Plan truncated from {} to 5 steps. You are a specialist — keep tasks focused.",
+                        original_len
+                    ));
+                    tracing::info!("Subagent plan truncated from {} to 5 steps", original_len);
+                }
+            }
+        }
+
+        // Store the (possibly truncated) plan in session state for UI rendering
+        ctx.set_state("app:plan".to_string(), plan_args.clone());
+
+        let final_plan = plan_args.get("plan").and_then(|v| v.as_array()).unwrap_or(plan);
+        tracing::debug!("Plan updated: {} steps", final_plan.len());
+
+        // Build response with optional warnings
+        let mut response = json!({
             "__plan_update": true,
-            "plan": plan,
+            "plan": final_plan,
             "message": "Plan updated"
-        }))
+        });
+
+        if let Some(warning) = replacement_warning {
+            response["replacement_warning"] = json!(warning);
+        }
+        if let Some(warning) = truncation_warning {
+            response["truncation_warning"] = json!(warning);
+        }
+
+        // Return response — fire-and-forget
+        Ok(response)
     }
 }
 

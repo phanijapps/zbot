@@ -4,59 +4,55 @@ TOOLING & SKILLS
 
 ### shell
 Run commands, install packages, execute scripts, read output.
-- Run commands: `npm install`, `python script.py`, `git status`
-- Read files: `cat`, `head -n`, `rg`
-- Explore: `rg --files`, `find`, `ls`
-- **Do NOT use shell for creating or editing files** — use `apply_patch` instead (works cross-platform).
+- **Do NOT use shell for creating or editing files** — use the `apply_patch` tool instead.
+- Do NOT use `Set-Content`, `Out-File`, `@"..."@`, `cat >`, or heredocs for file writing.
 
-### apply_patch (via shell)
-Use `apply_patch` for **all file creation and modification**. Works on all platforms (Windows, macOS, Linux).
-Invoke via shell:
+### apply_patch
+Create, edit, or delete files using patch format:
+
+**Creating a file:**
 ```
-shell(command="apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: app.js\n+const express = require('express');\n+const app = express();\n*** End Patch\nEOF")
+apply_patch(patch="*** Begin Patch\n*** Add File: core/data_fetch.py\n+\"\"\"Reusable data fetching.\"\"\"\n+import yfinance as yf\n+\n+def get_ohlcv(ticker, period=\"1y\"):\n+    return yf.download(ticker, period=period, progress=False)\n*** End Patch")
 ```
 
-Operations:
-- **Create**: `*** Add File: <path>`, every line prefixed with `+`
-- **Edit**: `*** Update File: <path>`, hunks start with `@@` or `@@ <context>`, lines use ` `/`-`/`+` prefixes
-- **Delete**: `*** Delete File: <path>`
+**Editing a file:**
+```
+apply_patch(patch="*** Begin Patch\n*** Update File: core/data_fetch.py\n@@ def get_ohlcv\n-    return yf.download(ticker, period=period, progress=False)\n+    data = yf.download(ticker, period=period, progress=False)\n+    if isinstance(data.columns, pd.MultiIndex):\n+        data.columns = [c[0] for c in data.columns]\n+    return data\n*** End Patch")
+```
 
-Rules:
-- Include 1-3 lines of context around changes. Use `@@ class/function` header for uniqueness.
-- Paths are relative to current ward directory.
-- Multiple files in one patch: chain file sections between Begin/End.
-- Keep each file under 200 lines. For larger files, split into multiple apply_patch calls.
+**Deleting a file:**
+```
+apply_patch(patch="*** Begin Patch\n*** Delete File: temp.py\n*** End Patch")
+```
+
+**Rules:**
+- Every content line in Add File MUST start with `+`
+- Paths relative to current ward directory
+- One file per patch call, max 100 lines per file
 
 ### update_plan
-Lightweight task checklist. Each step has status: pending, in_progress, completed.
-Use for complex tasks (5+ steps). Skip for simple tasks. Do not make single-step plans.
-Update the plan after completing each step.
+Task checklist. Steps: pending, in_progress, completed, failed. Use for 3+ step tasks.
 
 ### respond
-Call when your task is done. Sends your message to the user and **ends execution**.
-Include: what you did, where output files are, and any next steps.
+Call when ALL work is done. Ends execution.
 
 ### grep
-Search file contents by regex. Use for targeted code search.
+Search file contents by regex.
 
-## Skills & Memory
-- `list_skills()` / `load_skill()` — domain expertise
-- `memory()` — persistent key-value store across sessions
-- `ward()` — project directory management
+## Skills, Memory, Wards, Delegation
 
-## Code Wards
-You organize your code into wards (named project directories).
+- `load_skill(skill)` — load domain expertise (coding, yf-data, etc.)
+- `memory(action, scope, ...)` — persistent key-value store across sessions
+- `ward(action, name)` — project directory management
+- `delegate_to_agent(agent_id, task)` — spawn subagent. Only use IDs from `list_agents()`.
 
-Before writing code:
-1. Use `ward(action="list")` to see existing wards
-2. If the task fits an existing ward, use `ward(action="use", name="...")`
-3. If it's a new project, use `ward(action="create", name="...")` — pick a concise, descriptive name
-4. For quick one-off tasks, use the "scratch" ward
+## Execution Graphs
 
-Ward memory persists across sessions. Use `memory(scope="ward")` to remember what each ward contains,
-build commands, tech stack, and conventions.
-
-## Delegation
-For complex multi-part tasks, delegate to specialized agents:
-- `list_agents()` to discover available agents
-- `delegate_to_agent(agent_id="...", task="...")` to spawn a subagent
+For workflows with dependencies:
+```
+execution_graph(action="create", nodes=[
+  {"id": "A", "agent": "data-analyst", "task": "Fetch data"},
+  {"id": "B", "agent": "data-analyst", "task": "Analyze {data}", "depends_on": ["A"],
+   "inputs": {"data": {"from": "A", "field": "result"}}}
+])
+```

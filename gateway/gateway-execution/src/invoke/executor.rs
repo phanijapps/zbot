@@ -3,6 +3,7 @@
 //! Builds agent executors with all required components.
 
 use gateway_services::agents::Agent;
+use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SkillService};
 use agent_runtime::{
@@ -39,6 +40,10 @@ pub struct ExecutorBuilder {
     workspace_cache: Option<WorkspaceCache>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
+    llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
+    model_registry: Option<Arc<ModelRegistry>>,
+    is_delegated: bool,
+    extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
 }
 
 impl ExecutorBuilder {
@@ -50,6 +55,10 @@ impl ExecutorBuilder {
             workspace_cache: None,
             fact_store: None,
             connector_provider: None,
+            llm_throttle: None,
+            model_registry: None,
+            is_delegated: false,
+            extra_initial_state: None,
         }
     }
 
@@ -71,6 +80,32 @@ impl ExecutorBuilder {
         self
     }
 
+    /// Set the LLM throttle semaphore (shared per provider across all executors).
+    pub fn with_llm_throttle(mut self, semaphore: Arc<tokio::sync::Semaphore>) -> Self {
+        self.llm_throttle = Some(semaphore);
+        self
+    }
+
+    /// Mark this executor as a delegated subagent (enables plan step cap).
+    pub fn with_delegated(mut self, is_delegated: bool) -> Self {
+        self.is_delegated = is_delegated;
+        self
+    }
+
+    /// Set the model registry for capability lookups and context window resolution.
+    pub fn with_model_registry(mut self, registry: Arc<ModelRegistry>) -> Self {
+        self.model_registry = Some(registry);
+        self
+    }
+
+    /// Add an initial state entry that will be injected into executor context.
+    pub fn with_initial_state(mut self, key: &str, value: serde_json::Value) -> Self {
+        self.extra_initial_state
+            .get_or_insert_with(Vec::new)
+            .push((key.to_string(), value));
+        self
+    }
+
     /// Build an executor for the given agent and provider.
     ///
     /// # Arguments
@@ -89,8 +124,8 @@ impl ExecutorBuilder {
         provider: &Provider,
         conversation_id: &str,
         session_id: &str,
-        available_agents: Vec<serde_json::Value>,
-        available_skills: Vec<serde_json::Value>,
+        available_agents: &[serde_json::Value],
+        available_skills: &[serde_json::Value],
         hook_context: Option<&serde_json::Value>,
         mcp_service: &McpService,
         ward_id: Option<&str>,
@@ -110,13 +145,13 @@ impl ExecutorBuilder {
         // Cache available agents for list_agents tool
         if !available_agents.is_empty() {
             executor_config = executor_config
-                .with_initial_state("available_agents", serde_json::Value::Array(available_agents));
+                .with_initial_state("available_agents", serde_json::Value::Array(available_agents.to_vec()));
         }
 
         // Cache available skills for list_skills tool
         if !available_skills.is_empty() {
             executor_config = executor_config
-                .with_initial_state("available_skills", serde_json::Value::Array(available_skills));
+                .with_initial_state("available_skills", serde_json::Value::Array(available_skills.to_vec()));
         }
 
         // Load workspace context (from cache if available, otherwise disk)
@@ -141,6 +176,38 @@ impl ExecutorBuilder {
                 .with_initial_state("ward_id", serde_json::Value::String(ward.to_string()));
         }
 
+        // Mark delegated executors so tools can enforce subagent constraints
+        if self.is_delegated {
+            executor_config = executor_config
+                .with_initial_state("app:is_delegated", serde_json::Value::Bool(true));
+        }
+
+        // Inject extra initial state (e.g., ward_purpose, ward_structure from intent analysis)
+        if let Some(entries) = &self.extra_initial_state {
+            for (key, value) in entries {
+                executor_config = executor_config.with_initial_state(key, value.clone());
+            }
+        }
+
+        // Validate thinking capability against model registry
+        let thinking_enabled = if agent.thinking_enabled {
+            if let Some(ref registry) = self.model_registry {
+                if !registry.has_capability(&agent.model, gateway_services::models::Capability::Thinking) {
+                    tracing::warn!(
+                        model = %agent.model,
+                        "thinking_enabled but model lacks thinking capability — disabling"
+                    );
+                    false
+                } else {
+                    true
+                }
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
         // Create LLM client using provider config
         let llm_config = LlmConfig::new(
             provider.base_url.clone(),
@@ -150,7 +217,7 @@ impl ExecutorBuilder {
         )
         .with_temperature(agent.temperature)
         .with_max_tokens(agent.max_tokens)
-        .with_thinking(agent.thinking_enabled);
+        .with_thinking(thinking_enabled);
 
         let raw_client: Arc<dyn agent_runtime::LlmClient> = Arc::new(
             OpenAiClient::new(llm_config)
@@ -158,7 +225,15 @@ impl ExecutorBuilder {
         );
 
         // Wrap with retry logic: 3 retries, 500ms base delay, exponential backoff with jitter
-        let llm_client = Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
+        let retrying_client: Arc<dyn agent_runtime::LlmClient> =
+            Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
+
+        // Wrap with throttle if configured (limits concurrent calls per provider)
+        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref sem) = self.llm_throttle {
+            Arc::new(agent_runtime::ThrottledLlmClient::new(retrying_client, sem.clone()))
+        } else {
+            retrying_client
+        };
 
         // Create file system context for tools
         let fs_context: Arc<dyn FileSystemContext> =
@@ -178,7 +253,12 @@ impl ExecutorBuilder {
         executor_config.conversation_id = Some(conversation_id.to_string());
         executor_config.temperature = agent.temperature;
         executor_config.max_tokens = agent.max_tokens;
-        executor_config.context_window_tokens = agent_runtime::middleware::token_counter::get_model_context_window(&agent.model) as u64;
+        // Resolve context window: provider override > model registry > default 8192
+        executor_config.context_window_tokens = provider.context_window.unwrap_or_else(|| {
+            self.model_registry.as_ref()
+                .map(|r| r.context_window(&agent.model).input)
+                .unwrap_or(8192)
+        });
         executor_config.mcps = agent.mcps.clone();
 
         // Configure tool result offload settings

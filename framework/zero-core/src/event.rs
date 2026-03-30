@@ -168,6 +168,10 @@ pub struct DelegateAction {
 
     /// Whether to wait for the result.
     pub wait_for_result: bool,
+
+    /// Optional max iterations for the subagent execution loop.
+    #[serde(default)]
+    pub max_iterations: Option<u32>,
 }
 
 impl EventActions {

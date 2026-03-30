@@ -170,7 +170,7 @@ pub async fn search_memory_facts(
 
     // Use FTS5 search (hybrid requires embeddings which we don't have in HTTP API)
     let results = memory_repo
-        .search_memory_facts_fts(&query.q, &agent_id, query.limit)
+        .search_memory_facts_fts(&query.q, &agent_id, query.limit, None)
         .map_err(|e| {
             tracing::error!("Failed to search memory facts: {}", e);
             (

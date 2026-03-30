@@ -190,6 +190,52 @@ const Card = ({ size }) => (
 - `.modal`, `.modal--sm/lg` - Dialog container
 - `.modal__header/body/footer` - Modal sections
 
+### Shared Slide-over
+- `.slideover-backdrop`, `.slideover-backdrop--open` - Overlay
+- `.slideover`, `.slideover--open` - Right-side panel (540px)
+- `.slideover__header/body/footer` - Panel sections (--spacing-8 padding)
+- `.slideover__section` - Section with bottom border separator
+- `.slideover__section-title` - Uppercase label with line divider
+- `.slideover__icon/title/subtitle/close` - Header elements
+
+### Shared Components
+- `.tab-bar` - Horizontal tab container with active underline
+- `.tab-bar__tab`, `.tab-bar__tab--active` - Tab items with count badges
+- `.action-bar` - Search + filter + action button row
+- `.action-bar__search`, `.action-bar__search-input` - Search field
+- `.filter-chip`, `.filter-chip--active` - Filter toggle chips
+- `.help-box`, `.help-box__icon`, `.help-box__content` - Contextual help
+- `.meta-chip`, `.meta-chip--{variant}` - Metadata badges (model/skills/mcps/schedule/tools/stdio/http/sse/plugin/worker/enabled/disabled/running/error/stopped/starting)
+- `.card-grid`, `.card-grid--2col` - Responsive card grid layout
+- `.status-dot`, `.status-dot--idle` - Pulsing status indicator
+- `.info-tip` - Inline (i) tooltip circle
+- `.add-link` - "+ Add" styled link button
+- `.toggle-switch`, `.toggle-switch--on/off` - Toggle switch control
+
+### Page Layout (v2)
+- `.page-header-v2` - Page title area (--spacing-8 padding)
+- `.page-title-v2` - Page heading (text-2xl, weight 600)
+- `.page-subtitle-v2` - Descriptive subtitle
+- `.page-content-v2` - Scrollable content area
+
+### Settings Page (tabbed: Providers | General | Logging)
+- Provider components in `features/settings/`: ProviderCard, ProviderSlideover, ProvidersGrid, ProvidersEmptyState, providerPresets
+- `.provider-grid`, `.provider-card`, `.model-chip` - Provider-specific classes
+- `.settings-info-card`, `.settings-toggle-option` - Settings form controls
+
+### Agents Page (tabbed: My Agents | Skills Library | Schedules)
+- `.agent-card`, `.agent-card__top/avatar/info/name/id/desc/meta/footer` - Agent cards
+- `.skill-card`, `.skill-card__header/name/desc` - Skill cards
+- `.schedule-card`, `.schedule-card__icon/info/name/cron/agent/meta` - Schedule items
+- `.skill-toggle`, `.skill-toggle--on` - Toggle rows for MCP/skill selection
+
+### Integrations Page (tabbed: Tool Servers | Plugins & Workers)
+- `.ts-card`, `.ts-card__top/icon/info/name/desc/meta/footer` - Tool server cards
+- `.ts-card__icon--stdio/http/sse` - Transport type icon variants
+- `.ts-detail-row`, `.ts-test-result`, `.ts-tool-item` - Slide-over detail elements
+- `.pw-card`, `.pw-card__top/icon/info/name/desc/meta/footer` - Plugin/worker cards
+- `.pw-card__icon--plugin/worker` - Source type icon variants
+
 ---
 
 ## Adding New Components

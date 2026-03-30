@@ -37,6 +37,9 @@ pub struct DelegationRequest {
     pub task: String,
     /// Optional context to pass to the child agent
     pub context: Option<Value>,
+    /// Optional max iterations for the child agent execution loop.
+    /// Defaults to 25 if not specified.
+    pub max_iterations: Option<u32>,
 }
 
 // ============================================================================
@@ -68,6 +71,10 @@ pub struct DelegationContext {
     /// Whether to send a callback message on completion.
     #[serde(default = "default_callback")]
     pub callback_on_complete: bool,
+
+    /// Conversation ID of the child agent (for routing events back).
+    #[serde(default)]
+    pub child_conversation_id: Option<String>,
 }
 
 fn default_callback() -> bool {
@@ -89,12 +96,19 @@ impl DelegationContext {
             parent_conversation_id: parent_conversation_id.into(),
             task_context: None,
             callback_on_complete: true,
+            child_conversation_id: None,
         }
     }
 
     /// Set task-scoped context.
     pub fn with_context(mut self, context: Value) -> Self {
         self.task_context = Some(context);
+        self
+    }
+
+    /// Set the child conversation ID.
+    pub fn with_child_conversation_id(mut self, id: String) -> Self {
+        self.child_conversation_id = Some(id);
         self
     }
 

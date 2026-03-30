@@ -9,15 +9,6 @@ import { WifiOff, Loader2, AlertCircle } from "lucide-react";
 import { useConnectionState } from "@/hooks/useConnectionState";
 import { getTransport } from "@/services/transport";
 
-/**
- * Displays the current WebSocket connection status.
- *
- * - Connected: Hidden (no indicator needed)
- * - Connecting: Yellow spinner with "Connecting..."
- * - Reconnecting: Yellow spinner with attempt count
- * - Disconnected: Gray with reconnect button
- * - Failed: Red with retry button
- */
 export function ConnectionStatus() {
   const state = useConnectionState();
 
@@ -28,34 +19,32 @@ export function ConnectionStatus() {
 
   switch (state.status) {
     case "connected":
-      // Don't show anything when connected
       return null;
 
     case "connecting":
       return (
-        <div className="flex items-center gap-2 text-yellow-600 text-sm px-3 py-1.5 bg-yellow-50 rounded-lg">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Connecting...
+        <div className="connection-status connection-status--connecting">
+          <Loader2 className="connection-status__spinner" />
+          <span className="connection-status__text">Connecting...</span>
         </div>
       );
 
     case "reconnecting":
       return (
-        <div className="flex items-center gap-2 text-yellow-600 text-sm px-3 py-1.5 bg-yellow-50 rounded-lg">
-          <Loader2 className="w-4 h-4 animate-spin" />
-          Reconnecting ({state.attempt}/{state.maxAttempts})...
+        <div className="connection-status connection-status--connecting">
+          <Loader2 className="connection-status__spinner" />
+          <span className="connection-status__text">
+            Reconnecting ({state.attempt}/{state.maxAttempts})...
+          </span>
         </div>
       );
 
     case "disconnected":
       return (
-        <div className="flex items-center gap-2 text-gray-500 text-sm px-3 py-1.5 bg-gray-100 rounded-lg">
-          <WifiOff className="w-4 h-4" />
-          Disconnected
-          <button
-            onClick={handleReconnect}
-            className="underline ml-1 hover:text-gray-700"
-          >
+        <div className="connection-status connection-status--disconnected">
+          <WifiOff style={{ width: 16, height: 16 }} />
+          <span className="connection-status__text">Disconnected</span>
+          <button onClick={handleReconnect} className="connection-status__action">
             Reconnect
           </button>
         </div>
@@ -63,13 +52,10 @@ export function ConnectionStatus() {
 
     case "failed":
       return (
-        <div className="flex items-center gap-2 text-red-600 text-sm px-3 py-1.5 bg-red-50 rounded-lg">
-          <AlertCircle className="w-4 h-4" />
-          Connection failed
-          <button
-            onClick={handleReconnect}
-            className="underline ml-1 hover:text-red-700"
-          >
+        <div className="connection-status connection-status--failed">
+          <AlertCircle style={{ width: 16, height: 16 }} />
+          <span className="connection-status__text">Connection failed</span>
+          <button onClick={handleReconnect} className="connection-status__action">
             Retry
           </button>
         </div>

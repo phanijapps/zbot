@@ -69,6 +69,12 @@ enum Commands {
 
     /// Check gateway status
     Status,
+
+    /// Manage distillation
+    Distill {
+        #[command(subcommand)]
+        action: DistillAction,
+    },
 }
 
 #[derive(Subcommand)]
@@ -78,6 +84,16 @@ enum DaemonAction {
 
     /// Show daemon info
     Info,
+}
+
+#[derive(Subcommand)]
+enum DistillAction {
+    /// Retroactively distill all undistilled sessions
+    Backfill {
+        /// Max concurrent distillation calls
+        #[arg(long, default_value = "2")]
+        concurrency: usize,
+    },
 }
 
 #[tokio::main]
@@ -127,6 +143,12 @@ async fn main() -> Result<()> {
             run_status(&gateway_url).await?;
         }
 
+        Some(Commands::Distill { action }) => match action {
+            DistillAction::Backfill { concurrency } => {
+                run_distill_backfill(&gateway_url, concurrency).await?;
+            }
+        },
+
         None => {
             // Default: run interactive chat TUI with agent selector
             app::run_chat_tui(&gateway_url, &ws_url, "assistant", &uuid::Uuid::new_v4().to_string()).await?;
@@ -175,7 +197,7 @@ async fn run_invoke(
                     println!("[Tool Error: {}]", err);
                 } else if let Some(res) = result {
                     let preview = if res.len() > 100 {
-                        format!("{}...", &res[..100])
+                        format!("{}...", &res[..res.floor_char_boundary(100)])
                     } else {
                         res
                     };
@@ -265,4 +287,113 @@ async fn run_daemon_info(gateway_url: &str) -> Result<()> {
 
 async fn run_status(gateway_url: &str) -> Result<()> {
     run_daemon_info(gateway_url).await
+}
+
+// ============================================================================
+// Distillation Backfill
+// ============================================================================
+
+#[derive(serde::Deserialize)]
+struct UndistilledSession {
+    session_id: String,
+    #[allow(dead_code)]
+    agent_id: String,
+}
+
+#[derive(serde::Deserialize)]
+struct TriggerDistillationResponse {
+    #[allow(dead_code)]
+    session_id: String,
+    status: String,
+    facts_upserted: usize,
+    error: Option<String>,
+}
+
+async fn run_distill_backfill(gateway_url: &str, _concurrency: usize) -> Result<()> {
+    let client = reqwest::Client::new();
+
+    // Check if gateway is running
+    let health_resp = client
+        .get(format!("{}/api/health", gateway_url))
+        .timeout(std::time::Duration::from_secs(2))
+        .send()
+        .await;
+
+    if health_resp.is_err() {
+        eprintln!("Error: Gateway daemon is not running");
+        eprintln!("Start it with: cargo run -p daemon");
+        std::process::exit(1);
+    }
+
+    println!("Fetching undistilled sessions...");
+
+    let sessions: Vec<UndistilledSession> = client
+        .get(format!("{}/api/distillation/undistilled", gateway_url))
+        .send()
+        .await?
+        .json()
+        .await?;
+
+    if sessions.is_empty() {
+        println!("All sessions are already distilled. Nothing to do.");
+        return Ok(());
+    }
+
+    println!("Found {} undistilled session(s)\n", sessions.len());
+
+    let mut success_count = 0;
+    let mut fail_count = 0;
+
+    for (i, session) in sessions.iter().enumerate() {
+        let short_id = if session.session_id.len() > 8 {
+            &session.session_id[..8]
+        } else {
+            &session.session_id
+        };
+
+        print!("[{}/{}] Session {}... ", i + 1, sessions.len(), short_id);
+        std::io::Write::flush(&mut std::io::stdout())?;
+
+        let resp = client
+            .post(format!(
+                "{}/api/distillation/trigger/{}",
+                gateway_url, session.session_id
+            ))
+            .send()
+            .await;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                match r.json::<TriggerDistillationResponse>().await {
+                    Ok(body) => {
+                        if body.status == "success" {
+                            println!("ok ({} facts)", body.facts_upserted);
+                            success_count += 1;
+                        } else {
+                            let err_msg = body.error.as_deref().unwrap_or("unknown error");
+                            println!("failed ({})", err_msg);
+                            fail_count += 1;
+                        }
+                    }
+                    Err(e) => {
+                        println!("failed (parse error: {})", e);
+                        fail_count += 1;
+                    }
+                }
+            }
+            Ok(r) => {
+                println!("failed (HTTP {})", r.status());
+                fail_count += 1;
+            }
+            Err(e) => {
+                println!("failed ({})", e);
+                fail_count += 1;
+            }
+        }
+    }
+
+    println!();
+    println!("Backfill complete: {} succeeded, {} failed", success_count, fail_count);
+
+    Ok(())
 }

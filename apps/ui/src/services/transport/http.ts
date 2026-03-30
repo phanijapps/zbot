@@ -17,6 +17,7 @@ import type {
   CreateProviderRequest,
   UpdateProviderRequest,
   ProviderTestResult,
+  ModelRegistryResponse,
   HealthResponse,
   StatusResponse,
   EventCallback,
@@ -55,6 +56,8 @@ import type {
   SubscriptionErrorMessage,
   SubscriptionOptions,
   SubscriptionScope,
+  // Plugin types
+  PluginsResponse,
   // Bridge worker types
   BridgeWorker,
   // Cron types
@@ -231,6 +234,14 @@ export class HttpTransport implements Transport {
 
   async setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>> {
     return this.post<ProviderResponse>(`/api/providers/${encodeURIComponent(id)}/default`, {});
+  }
+
+  // =========================================================================
+  // Model Registry Operations
+  // =========================================================================
+
+  async listModels(): Promise<TransportResult<ModelRegistryResponse>> {
+    return this.get<ModelRegistryResponse>("/api/models");
   }
 
   // =========================================================================
@@ -1237,6 +1248,14 @@ export class HttpTransport implements Transport {
     setTimeout(() => {
       this.connect();
     }, delay);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Plugin Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listPlugins(): Promise<TransportResult<PluginsResponse>> {
+    return this.get<PluginsResponse>("/api/plugins");
   }
 
   // ─────────────────────────────────────────────────────────────────────────

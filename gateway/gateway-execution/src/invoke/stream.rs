@@ -141,7 +141,7 @@ pub fn log_tool_result(
 
     // Truncate result for logging
     let truncated = if result.len() > 500 {
-        format!("{}...", &result[..500])
+        format!("{}...", zero_core::truncate_str(result, 500))
     } else {
         result.to_string()
     };
@@ -237,6 +237,7 @@ pub fn handle_delegation(
     child_agent: &str,
     task: &str,
     context: &Option<serde_json::Value>,
+    max_iterations: Option<u32>,
 ) {
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
@@ -284,6 +285,7 @@ pub fn handle_delegation(
         child_execution_id,
         task: task.to_string(),
         context: context.clone(),
+        max_iterations,
     });
 
     log_delegation(ctx, child_agent, task);
@@ -306,10 +308,11 @@ pub fn process_stream_event(
         agent_id: child_agent,
         task,
         context,
+        max_iterations,
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context);
+        handle_delegation(ctx, child_agent, task, context, *max_iterations);
     }
 
     // Log based on event type

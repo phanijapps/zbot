@@ -4,43 +4,29 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Link, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useNavigate } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
   Bot,
-  Zap,
-  Cable,
-  Server,
   Settings,
   Loader2,
   AlertCircle,
   RefreshCw,
-  Wrench,
-  ChevronDown,
-  ChevronRight,
-  Search,
-  Terminal,
-  Layers,
-  Users,
   Eye,
   LayoutDashboard,
   Plug,
-  Calendar,
-  FileText,
-  AlertTriangle,
   Brain,
+  Network,
 } from "lucide-react";
-import { initializeTransport, getTransport, type ToolSettings, type LogSettings, type UpdateLogSettingsRequest } from "@/services/transport";
+import { initializeTransport, getTransport } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
-import { WebSkillsPanel } from "./features/skills/WebSkillsPanel";
-import { WebCronPanel } from "./features/cron/WebCronPanel";
-import { WebConnectorsPanel } from "./features/connectors/WebConnectorsPanel";
+import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
-import { WebMcpsPanel } from "./features/mcps/WebMcpsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { WebMemoryPanel } from "./features/memory";
+import { ObservatoryPage } from "./features/observatory";
 import { ChatSlider } from "./components/ChatSlider";
 import { ThemeToggle } from "./components/ThemeToggle";
 
@@ -130,7 +116,7 @@ function App() {
 
   if (isInitializing) {
     return (
-      <div className="loading-spinner" style={{ minHeight: '100vh' }}>
+      <div className="loading-spinner">
         <div className="text-center">
           <Loader2 className="loading-spinner__icon" />
           <p className="page-subtitle">Connecting to gateway...</p>
@@ -141,17 +127,17 @@ function App() {
 
   if (error && !connectionStatus.connected) {
     return (
-      <div className="loading-spinner" style={{ minHeight: '100vh' }}>
-        <div className="card card__padding--lg" style={{ maxWidth: '28rem', textAlign: 'center' }}>
-          <div className="empty-state__icon" style={{ backgroundColor: 'var(--destructive-muted)' }}>
-            <AlertCircle style={{ width: 24, height: 24, color: 'var(--destructive)' }} />
+      <div className="loading-spinner">
+        <div className="card card__padding--lg page-container--narrow text-center">
+          <div className="card__icon card__icon--destructive empty-state__icon">
+            <AlertCircle style={{ width: 24, height: 24 }} />
           </div>
           <h2 className="empty-state__title">Connection Failed</h2>
           <p className="empty-state__description">{error}</p>
-          <p className="page-subtitle" style={{ marginBottom: 'var(--spacing-6)' }}>
+          <p className="page-subtitle mb-section">
             Make sure the z-Bot daemon is running:
             <br />
-            <code className="badge" style={{ marginTop: 'var(--spacing-2)', display: 'inline-block' }}>
+            <code className="badge mt-inline">
               zerod
             </code>
           </p>
@@ -171,7 +157,7 @@ function App() {
     <BrowserRouter>
       <Toaster
         position="bottom-right"
-        theme="light"
+        theme="system"
         toastOptions={{
           style: {
             fontWeight: 500,
@@ -183,18 +169,22 @@ function App() {
       />
       <WebAppShell connectionStatus={connectionStatus}>
         <Routes>
-          {/* Dashboard is home, Chat is handled by slider */}
+          {/* Active pages */}
           <Route path="/" element={<WebOpsDashboard />} />
           <Route path="/chat" element={<WebOpsDashboard />} />
           <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/memory" element={<WebMemoryPanel />} />
+          <Route path="/observatory" element={<ObservatoryPage />} />
           <Route path="/agents" element={<WebAgentsPanel />} />
-          <Route path="/skills" element={<WebSkillsPanel />} />
-          <Route path="/hooks" element={<WebCronPanel />} />
-          <Route path="/connectors" element={<WebConnectorsPanel />} />
-          <Route path="/providers" element={<WebIntegrationsPanel />} />
-          <Route path="/mcps" element={<WebMcpsPanel />} />
+          <Route path="/integrations" element={<WebIntegrationsPanel />} />
           <Route path="/settings" element={<WebSettingsPanel />} />
+
+          {/* Redirects from old routes */}
+          <Route path="/providers" element={<Navigate to="/settings" replace />} />
+          <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
+          <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
+          <Route path="/connectors" element={<Navigate to="/integrations?tab=plugins" replace />} />
+          <Route path="/mcps" element={<Navigate to="/integrations" replace />} />
         </Routes>
       </WebAppShell>
     </BrowserRouter>
@@ -229,22 +219,14 @@ const navGroups: NavGroup[] = [
       { to: "/", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
+      { to: "/observatory", label: "Observatory", icon: Network },
     ],
   },
   {
-    label: "Configure",
+    label: "Manage",
     items: [
       { to: "/agents", label: "Agents", icon: Bot },
-      { to: "/skills", label: "Skills", icon: Zap },
-    ],
-  },
-  {
-    label: "Connect",
-    items: [
-      { to: "/connectors", label: "Workers", icon: Plug },
-      { to: "/hooks", label: "Schedules", icon: Calendar },
-      { to: "/providers", label: "Providers", icon: Cable },
-      { to: "/mcps", label: "MCPs", icon: Server },
+      { to: "/integrations", label: "Integrations", icon: Plug },
     ],
   },
   {
@@ -330,494 +312,6 @@ function NavLink({ to, label, icon: Icon }: NavLinkProps) {
       <Icon className="nav-link__icon" />
       <span className="nav-link__label">{label}</span>
     </Link>
-  );
-}
-
-// ============================================================================
-// Web Settings Panel
-// ============================================================================
-
-function WebSettingsPanel() {
-  const [toolSettings, setToolSettings] = useState<ToolSettings | null>(null);
-  const [isLoadingTools, setIsLoadingTools] = useState(true);
-  const [isSavingTools, setIsSavingTools] = useState(false);
-  const [toolsError, setToolsError] = useState<string | null>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-
-  // Log settings state
-  const [logSettings, setLogSettings] = useState<LogSettings | null>(null);
-  const [isLoadingLogs, setIsLoadingLogs] = useState(true);
-  const [isSavingLogs, setIsSavingLogs] = useState(false);
-  const [logsError, setLogsError] = useState<string | null>(null);
-  const [logsOpen, setLogsOpen] = useState(false);
-
-  useEffect(() => {
-    loadToolSettings();
-    loadLogSettings();
-  }, []);
-
-  const loadToolSettings = async () => {
-    setIsLoadingTools(true);
-    setToolsError(null);
-    try {
-      const transport = await getTransport();
-      const result = await transport.getToolSettings();
-      if (result.success && result.data) {
-        setToolSettings(result.data);
-      } else {
-        setToolsError(result.error || "Failed to load tool settings");
-      }
-    } catch (err) {
-      setToolsError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setIsLoadingTools(false);
-    }
-  };
-
-  const loadLogSettings = async () => {
-    setIsLoadingLogs(true);
-    setLogsError(null);
-    try {
-      const transport = await getTransport();
-      const result = await transport.getLogSettings();
-      if (result.success && result.data) {
-        setLogSettings(result.data);
-      } else {
-        setLogsError(result.error || "Failed to load log settings");
-      }
-    } catch (err) {
-      setLogsError(err instanceof Error ? err.message : "Unknown error");
-    } finally {
-      setIsLoadingLogs(false);
-    }
-  };
-
-  const handleToolToggle = async (key: keyof ToolSettings) => {
-    if (!toolSettings) return;
-
-    const newSettings = { ...toolSettings, [key]: !toolSettings[key] };
-    setToolSettings(newSettings);
-    setIsSavingTools(true);
-
-    try {
-      const transport = await getTransport();
-      const result = await transport.updateToolSettings(newSettings);
-      if (!result.success) {
-        setToolsError(result.error || "Failed to save settings");
-        setToolSettings(toolSettings);
-      }
-    } catch (err) {
-      setToolsError(err instanceof Error ? err.message : "Unknown error");
-      setToolSettings(toolSettings);
-    } finally {
-      setIsSavingTools(false);
-    }
-  };
-
-  const handleLogSettingChange = async (updates: Partial<UpdateLogSettingsRequest>) => {
-    if (!logSettings) return;
-
-    const newSettings = { ...logSettings, ...updates };
-    setLogSettings(newSettings);
-    setIsSavingLogs(true);
-
-    try {
-      const transport = await getTransport();
-      const result = await transport.updateLogSettings(updates);
-      if (!result.success) {
-        setLogsError(result.error || "Failed to save log settings");
-        setLogSettings(logSettings);
-      }
-    } catch (err) {
-      setLogsError(err instanceof Error ? err.message : "Unknown error");
-      setLogSettings(logSettings);
-    } finally {
-      setIsSavingLogs(false);
-    }
-  };
-
-  const toolGroups = [
-    {
-      name: "Search Tools",
-      icon: Search,
-      tools: [
-        { key: "grep" as const, label: "Grep", description: "Search file contents with patterns" },
-        { key: "glob" as const, label: "Glob", description: "Find files by name patterns" },
-      ],
-    },
-    {
-      name: "Execution",
-      icon: Terminal,
-      tools: [
-        { key: "python" as const, label: "Python", description: "Execute Python code" },
-        { key: "loadSkill" as const, label: "Load Skill", description: "Dynamically load skills" },
-      ],
-    },
-    {
-      name: "UI Tools",
-      icon: Layers,
-      tools: [
-        { key: "uiTools" as const, label: "UI Tools", description: "Interactive UI components" },
-      ],
-    },
-    {
-      name: "Agent Tools",
-      icon: Users,
-      tools: [
-        { key: "createAgent" as const, label: "Create Agent", description: "Create new agents dynamically" },
-      ],
-    },
-    {
-      name: "Introspection",
-      icon: Eye,
-      tools: [
-        { key: "introspection" as const, label: "Introspection", description: "Self-analysis tools" },
-      ],
-    },
-  ];
-
-  return (
-    <div className="page">
-      <div className="page-container page-container--narrow">
-        <div className="page-header">
-          <div className="page-header__content">
-            <h1 className="page-title">Settings</h1>
-            <p className="page-subtitle">Configure your z-Bot environment</p>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-4">
-          <div className="card card__padding--lg">
-            <div className="card__header">
-              <div className="flex items-center gap-3">
-                <div className="card__icon card__icon--primary">
-                  <Server style={{ width: 18, height: 18 }} />
-                </div>
-                <div>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Gateway Connection</h2>
-                  <p className="page-subtitle">HTTP and WebSocket endpoints</p>
-                </div>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div className="badge" style={{ padding: 'var(--spacing-3)', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>HTTP API</span>
-                <code className="font-mono" style={{ marginTop: 'var(--spacing-1)' }}>http://localhost:18791</code>
-              </div>
-              <div className="badge" style={{ padding: 'var(--spacing-3)', flexDirection: 'column', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 'var(--text-xs)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>WebSocket</span>
-                <code className="font-mono" style={{ marginTop: 'var(--spacing-1)' }}>ws://localhost:18790</code>
-              </div>
-            </div>
-          </div>
-
-          <div className="card card__padding--lg">
-            <div className="card__header">
-              <div className="flex items-center gap-3">
-                <div className="card__icon card__icon--success">
-                  <Settings style={{ width: 18, height: 18 }} />
-                </div>
-                <div>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600 }}>Data Location</h2>
-                  <p className="page-subtitle">Where your configurations are stored</p>
-                </div>
-              </div>
-            </div>
-            <div className="badge font-mono" style={{ padding: 'var(--spacing-3)' }}>
-              ~/Documents/zbot/
-            </div>
-          </div>
-
-          {/* Log Settings */}
-          <div className="card card__padding--lg">
-            <button
-              onClick={() => setLogsOpen(!logsOpen)}
-              className="w-full flex items-center justify-between"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-            >
-              <div className="flex items-center gap-3">
-                <div className="card__icon card__icon--primary">
-                  <FileText style={{ width: 18, height: 18 }} />
-                </div>
-                <div style={{ textAlign: 'left' }}>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--foreground)' }}>Log Settings</h2>
-                  <p className="page-subtitle">File logging and rotation</p>
-                </div>
-              </div>
-              {logsOpen ? (
-                <ChevronDown style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
-              ) : (
-                <ChevronRight style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
-              )}
-            </button>
-
-            {logsOpen && (
-              <div style={{ marginTop: 'var(--spacing-4)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border)' }}>
-                {logsError && (
-                  <div className="badge" style={{
-                    padding: 'var(--spacing-3)',
-                    marginBottom: 'var(--spacing-4)',
-                    backgroundColor: 'var(--destructive-muted)',
-                    color: 'var(--destructive)'
-                  }}>
-                    {logsError}
-                  </div>
-                )}
-
-                {/* Restart warning */}
-                <div className="badge" style={{
-                  padding: 'var(--spacing-3)',
-                  marginBottom: 'var(--spacing-4)',
-                  backgroundColor: 'var(--warning-muted)',
-                  color: 'var(--warning)'
-                }}>
-                  <AlertTriangle style={{ width: 14, height: 14, marginRight: 'var(--spacing-2)' }} />
-                  Changes require daemon restart to take effect
-                </div>
-
-                {isLoadingLogs ? (
-                  <div className="flex items-center justify-center" style={{ padding: 'var(--spacing-6)' }}>
-                    <Loader2 className="loading-spinner__icon" style={{ width: 24, height: 24 }} />
-                  </div>
-                ) : logSettings ? (
-                  <div className="flex flex-col gap-4">
-                    {/* Enable file logging */}
-                    <label
-                      className="flex items-center gap-3 cursor-pointer"
-                      style={{
-                        padding: 'var(--spacing-3)',
-                        backgroundColor: logSettings.enabled ? 'var(--primary-muted)' : 'var(--muted)',
-                        borderRadius: 'var(--radius-md)',
-                        opacity: isSavingLogs ? 0.7 : 1,
-                        border: logSettings.enabled ? '1px solid var(--primary)' : '1px solid transparent',
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={logSettings.enabled}
-                        onChange={() => handleLogSettingChange({ enabled: !logSettings.enabled })}
-                        disabled={isSavingLogs}
-                        style={{
-                          width: 16,
-                          height: 16,
-                          accentColor: 'var(--primary)',
-                          cursor: isSavingLogs ? 'not-allowed' : 'pointer',
-                        }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
-                          Enable File Logging
-                        </div>
-                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
-                          Write logs to files in addition to stdout
-                        </div>
-                      </div>
-                    </label>
-
-                    {/* Log level */}
-                    <div>
-                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
-                        Log Level
-                      </label>
-                      <select
-                        value={logSettings.level}
-                        onChange={(e) => handleLogSettingChange({ level: e.target.value as LogSettings['level'] })}
-                        disabled={isSavingLogs}
-                        className="form-select"
-                        style={{ width: '100%' }}
-                      >
-                        <option value="trace">Trace (most verbose)</option>
-                        <option value="debug">Debug</option>
-                        <option value="info">Info (default)</option>
-                        <option value="warn">Warn</option>
-                        <option value="error">Error (least verbose)</option>
-                      </select>
-                    </div>
-
-                    {/* Rotation strategy */}
-                    <div>
-                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
-                        Rotation
-                      </label>
-                      <select
-                        value={logSettings.rotation}
-                        onChange={(e) => handleLogSettingChange({ rotation: e.target.value as LogSettings['rotation'] })}
-                        disabled={isSavingLogs}
-                        className="form-select"
-                        style={{ width: '100%' }}
-                      >
-                        <option value="daily">Daily (default)</option>
-                        <option value="hourly">Hourly</option>
-                        <option value="minutely">Minutely (testing)</option>
-                        <option value="never">Never</option>
-                      </select>
-                    </div>
-
-                    {/* Max files */}
-                    <div>
-                      <label style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em', display: 'block', marginBottom: 'var(--spacing-2)' }}>
-                        Max Files to Keep
-                      </label>
-                      <input
-                        type="number"
-                        value={logSettings.maxFiles}
-                        onChange={(e) => handleLogSettingChange({ maxFiles: parseInt(e.target.value, 10) || 0 })}
-                        disabled={isSavingLogs}
-                        className="form-input"
-                        style={{ width: '100%' }}
-                        min={0}
-                      />
-                      <p style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)', marginTop: 'var(--spacing-1)' }}>
-                        Set to 0 for unlimited retention
-                      </p>
-                    </div>
-
-                    {/* Suppress stdout */}
-                    <label
-                      className="flex items-center gap-3 cursor-pointer"
-                      style={{
-                        padding: 'var(--spacing-3)',
-                        backgroundColor: 'var(--muted)',
-                        borderRadius: 'var(--radius-md)',
-                        opacity: isSavingLogs ? 0.7 : 1,
-                      }}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={logSettings.suppressStdout}
-                        onChange={() => handleLogSettingChange({ suppressStdout: !logSettings.suppressStdout })}
-                        disabled={isSavingLogs}
-                        style={{
-                          width: 16,
-                          height: 16,
-                          accentColor: 'var(--primary)',
-                          cursor: isSavingLogs ? 'not-allowed' : 'pointer',
-                        }}
-                      />
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
-                          Suppress Stdout
-                        </div>
-                        <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
-                          Only log to file (useful for daemon mode)
-                        </div>
-                      </div>
-                    </label>
-
-                    {/* Log directory info */}
-                    {logSettings.enabled && (
-                      <div style={{ padding: 'var(--spacing-3)', backgroundColor: 'var(--muted)', borderRadius: 'var(--radius-md)' }}>
-                        <span style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>Log directory:</span>
-                        <code className="font-mono" style={{ fontSize: 'var(--text-xs)', display: 'block', marginTop: 'var(--spacing-1)' }}>
-                          {logSettings.directory || '~/Documents/zbot/logs/'}
-                        </code>
-                      </div>
-                    )}
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-
-          {/* Advanced Options - Tool Settings */}
-          <div className="card card__padding--lg">
-            <button
-              onClick={() => setAdvancedOpen(!advancedOpen)}
-              className="w-full flex items-center justify-between"
-              style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0 }}
-            >
-              <div className="flex items-center gap-3">
-                <div className="card__icon" style={{ backgroundColor: 'var(--warning-muted)' }}>
-                  <Wrench style={{ width: 18, height: 18, color: 'var(--warning)' }} />
-                </div>
-                <div style={{ textAlign: 'left' }}>
-                  <h2 style={{ fontSize: 'var(--text-base)', fontWeight: 600, color: 'var(--foreground)' }}>Advanced Options</h2>
-                  <p className="page-subtitle">Configure optional agent tools</p>
-                </div>
-              </div>
-              {advancedOpen ? (
-                <ChevronDown style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
-              ) : (
-                <ChevronRight style={{ width: 20, height: 20, color: 'var(--muted-foreground)' }} />
-              )}
-            </button>
-
-            {advancedOpen && (
-              <div style={{ marginTop: 'var(--spacing-4)', paddingTop: 'var(--spacing-4)', borderTop: '1px solid var(--border)' }}>
-                {toolsError && (
-                  <div className="badge" style={{
-                    padding: 'var(--spacing-3)',
-                    marginBottom: 'var(--spacing-4)',
-                    backgroundColor: 'var(--destructive-muted)',
-                    color: 'var(--destructive)'
-                  }}>
-                    {toolsError}
-                  </div>
-                )}
-
-                {isLoadingTools ? (
-                  <div className="flex items-center justify-center" style={{ padding: 'var(--spacing-6)' }}>
-                    <Loader2 className="loading-spinner__icon" style={{ width: 24, height: 24 }} />
-                  </div>
-                ) : toolSettings ? (
-                  <div className="flex flex-col gap-4">
-                    <p style={{ fontSize: 'var(--text-sm)', color: 'var(--muted-foreground)' }}>
-                      Enable or disable optional tools. Core tools (shell, read, write, edit, memory, web_fetch, todo) are always available.
-                    </p>
-
-                    {toolGroups.map((group) => (
-                      <div key={group.name}>
-                        <div className="flex items-center gap-2" style={{ marginBottom: 'var(--spacing-2)' }}>
-                          <group.icon style={{ width: 14, height: 14, color: 'var(--muted-foreground)' }} />
-                          <span style={{ fontSize: 'var(--text-xs)', fontWeight: 600, color: 'var(--muted-foreground)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            {group.name}
-                          </span>
-                        </div>
-                        <div className="flex flex-col gap-2">
-                          {group.tools.map((tool) => (
-                            <label
-                              key={tool.key}
-                              className="flex items-center gap-3 cursor-pointer"
-                              style={{
-                                padding: 'var(--spacing-3)',
-                                backgroundColor: 'var(--muted)',
-                                borderRadius: 'var(--radius-md)',
-                                opacity: isSavingTools ? 0.7 : 1,
-                              }}
-                            >
-                              <input
-                                type="checkbox"
-                                checked={toolSettings[tool.key]}
-                                onChange={() => handleToolToggle(tool.key)}
-                                disabled={isSavingTools}
-                                style={{
-                                  width: 16,
-                                  height: 16,
-                                  accentColor: 'var(--primary)',
-                                  cursor: isSavingTools ? 'not-allowed' : 'pointer',
-                                }}
-                              />
-                              <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500, color: 'var(--foreground)' }}>
-                                  {tool.label}
-                                </div>
-                                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
-                                  {tool.description}
-                                </div>
-                              </div>
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            )}
-          </div>
-        </div>
-      </div>
-    </div>
   );
 }
 

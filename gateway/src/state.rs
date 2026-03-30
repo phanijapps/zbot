@@ -11,13 +11,13 @@ use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
 use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
-use crate::services::{AgentService, McpService, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
+use crate::services::{AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
 use agent_runtime::llm::LocalEmbeddingClient;
 use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
-use gateway_database::MemoryRepository;
+use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -76,6 +76,15 @@ pub struct AppState {
     /// Memory repository for accessing agent memory facts.
     pub memory_repo: Option<Arc<MemoryRepository>>,
 
+    /// Distillation repository for tracking distillation run outcomes.
+    pub distillation_repo: Option<Arc<DistillationRepository>>,
+
+    /// Session distiller for triggering on-demand distillation (e.g., backfill).
+    pub distiller: Option<Arc<SessionDistiller>>,
+
+    /// Episode repository for accessing session episodes.
+    pub episode_repo: Option<Arc<EpisodeRepository>>,
+
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
 
@@ -85,6 +94,9 @@ pub struct AppState {
 
     /// Plugin manager for STDIO plugin lifecycle.
     pub plugin_manager: Arc<gateway_bridge::PluginManager>,
+
+    /// Model capabilities registry (bundled + local overrides).
+    pub model_registry: Arc<ModelRegistry>,
 
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
@@ -117,6 +129,12 @@ impl AppState {
         let provider_service = Arc::new(ProviderService::new(paths.clone()));
         let mcp_service = Arc::new(McpService::new(paths.clone()));
 
+        // Initialize model capabilities registry (bundled + local overrides)
+        let bundled_models = gateway_templates::Templates::get("models_registry.json")
+            .map(|f| f.data.to_vec())
+            .unwrap_or_default();
+        let model_registry = Arc::new(ModelRegistry::load(&bundled_models, &paths.vault_dir()));
+
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
             DatabaseManager::new(paths.clone())
@@ -143,6 +161,8 @@ impl AppState {
 
         // Initialize memory evolution services
         let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
+        let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
+        let episode_repo = Arc::new(EpisodeRepository::new(db_manager.clone()));
 
         // Initialize knowledge graph service and storage
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
@@ -173,22 +193,35 @@ impl AppState {
             }
         };
 
-        // Create memory recall with optional graph enrichment
-        let memory_recall = match &graph_service {
+        // Load recall configuration (compiled defaults merged with optional user overrides)
+        let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(paths.vault_dir()));
+
+        // Create memory recall with optional graph enrichment and episodic recall
+        let mut memory_recall_inner = match &graph_service {
             Some(gs) => {
-                Arc::new(MemoryRecall::with_graph(
+                MemoryRecall::with_graph(
                     embedding_client.clone(),
                     memory_repo.clone(),
                     gs.clone(),
-                ))
+                    recall_config.clone(),
+                )
             }
             None => {
-                Arc::new(MemoryRecall::new(
+                MemoryRecall::new(
                     embedding_client.clone(),
                     memory_repo.clone(),
-                ))
+                    recall_config.clone(),
+                )
             }
         };
+        memory_recall_inner.set_episode_repo(episode_repo.clone());
+        let memory_recall = Arc::new(memory_recall_inner);
+
+        // Clone embedding client before it's moved into distiller — the runner
+        // also needs it so the memory fact store can generate embeddings.
+        let runner_embedding_client = embedding_client.clone();
+
+        let episode_repo_ref = episode_repo.clone();
 
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
@@ -196,8 +229,13 @@ impl AppState {
             conversation_repo.clone(),
             memory_repo.clone(),
             graph_storage,
+            Some(distillation_repo.clone()),
+            Some(episode_repo),
             paths.clone(), // For loading distillation_prompt.md
         ));
+
+        // Keep a handle for on-demand distillation (backfill, trigger)
+        let distiller_ref = distiller.clone();
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -217,6 +255,7 @@ impl AppState {
             Some(memory_recall),
             Some(bridge_registry.clone()),
             Some(bridge_outbox.clone()),
+            runner_embedding_client,
         ));
 
         // Create hook registry
@@ -255,10 +294,14 @@ impl AppState {
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             plugin_manager,
+            model_registry,
             workspace_cache,
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            distillation_repo: Some(distillation_repo),
+            distiller: Some(distiller_ref),
+            episode_repo: Some(episode_repo_ref),
             graph_service,
         }
     }
@@ -317,11 +360,15 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            distillation_repo: None,
+            distiller: None,
+            episode_repo: None,
             graph_service: None,
         }
     }
@@ -383,11 +430,15 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            distillation_repo: None,
+            distiller: None,
+            episode_repo: None,
             graph_service: None,
         }
     }

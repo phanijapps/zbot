@@ -806,7 +806,7 @@ export function WebChatPanel() {
                 <div
                   className={`max-w-[75%] rounded-2xl px-4 py-3 ${
                     message.role === "user"
-                      ? "bg-[var(--primary)] text-white"
+                      ? "bg-[var(--primary)] text-[var(--primary-foreground)]"
                       : message.role === "tool"
                         ? "bg-amber-50 border border-amber-200 text-amber-900"
                         : message.role === "delegation"
@@ -903,7 +903,7 @@ export function WebChatPanel() {
             <button
               onClick={handleSend}
               disabled={!input.trim() || isProcessing || canvasOpen}
-              className="bg-[var(--primary)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-3 rounded-xl transition-all flex items-center gap-2 font-medium"
+              className="bg-[var(--primary)] hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed text-[var(--primary-foreground)] px-5 py-3 rounded-xl transition-all flex items-center gap-2 font-medium"
             >
               <Send className="w-4 h-4" />
             </button>

@@ -24,6 +24,7 @@ import type {
   McpServerConfig,
   CreateMcpRequest,
   McpTestResult,
+  ModelRegistryResponse,
   MessageResponse,
   SessionMessage,
   SessionMessagesQuery,
@@ -46,6 +47,8 @@ import type {
   ConnectionStateCallback,
   GlobalCallback,
   SubscriptionOptions,
+  // Plugin types
+  PluginsResponse,
   // Bridge worker types
   BridgeWorker,
   // Cron types
@@ -148,6 +151,13 @@ export interface Transport {
 
   /** Set a provider as the default */
   setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>>;
+
+  // =========================================================================
+  // Model Registry Operations
+  // =========================================================================
+
+  /** Get all known models with capabilities */
+  listModels(): Promise<TransportResult<ModelRegistryResponse>>;
 
   // =========================================================================
   // MCP Operations
@@ -320,6 +330,13 @@ export interface Transport {
 
   /** Manual reconnect - resets attempt counter and tries again */
   reconnect(): Promise<void>;
+
+  // =========================================================================
+  // Plugin Operations
+  // =========================================================================
+
+  /** List all plugins */
+  listPlugins(): Promise<TransportResult<PluginsResponse>>;
 
   // =========================================================================
   // Bridge Worker Operations
