@@ -3484,6 +3484,7 @@
 .session-bar__status--running { background: var(--success); animation: pulse 2s ease-in-out infinite; }
 .session-bar__status--completed { background: var(--success); }
 .session-bar__status--error { background: var(--destructive); }
+.session-bar__status--idle { background: var(--muted-foreground); }
 
 /* Message blocks shared */
 .msg-block { display: flex; gap: var(--spacing-3); }
@@ -3542,6 +3543,12 @@
 .intel-fact { padding: 3px 6px; border-left: 2px solid var(--border); border-radius: 0 var(--radius-sm) var(--radius-sm) 0; font-size: 10px; color: var(--muted-foreground); margin-bottom: var(--spacing-1); }
 .intel-fact--correction { border-left-color: var(--destructive); background: rgba(239,68,68,0.04); }
 .intel-subagent { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-xs); padding: var(--spacing-1) 0; }
+.intel-subagent__name { display: flex; align-items: center; gap: var(--spacing-1); }
+.intel-subagent__dot { width: 6px; height: 6px; border-radius: var(--radius-full); display: inline-block; flex-shrink: 0; }
+.intel-subagent__task { color: var(--muted-foreground); font-size: 10px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.intel-ward__name { font-weight: 600; font-size: var(--text-xs); color: var(--foreground); margin-bottom: var(--spacing-1); }
+.intel-ward__content { font-size: var(--text-xs); color: var(--muted-foreground); }
+.intel-empty { font-size: var(--text-xs); color: var(--muted-foreground); }
 
 /* Chat input */
 .chat-input__field { flex: 1; background: var(--muted); border: 1px solid var(--border); border-radius: var(--radius-md); padding: var(--spacing-2) var(--spacing-3); font-size: var(--text-sm); color: var(--foreground); outline: none; resize: none; min-height: 36px; max-height: 120px; font-family: inherit; }
@@ -3553,3 +3560,5 @@
 .chat-input__chips { display: flex; gap: var(--spacing-2); padding-bottom: var(--spacing-2); flex-wrap: wrap; }
 .chat-input__chip { background: var(--muted); padding: 2px 8px; border-radius: var(--radius-sm); font-size: var(--text-xs); display: flex; align-items: center; gap: var(--spacing-1); }
 .chat-input__chip-remove { cursor: pointer; color: var(--muted-foreground); font-size: 10px; }
+.chat-input__row { display: flex; align-items: center; gap: var(--spacing-2); }
+.chat-input__uploading { font-size: var(--text-xs); color: var(--muted-foreground); margin-top: var(--spacing-1); }
