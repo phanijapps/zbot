@@ -117,6 +117,9 @@ export function useMissionControl() {
   const [conversationId, setConversationId] = useState<string>(() => getOrCreateConversationId());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
 
+  // -- Load flag to prevent double-load --
+  const hasLoadedSessionRef = useRef(false);
+
   // -- Timing --
   const startTimeRef = useRef<number | null>(null);
   const [durationMs, setDurationMs] = useState(0);
@@ -702,6 +705,119 @@ export function useMissionControl() {
       }
     };
   }, []);
+
+  // ========================================================================
+  // Load existing session messages on mount (for resuming past sessions)
+  // ========================================================================
+
+  useEffect(() => {
+    if (!activeSessionId || hasLoadedSessionRef.current) return;
+    hasLoadedSessionRef.current = true;
+
+    const loadSession = async () => {
+      try {
+        const transport = await getTransport();
+        const res = await transport.getLogSession(activeSessionId);
+        if (!res.success || !res.data) return;
+
+        const detail = res.data;
+        const session = detail.session;
+
+        // Set session metadata
+        if (session.title) setSessionTitle(session.title);
+        const sStatus = session.status as string;
+        if (sStatus === "completed" || sStatus === "stopped") {
+          setStatus("completed");
+        } else if (sStatus === "error" || sStatus === "crashed") {
+          setStatus("error");
+        } else if (sStatus === "running") {
+          setStatus("running");
+          startDurationTimer();
+        }
+        if (session.token_count) setTokenCount(session.token_count);
+        if (session.duration_ms) setDurationMs(session.duration_ms);
+
+        // Convert logs to narrative blocks
+        const loadedBlocks: NarrativeBlock[] = [];
+        const logs = detail.logs || [];
+
+        for (const log of logs) {
+          if (log.category === "tool_call") {
+            // Parse tool name from message
+            const toolMatch = log.message.match(/^(\w+):/);
+            const toolName = toolMatch ? toolMatch[1] : log.message.split(" ")[0];
+
+            if (toolName === "memory" && log.message.includes("recall")) {
+              loadedBlocks.push({
+                id: log.id,
+                type: "recall",
+                timestamp: log.timestamp,
+                data: { raw: "" },
+              });
+            } else if (toolName === "delegate_to_agent" || toolName === "delegate") {
+              const agentMatch = log.message.match(/agent[_:]?\s*["']?(\w[\w-]*)["']?/i);
+              loadedBlocks.push({
+                id: log.id,
+                type: "delegation",
+                timestamp: log.timestamp,
+                data: {
+                  agentId: agentMatch ? agentMatch[1] : "subagent",
+                  task: log.message.slice(0, 200),
+                  status: "completed",
+                },
+              });
+            } else {
+              loadedBlocks.push({
+                id: log.id,
+                type: "tool",
+                timestamp: log.timestamp,
+                data: {
+                  toolName,
+                  input: log.message.slice(0, 200),
+                  durationMs: log.duration_ms,
+                },
+              });
+            }
+          } else if (log.category === "tool_result") {
+            // Find matching tool block and add output
+            const lastTool = [...loadedBlocks].reverse().find(b => b.type === "tool" && !b.data.output);
+            if (lastTool) {
+              lastTool.data.output = log.message.slice(0, 500);
+              lastTool.data.isError = log.level === "error";
+            }
+          } else if (log.category === "session" && log.message.length > 20) {
+            // Could be a user message or agent response — heuristic
+            if (!loadedBlocks.some(b => b.type === "user")) {
+              loadedBlocks.push({
+                id: log.id,
+                type: "user",
+                timestamp: log.timestamp,
+                data: { content: log.message, timestamp: log.timestamp },
+              });
+            }
+          }
+        }
+
+        // If we got the user's first message from the session title API
+        if (session.title && !loadedBlocks.some(b => b.type === "user")) {
+          loadedBlocks.unshift({
+            id: "user-" + activeSessionId,
+            type: "user",
+            timestamp: session.started_at,
+            data: { content: session.title, timestamp: session.started_at },
+          });
+        }
+
+        if (loadedBlocks.length > 0) {
+          setBlocks(loadedBlocks);
+        }
+      } catch (err) {
+        console.error("[MissionControl] Failed to load session:", err);
+      }
+    };
+
+    loadSession();
+  }, [activeSessionId, startDurationTimer]);
 
   // ========================================================================
   // Send message
