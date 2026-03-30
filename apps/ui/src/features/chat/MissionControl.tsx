@@ -4,7 +4,7 @@
 // Shows HeroInput when idle with no blocks, full layout otherwise.
 // ============================================================================
 
-import { useMissionControl } from "./mission-hooks";
+import { useMissionControl, useRecentSessions } from "./mission-hooks";
 import { SessionBar } from "./SessionBar";
 import { ExecutionNarrative } from "./ExecutionNarrative";
 import { IntelligenceFeed } from "./IntelligenceFeed";
@@ -25,14 +25,20 @@ import { HeroInput } from "./HeroInput";
  */
 export function MissionControl() {
   const { state, sendMessage, stopAgent, startNewSession } = useMissionControl();
+  const recentSessions = useRecentSessions();
 
   // No blocks and idle — show the beautiful landing input
   if (state.blocks.length === 0 && state.status === "idle") {
-    return <HeroInput onSend={sendMessage} />;
+    return <HeroInput onSend={sendMessage} recentSessions={recentSessions} />;
   }
 
   // Active session — full execution theater
   const isDisabled = state.status === "running";
+
+  // Derive current session ID from localStorage for active highlight
+  const currentSessionId = typeof window !== "undefined"
+    ? localStorage.getItem("agentzero_web_session_id")
+    : null;
 
   return (
     <div className="mission-control">
@@ -43,6 +49,8 @@ export function MissionControl() {
         tokenCount={state.tokenCount}
         durationMs={state.durationMs}
         modelName={state.modelName || undefined}
+        recentSessions={recentSessions}
+        currentSessionId={currentSessionId}
         onStop={stopAgent}
         onNewSession={startNewSession}
       />

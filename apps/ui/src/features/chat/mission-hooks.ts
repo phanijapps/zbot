@@ -6,6 +6,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getTransport, type StreamEvent } from "@/services/transport";
+import type { LogSession } from "@/services/transport/types";
 import type { PlanStep, StepStatus } from "./PlanBlock";
 import type { RecalledFact, SubagentInfo } from "./IntelligenceFeed";
 import type { UploadedFile } from "./ChatInput";
@@ -808,4 +809,57 @@ export function useMissionControl() {
   };
 
   return { state, sendMessage, stopAgent, startNewSession };
+}
+
+// ============================================================================
+// Helper: relative time
+// ============================================================================
+
+export function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
+// ============================================================================
+// Helper: switch to an existing session
+// ============================================================================
+
+export function switchToSession(sessionId: string, conversationId: string): void {
+  localStorage.setItem(WEB_SESSION_ID_KEY, sessionId);
+  localStorage.setItem(WEB_CONV_ID_KEY, conversationId);
+  window.location.reload();
+}
+
+// ============================================================================
+// Hook: useRecentSessions
+// ============================================================================
+
+export function useRecentSessions() {
+  const [sessions, setSessions] = useState<LogSession[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const transport = await getTransport();
+        const res = await transport.listLogSessions({ limit: 10 });
+        if (!cancelled && res.success && res.data) {
+          // Filter to root sessions only (no parent)
+          setSessions(res.data.filter((s) => !s.parent_session_id));
+        }
+      } catch (err) {
+        console.error("[useRecentSessions] Failed to load sessions:", err);
+      }
+    };
+    load();
+    return () => { cancelled = true; };
+  }, []);
+
+  return sessions;
 }

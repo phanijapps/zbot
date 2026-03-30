@@ -6,8 +6,10 @@
 // ============================================================================
 
 import { useState, useRef, useCallback } from "react";
-import { Paperclip, ImagePlus, ArrowUp } from "lucide-react";
+import { Paperclip, ImagePlus, ArrowUp, CheckCircle2, XCircle } from "lucide-react";
 import type { UploadedFile } from "./ChatInput";
+import type { LogSession } from "@/services/transport/types";
+import { timeAgo, switchToSession } from "./mission-hooks";
 
 // ============================================================================
 // Types
@@ -15,6 +17,7 @@ import type { UploadedFile } from "./ChatInput";
 
 interface HeroInputProps {
   onSend: (message: string, attachments: UploadedFile[]) => void;
+  recentSessions?: LogSession[];
 }
 
 // ============================================================================
@@ -47,7 +50,7 @@ const SUGGESTIONS = [
 // Component
 // ============================================================================
 
-export function HeroInput({ onSend }: HeroInputProps) {
+export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
@@ -204,6 +207,34 @@ export function HeroInput({ onSend }: HeroInputProps) {
           </button>
         ))}
       </div>
+
+      {/* Recent sessions */}
+      {recentSessions.length > 0 && (
+        <div className="hero-input__recent">
+          <span className="hero-input__recent-label">Recent</span>
+          <div className="hero-input__recent-cards">
+            {recentSessions.slice(0, 3).map((s) => {
+              const displayTitle = s.title?.slice(0, 40) || "Untitled";
+              const isOk = s.status === "completed";
+              return (
+                <button
+                  key={s.session_id}
+                  className="hero-input__recent-card"
+                  onClick={() => switchToSession(s.session_id, s.conversation_id)}
+                >
+                  <span className="hero-input__recent-title">{displayTitle}</span>
+                  <span className="hero-input__recent-meta">
+                    {isOk
+                      ? <CheckCircle2 style={{ width: 12, height: 12, color: "var(--success)" }} />
+                      : <XCircle style={{ width: 12, height: 12, color: "var(--destructive)" }} />}
+                    <span className="hero-input__recent-time">{timeAgo(s.started_at)}</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
