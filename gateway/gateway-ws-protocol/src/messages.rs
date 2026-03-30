@@ -411,6 +411,20 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+
+    /// Intent analysis completed for a root session.
+    IntentAnalysisComplete {
+        session_id: String,
+        execution_id: String,
+        primary_intent: String,
+        hidden_intents: Vec<String>,
+        recommended_skills: Vec<String>,
+        recommended_agents: Vec<String>,
+        ward_recommendation: Value,
+        execution_strategy: Value,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -497,6 +511,7 @@ impl ServerMessage {
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisComplete { .. } => None,
             Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
             | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
             | Self::SessionEnded { .. } => None,
@@ -577,6 +592,9 @@ impl ServerMessage {
             }
             Self::SessionTitleChanged { session_id, title, .. } => {
                 Self::SessionTitleChanged { session_id, title, seq: Some(seq) }
+            }
+            Self::IntentAnalysisComplete { session_id, execution_id, primary_intent, hidden_intents, recommended_skills, recommended_agents, ward_recommendation, execution_strategy, .. } => {
+                Self::IntentAnalysisComplete { session_id, execution_id, primary_intent, hidden_intents, recommended_skills, recommended_agents, ward_recommendation, execution_strategy, seq: Some(seq) }
             }
             // Messages without sequence numbers pass through unchanged
             other => other,

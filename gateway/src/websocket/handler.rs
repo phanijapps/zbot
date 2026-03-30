@@ -921,8 +921,21 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             seq: None,
         }),
 
-        // Intent analysis complete - internal event, not forwarded to WebSocket
-        GatewayEvent::IntentAnalysisComplete { .. } => None,
+        // Intent analysis complete — forwarded so UI sidebar can display results
+        GatewayEvent::IntentAnalysisComplete {
+            session_id, execution_id, primary_intent, hidden_intents,
+            recommended_skills, recommended_agents, ward_recommendation, execution_strategy,
+        } => Some(ServerMessage::IntentAnalysisComplete {
+            session_id,
+            execution_id,
+            primary_intent,
+            hidden_intents,
+            recommended_skills,
+            recommended_agents,
+            ward_recommendation,
+            execution_strategy,
+            seq: None,
+        }),
 
         // Session title changed
         GatewayEvent::SessionTitleChanged { session_id, title } => {
