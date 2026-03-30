@@ -269,6 +269,18 @@ pub enum GatewayEvent {
         session_id: String,
         title: String,
     },
+
+    /// Intent analysis completed for a root session
+    IntentAnalysisComplete {
+        session_id: String,
+        execution_id: String,
+        primary_intent: String,
+        hidden_intents: Vec<String>,
+        recommended_skills: Vec<String>,
+        recommended_agents: Vec<String>,
+        ward_recommendation: serde_json::Value,
+        execution_strategy: serde_json::Value,
+    },
 }
 
 impl GatewayEvent {
@@ -301,6 +313,7 @@ impl GatewayEvent {
             Self::PlanUpdate { .. } => None,
             Self::IterationsExtended { .. } => None,
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisComplete { .. } => None,
         }
     }
 
@@ -333,6 +346,7 @@ impl GatewayEvent {
             Self::PlanUpdate { session_id, .. } => Some(session_id),
             Self::IterationsExtended { session_id, .. } => Some(session_id),
             Self::SessionTitleChanged { session_id, .. } => Some(session_id),
+            Self::IntentAnalysisComplete { session_id, .. } => Some(session_id),
         }
     }
 
@@ -372,6 +386,7 @@ impl GatewayEvent {
             Self::PlanUpdate { execution_id, .. } => Some(execution_id),
             Self::IterationsExtended { execution_id, .. } => Some(execution_id),
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisComplete { execution_id, .. } => Some(execution_id),
         }
     }
 
@@ -408,6 +423,7 @@ impl GatewayEvent {
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisComplete { .. } => None,
         }
     }
 }
