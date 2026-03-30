@@ -11,6 +11,7 @@ export interface SessionBarProps {
   durationMs: number;
   modelName?: string;
   onStop?: () => void;
+  onNewSession?: () => void;
 }
 
 /** Format milliseconds to a human-readable duration */
@@ -39,6 +40,7 @@ export function SessionBar({
   durationMs,
   modelName,
   onStop,
+  onNewSession,
 }: SessionBarProps) {
   const statusClass = `session-bar__status session-bar__status--${status}`;
 
@@ -58,6 +60,13 @@ export function SessionBar({
       <span className="session-bar__metric">{formatTokens(tokenCount)} tok</span>
       <span className="session-bar__metric">{formatDuration(durationMs)}</span>
       {modelName && <span className="session-bar__metric">{modelName}</span>}
+
+      {/* New Session button */}
+      {onNewSession && status !== "running" && (
+        <button className="btn btn--ghost btn--sm" onClick={onNewSession}>
+          + New
+        </button>
+      )}
 
       {/* Stop button - only shown when running */}
       {status === "running" && onStop && (

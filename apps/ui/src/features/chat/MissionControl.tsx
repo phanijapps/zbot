@@ -24,7 +24,7 @@ import { HeroInput } from "./HeroInput";
  *   - ChatInput (bottom input area)
  */
 export function MissionControl() {
-  const { state, sendMessage, stopAgent } = useMissionControl();
+  const { state, sendMessage, stopAgent, startNewSession } = useMissionControl();
 
   // No blocks and idle — show the beautiful landing input
   if (state.blocks.length === 0 && state.status === "idle") {
@@ -44,6 +44,7 @@ export function MissionControl() {
         durationMs={state.durationMs}
         modelName={state.modelName || undefined}
         onStop={stopAgent}
+        onNewSession={startNewSession}
       />
 
       <div className="mission-control__body">

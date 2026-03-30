@@ -46,11 +46,29 @@ const WEB_CONV_ID_KEY = "agentzero_web_conv_id";
 const WEB_SESSION_ID_KEY = "agentzero_web_session_id";
 
 function getOrCreateConversationId(): string {
+  // Check for ?new=1 param — start fresh session
+  const params = new URLSearchParams(window.location.search);
+  if (params.get("new") === "1") {
+    // Clear the param from URL without reload
+    params.delete("new");
+    const newUrl = window.location.pathname + (params.toString() ? `?${params}` : "");
+    window.history.replaceState({}, "", newUrl);
+    return createNewConversationId();
+  }
+
   let convId = localStorage.getItem(WEB_CONV_ID_KEY);
   if (!convId) {
     convId = `web-${crypto.randomUUID()}`;
     localStorage.setItem(WEB_CONV_ID_KEY, convId);
   }
+  return convId;
+}
+
+/** Create a fresh conversation — clears session state so the next invoke creates a new session */
+function createNewConversationId(): string {
+  localStorage.removeItem(WEB_SESSION_ID_KEY);
+  const convId = `web-${crypto.randomUUID()}`;
+  localStorage.setItem(WEB_CONV_ID_KEY, convId);
   return convId;
 }
 
@@ -95,7 +113,7 @@ export function useMissionControl() {
   const [activeWard, setActiveWard] = useState<{ name: string; content: string } | null>(null);
 
   // -- Session/conversation IDs --
-  const [conversationId] = useState<string>(() => getOrCreateConversationId());
+  const [conversationId, setConversationId] = useState<string>(() => getOrCreateConversationId());
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
 
   // -- Timing --
@@ -752,6 +770,30 @@ export function useMissionControl() {
   // Return state
   // ========================================================================
 
+  // ========================================================================
+  // Start new session — clears all state and creates fresh conversation ID
+  // ========================================================================
+
+  const startNewSession = useCallback(() => {
+    const newConvId = createNewConversationId();
+    setConversationId(newConvId);
+    setActiveSessionId(null);
+    setBlocks([]);
+    setSessionTitle("");
+    setStatus("idle");
+    setTokenCount(0);
+    setModelName("");
+    setSubagents([]);
+    setPlan([]);
+    setRecalledFacts([]);
+    setActiveWard(null);
+    stopDurationTimer();
+    setDurationMs(0);
+    lastSeqRef.current = 0;
+    streamingBufferRef.current = "";
+    toolCallBlockMapRef.current.clear();
+  }, [stopDurationTimer]);
+
   const state: MissionState = {
     blocks,
     sessionTitle,
@@ -765,5 +807,5 @@ export function useMissionControl() {
     activeWard,
   };
 
-  return { state, sendMessage, stopAgent };
+  return { state, sendMessage, stopAgent, startNewSession };
 }
