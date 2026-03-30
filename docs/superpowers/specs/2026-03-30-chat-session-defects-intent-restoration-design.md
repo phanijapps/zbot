@@ -25,12 +25,13 @@ Title depends entirely on the agent calling `set_session_title` tool. If it does
 
 ### Fix
 **Fallback title generation (frontend only):**
-- In `mission-hooks.ts`, after `agent_started` fires, start a 10-second timer
-- If `sessionTitle` is still empty when it expires, auto-generate a title from the first user message (truncate to ~50 chars, add "..." if needed)
-- Persist the fallback title to the backend via the existing transport call
+- In `mission-hooks.ts`, after `agent_started` fires, start a 10-second timer via `useRef<ReturnType<typeof setTimeout>>`
+- If `sessionTitle` is still empty when it expires, auto-generate a title from the first user message (truncate at word boundary to ~50 chars, add "..." if needed)
+- Persist the fallback title to the backend via `transport.executeCommand("set_session_title", { title })` or equivalent HTTP call
+- **Timer cleanup:** Cancel the timer if (a) a title arrives via `session_title_changed` event, (b) a new `agent_started` fires, or (c) the hook unmounts (cleanup in `useEffect` return)
 
 ### Files Changed
-- `apps/ui/src/features/chat/mission-hooks.ts` — add fallback timer in `agent_started` handler
+- `apps/ui/src/features/chat/mission-hooks.ts` — add fallback timer in `agent_started` handler with cleanup
 
 ---
 
@@ -41,7 +42,7 @@ Title depends entirely on the agent calling `set_session_title` tool. If it does
 
 ### Fix
 1. Pass `status` prop to `ExecutionNarrative` from `MissionControl.tsx`
-2. Guard the thinking indicator: only show when `status === "running"`. Suppress for `"completed"`, `"idle"`, or `"error"`.
+2. Add an **outer guard** around the existing thinking indicator logic: only evaluate the block-based conditions when `status === "running"`. For `"completed"`, `"idle"`, or `"error"`, suppress entirely. The existing inner logic (last block type checks, `isStreaming` checks, delegation status) remains unchanged.
 
 ### Files Changed
 - `apps/ui/src/features/chat/ExecutionNarrative.tsx` — accept `status` prop, add guard
@@ -64,7 +65,7 @@ Title depends entirely on the agent calling `set_session_title` tool. If it does
 
 ### Fix — Frontend (New Chats)
 
-3. In `mission-hooks.ts`, the `agent_completed` handler gets a safety net: if no response block exists in `blocks` when `agent_completed` fires, AND the event carries a `result` field (which `GatewayEvent::AgentCompleted` does), create a response block from it.
+3. In `mission-hooks.ts`, the `agent_completed` handler gets a safety net: if no response block exists in `blocks` when `agent_completed` fires, AND the event carries a `result` field (serialized as `event.result: string | undefined` from `GatewayEvent::AgentCompleted { result: Option<String> }`), create a response block from it. If `result` is null/undefined, silently complete — no empty response block.
 
 ### Fix — Frontend (Resumed Chats)
 
@@ -86,7 +87,7 @@ Title depends entirely on the agent calling `set_session_title` tool. If it does
 
 **Backend:**
 
-1. **Re-wire `analyze_intent()`** in `runner.rs::create_executor()` for root agent first turns. Restore the import, un-underscore `_user_message`, call `analyze_intent()` after `index_resources()`. Re-enable `inject_intent_context()` to enrich the system prompt.
+1. **Re-wire `analyze_intent()`** in `runner.rs::create_executor()` for root agent first turns. Restore the import, un-underscore `_user_message`, call `analyze_intent()` after `index_resources()`. Re-enable `inject_intent_context()` to enrich the system prompt. **LLM client:** Build a temporary `OpenAiClient` + `RetryingLlmClient` from the `provider` parameter (same pattern as `executor.rs:222-229`) before the executor is constructed. This is a short-lived client used only for the analysis call.
 
 2. **New `GatewayEvent::IntentAnalysisComplete`** in `gateway-events/src/lib.rs`:
    - `session_id: String`
@@ -121,11 +122,23 @@ Title depends entirely on the agent calling `set_session_title` tool. If it does
    - Positioned as **first section** in the sidebar (above Active Ward)
 
 ### Files Changed
-- `gateway/gateway-execution/src/runner.rs` — re-wire analyze_intent, emit event + log
-- `gateway/gateway-events/src/lib.rs` — add `IntentAnalysisComplete` variant
+- `gateway/gateway-execution/src/runner.rs` — re-wire analyze_intent, build temp LLM client, emit event + log
+- `gateway/gateway-events/src/lib.rs` — add `IntentAnalysisComplete` variant + update `agent_id()`, `session_id()`, `execution_id()` accessor methods to handle the new variant
 - `services/api-logs/src/types.rs` — add `Intent` to `LogCategory`
 - `apps/ui/src/features/chat/mission-hooks.ts` — new state, event handler, session loading
-- `apps/ui/src/features/chat/IntelligenceFeed.tsx` — new Intent Analysis section with progressive disclosure
+- `apps/ui/src/features/chat/IntelligenceFeed.tsx` — new Intent Analysis section with progressive disclosure, update `IntelligenceFeedProps` to accept `intentAnalysis`
+- `apps/ui/src/features/chat/MissionControl.tsx` — pass `intentAnalysis` prop to `IntelligenceFeed`
+- `apps/ui/src/features/chat/types.ts` — add `IntentAnalysis` TypeScript interface mirroring the Rust struct:
+  ```typescript
+  interface IntentAnalysis {
+    primaryIntent: string;
+    hiddenIntents: string[];
+    recommendedSkills: string[];
+    recommendedAgents: string[];
+    wardRecommendation: { action: string; wardName: string; subdirectory?: string; reason: string };
+    executionStrategy: { approach: string; graph?: { nodes: GraphNode[]; mermaid?: string }; explanation: string };
+  }
+  ```
 
 ---
 
@@ -150,9 +163,14 @@ Title depends entirely on the agent calling `set_session_title` tool. If it does
 
 ---
 
+## Known Limitations
+
+- **Pre-existing sessions:** Sessions completed before this fix will not have `Response` or `Intent` execution logs. Resumed pre-existing sessions will still lack final response and intent sidebar data. No migration or backfill is planned — this only affects sessions created before deployment.
+
 ## Non-Goals
 
 - No changes to the `first_turn_protocol` shard (it complements, not conflicts)
 - No graph execution engine (intent analysis produces the graph; agent orchestration is separate)
 - No changes to ward setup automation (was deleted in refactor; out of scope)
 - No changes to spec file generation (was deleted in refactor; out of scope)
+- No backfill migration for pre-existing sessions (see Known Limitations)
