@@ -964,6 +964,33 @@ export function useMissionControl() {
           });
         }
 
+        // Fallback for pre-existing sessions without Response logs:
+        // fetch conversation messages and use the last assistant message
+        if (!loadedBlocks.some((b) => b.type === "response") && session.conversation_id) {
+          try {
+            const msgRes = await transport.getMessages(session.conversation_id);
+            if (msgRes.success && msgRes.data) {
+              const lastAssistant = [...msgRes.data]
+                .reverse()
+                .find((m) => m.role === "assistant" && m.content);
+              if (lastAssistant) {
+                loadedBlocks.push({
+                  id: lastAssistant.id ?? crypto.randomUUID(),
+                  type: "response",
+                  timestamp: lastAssistant.timestamp ?? session.ended_at ?? session.started_at,
+                  data: {
+                    content: lastAssistant.content,
+                    timestamp: lastAssistant.timestamp ?? session.ended_at ?? session.started_at,
+                  },
+                  isStreaming: false,
+                });
+              }
+            }
+          } catch {
+            // Non-fatal — older sessions may not have conversation messages
+          }
+        }
+
         if (loadedBlocks.length > 0) {
           setBlocks(loadedBlocks);
         }
