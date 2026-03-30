@@ -874,6 +874,14 @@ export function useMissionControl() {
               log.message.match(/^Calling tool:\s*(\S+)/)?.[1] ??
               log.message.split(" ")[0];
 
+            // set_session_title tool = extract title for display
+            if (toolName === "set_session_title") {
+              const args = meta?.args as Record<string, unknown> | undefined;
+              const title = (args?.title ?? args?.name ?? "") as string;
+              if (title) setSessionTitle(title);
+              continue; // Don't render as a tool block
+            }
+
             // respond tool = agent's final response
             if (toolName === "respond") {
               const args = meta?.args as Record<string, unknown> | undefined;
