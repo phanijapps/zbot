@@ -25,6 +25,27 @@ export interface NarrativeBlock {
   isExpanded?: boolean;
 }
 
+export interface IntentAnalysis {
+  primaryIntent: string;
+  hiddenIntents: string[];
+  recommendedSkills: string[];
+  recommendedAgents: string[];
+  wardRecommendation: {
+    action: string;
+    wardName: string;
+    subdirectory?: string;
+    reason: string;
+  };
+  executionStrategy: {
+    approach: string;
+    graph?: {
+      nodes: Array<{ id: string; task: string; agent: string; skills: string[] }>;
+      mermaid?: string;
+    };
+    explanation: string;
+  };
+}
+
 export interface MissionState {
   blocks: NarrativeBlock[];
   sessionTitle: string;
@@ -36,6 +57,7 @@ export interface MissionState {
   plan: PlanStep[];
   recalledFacts: RecalledFact[];
   activeWard: { name: string; content: string } | null;
+  intentAnalysis: IntentAnalysis | null;
 }
 
 // ============================================================================
@@ -112,6 +134,7 @@ export function useMissionControl() {
   const [plan, setPlan] = useState<PlanStep[]>([]);
   const [recalledFacts, setRecalledFacts] = useState<RecalledFact[]>([]);
   const [activeWard, setActiveWard] = useState<{ name: string; content: string } | null>(null);
+  const [intentAnalysis, setIntentAnalysis] = useState<IntentAnalysis | null>(null);
 
   // -- Session/conversation IDs --
   const [conversationId, setConversationId] = useState<string>(() => getOrCreateConversationId());
@@ -615,6 +638,30 @@ export function useMissionControl() {
         break;
       }
 
+      case "intent_analysis_complete": {
+        const wardRec = event.ward_recommendation as Record<string, unknown> | undefined;
+        const execStrat = event.execution_strategy as Record<string, unknown> | undefined;
+        const ia: IntentAnalysis = {
+          primaryIntent: (event.primary_intent ?? "") as string,
+          hiddenIntents: (event.hidden_intents ?? []) as string[],
+          recommendedSkills: (event.recommended_skills ?? []) as string[],
+          recommendedAgents: (event.recommended_agents ?? []) as string[],
+          wardRecommendation: {
+            action: (wardRec?.action ?? "") as string,
+            wardName: (wardRec?.ward_name ?? "") as string,
+            subdirectory: wardRec?.subdirectory as string | undefined,
+            reason: (wardRec?.reason ?? "") as string,
+          },
+          executionStrategy: {
+            approach: (execStrat?.approach ?? "simple") as string,
+            graph: execStrat?.graph as IntentAnalysis["executionStrategy"]["graph"],
+            explanation: (execStrat?.explanation ?? "") as string,
+          },
+        };
+        setIntentAnalysis(ia);
+        break;
+      }
+
       // ------------------------------------------------------------------
       // Turn complete (respond tool output)
       // ------------------------------------------------------------------
@@ -881,6 +928,29 @@ export function useMissionControl() {
                 data: { content: log.message, timestamp: log.timestamp },
               });
             }
+          } else if (log.category === "intent" && log.metadata) {
+            try {
+              const meta = typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
+              setIntentAnalysis({
+                primaryIntent: meta.primary_intent ?? "",
+                hiddenIntents: meta.hidden_intents ?? [],
+                recommendedSkills: meta.recommended_skills ?? [],
+                recommendedAgents: meta.recommended_agents ?? [],
+                wardRecommendation: {
+                  action: meta.ward_recommendation?.action ?? "",
+                  wardName: meta.ward_recommendation?.ward_name ?? "",
+                  subdirectory: meta.ward_recommendation?.subdirectory,
+                  reason: meta.ward_recommendation?.reason ?? "",
+                },
+                executionStrategy: {
+                  approach: meta.execution_strategy?.approach ?? "simple",
+                  graph: meta.execution_strategy?.graph,
+                  explanation: meta.execution_strategy?.explanation ?? "",
+                },
+              });
+            } catch {
+              // Ignore malformed intent metadata
+            }
           }
         }
 
@@ -991,6 +1061,7 @@ export function useMissionControl() {
     setPlan([]);
     setRecalledFacts([]);
     setActiveWard(null);
+    setIntentAnalysis(null);
     stopDurationTimer();
     setDurationMs(0);
     lastSeqRef.current = 0;
@@ -1009,6 +1080,7 @@ export function useMissionControl() {
     plan,
     recalledFacts,
     activeWard,
+    intentAnalysis,
   };
 
   return { state, sendMessage, stopAgent, startNewSession };

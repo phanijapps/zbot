@@ -64,6 +64,7 @@ export function MissionControl() {
             recalledFacts={state.recalledFacts}
             subagents={state.subagents}
             plan={state.plan}
+            intentAnalysis={state.intentAnalysis}
           />
         </div>
       </div>

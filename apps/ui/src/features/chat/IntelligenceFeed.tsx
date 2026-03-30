@@ -4,6 +4,7 @@
 // ============================================================================
 
 import type { PlanStep } from "./PlanBlock";
+import type { IntentAnalysis } from "./mission-hooks";
 
 // ============================================================================
 // Types
@@ -27,6 +28,7 @@ export interface IntelligenceFeedProps {
   recalledFacts: RecalledFact[];
   subagents: SubagentInfo[];
   plan: PlanStep[];
+  intentAnalysis: IntentAnalysis | null;
 }
 
 // ============================================================================
@@ -58,9 +60,86 @@ export function IntelligenceFeed({
   recalledFacts,
   subagents,
   plan,
+  intentAnalysis,
 }: IntelligenceFeedProps) {
   return (
     <div>
+      {/* Intent Analysis */}
+      {intentAnalysis && (
+        <details className="intel-section">
+          <summary className="intel-section__header">
+            <span className="intel-section__icon">&#x1f9e0;</span>
+            Intent Analysis
+            <span className="intel-badge">{intentAnalysis.executionStrategy.approach}</span>
+          </summary>
+          <div className="intel-section__body">
+            <div className="intel-item">
+              <span className="intel-label">Primary Intent</span>
+              <span className="intel-value">{intentAnalysis.primaryIntent}</span>
+            </div>
+
+            {intentAnalysis.hiddenIntents.length > 0 && (
+              <div className="intel-item">
+                <span className="intel-label">Hidden Intents</span>
+                <ul className="intel-list">
+                  {intentAnalysis.hiddenIntents.map((h, i) => (
+                    <li key={i}>{h}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {intentAnalysis.recommendedSkills.length > 0 && (
+              <div className="intel-item">
+                <span className="intel-label">Skills</span>
+                <div className="intel-tags">
+                  {intentAnalysis.recommendedSkills.map((s) => (
+                    <span key={s} className="intel-tag">{s}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {intentAnalysis.recommendedAgents.length > 0 && (
+              <div className="intel-item">
+                <span className="intel-label">Agents</span>
+                <div className="intel-tags">
+                  {intentAnalysis.recommendedAgents.map((a) => (
+                    <span key={a} className="intel-tag">{a}</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <div className="intel-item">
+              <span className="intel-label">Ward</span>
+              <span className="intel-value">
+                {intentAnalysis.wardRecommendation.wardName} ({intentAnalysis.wardRecommendation.action})
+              </span>
+              <span className="intel-detail">{intentAnalysis.wardRecommendation.reason}</span>
+            </div>
+
+            {intentAnalysis.executionStrategy.graph && (
+              <div className="intel-item">
+                <span className="intel-label">Execution Graph</span>
+                <ul className="intel-list">
+                  {intentAnalysis.executionStrategy.graph.nodes.map((n) => (
+                    <li key={n.id}>
+                      <strong>{n.id}:</strong> {n.task} <em>({n.agent})</em>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            <div className="intel-item">
+              <span className="intel-label">Strategy</span>
+              <span className="intel-detail">{intentAnalysis.executionStrategy.explanation}</span>
+            </div>
+          </div>
+        </details>
+      )}
+
       {/* Active Ward */}
       <div className="intel-section">
         <div className="intel-section__title">Active Ward</div>

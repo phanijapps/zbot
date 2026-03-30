@@ -3549,6 +3549,18 @@
 .intel-ward__name { font-weight: 600; font-size: var(--text-xs); color: var(--foreground); margin-bottom: var(--spacing-1); }
 .intel-ward__content { font-size: var(--text-xs); color: var(--muted-foreground); }
 .intel-empty { font-size: var(--text-xs); color: var(--muted-foreground); }
+.intel-section__header { display: flex; align-items: center; gap: var(--spacing-1); list-style: none; cursor: pointer; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted-foreground); font-weight: 600; }
+.intel-section__header::-webkit-details-marker { display: none; }
+.intel-section__icon { font-size: 10px; }
+.intel-section__body { padding-top: var(--spacing-2); }
+.intel-item { margin-bottom: var(--spacing-2); }
+.intel-label { display: block; font-size: 9px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted-foreground); font-weight: 600; margin-bottom: 2px; }
+.intel-value { display: block; font-size: var(--text-xs); color: var(--foreground); }
+.intel-list { margin: 2px 0 0 var(--spacing-3); padding: 0; font-size: var(--text-xs); color: var(--muted-foreground); }
+.intel-badge { display: inline-block; padding: 1px 6px; border-radius: 4px; font-size: 0.7rem; font-weight: 600; text-transform: uppercase; background: var(--color-accent, #3b82f6); color: var(--color-bg, #fff); margin-left: 8px; }
+.intel-tags { display: flex; flex-wrap: wrap; gap: 4px; }
+.intel-tag { display: inline-block; padding: 1px 6px; border-radius: 3px; font-size: 0.7rem; background: var(--color-surface, #1e1e2e); border: 1px solid var(--color-border, #333); }
+.intel-detail { display: block; font-size: 0.75rem; color: var(--color-text-muted, #888); margin-top: 2px; }
 
 /* Chat input — active session bottom bar */
 .chat-input__container { position: relative; flex: 1; }

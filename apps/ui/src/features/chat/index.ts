@@ -31,4 +31,4 @@ export type { ExecutionNarrativeProps } from "./ExecutionNarrative";
 export { MissionControl } from "./MissionControl";
 
 export { useMissionControl } from "./mission-hooks";
-export type { NarrativeBlock, MissionState } from "./mission-hooks";
+export type { NarrativeBlock, MissionState, IntentAnalysis } from "./mission-hooks";
