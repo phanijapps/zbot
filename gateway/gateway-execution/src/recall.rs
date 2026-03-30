@@ -143,12 +143,27 @@ impl MemoryRecall {
             .get_high_confidence_facts(agent_id, self.config.high_confidence_threshold, limit)
             .unwrap_or_default();
 
-        // 3b. Always include top corrections — they're universally applicable
-        //     regardless of query similarity (e.g., "don't use bash in PowerShell"
-        //     won't match a query about stock analysis, but is still critical).
-        let corrections = self.memory_repo
-            .get_facts_by_category(agent_id, "correction", 5)
+        // 3b. Include relevant corrections — corrections get a 1.5x category boost
+        //     but must still have minimum relevance to the query. This prevents
+        //     "WiZ lights" corrections appearing for currency questions.
+        let all_corrections = self.memory_repo
+            .get_facts_by_category(agent_id, "correction", 10)
             .unwrap_or_default();
+
+        // Filter corrections by minimum cosine similarity to query (if embedding available)
+        let corrections: Vec<_> = if let Some(ref qe) = query_embedding {
+            all_corrections.into_iter().filter(|fact| {
+                if let Some(ref fact_emb) = fact.embedding {
+                    let sim = cosine_similarity(fact_emb, qe);
+                    sim >= 0.15 // Low threshold — broadly relevant corrections pass
+                } else {
+                    true // No embedding = include (benefit of the doubt)
+                }
+            }).take(5).collect()
+        } else {
+            // No query embedding = include top 5 (fallback)
+            all_corrections.into_iter().take(5).collect()
+        };
 
         // 4. Merge, dedup by key, take top-K
         let mut seen_keys = std::collections::HashSet::new();
@@ -766,6 +781,25 @@ async fn get_graph_context_for_entities(
             entities: entities_with_connections,
         }))
     }
+}
+
+/// Convert embedding blob (little-endian bytes) to f32 vector.
+fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
+    blob.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
+}
+
+/// Cosine similarity between two vectors. Returns 0.0 on length mismatch.
+fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+    if a.len() != b.len() || a.is_empty() {
+        return 0.0;
+    }
+    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| *x as f64 * *y as f64).sum();
+    let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    let norm_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
+    if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+    dot / (norm_a * norm_b)
 }
 
 // ============================================================================

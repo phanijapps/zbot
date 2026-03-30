@@ -855,14 +855,14 @@ fn f32_vec_to_blob(vec: &[f32]) -> Vec<u8> {
 }
 
 /// Convert raw bytes (little-endian) back to f32 vector.
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
+pub fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
     blob.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
 
 /// Compute cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
