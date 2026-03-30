@@ -392,7 +392,7 @@ export type UnsubscribeFn = () => void;
 // ============================================================================
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system";
+export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system" | "response" | "intent";
 export type SessionStatus = "running" | "completed" | "error" | "stopped";
 
 /** A single execution log entry (snake_case from API) */

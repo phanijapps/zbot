@@ -661,6 +661,26 @@ export function useMissionControl() {
           rafIdRef.current = null;
         }
         flushTokenBuffer();
+
+        // Safety net: create response block from result if none exists
+        const result = event.result as string | undefined;
+        if (result) {
+          setBlocks((prev) => {
+            const hasResponse = prev.some((b) => b.type === "response");
+            if (hasResponse) return prev;
+            return [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                type: "response",
+                timestamp: now(),
+                data: { content: result, timestamp: now() },
+                isStreaming: false,
+              },
+            ];
+          });
+        }
+
         setStatus("completed");
         stopDurationTimer();
         // Finalize any streaming blocks
@@ -843,6 +863,14 @@ export function useMissionControl() {
               lastTool.data.output = log.message.slice(0, 500);
               lastTool.data.isError = log.level === "error";
             }
+          } else if (log.category === "response" && log.message.length > 0) {
+            loadedBlocks.push({
+              id: log.id,
+              type: "response",
+              timestamp: log.timestamp,
+              data: { content: log.message, timestamp: log.timestamp },
+              isStreaming: false,
+            });
           } else if (log.category === "session" && log.message.length > 20) {
             // Could be a user message or agent response — heuristic
             if (!loadedBlocks.some(b => b.type === "user")) {
