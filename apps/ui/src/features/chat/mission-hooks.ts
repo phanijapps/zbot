@@ -382,17 +382,17 @@ export function useMissionControl() {
           if (steps.length > 0) {
             setPlan(steps);
           }
-          const blockId = crypto.randomUUID();
-          if (toolCallId) toolCallBlockMapRef.current.set(toolCallId, blockId);
-          setBlocks((prev) => [
-            ...prev,
-            {
-              id: blockId,
-              type: "plan",
-              timestamp: now(),
-              data: { steps: steps.length > 0 ? steps : [{ text: "Planning...", status: "active" as StepStatus }] },
-            },
-          ]);
+          const planData = { steps: steps.length > 0 ? steps : [{ text: "Planning...", status: "active" as StepStatus }] };
+          // Replace existing plan block instead of appending a new one
+          setBlocks((prev) => {
+            const existingIdx = prev.findIndex((b) => b.type === "plan");
+            if (existingIdx >= 0) {
+              const updated = [...prev];
+              updated[existingIdx] = { ...updated[existingIdx], data: planData };
+              return updated;
+            }
+            return [...prev, { id: crypto.randomUUID(), type: "plan", timestamp: now(), data: planData }];
+          });
           break;
         }
 
@@ -928,12 +928,13 @@ export function useMissionControl() {
                   status: (s.status === "completed" ? "done" : s.status === "in_progress" ? "active" : "pending") as "done" | "active" | "pending",
                 }));
                 setPlan(mapped);
-                loadedBlocks.push({
-                  id: log.id,
-                  type: "plan",
-                  timestamp: log.timestamp,
-                  data: { steps: mapped },
-                });
+                // Replace existing plan block — only show the latest plan
+                const existingIdx = loadedBlocks.findIndex((b) => b.type === "plan");
+                if (existingIdx >= 0) {
+                  loadedBlocks[existingIdx] = { ...loadedBlocks[existingIdx], data: { steps: mapped } };
+                } else {
+                  loadedBlocks.push({ id: log.id, type: "plan", timestamp: log.timestamp, data: { steps: mapped } });
+                }
               }
               continue;
             }
