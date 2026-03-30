@@ -68,6 +68,7 @@
 │  │   ├── INSTRUCTIONS.md       #   Execution rules                     │
 │  │   ├── OS.md                 #   Platform-specific commands (auto)    │
 │  │   ├── distillation_prompt.md#   Customizable distillation prompt     │
+│  │   ├── recall_config.json    #   Recall tuning: weights, decay, graph │
 │  │   ├── mcps.json             #   MCP server configurations            │
 │  │   └── shards/               #   Overridable prompt shards            │
 │  │       ├── tooling_skills.md #     Skills-first approach              │
@@ -312,7 +313,7 @@ Standalone data services:
 services/
 ├── execution-state/     # Session/execution state machine (SQLite)
 ├── api-logs/            # Execution logging (SQLite)
-├── knowledge-graph/     # Entity/relationship storage (used by distillation)
+├── knowledge-graph/     # Entity/relationship storage, GraphTraversal trait (SQLite CTE → Neo4j swappable)
 └── daily-sessions/      # Session management
 ```
 
@@ -327,7 +328,7 @@ gateway/
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
 ├── gateway-services/    # AgentService, ProviderService, ModelRegistry, McpService, SkillService, SettingsService
-├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller, MemoryRecall
+├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller (health, episodes, strategies, failure clustering, ward sync), MemoryRecall (priority engine, graph expansion, nudges)
 ├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
 ├── gateway-cron/        # CronJobConfig, CronService
 ├── gateway-bus/         # GatewayBus trait, SessionRequest, SessionHandle
@@ -722,10 +723,15 @@ User Message
 | PUT | `/api/settings/tools` | Update tool settings |
 | GET | `/api/settings/logs` | Get log settings |
 | PUT | `/api/settings/logs` | Update log settings (requires restart) |
-| **Operations Dashboard** | | |
-| GET | `/api/executions/stats/counts` | Dashboard statistics |
-| GET | `/api/executions/v2/sessions/full` | Sessions with executions |
-| GET | `/api/executions/v2/sessions/:id` | Single session details |
+| **Execution Intelligence Dashboard** | | |
+| GET | `/api/executions/stats/counts` | KPI cards (success rate, tokens, tool calls, duration) |
+| GET | `/api/executions/v2/sessions/full` | Sessions with inline mini waterfalls |
+| GET | `/api/executions/v2/sessions/:id` | Full waterfall timeline with delegation spans |
+| **Observatory (Knowledge Graph)** | | |
+| GET | `/api/memory/graph/entities` | Graph entities for D3-force visualization |
+| GET | `/api/memory/graph/relationships` | Graph relationships |
+| GET | `/api/memory/health` | Learning health (distillation stats) |
+| POST | `/api/memory/distill/backfill` | Retroactive distillation |
 | POST | `/api/gateway/submit` | Submit new agent request |
 | GET | `/api/gateway/status/:session_id` | Get session status |
 | POST | `/api/gateway/cancel/:session_id` | Cancel running session |
@@ -921,7 +927,9 @@ CREATE TABLE embedding_cache (
 );
 ```
 
-### Memory Evolution Architecture
+### Cognitive Memory Architecture
+
+The memory system is a full cognitive pipeline: distill (post-session extraction), recall (tool-call based retrieval with priority scoring), and a knowledge graph with graph-driven expansion.
 
 ```
                     ┌─────────────────────────────────┐
@@ -933,8 +941,14 @@ CREATE TABLE embedding_cache (
           ┌────────────────────┼────────────────────┐
           ▼                    ▼                     ▼
 ┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐
-│ Session Distiller │ │  Memory Indexer  │ │  Smart Recall    │
-│ (post-session)   │ │ (on fact write)  │ │ (session start)  │
+│ Session Distiller │ │  Memory Indexer  │ │  Memory Recall   │
+│ (post-session)   │ │ (on fact write)  │ │ (tool-call based)│
+│ + health report  │ │                  │ │ + graph expansion│
+│ + provider fbk   │ │                  │ │ + priority engine│
+│ + episode extract│ │                  │ │ + nudges         │
+│ + strategy emerge│ │                  │ │                  │
+│ + failure cluster│ │                  │ │                  │
+│ + ward file sync │ │                  │ │                  │
 └────────┬─────────┘ └────────┬────────┘ └────────┬─────────┘
          │                    │                    │
          ▼                    ▼                    ▼
@@ -945,25 +959,158 @@ CREATE TABLE embedding_cache (
 │  │ (structured) │  │ _fts (FTS5)  │  │ (in Rust, <10K)    │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │                                                              │
+│  ┌───────────────────┐  ┌────────────────┐                   │
+│  │ distillation_runs │  │ session_episodes│                   │
+│  │ (health tracking) │  │ (episodic mem) │                   │
+│  └───────────────────┘  └────────────────┘                   │
+│  ┌───────────────────┐  ┌────────────────┐                   │
+│  │ recall_log        │  │ memory_facts   │                   │
+│  │ (audit trail)     │  │ _archive (decay)│                  │
+│  └───────────────────┘  └────────────────┘                   │
+│                                                              │
 │  Hybrid Search: 0.7 * vector_score + 0.3 * bm25_score       │
 │  × confidence × recency_decay × mention_boost                │
+│                                                              │
+│  Priority Engine (recall):                                    │
+│  category_weight × ward_affinity × temporal_decay             │
+│  correction 1.5x > strategy 1.4x > user 1.3x > domain 1.0x │
 └─────────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Knowledge Graph (services/knowledge-graph/)                 │
-│  Entities + relationships extracted during distillation      │
+│  198+ entities, 333+ relationships, cross-agent __global__   │
+│  GraphTraversal trait (SQLite CTE today, Neo4j future)       │
+│  2-hop BFS expansion via recursive CTE for recall            │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+#### Distillation Pipeline
+
+Post-session LLM extraction with:
+- **Health reporting**: `distillation_runs` table tracks success/failure per session
+- **Provider fallback**: tries configured provider, falls back gracefully
+- **Episode extraction**: identifies session episodes (goal, outcome, tools used) in `session_episodes`
+- **Strategy emergence**: detects repeated successful patterns, promotes to strategy facts
+- **Failure clustering**: groups repeated failures, auto-generates correction facts
+- **Ward file sync**: auto-generates `wards/{ward}/memory/ward.md` from distilled knowledge
+- **Contradiction detection**: flags conflicting facts via `memory_facts.contradicted_by`
+
+#### Recall Architecture
+
+Recall is **tool-call based** — the agent explicitly calls `memory recall` (not hidden injection). This makes recall visible, debuggable, and learnable.
+
+**Priority scoring**: Each recalled fact is scored by:
+1. **Category weight**: correction (1.5x) > strategy (1.4x) > user preference (1.3x) > domain (1.0x)
+2. **Ward affinity boost**: facts from the active ward score higher
+3. **Temporal decay**: per-category half-lives (corrections 90d, domain 30d) via `recall_config.json`
+4. **Contradiction penalty**: facts flagged by `contradicted_by` are penalized
+5. **Predictive recall**: success-correlated facts bubble up from historical recall_log
+
+**Graph-driven expansion**: After initial fact retrieval, a 2-hop BFS via SQLite recursive CTE expands through the knowledge graph. Related entities within `max_hops` (configurable) are included with `hop_decay` attenuation.
+
+**Corrections as rules**: Top correction facts are always injected first, formatted as "NEVER do X" / "ALWAYS do Y" rules. Filtered by query relevance.
+
+**Capability gap detection**: When no matching skill/agent is found, recall surfaces the gap and prompts the agent to create a plan.
+
+**Recall nudges**: System nudges at session start, ward entry, and post-delegation prompt the agent to recall via the tool.
+
+**Configuration**: `config/recall_config.json` with `category_weights`, `ward_affinity`, `temporal_decay` half-lives, `graph_traversal` (max_hops, hop_decay), `predictive_recall`, `session_offload`.
+
+#### Session Offload
+
+Old session transcripts are archived to JSONL.gz files to keep SQLite lean:
+- `zero sessions archive --older-than 7` — offload transcripts older than N days
+- `zero sessions restore <session_id>` — restore an archived session
+- `sessions.archived` column tracks offload state
+
+#### Fact Pruning
+
+Temporal decay moves old facts past their category half-life to `memory_facts_archive`. Archived facts are excluded from recall but preserved for audit.
 
 **Key files**:
 - `runtime/agent-runtime/src/llm/embedding.rs` — EmbeddingClient trait, EmbeddingConfig
 - `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
 - `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
 - `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
-- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (fires after both `invoke()` and `invoke_continuation()`, min 4 messages, extracts facts + entities + relationships)
-- `gateway/gateway-execution/src/recall.rs` — MemoryRecall (inject facts at session start)
+- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (health reporting, episode extraction, strategy emergence, failure clustering, ward file sync)
+- `gateway/gateway-execution/src/recall.rs` — MemoryRecall (priority engine, graph expansion, corrections as rules, nudges)
 - `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
+- `config/recall_config.json` — recall tuning: weights, decay, graph traversal, predictive recall
+
+### distillation_runs
+Tracks distillation health per session (v11).
+
+```sql
+CREATE TABLE distillation_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    status TEXT NOT NULL,              -- success|failed|skipped
+    facts_extracted INTEGER DEFAULT 0,
+    entities_extracted INTEGER DEFAULT 0,
+    relationships_extracted INTEGER DEFAULT 0,
+    provider TEXT,
+    error_message TEXT,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### session_episodes
+Episodic memory — goal/outcome pairs extracted during distillation (v11).
+
+```sql
+CREATE TABLE session_episodes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    episode_index INTEGER NOT NULL,
+    goal TEXT NOT NULL,
+    outcome TEXT,
+    tools_used TEXT,                    -- JSON array
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### recall_log
+Audit trail for recall invocations — enables predictive recall (v13).
+
+```sql
+CREATE TABLE recall_log (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    query TEXT NOT NULL,
+    facts_returned INTEGER DEFAULT 0,
+    graph_hops_used INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### memory_facts_archive
+Temporally decayed facts moved here for archival (v13).
+
+```sql
+CREATE TABLE memory_facts_archive (
+    -- Same schema as memory_facts
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    category TEXT NOT NULL,
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL,
+    archived_at TEXT NOT NULL DEFAULT (datetime('now')),
+    original_created_at TEXT
+);
+```
+
+### Additional columns (migration notes)
+
+| Migration | Table | Column | Purpose |
+|-----------|-------|--------|---------|
+| v11 | `memory_facts` | `ward_id TEXT` | Ward-scoped facts |
+| v12 | `memory_facts` | `contradicted_by TEXT` | Links to contradicting fact ID |
+| v13 | `sessions` | `archived INTEGER DEFAULT 0` | Session offload tracking |
 
 ### ID Conventions
 
@@ -1549,6 +1696,42 @@ The `respond_to` field controls where agent responses are delivered:
 - **Empty/null**: Response goes to web UI only (default)
 - **Specified**: Response dispatched to listed connectors
 - **Original source NOT automatically included** (explicit routing)
+
+## UI: Observatory and Execution Intelligence Dashboard
+
+### Observatory (Knowledge Graph)
+
+D3-force directed graph visualization of the knowledge graph. Entity detail sidebar on click. Learning health bar shows distillation success rate with a backfill button for retroactive distillation.
+
+Implementation: `apps/ui/src/features/observatory/`
+
+### Execution Intelligence Dashboard
+
+Replaced the flat 845-line log viewer with a visual observability dashboard:
+- **KPI cards** with sparkline trends (success rate, tokens, tool calls, duration)
+- **Session list** with inline mini waterfalls showing execution shape
+- **Expandable full waterfall timelines** with delegation spans and tool dots
+- **Interactive**: hover tooltips on dots/bars, click for slide-out detail panel
+- **Real-time**: auto-refresh when sessions are running
+- **Session titles** derived from first user message
+
+Implementation: `apps/ui/src/features/executions/`
+
+## Extension Points
+
+### GraphTraversal Trait
+
+Abstract graph backend — SQLite recursive CTE today, Neo4j tomorrow. The trait provides `expand_from_entity(entity_id, max_hops)` for recall graph expansion and `find_related(entity_ids, relationship_types)` for targeted traversal.
+
+Implementation: `services/knowledge-graph/src/traversal.rs`
+
+### New CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `zero distill backfill` | Retroactive distillation for sessions that pre-date the pipeline |
+| `zero sessions archive --older-than 7` | Offload old transcripts to JSONL.gz |
+| `zero sessions restore <session_id>` | Restore an archived session |
 
 ## Runtime Memory Profile
 

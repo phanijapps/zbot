@@ -243,6 +243,41 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Decision**: Fire distillation after both `invoke()` and `invoke_continuation()`. Lower min messages threshold from 10 to 4.
 **Rationale**: Many useful sessions are short (4-6 messages). Continuation sessions often contain important follow-up decisions. Distillation prompt is customizable via `config/distillation_prompt.md`.
 
+### Recall: Tool-Call Based, Not Hidden Injection
+**Problem**: Hidden memory injection is invisible — agents can't learn when or what to recall, and developers can't debug what was injected.
+**Decision**: Recall is an explicit tool call (`memory recall`). The agent decides when and what to recall. Results appear in the conversation as tool output.
+**Rationale**: Visible in transcripts, debuggable in logs, learnable by the agent (it sees what works). Nudges at session start, ward entry, and post-delegation prompt the agent to recall without forcing it.
+
+### Corrections as Rules (NEVER/ALWAYS)
+**Problem**: LLMs treat "correction: don't do X" as a suggestion. They follow "NEVER do X" more reliably.
+**Decision**: Top correction facts are formatted as imperative rules ("NEVER use `rm -rf` without confirmation", "ALWAYS check ward before file operations") and injected first in recall results.
+**Rationale**: Rule-formatted corrections have higher compliance in practice. Filtered by query relevance so only applicable corrections appear.
+
+### Graph Traversal via SQLite Recursive CTE
+**Problem**: Knowledge graph expansion for recall needs graph traversal. Neo4j is the standard but adds an external dependency.
+**Decision**: 2-hop BFS via SQLite recursive CTE behind a `GraphTraversal` trait. Trait-based so Neo4j can be swapped in later.
+**Rationale**: Pi 4 safe (<10ms for 2-hop expansion), zero extra dependencies. SQLite CTE handles the current graph size (198+ entities, 333+ relationships) easily. Neo4j swap is a trait implementation change, not a redesign.
+
+### Temporal Decay with Per-Category Half-Lives
+**Problem**: Not all facts stale at the same rate. Domain knowledge ("project uses React 19") stales faster than corrections ("NEVER skip tests").
+**Decision**: Per-category half-lives configured in `recall_config.json`: domain facts (30d), preferences (60d), corrections (90d), strategies (90d). Facts past their half-life decay exponentially in recall scoring; past 2x half-life they move to `memory_facts_archive`.
+**Rationale**: Keeps recall fresh without losing corrections. Archive preserves audit trail.
+
+### Session Offload to JSONL.gz
+**Problem**: Session transcripts are the largest data in SQLite. After distillation, raw transcripts are dead weight.
+**Decision**: `zero sessions archive --older-than N` compresses transcripts to JSONL.gz files. `sessions.archived` column tracks state. `zero sessions restore <id>` reverses the process.
+**Rationale**: Keeps SQLite lean for Pi 4. Transcripts are already distilled — the extracted facts, episodes, and entities survive independently. Restorable if needed.
+
+### Entity Dedup as __global__
+**Problem**: The same entity (e.g., "React") was duplicated per agent — "React" x4 across root, researcher, coder, reviewer.
+**Decision**: Entities are stored under `__global__` agent scope. Cross-agent dedup during distillation merges identical entities.
+**Rationale**: Single source of truth. Graph queries return one "React" node with all relationships, not four disconnected copies.
+
+### Execution Intelligence Dashboard Over Flat Logs
+**Problem**: The log viewer was 845 lines of flat session/log rendering. No visual structure, no execution shape, no interactivity.
+**Decision**: Visual observability dashboard with KPI sparkline cards, inline mini waterfalls in the session list, expandable full waterfall timelines with delegation spans and tool dots, hover tooltips, click-through detail panels, and auto-refresh for running sessions.
+**Rationale**: Operators need to see execution shape at a glance — which delegations happened, where time was spent, what tools were called. Flat logs require scrolling and mental reconstruction.
+
 ## Patterns We Did NOT Adopt
 
 These were considered during the Codex gap analysis and explicitly rejected:
