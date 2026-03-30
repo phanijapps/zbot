@@ -868,9 +868,27 @@ export function useMissionControl() {
 
         for (const log of logs) {
           if (log.category === "tool_call") {
-            // Parse tool name from message
-            const toolMatch = log.message.match(/^(\w+):/);
-            const toolName = toolMatch ? toolMatch[1] : log.message.split(" ")[0];
+            // Extract tool name from metadata (preferred) or message
+            const meta = log.metadata as Record<string, unknown> | undefined;
+            const toolName = (meta?.tool_name as string) ??
+              log.message.match(/^Calling tool:\s*(\S+)/)?.[1] ??
+              log.message.split(" ")[0];
+
+            // respond tool = agent's final response
+            if (toolName === "respond") {
+              const args = meta?.args as Record<string, unknown> | undefined;
+              const respondMsg = (args?.message ?? "") as string;
+              if (respondMsg) {
+                loadedBlocks.push({
+                  id: log.id,
+                  type: "response",
+                  timestamp: log.timestamp,
+                  data: { content: respondMsg, timestamp: log.timestamp },
+                  isStreaming: false,
+                });
+              }
+              continue;
+            }
 
             if (toolName === "memory" && log.message.includes("recall")) {
               loadedBlocks.push({
