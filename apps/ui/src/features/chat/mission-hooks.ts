@@ -396,6 +396,24 @@ export function useMissionControl() {
           break;
         }
 
+        // respond — agent's final response, create response block
+        if (toolName === "respond") {
+          const respondMsg = (args.message ?? "") as string;
+          if (respondMsg) {
+            setBlocks((prev) => [
+              ...prev,
+              {
+                id: crypto.randomUUID(),
+                type: "response",
+                timestamp: now(),
+                data: { content: respondMsg, timestamp: now() },
+                isStreaming: false,
+              },
+            ]);
+          }
+          break;
+        }
+
         // delegate_to_agent — type: 'delegation'
         if (toolName === "delegate_to_agent") {
           const delegateAgentId = (args.agent_id ?? args.agentId ?? "") as string;
