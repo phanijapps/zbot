@@ -13,9 +13,11 @@ pub mod types;
 pub mod extractor;
 pub mod storage;
 pub mod service;
+pub mod traversal;
 
 pub use error::{GraphError, GraphResult};
 pub use types::{Entity, Relationship, EntityType, RelationshipType, Direction, NeighborInfo, EntityWithConnections, ExtractedKnowledge, GraphStats, Subgraph};
 pub use extractor::EntityExtractor;
 pub use storage::GraphStorage;
 pub use service::GraphService;
+pub use traversal::{GraphTraversal, SqliteGraphTraversal, TraversalNode};

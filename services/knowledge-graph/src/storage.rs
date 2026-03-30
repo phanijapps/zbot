@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 /// SQLite storage for knowledge graph
 pub struct GraphStorage {
-    conn: Arc<Mutex<Connection>>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
 }
 
 impl GraphStorage {
