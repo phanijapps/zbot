@@ -842,7 +842,9 @@ export function useMissionControl() {
     const loadSession = async () => {
       try {
         const transport = await getTransport();
-        const res = await transport.getLogSession(activeSessionId);
+        // Use the log session ID (exec-...) if available, fall back to activeSessionId
+        const logSessionId = localStorage.getItem("agentzero_log_session_id") || activeSessionId;
+        const res = await transport.getLogSession(logSessionId!);
         if (!res.success || !res.data) return;
 
         const detail = res.data;
@@ -1159,8 +1161,14 @@ export function timeAgo(iso: string): string {
 // ============================================================================
 
 export function switchToSession(sessionId: string, conversationId: string): void {
-  localStorage.setItem(WEB_SESSION_ID_KEY, sessionId);
+  // The logs API uses exec- prefixed IDs for sessions, but the backend
+  // state DB uses sess- prefixed conversation IDs as the real session ID.
+  // Store the conversation_id as the session ID so sendMessage can
+  // continue the correct session, and keep the exec- ID for log loading.
+  localStorage.setItem(WEB_SESSION_ID_KEY, conversationId);
   localStorage.setItem(WEB_CONV_ID_KEY, conversationId);
+  // Store the log session ID separately for loading session details
+  localStorage.setItem("agentzero_log_session_id", sessionId);
   window.location.reload();
 }
 
