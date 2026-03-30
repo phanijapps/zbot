@@ -2,7 +2,7 @@ PLANNING & AUTONOMY
 
 ## Execution Modes
 
-Assess task complexity from the Intent Analysis section (if present):
+Assess task complexity from the user's request and recalled context:
 
 - **Simple** (1-2 steps): Execute directly. No specs, no plans, no delegation.
 - **Tracked** (3-4 steps): Create a plan with `update_plan`. May delegate 1-2 steps.

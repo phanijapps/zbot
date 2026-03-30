@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 
-use crate::middleware::intent_analysis::{analyze_intent, inject_intent_context};
+use crate::middleware::intent_analysis::index_resources;
 
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
@@ -1100,7 +1100,7 @@ impl ExecutionRunner {
         session_id: &str,
         ward_id: Option<&str>,
         is_root: bool,
-        user_message: Option<&str>,
+        _user_message: Option<&str>,
     ) -> Result<AgentExecutor, String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
@@ -1121,8 +1121,8 @@ impl ExecutionRunner {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), self.embedding_client.clone()))
                 as Arc<dyn zero_core::MemoryFactStore>
         });
-        // Clone for intent analysis (before fact_store is moved into builder)
-        let fact_store_for_analysis = fact_store.clone();
+        // Clone for resource indexing (before fact_store is moved into builder)
+        let fact_store_for_indexing = fact_store.clone();
 
         // Build connector resource provider (HTTP + bridge composite)
         let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
@@ -1164,103 +1164,19 @@ impl ExecutionRunner {
             builder = builder.with_connector_provider(cp);
         }
 
-        // Intent analysis enrichment (root agent first turn only)
-        let mut ward_purpose: Option<String> = None;
-        let mut ward_structure: Option<serde_json::Value> = None;
-        let enriched_agent = if is_root {
-            if let Some(msg) = user_message {
-                // Intent analysis: same model/config as agent but thinking disabled
-                // (reasoning tokens would corrupt JSON parsing)
-                let llm_config = agent_runtime::LlmConfig::new(
-                    provider.base_url.clone(),
-                    provider.api_key.clone(),
-                    agent.model.clone(),
-                    provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+        // Index resources into memory (fast DB upsert — no LLM call)
+        // Agent handles intent reasoning on its own first turn via the first_turn_protocol shard.
+        if is_root {
+            if let Some(ref fs) = fact_store_for_indexing {
+                index_resources(
+                    fs.as_ref(),
+                    &self.skill_service,
+                    &self.agent_service,
+                    &self.paths,
                 )
-                .with_temperature(agent.temperature)
-                .with_max_tokens(agent.max_tokens)
-                .with_thinking(false);
-                match agent_runtime::OpenAiClient::new(llm_config) {
-                    Ok(raw_client) => {
-                        let retry_client = agent_runtime::RetryingLlmClient::new(
-                            std::sync::Arc::new(raw_client),
-                            agent_runtime::RetryPolicy::default(),
-                        );
-                        let llm_client: std::sync::Arc<dyn agent_runtime::LlmClient> =
-                            std::sync::Arc::new(retry_client);
-
-                        if let Some(ref fs) = fact_store_for_analysis {
-                            match analyze_intent(
-                                llm_client.as_ref(),
-                                msg,
-                                fs.as_ref(),
-                                &self.skill_service,
-                                &self.agent_service,
-                                &self.paths,
-                            )
-                            .await
-                            {
-                                Ok(analysis) => {
-                                    let mut enriched = agent.clone();
-                                    inject_intent_context(&mut enriched.instructions, &analysis);
-
-                                    // Set up ward with blueprint and specs
-                                    setup_ward_from_analysis(
-                                        self.paths.vault_dir(),
-                                        &analysis,
-                                    );
-
-                                    tracing::info!(
-                                        primary_intent = %analysis.primary_intent,
-                                        hidden_intents = analysis.hidden_intents.len(),
-                                        ward = %analysis.ward_recommendation.ward_name,
-                                        "Intent analysis enrichment complete"
-                                    );
-                                    // Save ward context for AGENTS.md creation
-                                    ward_purpose = Some(analysis.ward_recommendation.reason.clone());
-                                    ward_structure = if analysis.ward_recommendation.structure.is_empty() {
-                                        None
-                                    } else {
-                                        Some(serde_json::to_value(&analysis.ward_recommendation.structure).unwrap_or_default())
-                                    };
-                                    Some(enriched)
-                                }
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Intent analysis failed, proceeding without enrichment: {}",
-                                        e
-                                    );
-                                    None
-                                }
-                            }
-                        } else {
-                            tracing::warn!("No fact store available — skipping intent analysis");
-                            None
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to create LLM client for intent analysis: {}",
-                            e
-                        );
-                        None
-                    }
-                }
-            } else {
-                None
+                .await;
+                tracing::info!("Resource indexing complete (skills, agents, wards)");
             }
-        } else {
-            None
-        };
-
-        let agent_for_build = enriched_agent.as_ref().unwrap_or(agent);
-
-        // Inject ward context into executor state for AGENTS.md creation
-        if let Some(purpose) = &ward_purpose {
-            builder = builder.with_initial_state("ward_purpose", serde_json::Value::String(purpose.clone()));
-        }
-        if let Some(structure) = &ward_structure {
-            builder = builder.with_initial_state("ward_structure", structure.clone());
         }
 
         // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
@@ -1283,7 +1199,7 @@ impl ExecutionRunner {
 
         builder
             .build(
-                agent_for_build,
+                agent,
                 provider,
                 &config.conversation_id,
                 session_id,
@@ -2191,306 +2107,3 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     }
 }
 
-// ============================================================================
-// WARD SETUP FROM INTENT ANALYSIS
-// ============================================================================
-
-/// Set up ward directory, AGENTS.md blueprint, and per-node spec files
-/// from the intent analysis results. Called once before root agent starts.
-fn setup_ward_from_analysis(
-    vault_dir: &std::path::Path,
-    analysis: &crate::middleware::intent_analysis::IntentAnalysis,
-) {
-    let ward = &analysis.ward_recommendation;
-    let ward_dir = vault_dir.join("wards").join(&ward.ward_name);
-
-    // Skip scratch ward
-    if ward.ward_name == "scratch" {
-        return;
-    }
-
-    // Create ward directory structure
-    let is_new = !ward_dir.exists();
-    std::fs::create_dir_all(&ward_dir).ok();
-
-    // Create subdirectories from ward structure
-    for dir_name in ward.structure.keys() {
-        let dir_path = ward_dir.join(dir_name.trim_end_matches('/'));
-        std::fs::create_dir_all(&dir_path).ok();
-    }
-
-    // Also create core/ and output/ if not in structure
-    std::fs::create_dir_all(ward_dir.join("core")).ok();
-    std::fs::create_dir_all(ward_dir.join("output")).ok();
-
-    // Create subdirectory from ward_recommendation
-    if let Some(ref subdir) = ward.subdirectory {
-        let subdir_data = ward_dir.join(subdir).join("data");
-        std::fs::create_dir_all(&subdir_data).ok();
-    }
-
-    // Create memory/ folder with documentation templates
-    let memory_dir = ward_dir.join("memory");
-    std::fs::create_dir_all(&memory_dir).ok();
-
-    // ward.md — domain purpose and history
-    let ward_md_path = memory_dir.join("ward.md");
-    if !ward_md_path.exists() {
-        let ward_md_content = format!(
-r#"# {name}
-
-## Domain
-{reason}
-
-## Purpose
-{reason}
-
-## Session History
-- {today}: Ward created
-"#,
-            name = ward.ward_name,
-            reason = ward.reason,
-            today = chrono::Utc::now().format("%Y-%m-%d"),
-        );
-        std::fs::write(&ward_md_path, ward_md_content).ok();
-    }
-
-    // structure.md — code organization conventions
-    let structure_md_path = memory_dir.join("structure.md");
-    if !structure_md_path.exists() {
-        let structure_content = r#"# Code Structure
-
-## Conventions
-- One concern per file, max 100 lines
-- Functions with docstrings and typed parameters
-- `if __name__ == "__main__":` guard for scripts
-- Data saved as JSON/CSV, never print-only
-
-## Directory Rules
-- `core/` — Reusable across all topics. Import, don't copy.
-- `{task}/` — Topic-specific scripts and data
-- `{task}/data/` — Raw and computed data files
-- `output/` — Final deliverables only
-- `specs/` — Task specifications (archived)
-- `plans/` — Implementation plans (archived)
-- `memory/` — Ward documentation
-- No files in ward root except AGENTS.md
-"#;
-        std::fs::write(&structure_md_path, structure_content).ok();
-    }
-
-    // techstack.md — runtime environment
-    let techstack_md_path = memory_dir.join("techstack.md");
-    if !techstack_md_path.exists() {
-        let python_cmd = if cfg!(windows) { "python" } else { "python3" };
-        let activate_cmd = if cfg!(windows) {
-            ".\\venv\\Scripts\\Activate.ps1"
-        } else {
-            "source venv/bin/activate"
-        };
-        let techstack_content = format!(
-r#"# Tech Stack
-
-## Python
-- Command: `{python_cmd}`
-- Virtual env: Check ward root or system venv
-- Activate: `{activate_cmd}`
-
-## How to Run
-```
-{python_cmd} stocks/{{ticker}}/collect_data.py
-```
-"#,
-            python_cmd = python_cmd,
-            activate_cmd = activate_cmd,
-        );
-        std::fs::write(&techstack_md_path, techstack_content).ok();
-    }
-
-    // Write AGENTS.md blueprint (only if new)
-    if is_new {
-        write_agents_md_blueprint(&ward_dir, &ward.ward_name, &ward.reason, &ward.structure, analysis);
-    }
-
-    // Create spec files for each graph node
-    if let Some(ref graph) = analysis.execution_strategy.graph {
-        // Determine the topic directory (e.g., "spy" from subdirectory "stocks/spy")
-        let topic = ward.subdirectory.as_deref()
-            .and_then(|s| s.split('/').last())
-            .unwrap_or("session");
-
-        let today = chrono::Utc::now().format("%Y%m%d").to_string();
-        let specs_dir = ward_dir.join("specs").join(topic);
-        std::fs::create_dir_all(&specs_dir).ok();
-
-        let plans_dir = ward_dir.join("plans").join(topic);
-        std::fs::create_dir_all(&plans_dir).ok();
-
-        for node in &graph.nodes {
-            let spec_filename = format!("{}_{}.md",
-                node.id,
-                sanitize_filename(&node.task, 30)
-            );
-            let spec_path = specs_dir.join(&spec_filename);
-
-            // Don't overwrite existing specs (they may have been updated with results)
-            if spec_path.exists() {
-                continue;
-            }
-
-            let skills_str = if node.skills.is_empty() {
-                "none".to_string()
-            } else {
-                node.skills.join(", ")
-            };
-
-            // Find edges TO this node to determine dependencies
-            let depends_on: Vec<&str> = graph.edges.iter()
-                .filter_map(|edge| {
-                    match edge {
-                        crate::middleware::intent_analysis::GraphEdge::Direct { from, to } if to == &node.id => Some(from.as_str()),
-                        _ => None,
-                    }
-                })
-                .collect();
-
-            let deps_str = if depends_on.is_empty() {
-                "None (first step)".to_string()
-            } else {
-                depends_on.iter().map(|d| format!("Node {}", d)).collect::<Vec<_>>().join(", ")
-            };
-
-            let spec_content = format!(
-r#"# {id}: {task}
-Date: {date}
-Status: placeholder
-Agent: {agent}
-Skills: {skills}
-
-## Dependencies
-{deps}
-
-## Objective
-<!-- FILL: One sentence — what does this step produce? -->
-
-## Inputs
-<!-- FILL: What data/files are available from previous steps? What core/ functions to import? -->
-
-## Task
-{task}
-
-## Output
-<!-- FILL: Exact file paths, column names / JSON schema, data formats -->
-
-## Success Criteria
-<!-- FILL: How to verify — file exists, has N rows, specific fields present -->
-
-## Implementation Plan
-<!-- FILL: Step-by-step tool calls (apply_patch, shell) to complete this task -->
-"#,
-                id = node.id,
-                task = node.task,
-                date = today,
-                agent = node.agent,
-                skills = skills_str,
-                deps = deps_str,
-            );
-
-            if let Err(e) = std::fs::write(&spec_path, &spec_content) {
-                tracing::debug!("Failed to write spec {}: {}", spec_filename, e);
-            }
-        }
-
-        tracing::info!(
-            ward = %ward.ward_name,
-            nodes = graph.nodes.len(),
-            topic = topic,
-            "Created ward specs"
-        );
-    }
-}
-
-/// Write the initial AGENTS.md blueprint from intent analysis.
-fn write_agents_md_blueprint(
-    ward_dir: &std::path::Path,
-    ward_name: &str,
-    purpose: &str,
-    structure: &std::collections::HashMap<String, String>,
-    analysis: &crate::middleware::intent_analysis::IntentAnalysis,
-) {
-    let agents_md_path = ward_dir.join("AGENTS.md");
-
-    // Don't overwrite if it already has real content (not just auto-generated)
-    if agents_md_path.exists() {
-        if let Ok(existing) = std::fs::read_to_string(&agents_md_path) {
-            // Check if it has actual content beyond the template
-            if existing.contains("## Core Modules") && existing.contains("- `") {
-                return; // Already has substance, don't overwrite
-            }
-        }
-    }
-
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-    let mut content = format!("# {}\n\n## Purpose\n{}\n\n", ward_name, purpose);
-
-    // Directory layout from structure
-    if !structure.is_empty() {
-        content.push_str("## Directory Layout\n");
-        let mut dirs: Vec<_> = structure.iter().collect();
-        dirs.sort_by_key(|(k, _)| k.as_str());
-        for (dir, desc) in &dirs {
-            content.push_str(&format!("- `{}` -- {}\n", dir, desc));
-        }
-        content.push('\n');
-    }
-
-    // Ward Documentation references
-    content.push_str("## Ward Documentation\n");
-    content.push_str("- [memory/ward.md](memory/ward.md) — Domain history\n");
-    content.push_str("- [memory/structure.md](memory/structure.md) — Code conventions\n");
-    content.push_str("- [memory/techstack.md](memory/techstack.md) — Runtime environment\n\n");
-
-    // Planned execution from graph
-    if let Some(ref graph) = analysis.execution_strategy.graph {
-        content.push_str("## Execution Plan\n");
-        for node in &graph.nodes {
-            let skills = if node.skills.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", node.skills.join(", "))
-            };
-            content.push_str(&format!("- **{}**: {} -> `{}`{}\n",
-                node.id, node.task, node.agent, skills));
-        }
-        content.push('\n');
-    }
-
-    // How to Code section
-    content.push_str("## How to Code\n");
-    content.push_str("1. Write Python scripts with apply_patch, run with: `python path/to/script.py`\n");
-    content.push_str("2. Import from core/: `from core.<module> import <function>`\n");
-    content.push_str("3. Never use `python -c` for multi-line code -- always write a .py file first\n");
-    content.push_str("4. Read existing data files before fetching -- avoid duplicate work\n");
-    content.push_str("5. Check specs/ folder for your task specification\n\n");
-
-    content.push_str(&format!("*Blueprint created: {}*\n", today));
-
-    if let Err(e) = std::fs::write(&agents_md_path, &content) {
-        tracing::warn!("Failed to write AGENTS.md blueprint: {}", e);
-    }
-}
-
-/// Sanitize a string for use as a filename (lowercase, replace spaces with underscores, limit length).
-fn sanitize_filename(s: &str, max_len: usize) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
-        .collect::<String>()
-        .trim_matches('_')
-        .chars()
-        .take(max_len)
-        .collect::<String>()
-        .trim_end_matches('_')
-        .to_string()
-}

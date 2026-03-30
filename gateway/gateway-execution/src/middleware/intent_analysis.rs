@@ -329,7 +329,7 @@ pub async fn analyze_intent(
 
 /// Index skills, agents, and wards into memory_facts for semantic search.
 /// Uses upsert (save_fact) so this is idempotent — safe to call every session.
-async fn index_resources(
+pub async fn index_resources(
     fact_store: &dyn MemoryFactStore,
     skill_service: &SkillService,
     agent_service: &AgentService,
