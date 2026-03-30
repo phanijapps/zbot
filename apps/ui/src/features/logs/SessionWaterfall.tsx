@@ -1,4 +1,7 @@
+import { useState, useRef, useCallback, useMemo } from 'react';
 import type { LogSession, ExecutionLog } from '../../services/transport/types';
+import { WaterfallTooltip, type TooltipData } from './WaterfallTooltip';
+import { WaterfallSlideOut, type SlideOutData } from './WaterfallSlideOut';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -38,6 +41,41 @@ function truncateLabel(name: string, maxChars = 8): string {
   return name.length > maxChars ? name.slice(0, maxChars) + '\u2026' : name;
 }
 
+/**
+ * Convert an SVG-coordinate (viewBox space) to pixel-space
+ * relative to the container div.
+ */
+function svgToContainer(
+  svgX: number,
+  svgY: number,
+  svgEl: SVGSVGElement,
+  containerEl: HTMLDivElement,
+): { x: number; y: number } {
+  // Get the SVG's CTM (current transformation matrix)
+  const pt = svgEl.createSVGPoint();
+  pt.x = svgX;
+  pt.y = svgY;
+  const ctm = svgEl.getScreenCTM();
+  if (!ctm) return { x: 0, y: 0 };
+  const screenPt = pt.matrixTransform(ctm);
+  const containerRect = containerEl.getBoundingClientRect();
+  return {
+    x: screenPt.x - containerRect.left,
+    y: screenPt.y - containerRect.top,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Types for interactive items
+// ---------------------------------------------------------------------------
+
+interface NavigableItem {
+  type: 'tool' | 'delegation' | 'error';
+  log?: ExecutionLog;
+  childSession?: LogSession;
+  childLogs?: ExecutionLog[];
+}
+
 // ---------------------------------------------------------------------------
 // SessionWaterfall
 // ---------------------------------------------------------------------------
@@ -49,6 +87,12 @@ interface SessionWaterfallProps {
 }
 
 export function SessionWaterfall({ session, childSessions, logs }: SessionWaterfallProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const svgRef = useRef<SVGSVGElement>(null);
+
+  const [hoveredItem, setHoveredItem] = useState<TooltipData | null>(null);
+  const [selectedItem, setSelectedItem] = useState<SlideOutData | null>(null);
+
   // ---- Timing envelope ----------------------------------------------------
   const sessionStart = new Date(session.started_at).getTime();
 
@@ -86,13 +130,172 @@ export function SessionWaterfall({ session, childSessions, logs }: SessionWaterf
   }
 
   // ---- Tool dots ----------------------------------------------------------
-  const toolLogs = logs.filter(
-    (l) => l.category === 'tool_call' || l.category === 'delegation' || l.level === 'error',
+  const toolLogs = useMemo(
+    () =>
+      logs.filter(
+        (l) => l.category === 'tool_call' || l.category === 'delegation' || l.level === 'error',
+      ),
+    [logs],
+  );
+
+  // ---- Build navigable items list (tool dots + delegation bars) -----------
+  const navigableItems: NavigableItem[] = useMemo(() => {
+    const items: NavigableItem[] = [];
+
+    // Add delegation bars (child sessions)
+    for (const child of childSessions) {
+      const childLogs = logs.filter((l) => l.agent_id === child.agent_id);
+      items.push({
+        type: 'delegation',
+        childSession: child,
+        childLogs,
+      });
+    }
+
+    // Add tool dots
+    for (const log of toolLogs) {
+      items.push({
+        type: log.level === 'error' ? 'error' : 'tool',
+        log,
+      });
+    }
+
+    // Sort chronologically
+    items.sort((a, b) => {
+      const tsA = a.log?.timestamp ?? a.childSession?.started_at ?? '';
+      const tsB = b.log?.timestamp ?? b.childSession?.started_at ?? '';
+      return tsA.localeCompare(tsB);
+    });
+
+    return items;
+  }, [childSessions, logs, toolLogs]);
+
+  // ---- Compute the time range of the currently hovered delegation --------
+  const hoveredDelegationRange = useMemo(() => {
+    if (!hoveredItem || hoveredItem.type !== 'delegation' || !hoveredItem.childSession) return null;
+    const cs = hoveredItem.childSession;
+    const start = new Date(cs.started_at).getTime();
+    const end = cs.ended_at ? new Date(cs.ended_at).getTime() : sessionEnd;
+    return { start, end };
+  }, [hoveredItem, sessionEnd]);
+
+  // ---- Get surrounding logs for the selected item (error context) --------
+  const surroundingLogs = useMemo(() => {
+    if (!selectedItem?.log) return [];
+    const logIndex = logs.findIndex((l) => l.id === selectedItem.log!.id);
+    if (logIndex < 0) return [];
+    const start = Math.max(0, logIndex - 3);
+    const end = Math.min(logs.length, logIndex + 4);
+    return logs.slice(start, end);
+  }, [selectedItem, logs]);
+
+  // ---- Event helpers ------------------------------------------------------
+  const getContainerRect = useCallback((): DOMRect | null => {
+    return containerRef.current?.getBoundingClientRect() ?? null;
+  }, []);
+
+  const handleDotHover = useCallback(
+    (log: ExecutionLog, svgX: number, svgY: number) => {
+      if (!svgRef.current || !containerRef.current) return;
+      const pos = svgToContainer(svgX, svgY, svgRef.current, containerRef.current);
+      setHoveredItem({
+        type: log.level === 'error' ? 'error' : 'tool',
+        x: pos.x,
+        y: pos.y,
+        log,
+      });
+    },
+    [],
+  );
+
+  const handleBarHover = useCallback(
+    (child: LogSession, svgX: number, svgY: number) => {
+      if (!svgRef.current || !containerRef.current) return;
+      const pos = svgToContainer(svgX, svgY, svgRef.current, containerRef.current);
+      const childLogs = logs.filter((l) => l.agent_id === child.agent_id);
+      setHoveredItem({
+        type: 'delegation',
+        x: pos.x,
+        y: pos.y,
+        childSession: child,
+        childLogs,
+      });
+    },
+    [logs],
+  );
+
+  const handleDotClick = useCallback(
+    (log: ExecutionLog) => {
+      const idx = navigableItems.findIndex(
+        (item) => item.log?.id === log.id,
+      );
+      setSelectedItem({
+        type: log.level === 'error' ? 'error' : 'tool',
+        log,
+        index: idx >= 0 ? idx : 0,
+      });
+    },
+    [navigableItems],
+  );
+
+  const handleBarClick = useCallback(
+    (child: LogSession) => {
+      const childLogs = logs.filter((l) => l.agent_id === child.agent_id);
+      const idx = navigableItems.findIndex(
+        (item) => item.childSession?.session_id === child.session_id,
+      );
+      setSelectedItem({
+        type: 'delegation',
+        childSession: child,
+        childLogs,
+        index: idx >= 0 ? idx : 0,
+      });
+    },
+    [navigableItems, logs],
+  );
+
+  const handleNavigate = useCallback(
+    (direction: 'prev' | 'next') => {
+      if (!selectedItem) return;
+      const newIdx =
+        direction === 'prev'
+          ? Math.max(0, selectedItem.index - 1)
+          : Math.min(navigableItems.length - 1, selectedItem.index + 1);
+      const item = navigableItems[newIdx];
+      if (!item) return;
+      setSelectedItem({
+        type: item.type,
+        log: item.log,
+        childSession: item.childSession,
+        childLogs: item.childLogs,
+        index: newIdx,
+      });
+    },
+    [selectedItem, navigableItems],
+  );
+
+  const handleMouseLeave = useCallback(() => {
+    setHoveredItem(null);
+  }, []);
+
+  // ---- Is a dot within the hovered delegation's time range? ---------------
+  const isDotInDelegationRange = useCallback(
+    (logTs: string): boolean => {
+      if (!hoveredDelegationRange) return false;
+      const t = new Date(logTs).getTime();
+      return t >= hoveredDelegationRange.start && t <= hoveredDelegationRange.end;
+    },
+    [hoveredDelegationRange],
   );
 
   return (
-    <div className="waterfall">
-      <svg viewBox={`0 0 600 ${svgHeight}`} preserveAspectRatio="xMidYMid meet">
+    <div className="waterfall waterfall--interactive" ref={containerRef} style={{ position: 'relative' }}>
+      <svg
+        ref={svgRef}
+        viewBox={`0 0 600 ${svgHeight}`}
+        preserveAspectRatio="xMidYMid meet"
+        onMouseLeave={handleMouseLeave}
+      >
         {/* Agent lanes */}
         {agents.map((agent, i) => {
           const y = laneY0 + i * laneHeight;
@@ -156,6 +359,16 @@ export function SessionWaterfall({ session, childSessions, logs }: SessionWaterf
             : sessionEnd;
           const x1 = timeToX(new Date(childStart), sessionStart, totalDuration);
           const x2 = timeToX(new Date(childEnd), sessionStart, totalDuration);
+          const barWidth = Math.max(x2 - x1, 4);
+          const barMidX = x1 + barWidth / 2;
+          const barMidY = y + 6;
+
+          const isSelected =
+            selectedItem?.type === 'delegation' &&
+            selectedItem.childSession?.session_id === agent.session_id;
+          const isHovered =
+            hoveredItem?.type === 'delegation' &&
+            hoveredItem.childSession?.session_id === agent.session_id;
 
           return (
             <g key={agent.session_id}>
@@ -168,14 +381,32 @@ export function SessionWaterfall({ session, childSessions, logs }: SessionWaterf
               >
                 {truncateLabel(agent.agent_name)}
               </text>
+              {/* Selection highlight ring */}
+              {isSelected && (
+                <rect
+                  x={x1 - 1}
+                  y={y - 1}
+                  width={barWidth + 2}
+                  height={14}
+                  rx={3}
+                  fill="none"
+                  stroke="var(--primary)"
+                  strokeWidth={1.5}
+                  className="waterfall-bar--selected-ring"
+                />
+              )}
               <rect
+                className="waterfall-bar"
                 x={x1}
                 y={y}
-                width={Math.max(x2 - x1, 4)}
+                width={barWidth}
                 height={12}
                 rx={2}
                 fill="var(--success)"
-                opacity={0.75}
+                opacity={isHovered ? 0.95 : 0.75}
+                onMouseEnter={() => handleBarHover(agent, barMidX, barMidY)}
+                onMouseLeave={handleMouseLeave}
+                onClick={(e) => { e.stopPropagation(); handleBarClick(agent); }}
               />
             </g>
           );
@@ -186,14 +417,48 @@ export function SessionWaterfall({ session, childSessions, logs }: SessionWaterf
           const ts = new Date(log.timestamp);
           const cx = timeToX(ts, sessionStart, totalDuration);
           const { color, r } = dotStyle(log);
+
+          const isSelected =
+            selectedItem?.type !== 'delegation' &&
+            selectedItem?.log?.id === log.id;
+          const isInDelegationRange = isDotInDelegationRange(log.timestamp);
+
           return (
-            <circle
-              key={log.id}
-              cx={cx}
-              cy={dotRowY}
-              r={r}
-              fill={color}
-            />
+            <g key={log.id}>
+              {/* Selection pulsing ring */}
+              {isSelected && (
+                <circle
+                  cx={cx}
+                  cy={dotRowY}
+                  r={r + 3}
+                  fill="none"
+                  stroke={color}
+                  strokeWidth={1}
+                  className="waterfall-dot--selected-ring"
+                />
+              )}
+              {/* Connected highlight when hovering delegation */}
+              {isInDelegationRange && (
+                <circle
+                  cx={cx}
+                  cy={dotRowY}
+                  r={r + 2}
+                  fill={color}
+                  opacity={0.2}
+                  className="waterfall-dot--delegation-highlight"
+                />
+              )}
+              <circle
+                className="waterfall-dot"
+                cx={cx}
+                cy={dotRowY}
+                r={r}
+                fill={color}
+                onMouseEnter={() => handleDotHover(log, cx, dotRowY)}
+                onMouseLeave={handleMouseLeave}
+                onClick={(e) => { e.stopPropagation(); handleDotClick(log); }}
+              />
+            </g>
           );
         })}
 
@@ -220,6 +485,20 @@ export function SessionWaterfall({ session, childSessions, logs }: SessionWaterf
           </text>
         ))}
       </svg>
+
+      {/* HTML tooltip overlay — positioned over the SVG */}
+      <WaterfallTooltip data={hoveredItem} containerRect={getContainerRect()} />
+
+      {/* Slide-out detail panel */}
+      {selectedItem && (
+        <WaterfallSlideOut
+          data={selectedItem}
+          totalItems={navigableItems.length}
+          surroundingLogs={surroundingLogs}
+          onClose={() => setSelectedItem(null)}
+          onNavigate={handleNavigate}
+        />
+      )}
     </div>
   );
 }

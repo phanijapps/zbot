@@ -236,6 +236,24 @@ const Card = ({ size }) => (
 - `.pw-card`, `.pw-card__top/icon/info/name/desc/meta/footer` - Plugin/worker cards
 - `.pw-card__icon--plugin/worker` - Source type icon variants
 
+### Waterfall Interactive Components
+- `.waterfall--interactive` - Interactive waterfall container (position: relative for overlay positioning)
+- `.waterfall-dot`, `.waterfall-dot:hover` - Clickable tool dots with hover brightness
+- `.waterfall-dot--selected-ring` - Pulsing ring on selected dot
+- `.waterfall-dot--delegation-highlight` - Subtle pulse on dots within hovered delegation range
+- `.waterfall-bar`, `.waterfall-bar:hover` - Clickable delegation bars with hover opacity
+- `.waterfall-bar--selected-ring` - Pulsing ring on selected bar
+- `.waterfall-tooltip` - Floating HTML tooltip positioned over SVG
+- `.waterfall-tooltip__header/body/status` - Tooltip layout elements
+- `.waterfall-tooltip__status--success/error` - Status color variants
+- `.waterfall-slideout` - Right-side detail panel (320px, slides in from right)
+- `.waterfall-slideout__header/section/label/code/event/nav` - Panel layout elements
+- `.waterfall-slideout__header--error` - Error-themed header
+- `.waterfall-slideout__code--error` - Error-themed code block
+- `.waterfall-slideout__event--highlight/error/warn` - Event row variants
+- `.waterfall-slideout__meta-row` - Key-value metadata display
+- `.waterfall-slideout__nav-counter` - Navigation position indicator
+
 ---
 
 ## Adding New Components
