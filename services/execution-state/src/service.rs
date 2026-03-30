@@ -236,6 +236,11 @@ impl<D: StateDbProvider> StateService<D> {
         Ok(())
     }
 
+    /// Update the session title.
+    pub fn update_session_title(&self, session_id: &str, title: &str) -> Result<(), String> {
+        self.repo.update_session_title(session_id, title)
+    }
+
     /// Update the active ward for a session.
     pub fn update_session_ward(&self, session_id: &str, ward_id: &str) -> Result<(), String> {
         self.repo.update_session_ward(session_id, ward_id)

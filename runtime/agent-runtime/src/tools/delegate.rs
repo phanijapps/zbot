@@ -79,6 +79,10 @@ impl Tool for DelegateTool {
                 "max_iterations": {
                     "type": "integer",
                     "description": "Maximum number of iterations the subagent can run. Defaults to 25 if not specified."
+                },
+                "output_schema": {
+                    "type": "object",
+                    "description": "Optional JSON Schema the child agent's response must follow. When provided, the child is instructed to respond with ONLY a JSON object matching this schema."
                 }
             },
             "required": ["agent_id", "task"]
@@ -129,6 +133,8 @@ impl Tool for DelegateTool {
             .get("max_iterations")
             .and_then(|v| v.as_u64())
             .map(|v| v as u32);
+
+        let output_schema = args.get("output_schema").cloned();
 
         // Get parent context from state
         let parent_agent_id = ctx
@@ -204,6 +210,7 @@ impl Tool for DelegateTool {
             context,
             wait_for_result,
             max_iterations,
+            output_schema,
         });
         ctx.set_actions(actions);
 

@@ -920,6 +920,15 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             conversation_id,
             seq: None,
         }),
+
+        // Session title changed
+        GatewayEvent::SessionTitleChanged { session_id, title } => {
+            Some(ServerMessage::SessionTitleChanged {
+                session_id,
+                title,
+                seq: None,
+            })
+        }
     }
 }
 

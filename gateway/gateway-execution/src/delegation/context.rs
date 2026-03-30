@@ -40,6 +40,11 @@ pub struct DelegationRequest {
     /// Optional max iterations for the child agent execution loop.
     /// Defaults to 25 if not specified.
     pub max_iterations: Option<u32>,
+    /// Optional JSON Schema the child agent's response must conform to.
+    ///
+    /// When provided, the child's system prompt is augmented with an output
+    /// contract requiring a JSON response matching this schema.
+    pub output_schema: Option<Value>,
 }
 
 // ============================================================================
@@ -75,6 +80,13 @@ pub struct DelegationContext {
     /// Conversation ID of the child agent (for routing events back).
     #[serde(default)]
     pub child_conversation_id: Option<String>,
+
+    /// Optional JSON Schema the child's response should conform to.
+    ///
+    /// Stored here so the callback handler can validate the child's response
+    /// at completion time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
 }
 
 fn default_callback() -> bool {
@@ -97,6 +109,7 @@ impl DelegationContext {
             task_context: None,
             callback_on_complete: true,
             child_conversation_id: None,
+            output_schema: None,
         }
     }
 
@@ -115,6 +128,12 @@ impl DelegationContext {
     /// Disable callback on completion.
     pub fn without_callback(mut self) -> Self {
         self.callback_on_complete = false;
+        self
+    }
+
+    /// Set the output schema for response validation.
+    pub fn with_output_schema(mut self, schema: Value) -> Self {
+        self.output_schema = Some(schema);
         self
     }
 }

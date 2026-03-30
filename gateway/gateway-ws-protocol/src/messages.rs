@@ -403,6 +403,14 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+
+    /// Session title changed via set_session_title tool.
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -488,6 +496,7 @@ impl ServerMessage {
             Self::WardChanged { .. } => None,
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
+            Self::SessionTitleChanged { .. } => None,
             Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
             | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
             | Self::SessionEnded { .. } => None,
@@ -565,6 +574,9 @@ impl ServerMessage {
             }
             Self::PlanUpdate { session_id, execution_id, plan, explanation, conversation_id, .. } => {
                 Self::PlanUpdate { session_id, execution_id, plan, explanation, conversation_id, seq: Some(seq) }
+            }
+            Self::SessionTitleChanged { session_id, title, .. } => {
+                Self::SessionTitleChanged { session_id, title, seq: Some(seq) }
             }
             // Messages without sequence numbers pass through unchanged
             other => other,

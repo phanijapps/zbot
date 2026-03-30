@@ -743,6 +743,7 @@ impl AgentExecutor {
                                 context: delegate.context.clone(),
                                 wait_for_result: delegate.wait_for_result,
                                 max_iterations: delegate.max_iterations,
+                                output_schema: delegate.output_schema.clone(),
                             });
                             // Delegation claim is set atomically by the delegate tool via try_claim
                         }
@@ -848,6 +849,19 @@ impl AgentExecutor {
                                     plan,
                                     explanation,
                                 });
+                            }
+
+                            // Check for session_title_changed marker
+                            if parsed.get("__session_title_changed__")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                            {
+                                if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+                                    on_event(StreamEvent::SessionTitleChanged {
+                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                        title: title.to_string(),
+                                    });
+                                }
                             }
                         }
 

@@ -124,6 +124,10 @@ pub fn convert_stream_event(
             explanation,
             conversation_id: Some(conversation_id.to_string()),
         }),
+        StreamEvent::SessionTitleChanged { title, .. } => Some(GatewayEvent::SessionTitleChanged {
+            session_id: session_id.to_string(),
+            title,
+        }),
         // Handle other event types (ToolCallEnd, ShowContent, RequestInput, TokenUpdate)
         // These don't have direct gateway equivalents or are handled separately.
         _ => None,
@@ -215,6 +219,7 @@ mod tests {
             context: None,
             wait_for_result: false,
             max_iterations: None,
+            output_schema: None,
         };
 
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");

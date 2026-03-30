@@ -238,6 +238,7 @@ pub fn handle_delegation(
     task: &str,
     context: &Option<serde_json::Value>,
     max_iterations: Option<u32>,
+    output_schema: &Option<serde_json::Value>,
 ) {
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
@@ -286,6 +287,7 @@ pub fn handle_delegation(
         task: task.to_string(),
         context: context.clone(),
         max_iterations,
+        output_schema: output_schema.clone(),
     });
 
     log_delegation(ctx, child_agent, task);
@@ -309,10 +311,11 @@ pub fn process_stream_event(
         task,
         context,
         max_iterations,
+        output_schema,
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context, *max_iterations);
+        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema);
     }
 
     // Log based on event type
@@ -347,6 +350,12 @@ pub fn process_stream_event(
             // Persist ward_id to session so it survives across continuations
             if let Err(e) = ctx.state_service.update_session_ward(&ctx.session_id, ward_id) {
                 tracing::warn!("Failed to update session ward: {}", e);
+            }
+        }
+        StreamEvent::SessionTitleChanged { ref title, .. } => {
+            // Persist title to session
+            if let Err(e) = ctx.state_service.update_session_title(&ctx.session_id, title) {
+                tracing::warn!("Failed to update session title: {}", e);
             }
         }
         _ => {}

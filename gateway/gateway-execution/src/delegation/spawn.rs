@@ -114,6 +114,11 @@ pub async fn spawn_delegated_agent(
     } else {
         delegation_context
     };
+    let delegation_context = if let Some(schema) = request.output_schema.clone() {
+        delegation_context.with_output_schema(schema)
+    } else {
+        delegation_context
+    };
     delegation_registry.register(&execution_id, delegation_context);
 
     // Track delegation for continuation
@@ -135,7 +140,7 @@ pub async fn spawn_delegated_agent(
 
     // Load agent and provider using AgentLoader
     let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
-    let (agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
+    let (mut agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
         Ok(result) => result,
         Err(e) => {
             // Mark the pre-created execution as crashed so session can complete
@@ -144,6 +149,15 @@ pub async fn spawn_delegated_agent(
             return Err(e);
         }
     };
+
+    // Inject output contract into child agent instructions when schema is provided
+    if let Some(ref schema) = request.output_schema {
+        let schema_str = serde_json::to_string_pretty(schema).unwrap_or_default();
+        agent.instructions.push_str(&format!(
+            "\n\n## Output Contract\nYour response MUST be a JSON object matching this schema:\n```json\n{}\n```\nRespond with ONLY the JSON object. No explanation before or after the JSON.",
+            schema_str
+        ));
+    }
 
     // Collect available agents and skills for executor state
     let available_agents = collect_agents_summary(&agent_service).await;

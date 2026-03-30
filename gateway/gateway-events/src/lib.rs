@@ -263,6 +263,12 @@ pub enum GatewayEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         conversation_id: Option<String>,
     },
+
+    /// Session title changed via set_session_title tool.
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+    },
 }
 
 impl GatewayEvent {
@@ -294,6 +300,7 @@ impl GatewayEvent {
             Self::WardChanged { .. } => None,
             Self::PlanUpdate { .. } => None,
             Self::IterationsExtended { .. } => None,
+            Self::SessionTitleChanged { .. } => None,
         }
     }
 
@@ -325,6 +332,7 @@ impl GatewayEvent {
             Self::WardChanged { session_id, .. } => Some(session_id),
             Self::PlanUpdate { session_id, .. } => Some(session_id),
             Self::IterationsExtended { session_id, .. } => Some(session_id),
+            Self::SessionTitleChanged { session_id, .. } => Some(session_id),
         }
     }
 
@@ -363,6 +371,7 @@ impl GatewayEvent {
             Self::WardChanged { execution_id, .. } => Some(execution_id),
             Self::PlanUpdate { execution_id, .. } => Some(execution_id),
             Self::IterationsExtended { execution_id, .. } => Some(execution_id),
+            Self::SessionTitleChanged { .. } => None,
         }
     }
 
@@ -398,6 +407,7 @@ impl GatewayEvent {
             Self::WardChanged { .. } => None,
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
+            Self::SessionTitleChanged { .. } => None,
         }
     }
 }

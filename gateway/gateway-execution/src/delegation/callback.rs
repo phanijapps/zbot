@@ -5,6 +5,7 @@
 use super::context::DelegationContext;
 use gateway_database::ConversationRepository;
 use gateway_events::{EventBus, GatewayEvent};
+use serde_json::Value;
 use std::sync::Arc;
 
 // ============================================================================
@@ -76,6 +77,40 @@ pub fn format_error_callback_message(
 }
 
 // ============================================================================
+// RESPONSE VALIDATION
+// ============================================================================
+
+/// Validate a delegation response against an output schema.
+///
+/// Performs lenient validation:
+/// - If no schema is provided, the response is returned as-is.
+/// - If the response is valid JSON, it is re-serialized (normalized) and returned.
+/// - If the response is not valid JSON, it is wrapped as `{ "summary": "...", "_schema_valid": false }`
+///   so the parent agent always receives valid JSON without losing the child's work.
+///
+/// Full JSON Schema validation is future work; this currently only checks that
+/// the response parses as JSON.
+pub fn validate_delegation_response(response: &str, schema: &Option<Value>) -> String {
+    if schema.is_none() {
+        return response.to_string();
+    }
+    match serde_json::from_str::<Value>(response.trim()) {
+        Ok(json) => {
+            // Valid JSON — return normalized form
+            serde_json::to_string(&json).unwrap_or_else(|_| response.to_string())
+        }
+        Err(_) => {
+            // Not JSON — wrap as summary with validation flag
+            let wrapped = serde_json::json!({
+                "summary": response.trim(),
+                "_schema_valid": false
+            });
+            serde_json::to_string(&wrapped).unwrap_or_else(|_| response.to_string())
+        }
+    }
+}
+
+// ============================================================================
 // CALLBACK SENDING
 // ============================================================================
 
@@ -123,6 +158,9 @@ pub async fn send_callback_to_parent(
 }
 
 /// Handle successful delegation completion with callback.
+///
+/// When the delegation has an `output_schema`, the response is validated
+/// (or wrapped) before being forwarded to the parent.
 pub async fn handle_delegation_success(
     delegation_ctx: Option<&DelegationContext>,
     conversation_repo: &ConversationRepository,
@@ -135,8 +173,11 @@ pub async fn handle_delegation_success(
 ) {
     if let Some(ctx) = delegation_ctx {
         if ctx.callback_on_complete {
+            // Validate response against output_schema (if present)
+            let validated_response =
+                validate_delegation_response(response, &ctx.output_schema);
             let callback_msg =
-                format_callback_message(child_agent_id, response, child_conversation_id);
+                format_callback_message(child_agent_id, &validated_response, child_conversation_id);
 
             if send_callback_to_parent(
                 conversation_repo,
@@ -150,6 +191,7 @@ pub async fn handle_delegation_success(
                 tracing::info!(
                     parent_execution = %parent_execution_id,
                     child_agent = %child_agent_id,
+                    has_output_schema = ctx.output_schema.is_some(),
                     "Sent callback to parent execution"
                 );
             }
