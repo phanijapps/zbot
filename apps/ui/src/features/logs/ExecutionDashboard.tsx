@@ -62,7 +62,8 @@ export function ExecutionDashboard() {
         (s) =>
           s.session_id.toLowerCase().includes(lower) ||
           s.agent_id.toLowerCase().includes(lower) ||
-          (s.agent_name || "").toLowerCase().includes(lower),
+          (s.agent_name || "").toLowerCase().includes(lower) ||
+          (s.title || "").toLowerCase().includes(lower),
       );
     }
     return filtered;

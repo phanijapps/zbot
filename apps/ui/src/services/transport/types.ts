@@ -416,6 +416,8 @@ export interface LogSession {
   conversation_id: string;
   agent_id: string;
   agent_name: string;
+  /** Title derived from the first user message in the session */
+  title?: string;
   parent_session_id?: string;
   started_at: string;
   ended_at?: string;

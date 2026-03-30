@@ -58,7 +58,9 @@ export function SessionRow({
 
   const statusClassName = `session-row__status session-row__status--${session.status}`;
 
-  const title = session.agent_name || session.session_id.split('-')[0];
+  const title = session.title
+    || session.agent_name
+    || session.session_id.slice(0, 12);
 
   const delegationCount = childSessions.length;
 
@@ -124,6 +126,24 @@ export function SessionRow({
             </div>
           ) : (
             <>
+              {/* Session summary */}
+              <div style={{ padding: 'var(--spacing-3) var(--spacing-4)', borderTop: '1px solid var(--border)', fontSize: 'var(--text-sm)' }}>
+                {/* User's request */}
+                {detail.session.title && (
+                  <div style={{ marginBottom: 'var(--spacing-2)' }}>
+                    <span style={{ color: 'var(--muted-foreground)', fontSize: 'var(--text-xs)' }}>Request: </span>
+                    <span>{detail.session.title}</span>
+                  </div>
+                )}
+                {/* Quick stats row */}
+                <div style={{ display: 'flex', gap: 'var(--spacing-4)', fontSize: 'var(--text-xs)', color: 'var(--muted-foreground)' }}>
+                  <span>Duration: {formatDuration(session.duration_ms || 0)}</span>
+                  <span>Tool calls: {session.tool_call_count}</span>
+                  <span>Delegations: {childSessions.length}</span>
+                  <span>Tokens: {formatTokens(session.token_count)}</span>
+                </div>
+              </div>
+
               {/* Full waterfall timeline */}
               <SessionWaterfall
                 session={detail.session}

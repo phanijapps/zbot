@@ -170,6 +170,7 @@ impl<D: DbProvider> LogsRepository<D> {
                         conversation_id: row.get(1)?,
                         agent_id: row.get(2)?,
                         agent_name: row.get::<_, String>(2)?, // Will be enriched later
+                        title: None, // Enriched by service layer
                         started_at: row.get(3)?,
                         ended_at: row.get(4)?,
                         status: SessionStatus::Completed, // Will be computed
@@ -214,6 +215,7 @@ impl<D: DbProvider> LogsRepository<D> {
                         conversation_id: row.get(1)?,
                         agent_id: row.get(2)?,
                         agent_name: row.get::<_, String>(2)?,
+                        title: None, // Enriched by service layer
                         started_at: row.get(3)?,
                         ended_at: row.get(4)?,
                         status: SessionStatus::Completed,
@@ -283,6 +285,47 @@ impl<D: DbProvider> LogsRepository<D> {
                 .collect::<Result<Vec<String>, _>>()?;
 
             Ok(children)
+        })
+    }
+
+    // =========================================================================
+    // TITLE ENRICHMENT
+    // =========================================================================
+
+    /// Fetch first user message (truncated to 80 chars) for each session ID.
+    ///
+    /// Queries the `messages` table (shared database) to derive a human-readable
+    /// title from the first user message in each session.
+    pub fn get_session_titles(
+        &self,
+        session_ids: &[String],
+    ) -> Result<std::collections::HashMap<String, String>, String> {
+        if session_ids.is_empty() {
+            return Ok(std::collections::HashMap::new());
+        }
+
+        self.db.with_connection(|conn| {
+            let mut titles = std::collections::HashMap::new();
+
+            // Query one-by-one to avoid building large IN clauses.
+            // Session lists are typically <=100 so this is fine.
+            let mut stmt = conn.prepare(
+                "SELECT SUBSTR(content, 1, 80)
+                 FROM messages
+                 WHERE session_id = ? AND role = 'user'
+                 ORDER BY created_at ASC
+                 LIMIT 1",
+            )?;
+
+            for sid in session_ids {
+                if let Ok(title) = stmt.query_row(params![sid], |row| row.get::<_, String>(0)) {
+                    if !title.is_empty() {
+                        titles.insert(sid.clone(), title);
+                    }
+                }
+            }
+
+            Ok(titles)
         })
     }
 

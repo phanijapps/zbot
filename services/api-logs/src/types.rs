@@ -252,6 +252,9 @@ pub struct LogSession {
     pub agent_id: String,
     /// Agent display name
     pub agent_name: String,
+    /// Title derived from the first user message in the session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Session start time (RFC3339)
     pub started_at: String,
     /// Session end time (RFC3339)
