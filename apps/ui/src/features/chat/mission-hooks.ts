@@ -135,6 +135,10 @@ export function useMissionControl() {
   // -- Guard against double submission --
   const isSubmittingRef = useRef(false);
 
+  // -- Fallback title generation --
+  const titleFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastUserMessageRef = useRef<string>("");
+
   // -- Map of tool_call_id to block id for correlating ToolResult --
   const toolCallBlockMapRef = useRef<Map<string, string>>(new Map());
 
@@ -195,6 +199,18 @@ export function useMissionControl() {
   }, []);
 
   // ========================================================================
+  // Fallback title helper
+  // ========================================================================
+
+  const generateFallbackTitle = (message: string): string => {
+    const clean = message.replace(/\s+/g, " ").trim();
+    if (clean.length <= 50) return clean;
+    const truncated = clean.slice(0, 50);
+    const lastSpace = truncated.lastIndexOf(" ");
+    return (lastSpace > 20 ? truncated.slice(0, lastSpace) : truncated) + "...";
+  };
+
+  // ========================================================================
   // Event handler
   // ========================================================================
 
@@ -229,6 +245,23 @@ export function useMissionControl() {
         if (event.model && typeof event.model === "string") {
           setModelName(event.model);
         }
+
+        // Clear any previous fallback timer
+        if (titleFallbackTimerRef.current) {
+          clearTimeout(titleFallbackTimerRef.current);
+          titleFallbackTimerRef.current = null;
+        }
+
+        // Start fallback title timer — if no title arrives in 10s, generate from user message
+        titleFallbackTimerRef.current = setTimeout(() => {
+          setSessionTitle((current) => {
+            if (current) return current; // Title already set
+            const msg = lastUserMessageRef.current;
+            if (!msg) return current;
+            return generateFallbackTitle(msg);
+          });
+          titleFallbackTimerRef.current = null;
+        }, 10_000);
         break;
       }
 
@@ -269,7 +302,13 @@ export function useMissionControl() {
         // set_session_title — update title, no block
         if (toolName === "set_session_title") {
           const title = (args.title ?? args.name ?? "") as string;
-          if (title) setSessionTitle(title);
+          if (title) {
+            setSessionTitle(title);
+            if (titleFallbackTimerRef.current) {
+              clearTimeout(titleFallbackTimerRef.current);
+              titleFallbackTimerRef.current = null;
+            }
+          }
           break;
         }
 
@@ -565,7 +604,14 @@ export function useMissionControl() {
       // ------------------------------------------------------------------
       case "session_title_changed": {
         const title = (event.title ?? "") as string;
-        if (title) setSessionTitle(title);
+        if (title) {
+          setSessionTitle(title);
+          // Cancel fallback timer — real title arrived
+          if (titleFallbackTimerRef.current) {
+            clearTimeout(titleFallbackTimerRef.current);
+            titleFallbackTimerRef.current = null;
+          }
+        }
         break;
       }
 
@@ -707,6 +753,18 @@ export function useMissionControl() {
   }, []);
 
   // ========================================================================
+  // Cleanup fallback title timer on unmount
+  // ========================================================================
+
+  useEffect(() => {
+    return () => {
+      if (titleFallbackTimerRef.current) {
+        clearTimeout(titleFallbackTimerRef.current);
+      }
+    };
+  }, []);
+
+  // ========================================================================
   // Load existing session messages on mount (for resuming past sessions)
   // ========================================================================
 
@@ -830,6 +888,7 @@ export function useMissionControl() {
 
       // Add user message block
       const attachmentNames = attachments.map((a) => a.name);
+      lastUserMessageRef.current = text.trim();
       setBlocks((prev) => [
         ...prev,
         {
