@@ -1,6 +1,6 @@
 use agent_runtime::{ChatMessage, LlmClient};
 use gateway_services::{AgentService, SharedVaultPaths, SkillService};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zero_core::MemoryFactStore;
 
@@ -8,7 +8,7 @@ use zero_core::MemoryFactStore;
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentAnalysis {
     pub primary_intent: String,
     pub hidden_intents: Vec<String>,
@@ -19,7 +19,7 @@ pub struct IntentAnalysis {
     pub rewritten_prompt: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WardRecommendation {
     /// "use_existing" or "create_new"
     pub action: String,
@@ -35,14 +35,14 @@ pub struct WardRecommendation {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionStrategy {
     pub approach: String,
     pub graph: Option<ExecutionGraph>,
     pub explanation: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -50,7 +50,7 @@ pub struct ExecutionGraph {
     pub max_cycles: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: String,
     pub task: String,
@@ -58,7 +58,7 @@ pub struct GraphNode {
     pub skills: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GraphEdge {
     Conditional {
@@ -71,7 +71,7 @@ pub enum GraphEdge {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeCondition {
     pub when: String,
     pub to: String,

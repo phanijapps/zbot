@@ -921,6 +921,9 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             seq: None,
         }),
 
+        // Intent analysis complete - internal event, not forwarded to WebSocket
+        GatewayEvent::IntentAnalysisComplete { .. } => None,
+
         // Session title changed
         GatewayEvent::SessionTitleChanged { session_id, title } => {
             Some(ServerMessage::SessionTitleChanged {

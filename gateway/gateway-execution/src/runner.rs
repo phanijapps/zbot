@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 
-use crate::middleware::intent_analysis::index_resources;
+use crate::middleware::intent_analysis::{analyze_intent, index_resources, inject_intent_context};
 
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
@@ -583,7 +583,7 @@ impl ExecutionRunner {
         }
 
         // Create executor (restore ward_id from existing session if available)
-        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message)).await {
+        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message), &execution_id).await {
             Ok(e) => e,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
@@ -1111,7 +1111,8 @@ impl ExecutionRunner {
         session_id: &str,
         ward_id: Option<&str>,
         is_root: bool,
-        _user_message: Option<&str>,
+        user_message: Option<&str>,
+        execution_id: &str,
     ) -> Result<AgentExecutor, String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
@@ -1175,10 +1176,11 @@ impl ExecutionRunner {
             builder = builder.with_connector_provider(cp);
         }
 
-        // Index resources into memory (fast DB upsert — no LLM call)
-        // Agent handles intent reasoning on its own first turn via the first_turn_protocol shard.
+        // Intent analysis for root agent first turns
+        let mut agent_for_build = agent.clone();
         if is_root {
             if let Some(ref fs) = fact_store_for_indexing {
+                // Index resources (fast DB upsert — no LLM call)
                 index_resources(
                     fs.as_ref(),
                     &self.skill_service,
@@ -1187,6 +1189,84 @@ impl ExecutionRunner {
                 )
                 .await;
                 tracing::info!("Resource indexing complete (skills, agents, wards)");
+
+                // Run intent analysis if user message is present
+                if let Some(msg) = user_message {
+                    // Build temporary LLM client for analysis
+                    let llm_config = agent_runtime::LlmConfig::new(
+                        provider.base_url.clone(),
+                        provider.api_key.clone(),
+                        agent.model.clone(),
+                        provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+                    );
+                    match agent_runtime::OpenAiClient::new(llm_config) {
+                        Ok(raw_client) => {
+                            let retrying = agent_runtime::RetryingLlmClient::new(
+                                std::sync::Arc::new(raw_client),
+                                agent_runtime::RetryPolicy::default(),
+                            );
+
+                            match analyze_intent(
+                                &retrying,
+                                msg,
+                                fs.as_ref(),
+                                &self.skill_service,
+                                &self.agent_service,
+                                &self.paths,
+                            )
+                            .await
+                            {
+                                Ok(analysis) => {
+                                    tracing::info!(
+                                        primary_intent = %analysis.primary_intent,
+                                        approach = %analysis.execution_strategy.approach,
+                                        "Intent analysis succeeded"
+                                    );
+
+                                    // Inject into system prompt
+                                    inject_intent_context(
+                                        &mut agent_for_build.instructions,
+                                        &analysis,
+                                    );
+
+                                    // Emit IntentAnalysisComplete event
+                                    self.event_bus
+                                        .publish(GatewayEvent::IntentAnalysisComplete {
+                                            session_id: session_id.to_string(),
+                                            execution_id: execution_id.to_string(),
+                                            primary_intent: analysis.primary_intent.clone(),
+                                            hidden_intents: analysis.hidden_intents.clone(),
+                                            recommended_skills: analysis.recommended_skills.clone(),
+                                            recommended_agents: analysis.recommended_agents.clone(),
+                                            ward_recommendation: serde_json::to_value(&analysis.ward_recommendation).unwrap_or_default(),
+                                            execution_strategy: serde_json::to_value(&analysis.execution_strategy).unwrap_or_default(),
+                                        })
+                                        .await;
+
+                                    // Log for session replay
+                                    if let Ok(meta) = serde_json::to_value(&analysis) {
+                                        let log_entry = api_logs::ExecutionLog::new(
+                                            execution_id,
+                                            session_id,
+                                            &config.agent_id,
+                                            api_logs::LogLevel::Info,
+                                            api_logs::LogCategory::Intent,
+                                            format!("Intent: {}", analysis.primary_intent),
+                                        )
+                                        .with_metadata(meta);
+                                        let _ = self.log_service.log(log_entry);
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("Intent analysis failed (non-fatal): {}", e);
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
+                        }
+                    }
+                }
             }
         }
 
@@ -1210,7 +1290,7 @@ impl ExecutionRunner {
 
         builder
             .build(
-                agent,
+                &agent_for_build,
                 provider,
                 &config.conversation_id,
                 session_id,
