@@ -18,6 +18,7 @@ import { PlanBlock } from "./PlanBlock";
 
 export interface ExecutionNarrativeProps {
   blocks: NarrativeBlock[];
+  status: string;
 }
 
 // ============================================================================
@@ -28,7 +29,7 @@ export interface ExecutionNarrativeProps {
  * ExecutionNarrative — renders the narrative block list, auto-scrolls on
  * new blocks, but preserves scroll position when user has scrolled up.
  */
-export function ExecutionNarrative({ blocks }: ExecutionNarrativeProps) {
+export function ExecutionNarrative({ blocks, status }: ExecutionNarrativeProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const [isUserScrolled, setIsUserScrolled] = useState(false);
@@ -147,7 +148,7 @@ export function ExecutionNarrative({ blocks }: ExecutionNarrativeProps) {
       })}
 
       {/* Thinking indicator — shows when running and last block is user or no response yet */}
-      {blocks.length > 0 && !blocks.some(b => b.type === 'response' && b.isStreaming) && (
+      {status === "running" && blocks.length > 0 && !blocks.some(b => b.type === 'response' && b.isStreaming) && (
         (() => {
           const lastBlock = blocks[blocks.length - 1];
           const isWaiting = lastBlock?.type === 'user' ||

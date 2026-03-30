@@ -56,7 +56,7 @@ export function MissionControl() {
       />
 
       <div className="mission-control__body">
-        <ExecutionNarrative blocks={state.blocks} />
+        <ExecutionNarrative blocks={state.blocks} status={state.status} />
 
         <div className="mission-control__sidebar">
           <IntelligenceFeed
