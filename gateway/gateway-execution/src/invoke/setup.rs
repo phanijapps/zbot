@@ -275,12 +275,15 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
         SubagentRole::Executor => "\n\n# --- SUBAGENT RULES ---\n\
             You are a specialist executing a specific task.\n\
-            Your working directory is already set to the ward — use relative paths for everything.\n\
-            Do NOT call ward(use) — it's already set. Do NOT cat AGENTS.md — it's in your context.\n\
-            Read specs by path (e.g., `cat specs/topic/01-module.md`), then write ALL code with apply_patch, then run.\n\
-            Write all files first, then test. Do not write-run-debug in a loop.\n\
-            Use apply_patch for ALL file creation and editing.\n\
-            If your task fails after 2 attempts, respond with what you accomplished and what failed.\n",
+            Your working directory is the ward — use relative paths.\n\
+            AGENTS.md and spec paths are in your context. Do NOT call ward(use) or cat AGENTS.md.\n\
+            Write ALL files with apply_patch first, then run once. No write-run-debug loops.\n\
+            If your task fails after 2 attempts, respond with what you accomplished and what failed.\n\n\
+            When you respond, include a LEARNINGS section with any corrections or gotchas:\n\
+            ## Result\n\
+            <what you built and output locations>\n\
+            ## Learnings\n\
+            - <any API gotchas, corrections, or patterns discovered>\n",
         SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
             1. Read the specs and the implementation carefully before forming opinions.\n\

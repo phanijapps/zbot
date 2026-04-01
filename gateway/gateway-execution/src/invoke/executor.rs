@@ -13,7 +13,7 @@ use agent_runtime::{
 use agent_tools::{
     core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings,
     // Individual tools for lean subagent registry
-    ShellTool, ApplyPatchTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
+    ShellTool, ApplyPatchTool, LoadSkillTool,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -285,22 +285,15 @@ impl ExecutorBuilder {
         let mut tool_registry = ToolRegistry::new();
 
         if self.is_delegated {
-            // Subagents get a lean tool set: execute, don't orchestrate.
-            // ~6 tools instead of 12+. Fewer tools = fewer token in tool descriptions
-            // = faster LLM decisions = no wasted calls to update_plan/list_agents/etc.
-            let fact_store = self.fact_store.clone();
+            // Subagents get 4 tools: execute, don't orchestrate.
+            // shell (includes grep/cat/find natively on unix), apply_patch,
+            // load_skill (on demand), respond (return result + learnings).
+            // No memory — subagents report learnings in respond output,
+            // root synthesizes and saves them.
             tool_registry.register(Arc::new(ShellTool::new()));
             tool_registry.register(Arc::new(ApplyPatchTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), fact_store)));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(GrepTool));
             tool_registry.register(Arc::new(RespondTool::new()));
-
-            // Optional: file tools if enabled (read/glob useful for reviewing)
-            if self.tool_settings.file_tools {
-                tool_registry.register(Arc::new(ReadTool));
-                tool_registry.register(Arc::new(GlobTool));
-            }
         } else {
             // Root agent gets the full tool set
             tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
