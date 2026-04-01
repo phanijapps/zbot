@@ -113,6 +113,11 @@ If an existing ward matches the domain, REUSE it. Only create new for genuinely 
 - If the request is simple (greeting, quick question), use approach "simple" with no graph
 - Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
 - Any graph node that creates or modifies files MUST include "coding" in its skills list.
+- When approach is "graph" and the task involves writing code:
+  - The FIRST node must be a spec-writing node (id: "specs", agent: "root", skills: ["coding"])
+  - This node reads AGENTS.md, existing core modules, and writes detailed specs in specs/<domain>/*.md
+  - Subsequent nodes implement against those specs
+  - Do NOT combine spec writing with implementation in the same node
 
 ## Output Format
 Respond with ONLY a JSON object (no markdown fences, no explanation) matching this schema:
@@ -150,7 +155,11 @@ When approach is "simple", omit the graph entirely."#;
 
 /// Format an `IntentAnalysis` as a markdown section suitable for appending
 /// to the agent's system prompt / instructions.
-pub fn format_intent_injection(analysis: &IntentAnalysis) -> String {
+///
+/// `spec_guidance` is optional domain-specific guidance for writing specs
+/// (e.g., "Cover data sources and rate limits"). When provided, it is appended
+/// after the ward rules section.
+pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<&str>) -> String {
     let mut out = String::from("\n\n## Intent Analysis\n\n");
 
     out.push_str(&format!("**Primary Intent:** {}\n", analysis.primary_intent));
@@ -190,6 +199,33 @@ pub fn format_intent_injection(analysis: &IntentAnalysis) -> String {
     out.push_str(&format!("\n**Execution Approach:** {}\n", es.approach));
     if !es.explanation.is_empty() {
         out.push_str(&format!("{}\n", es.explanation));
+    }
+
+    // Ward rules — always included regardless of approach
+    out.push_str(r#"
+**Ward Rule:** ALL code must be written inside a ward. If you need to write code:
+1. Enter the recommended ward (or create if new)
+2. Read AGENTS.md to understand what exists in core/
+3. Check if existing core/ modules already solve your need — reuse, don't recreate
+4. If new functionality: write a spec in specs/<domain>/<name>.md first, then implement
+5. After implementing: archive spec to specs/archive/, update AGENTS.md with new core modules
+
+**Spec Lifecycle:**
+- Active specs live in specs/
+- After implementing a spec, archive it to specs/archive/
+- Archived specs are searchable via knowledge graph for future context
+
+**Spec Quality:**
+Write specs detailed enough that a different agent can implement them without asking questions:
+- Purpose: what this does and why
+- Inputs/Outputs: exact data structures, types, formats
+- Dependencies: which core/ modules to import, external packages needed
+- Implementation detail: algorithm, data flow, error cases
+- Integration: how this connects to other specs in this run
+"#);
+
+    if let Some(guidance) = spec_guidance {
+        out.push_str(&format!("\n**Domain Spec Guidance:**\n{}\n", guidance));
     }
 
     out
@@ -853,12 +889,96 @@ mod tests {
             rewritten_prompt: String::new(),
         };
 
-        let injection = format_intent_injection(&analysis);
+        let injection = format_intent_injection(&analysis, None);
         assert!(injection.contains("## Intent Analysis"));
         assert!(injection.contains("**Ward:** financial-analysis (create_new)"));
         assert!(injection.contains("Subdirectory: stocks/spy"));
         assert!(injection.contains("coding, web-search"));
         assert!(injection.contains("code-agent"));
         assert!(injection.contains("Research then analyze"));
+        assert!(injection.contains("Ward Rule:"));
+        assert!(injection.contains("Spec Lifecycle:"));
+        assert!(injection.contains("Spec Quality:"));
+    }
+
+    #[test]
+    fn test_format_intent_injection_includes_ward_rules() {
+        let analysis = IntentAnalysis {
+            primary_intent: "code_generation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "test-ward".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, None);
+        assert!(injection.contains("Ward Rule:"));
+        assert!(injection.contains("Spec Lifecycle:"));
+        assert!(injection.contains("Spec Quality:"));
+    }
+
+    #[test]
+    fn test_format_intent_injection_includes_spec_guidance_when_provided() {
+        let analysis = IntentAnalysis {
+            primary_intent: "code_generation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "test-ward".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, Some("Cover data sources and rate limits"));
+        assert!(injection.contains("Domain Spec Guidance:"));
+        assert!(injection.contains("Cover data sources"));
+    }
+
+    #[test]
+    fn test_format_intent_injection_omits_spec_guidance_when_none() {
+        let analysis = IntentAnalysis {
+            primary_intent: "code_generation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "test-ward".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, None);
+        assert!(!injection.contains("Domain Spec Guidance:"));
     }
 }
