@@ -215,13 +215,22 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
 - After implementing a spec, archive it to specs/archive/
 - Archived specs are searchable via knowledge graph for future context
 
-**Spec Quality:**
-Write specs detailed enough that a different agent can implement them without asking questions:
-- Purpose: what this does and why
-- Inputs/Outputs: exact data structures, types, formats
-- Dependencies: which core/ modules to import, external packages needed
-- Implementation detail: algorithm, data flow, error cases
-- Integration: how this connects to other specs in this run
+**Spec Quality — MANDATORY sections for every spec:**
+A spec must be detailed enough that a coding agent can implement it without asking questions.
+
+1. **Purpose**: One sentence — what this module does and why it exists.
+2. **Inputs**: Exact source files/APIs with expected schema, columns, types, row counts.
+   Bad: "Read ohlcv data". Good: "Read data/ohlcv.csv — columns: Date(str), Open/High/Low/Close(float), Volume(int), ~252 rows daily."
+3. **Outputs**: Exact file path, format, and full schema with types.
+   Bad: "Write technicals.json". Good: "Write data/technicals.json — {sma_20: float, rsi_14: float, macd: {line: float, signal: float, histogram: float}, support_levels: float[], resistance_levels: float[]}"
+4. **Algorithm**: Step-by-step logic with formulas, not just library names.
+   Bad: "Compute RSI". Good: "RSI(14): avg_gain/avg_loss over 14 periods using Wilder smoothing, RSI = 100 - (100 / (1 + avg_gain/avg_loss))"
+5. **Dependencies**: Which core/ modules to import (with signatures), external packages.
+6. **Error handling**: What happens when data is missing, API fails, or values are NaN.
+7. **Validation**: How to verify output correctness — expected ranges, spot-check methods.
+8. **Core module candidates**: Which functions should be in core/ for reuse vs. task-specific.
+
+If a spec is missing any of these sections, it is incomplete. Do NOT start implementation until specs have all 8 sections.
 "#);
 
     if let Some(guidance) = spec_guidance {
@@ -898,7 +907,7 @@ mod tests {
         assert!(injection.contains("Research then analyze"));
         assert!(injection.contains("Ward Rule:"));
         assert!(injection.contains("Spec Lifecycle:"));
-        assert!(injection.contains("Spec Quality:"));
+        assert!(injection.contains("Spec Quality"));
     }
 
     #[test]
@@ -926,7 +935,7 @@ mod tests {
         let injection = format_intent_injection(&analysis, None);
         assert!(injection.contains("Ward Rule:"));
         assert!(injection.contains("Spec Lifecycle:"));
-        assert!(injection.contains("Spec Quality:"));
+        assert!(injection.contains("Spec Quality"));
     }
 
     #[test]
