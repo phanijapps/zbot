@@ -29,6 +29,38 @@ pub fn format_agent_display_name(agent_id: &str) -> String {
         .join(" ")
 }
 
+/// Extract the RESULT line from a subagent response.
+/// Looks for "RESULT: APPROVED" or "RESULT: DEFECTS" near the end.
+fn extract_result_line(response: &str) -> Option<&str> {
+    response
+        .lines()
+        .rev()
+        .take(20)
+        .find(|line| {
+            let trimmed = line.trim();
+            trimmed.starts_with("RESULT: APPROVED") || trimmed.starts_with("RESULT: DEFECTS")
+        })
+}
+
+/// Extract defect lines after the RESULT: DEFECTS marker.
+fn extract_defects(response: &str) -> String {
+    let mut in_defects = false;
+    let mut defects = Vec::new();
+
+    for line in response.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("RESULT: DEFECTS") {
+            in_defects = true;
+            continue;
+        }
+        if in_defects && trimmed.starts_with("- ") {
+            defects.push(trimmed.to_string());
+        }
+    }
+
+    defects.join("\n")
+}
+
 /// Format a successful callback message as markdown.
 pub fn format_callback_message(
     agent_id: &str,
@@ -55,10 +87,27 @@ pub fn format_callback_message(
         }
     };
 
+    // Detect structured review result for fast root decision-making
+    let action_hint = if let Some(result_line) = extract_result_line(response) {
+        if result_line.contains("APPROVED") {
+            "\n\n**Action:** This node APPROVED. Proceed to the next node in the execution plan.".to_string()
+        } else if result_line.contains("DEFECTS") {
+            let defects = extract_defects(response);
+            format!(
+                "\n\n**Action:** DEFECTS found. Re-delegate to coding agent with these defects:\n{}",
+                defects
+            )
+        } else {
+            String::new()
+        }
+    } else {
+        String::new()
+    };
+
     format!(
-        "## From {}\n\n{}\n\n---\n_Conversation: `{}`_\n\n\
+        "## From {}\n\n{}{}\n\n---\n_Conversation: `{}`_\n\n\
          [Recall] Delegation completed. Consider recalling to absorb any new learnings.",
-        agent_display_name, response_content, conversation_id
+        agent_display_name, response_content, action_hint, conversation_id
     )
 }
 
@@ -260,5 +309,52 @@ mod tests {
         assert_eq!(format_agent_display_name("research-agent"), "Research Agent");
         assert_eq!(format_agent_display_name("code-reviewer"), "Code Reviewer");
         assert_eq!(format_agent_display_name("simple"), "Simple");
+    }
+
+    #[test]
+    fn test_extract_result_approved() {
+        let response = "Everything looks good.\n\nRESULT: APPROVED";
+        assert!(extract_result_line(response).unwrap().contains("APPROVED"));
+    }
+
+    #[test]
+    fn test_extract_result_defects() {
+        let response = "Found issues.\n\nRESULT: DEFECTS\n- core/fetch.py: Missing error handling (severity: medium)";
+        assert!(extract_result_line(response).unwrap().contains("DEFECTS"));
+    }
+
+    #[test]
+    fn test_extract_result_none() {
+        let response = "Just a normal response without structured result.";
+        assert!(extract_result_line(response).is_none());
+    }
+
+    #[test]
+    fn test_extract_defects() {
+        let response = "Review done.\n\nRESULT: DEFECTS\n- file.py: Bug (severity: high)\n- data.json: Missing field (severity: medium)";
+        let defects = extract_defects(response);
+        assert!(defects.contains("file.py: Bug"));
+        assert!(defects.contains("data.json: Missing field"));
+    }
+
+    #[test]
+    fn test_callback_with_approved() {
+        let msg = format_callback_message("code-agent", "Code looks clean.\n\nRESULT: APPROVED", "conv-123");
+        assert!(msg.contains("APPROVED"));
+        assert!(msg.contains("Proceed to the next node"));
+    }
+
+    #[test]
+    fn test_callback_with_defects() {
+        let msg = format_callback_message("data-analyst", "Found issues.\n\nRESULT: DEFECTS\n- output.json: Wrong values (severity: high)", "conv-123");
+        assert!(msg.contains("DEFECTS found"));
+        assert!(msg.contains("Re-delegate to coding agent"));
+        assert!(msg.contains("Wrong values"));
+    }
+
+    #[test]
+    fn test_callback_without_result() {
+        let msg = format_callback_message("research-agent", "Here are the results of my research.", "conv-123");
+        assert!(!msg.contains("Action:"));
     }
 }
