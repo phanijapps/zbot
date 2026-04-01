@@ -20,9 +20,9 @@ use agent_runtime::ChatMessage;
 
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
-    broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    WorkspaceCache,
+    broadcast_event, collect_agents_summary, collect_skills_summary, detect_subagent_role,
+    process_stream_event, spawn_batch_writer_with_repo, subagent_rules, AgentLoader,
+    ExecutorBuilder, ResponseAccumulator, StreamContext, SubagentRole, WorkspaceCache,
 };
 use crate::recall::MemoryRecall;
 use crate::lifecycle::{
@@ -149,6 +149,53 @@ pub async fn spawn_delegated_agent(
             return Err(e);
         }
     };
+
+    // Pre-load requested skills into agent instructions
+    if !request.skills.is_empty() {
+        let mut skill_sections = String::new();
+        for skill_name in &request.skills {
+            match skill_service.get(skill_name).await {
+                Ok(skill) => {
+                    skill_sections.push_str(&format!(
+                        "\n## Skill: {}\n{}\n",
+                        skill.name, skill.instructions
+                    ));
+                }
+                Err(e) => {
+                    tracing::warn!(skill = %skill_name, error = %e, "Failed to pre-load skill for subagent");
+                }
+            }
+        }
+        if !skill_sections.is_empty() {
+            agent.instructions.push_str(&format!(
+                "\n# Pre-Loaded Skills\n{}\n",
+                skill_sections
+            ));
+        }
+        tracing::info!(
+            child_agent = %request.child_agent_id,
+            skills_loaded = request.skills.len(),
+            "Pre-loaded skills for subagent"
+        );
+    }
+
+    // Detect subagent role for rule injection
+    let role = detect_subagent_role(
+        &request.child_agent_id,
+        &request.task,
+    );
+    tracing::info!(
+        child_agent = %request.child_agent_id,
+        role = ?role,
+        "Subagent role detected"
+    );
+
+    // If role is Reviewer, replace the default Executor rules with Reviewer rules
+    if role == SubagentRole::Reviewer {
+        let executor_rules = subagent_rules(SubagentRole::Executor);
+        let reviewer_rules = subagent_rules(SubagentRole::Reviewer);
+        agent.instructions = agent.instructions.replace(executor_rules, reviewer_rules);
+    }
 
     // Inject output contract into child agent instructions when schema is provided
     if let Some(ref schema) = request.output_schema {
