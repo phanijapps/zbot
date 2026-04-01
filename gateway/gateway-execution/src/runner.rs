@@ -1312,7 +1312,7 @@ impl ExecutionRunner {
                                     // Inject intent analysis into agent instructions
                                     // so the agent can follow ward/skill/strategy recommendations
                                     agent_for_build.instructions.push_str(
-                                        &format_intent_injection(&analysis),
+                                        &format_intent_injection(&analysis, None),
                                     );
                                 }
                                 Err(e) => {
@@ -2058,13 +2058,27 @@ async fn scaffold_ward_from_skills(
     }
 }
 
-fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
+/// Auto-update AGENTS.md using language configs for core module indexing.
+///
+/// This is the primary implementation. It accepts a `lang_configs_dir` path so that
+/// callers (and integration tests) can supply a custom config directory. Language
+/// configs are loaded from that directory; files whose extension matches a config use
+/// the config's `extract_signatures` / `extract_first_docstring` methods. Files with
+/// no matching config fall back to the hardcoded Python extraction helpers.
+pub fn auto_update_agents_md_with_lang_configs(
+    vault_dir: &std::path::Path,
+    ward_id: &str,
+    lang_configs_dir: &std::path::Path,
+) {
     let ward_dir = vault_dir.join("wards").join(ward_id);
     let agents_md_path = ward_dir.join("AGENTS.md");
 
     if !ward_dir.exists() || ward_id == "scratch" {
         return;
     }
+
+    let lang_configs =
+        gateway_services::lang_config::load_all_lang_configs(lang_configs_dir).unwrap_or_default();
 
     let mut sections = Vec::new();
 
@@ -2090,30 +2104,51 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
         if let Ok(entries) = std::fs::read_dir(&core_dir) {
             let mut modules: Vec<_> = entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map(|ext| ext == "py").unwrap_or(false))
+                .filter(|e| {
+                    let path = e.path();
+                    if !path.is_file() {
+                        return false;
+                    }
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') || name == "__init__.py" {
+                        return false;
+                    }
+                    let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
+                    // Accept if any lang config matches, or if it's .py (hardcoded fallback)
+                    gateway_services::lang_config::LangConfig::find_for_extension(&lang_configs, ext).is_some()
+                        || ext == "py"
+                })
                 .collect();
             modules.sort_by_key(|e| e.file_name());
 
             if !modules.is_empty() {
                 sections.push("\n## Core Modules\n".to_string());
                 for entry in &modules {
+                    let path = entry.path();
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let desc = extract_first_docstring(&entry.path());
+                    let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
 
                     sections.push(format!("### core/{}\n", name));
-                    if !desc.is_empty() {
-                        sections.push(format!("{}\n", desc));
-                    }
 
-                    let sigs = extract_function_signatures(&entry.path());
-                    for sig in &sigs {
-                        // Strip the leading `def ` for display as callable signature
-                        let display = if let Some(rest) = sig.strip_prefix("def ") {
-                            rest.to_string()
-                        } else {
-                            sig.clone()
-                        };
-                        sections.push(format!("- `{}`\n", display));
+                    if let Some(config) = gateway_services::lang_config::LangConfig::find_for_extension(&lang_configs, ext) {
+                        // Language config path: use config's extraction methods
+                        let desc = config.extract_first_docstring(&path).unwrap_or_default();
+                        if !desc.is_empty() {
+                            sections.push(format!("{}\n", desc));
+                        }
+                        for sig in config.extract_signatures(&path) {
+                            sections.push(format!("- `{}`\n", sig));
+                        }
+                    } else {
+                        // Fallback: hardcoded Python extraction
+                        let desc = extract_first_docstring(&path);
+                        if !desc.is_empty() {
+                            sections.push(format!("{}\n", desc));
+                        }
+                        for sig in extract_function_signatures(&path) {
+                            let display = sig.strip_prefix("def ").unwrap_or(&sig).to_string();
+                            sections.push(format!("- `{}`\n", display));
+                        }
                     }
                     sections.push("\n".to_string());
                 }
@@ -2332,5 +2367,10 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     } else {
         tracing::info!(ward = %ward_id, "Auto-updated AGENTS.md");
     }
+}
+
+fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
+    let lang_configs_dir = vault_dir.join("config").join("wards");
+    auto_update_agents_md_with_lang_configs(vault_dir, ward_id, &lang_configs_dir);
 }
 
