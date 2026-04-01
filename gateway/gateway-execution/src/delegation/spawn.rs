@@ -213,17 +213,22 @@ pub async fn spawn_delegated_agent(
             ));
         }
 
-        // List active specs so subagent knows what to implement
+        // Inject active spec CONTENT so subagent can code immediately — no cat calls needed
         let specs_dir = ward_dir.join("specs");
         if specs_dir.exists() {
             let mut spec_files = Vec::new();
             collect_spec_files(&specs_dir, &specs_dir, &mut spec_files);
             if !spec_files.is_empty() {
-                agent.instructions.push_str("\n# Active Specs\n");
-                for path in &spec_files {
-                    agent.instructions.push_str(&format!("- `{}`\n", path));
+                agent.instructions.push_str("\n# Specs (implement these)\n");
+                for rel_path in &spec_files {
+                    let full_path = ward_dir.join(rel_path);
+                    if let Ok(content) = std::fs::read_to_string(&full_path) {
+                        agent.instructions.push_str(&format!(
+                            "\n## {}\n{}\n",
+                            rel_path, content
+                        ));
+                    }
                 }
-                agent.instructions.push('\n');
             }
         }
 
