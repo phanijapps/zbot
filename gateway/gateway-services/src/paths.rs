@@ -147,6 +147,7 @@ impl VaultPaths {
     ///
     /// Creates:
     /// - config/
+    /// - config/wards/ (language configs for ward indexing)
     /// - data/
     /// - logs/
     /// - agents/
@@ -156,6 +157,7 @@ impl VaultPaths {
     pub fn ensure_dirs_exist(&self) -> io::Result<()> {
         let dirs = [
             self.config_dir(),
+            self.ward_lang_configs_dir(),
             self.data_dir(),
             self.logs_dir(),
             self.agents_dir(),

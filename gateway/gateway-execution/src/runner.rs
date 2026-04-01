@@ -2073,6 +2073,7 @@ async fn scaffold_ward_from_skills(
 ) {
     let ward_dir = vault_dir.join("wards").join(ward_id);
     if !ward_dir.exists() {
+        tracing::debug!(ward = %ward_id, "Ward directory does not exist — skipping scaffolding");
         return;
     }
 
@@ -2178,7 +2179,7 @@ pub fn auto_update_agents_md_with_lang_configs(
                             sections.push(format!("- `{}`\n", sig));
                         }
                     } else {
-                        // Fallback: hardcoded Python extraction
+                        // Fallback: hardcoded Python extraction (only reached for .py without a lang config)
                         let desc = extract_first_docstring(&path);
                         if !desc.is_empty() {
                             sections.push(format!("{}\n", desc));
@@ -2390,16 +2391,9 @@ pub fn auto_update_agents_md_with_lang_configs(
         .unwrap_or_else(|| "tasks/{name}/".to_string());
 
     sections.push("## How to Code\n".to_string());
-    sections.push("1. Write Python scripts with apply_patch, run with: `python path/to/script.py`\n".to_string());
-    sections.push(format!("2. Import from core/: {}\n", import_example));
-    sections.push(
-        "3. Never use `python -c` for multi-line code — always write a .py file first\n"
-            .to_string(),
-    );
-    sections.push(format!(
-        "4. Data files go in `{}/data/`, output files in `output/`\n",
-        task_dir_hint.trim_end_matches('/')
-    ));
+    sections.push("1. Write code files with apply_patch, run with the appropriate command for the language\n".to_string());
+    sections.push("2. Import/source from core/ for shared modules\n".to_string());
+    sections.push("3. Data files go in task subdirectories, output files in output/\n".to_string());
 
     // ── Timestamp ──
     sections.push(format!(

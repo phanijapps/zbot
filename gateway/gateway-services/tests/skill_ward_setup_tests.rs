@@ -1,6 +1,6 @@
 //! Tests for WardSetup frontmatter parsing in skills.
 
-use gateway_services::{SkillFrontmatter, WardAgentsMdConfig, WardSetup};
+use gateway_services::{SkillFrontmatter, WardAgentsMdConfig};
 
 // ---------------------------------------------------------------------------
 // Helpers

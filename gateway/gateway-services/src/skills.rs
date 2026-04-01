@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -27,6 +27,7 @@ pub struct Skill {
 pub struct WardSetup {
     #[serde(default)]
     pub directories: Vec<String>,
+    /// Referenced language skills (informational — not auto-loaded).
     #[serde(default)]
     pub language_skills: Vec<String>,
     #[serde(default)]
@@ -229,7 +230,7 @@ impl SkillService {
         *cache = None;
     }
 
-    fn read_skill_folder(&self, skill_dir: &PathBuf) -> Result<Skill, String> {
+    fn read_skill_folder(&self, skill_dir: &Path) -> Result<Skill, String> {
         let skill_md_path = skill_dir.join("SKILL.md");
 
         if !skill_md_path.exists() {
@@ -263,7 +264,7 @@ impl SkillService {
         })
     }
 
-    fn write_skill_md(&self, skill_dir: &PathBuf, skill: &Skill) -> Result<(), String> {
+    fn write_skill_md(&self, skill_dir: &Path, skill: &Skill) -> Result<(), String> {
         // Preserve existing ward_setup from the current SKILL.md, if any.
         // The Skill struct does not carry ward_setup, so a naive write would silently
         // strip it.  Read the existing file and extract the field before overwriting.
