@@ -279,38 +279,34 @@ When delegating other nodes to subagents:
 1. Enter the recommended ward (or create if new)
 2. Read AGENTS.md to understand what exists in core/
 3. Check if existing core/ modules already solve your need — reuse, don't recreate
-4. If new functionality: write a spec in specs/<domain>/<name>.md first, then implement
-5. After implementing: archive spec to specs/archive/, update AGENTS.md with new core modules
+4. If new functionality: write a spec first, then implement
+5. After implementing: archive spec to specs/archive/
 
 **Spec Lifecycle:**
-- Active specs live in specs/
-- After implementing a spec, archive it to specs/archive/
-- Archived specs are searchable via knowledge graph for future context
+- Active specs: `specs/<task-name>/<nn>-<module>.md`
+- Archived specs: `specs/archive/<task-name>/`
+- Path uses the task subdirectory name, NOT the ward name
 
-**Spec Structure — ONE spec per functional unit, NOT one giant file:**
-Write separate spec files in `specs/` using the subdirectory name as topic:
-- `specs/spy-technical/01-data-collection.md` — fetching and storing raw data
-- `specs/spy-technical/02-technical-analysis.md` — computing indicators
-- `specs/spy-technical/03-options-analysis.md` — options chain analysis
-The path is `specs/<subdirectory-name>/`, NOT `specs/<ward-name>/`. Do NOT nest the ward name inside specs/.
-Each spec should be under 3KB. If a spec is growing large, split it.
+**Spec Structure:**
+One spec per functional unit. Never one giant file.
+Example for a task named "my-analysis" with data collection, processing, and output:
+- `specs/my-analysis/01-data-collection.md`
+- `specs/my-analysis/02-processing.md`
+- `specs/my-analysis/03-output.md`
+Each spec under 3KB. If it's growing large, split it.
 
-**Spec Quality — MANDATORY sections for every spec:**
-A spec must be detailed enough that a coding agent can implement it without asking questions.
+**Spec Quality — MANDATORY sections (all 8 required):**
 
-1. **Purpose**: One sentence — what this module does and why it exists.
-2. **Inputs**: Exact source files/APIs with expected schema, columns, types, row counts.
-   Bad: "Read ohlcv data". Good: "Read data/ohlcv.csv — columns: Date(str), Open/High/Low/Close(float), Volume(int), ~252 rows daily."
-3. **Outputs**: Exact file path, format, and full schema with types.
-   Bad: "Write technicals.json". Good: "Write data/technicals.json — {sma_20: float, rsi_14: float, macd: {line: float, signal: float, histogram: float}, support_levels: float[], resistance_levels: float[]}"
-4. **Algorithm**: Step-by-step logic with formulas, not just library names.
-   Bad: "Compute RSI". Good: "RSI(14): avg_gain/avg_loss over 14 periods using Wilder smoothing, RSI = 100 - (100 / (1 + avg_gain/avg_loss))"
+1. **Purpose**: One sentence — what and why.
+2. **Inputs**: Exact sources with schema, types, expected volume.
+3. **Outputs**: Exact file path, format, full schema with types.
+4. **Algorithm**: Step-by-step logic with formulas — not just library/function names.
 5. **Dependencies**: Which core/ modules to import (with signatures), external packages.
-6. **Error handling**: What happens when data is missing, API fails, or values are NaN.
-7. **Validation**: How to verify output correctness — expected ranges, spot-check methods.
-8. **Core module candidates**: Which functions should be in core/ for reuse vs. task-specific.
+6. **Error handling**: What happens on missing data, API failure, invalid values.
+7. **Validation**: How to verify correctness — expected ranges, spot-check methods.
+8. **Core module candidates**: What belongs in core/ (reusable) vs task-specific.
 
-If a spec is missing any of these sections, it is incomplete. Do NOT start implementation until specs have all 8 sections.
+Do NOT start implementation until all specs have all 8 sections.
 "#);
 
     if let Some(guidance) = spec_guidance {
