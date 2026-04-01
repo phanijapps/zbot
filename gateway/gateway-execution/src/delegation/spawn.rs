@@ -221,6 +221,39 @@ pub async fn spawn_delegated_agent(
         .flatten()
         .and_then(|s| s.ward_id);
 
+    // Inject ward context so subagent starts with complete knowledge
+    if let Some(ref ward_id) = session_ward_id {
+        let ward_dir = paths.vault_dir().join("wards").join(ward_id);
+        let agents_md_path = ward_dir.join("AGENTS.md");
+
+        if let Ok(agents_md) = std::fs::read_to_string(&agents_md_path) {
+            agent.instructions.push_str(&format!(
+                "\n# Ward Context ({})\n{}\n",
+                ward_id, agents_md
+            ));
+        }
+
+        // List active specs so subagent knows what to implement
+        let specs_dir = ward_dir.join("specs");
+        if specs_dir.exists() {
+            let mut spec_files = Vec::new();
+            collect_spec_files(&specs_dir, &specs_dir, &mut spec_files);
+            if !spec_files.is_empty() {
+                agent.instructions.push_str("\n# Active Specs\n");
+                for path in &spec_files {
+                    agent.instructions.push_str(&format!("- `{}`\n", path));
+                }
+                agent.instructions.push('\n');
+            }
+        }
+
+        tracing::info!(
+            child_agent = %request.child_agent_id,
+            ward_id = %ward_id,
+            "Injected ward context for subagent"
+        );
+    }
+
     // Build model registry for capability lookups
     let bundled_models = gateway_templates::Templates::get("models_registry.json")
         .map(|f| f.data.to_vec())
@@ -834,6 +867,26 @@ fn build_crash_report(
          Existing files can be reused.\n",
     );
     report
+}
+
+/// Recursively collect .md spec file paths relative to specs_root.
+fn collect_spec_files(dir: &std::path::Path, specs_root: &std::path::Path, out: &mut Vec<String>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip archive directory
+                if path.file_name().map(|n| n == "archive").unwrap_or(false) {
+                    continue;
+                }
+                collect_spec_files(&path, specs_root, out);
+            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                if let Ok(rel) = path.strip_prefix(specs_root) {
+                    out.push(format!("specs/{}", rel.display()));
+                }
+            }
+        }
+    }
 }
 
 /// Simple recursive directory listing that skips hidden files and common noise.
