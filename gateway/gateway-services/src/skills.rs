@@ -22,7 +22,28 @@ pub struct Skill {
     pub created_at: Option<String>,
 }
 
-/// Skill frontmatter stored in SKILL.md
+/// Ward setup configuration from skill frontmatter.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WardSetup {
+    #[serde(default)]
+    pub directories: Vec<String>,
+    #[serde(default)]
+    pub language_skills: Vec<String>,
+    #[serde(default)]
+    pub spec_guidance: Option<String>,
+    #[serde(default)]
+    pub agents_md: Option<WardAgentsMdConfig>,
+}
+
+/// Seed content for AGENTS.md in a new ward.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WardAgentsMdConfig {
+    pub purpose: String,
+    #[serde(default)]
+    pub conventions: Vec<String>,
+}
+
+/// Skill frontmatter stored in SKILL.md (internal)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct SkillFrontmatter {
     name: String,
@@ -31,6 +52,21 @@ struct SkillFrontmatter {
     description: String,
     #[serde(default)]
     category: Option<String>,
+    #[serde(default)]
+    ward_setup: Option<WardSetup>,
+}
+
+/// Public version of SkillFrontmatter for external consumers.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillFrontmatterPublic {
+    pub name: String,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    pub description: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub ward_setup: Option<WardSetup>,
 }
 
 pub struct SkillService {
@@ -184,6 +220,22 @@ impl SkillService {
         Ok(())
     }
 
+    /// Get ward_setup config for a skill by ID, if it has one.
+    pub async fn get_ward_setup(&self, id: &str) -> Result<Option<WardSetup>, String> {
+        let skill_dir = self.skills_dir.join(id);
+        let skill_md_path = skill_dir.join("SKILL.md");
+
+        if !skill_md_path.exists() {
+            return Err(format!("Skill not found: {}", id));
+        }
+
+        let content = std::fs::read_to_string(&skill_md_path)
+            .map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+
+        let (frontmatter, _) = self.parse_frontmatter(&content)?;
+        Ok(frontmatter.ward_setup)
+    }
+
     /// Invalidate the skill cache.
     pub async fn invalidate_cache(&self) {
         let mut cache = self.cache.write().await;
@@ -238,6 +290,9 @@ impl SkillService {
             } else {
                 Some(skill.category.clone())
             },
+            // ward_setup is not written back through the Skill API (it's managed in SKILL.md
+            // directly); preserve as None when writing from Skill struct.
+            ward_setup: None,
         };
 
         let content = format!(
