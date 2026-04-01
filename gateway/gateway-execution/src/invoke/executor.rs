@@ -10,7 +10,11 @@ use agent_runtime::{
     AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
     OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
 };
-use agent_tools::{core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings};
+use agent_tools::{
+    core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings,
+    // Individual tools for lean subagent registry
+    ShellTool, ApplyPatchTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -280,20 +284,35 @@ impl ExecutorBuilder {
     fn build_tool_registry(&self, fs_context: Arc<dyn FileSystemContext>) -> Arc<ToolRegistry> {
         let mut tool_registry = ToolRegistry::new();
 
-        // Load core tools (always enabled, with optional DB-backed fact store)
-        tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
+        if self.is_delegated {
+            // Subagents get a lean tool set: execute, don't orchestrate.
+            // ~6 tools instead of 12+. Fewer tools = fewer token in tool descriptions
+            // = faster LLM decisions = no wasted calls to update_plan/list_agents/etc.
+            let fact_store = self.fact_store.clone();
+            tool_registry.register(Arc::new(ShellTool::new()));
+            tool_registry.register(Arc::new(ApplyPatchTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), fact_store)));
+            tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(GrepTool));
+            tool_registry.register(Arc::new(RespondTool::new()));
 
-        // Load optional tools based on settings
-        tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));
+            // Optional: file tools if enabled (read/glob useful for reviewing)
+            if self.tool_settings.file_tools {
+                tool_registry.register(Arc::new(ReadTool));
+                tool_registry.register(Arc::new(GlobTool));
+            }
+        } else {
+            // Root agent gets the full tool set
+            tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
+            tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));
+            tool_registry.register(Arc::new(RespondTool::new()));
+            tool_registry.register(Arc::new(DelegateTool::new()));
+            tool_registry.register(Arc::new(ListAgentsTool::new()));
 
-        // Register action tools (respond, delegate, list_agents)
-        tool_registry.register(Arc::new(RespondTool::new()));
-        tool_registry.register(Arc::new(DelegateTool::new()));
-        tool_registry.register(Arc::new(ListAgentsTool::new()));
-
-        // Register connector resource query tool (if provider available)
-        if let Some(provider) = &self.connector_provider {
-            tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+            // Register connector resource query tool (if provider available)
+            if let Some(provider) = &self.connector_provider {
+                tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+            }
         }
 
         Arc::new(tool_registry)
