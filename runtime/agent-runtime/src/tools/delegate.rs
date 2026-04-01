@@ -78,11 +78,16 @@ impl Tool for DelegateTool {
                 },
                 "max_iterations": {
                     "type": "integer",
-                    "description": "Maximum number of iterations the subagent can run. Defaults to 25 if not specified."
+                    "description": "Maximum iterations for the subagent. Default is 1000. Do NOT set this unless you have a specific reason — the system auto-detects stuck agents."
                 },
                 "output_schema": {
                     "type": "object",
                     "description": "Optional JSON Schema the child agent's response must follow. When provided, the child is instructed to respond with ONLY a JSON object matching this schema."
+                },
+                "skills": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Skills to pre-load for the subagent. These are loaded into the agent's context automatically."
                 }
             },
             "required": ["agent_id", "task"]
@@ -135,6 +140,16 @@ impl Tool for DelegateTool {
             .map(|v| v as u32);
 
         let output_schema = args.get("output_schema").cloned();
+
+        let skills: Vec<String> = args
+            .get("skills")
+            .and_then(|v| v.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Get parent context from state
         let parent_agent_id = ctx
@@ -211,6 +226,7 @@ impl Tool for DelegateTool {
             wait_for_result,
             max_iterations,
             output_schema,
+            skills,
         });
         ctx.set_actions(actions);
 

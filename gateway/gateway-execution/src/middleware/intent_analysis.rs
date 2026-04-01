@@ -211,12 +211,21 @@ Produce final deliverable.
 
 If review/validation returns DEFECTS, re-delegate to coding with the defect list.
 
+### Delegation
+- Phase 3 delegation MUST say: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
+- Do NOT write custom task descriptions — ralph.py + tasks.json IS the task.
+- Do NOT set max_iterations — default 1000 is correct. System auto-kills stuck agents.
+- Pass skills in the `skills` parameter.
+- Subagent has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use).
+
+### After a crash callback
+- Read the TASK RUNNER STATUS in the crash report
+- Re-delegate with: "Continue processing specs/<subdirectory>/tasks.json using ralph.py"
+- Do NOT code the remaining tasks yourself. Always re-delegate.
+
 ### Discipline
 - Do NOT call list_skills or list_agents.
 - Update plan ONLY at phase transitions.
-- Subagent has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use) or read files.
-- Pass skills in the `skills` parameter.
-- Keep delegation tasks under 4000 chars.
 - Do NOT poll with shell. System sends callback automatically. Stop and wait.
 "#);
     }
