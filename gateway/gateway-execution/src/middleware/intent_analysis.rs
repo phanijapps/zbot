@@ -261,12 +261,15 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
         out.push_str(r#"
 ### Delegation Rules
 
-When delegating a graph node to a subagent:
+**The specs node is YOUR job.** Do NOT delegate spec writing. You have the full context from intent analysis — write the specs yourself using apply_patch, then delegate the remaining nodes.
+
+When delegating other nodes to subagents:
 1. Include the node's task description and relevant context (ward name, data paths, what prior nodes produced)
-2. Tell the subagent which skills are recommended but DO NOT restrict them — they can use any skill
-3. Keep delegation tasks under 4000 chars — split into multiple delegations if needed
-4. After each node completes, verify output before proceeding to the next node
+2. Pass skills in the `skills` parameter so they are pre-loaded for the subagent
+3. Keep delegation tasks under 4000 chars — be concise, reference spec files by path instead of inlining content
+4. After each node completes via callback, verify output before proceeding to the next node
 5. On failure: fix and retry the node, don't skip to the next one
+6. Do NOT poll for subagent completion with shell commands. The system sends you a callback message automatically when the subagent finishes. Just stop and wait.
 "#);
     }
 
@@ -283,6 +286,13 @@ When delegating a graph node to a subagent:
 - Active specs live in specs/
 - After implementing a spec, archive it to specs/archive/
 - Archived specs are searchable via knowledge graph for future context
+
+**Spec Structure — ONE spec per functional unit, NOT one giant file:**
+Write separate spec files for each distinct piece of functionality:
+- `specs/{topic}/01-data-collection.md` — fetching and storing raw data
+- `specs/{topic}/02-technical-analysis.md` — computing indicators
+- `specs/{topic}/03-options-analysis.md` — options chain analysis
+Each spec should be under 3KB. If a spec is growing large, split it.
 
 **Spec Quality — MANDATORY sections for every spec:**
 A spec must be detailed enough that a coding agent can implement it without asking questions.
