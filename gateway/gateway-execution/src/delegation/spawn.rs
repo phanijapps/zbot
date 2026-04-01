@@ -150,16 +150,7 @@ pub async fn spawn_delegated_agent(
         }
     };
 
-    // Pre-load requested skills into agent instructions
-    if !request.skills.is_empty() {
-        let skill_names = request.skills.join(", ");
-        agent.instructions.push_str(&format!(
-            "\nRecommended skills: {}. Use load_skill to load any you need.\n",
-            skill_names
-        ));
-    }
-
-    // Detect subagent role for rule injection
+    // Detect subagent role
     let role = detect_subagent_role(
         &request.child_agent_id,
         &request.task,
@@ -170,11 +161,20 @@ pub async fn spawn_delegated_agent(
         "Subagent role detected"
     );
 
-    // If role is Reviewer, replace the default Executor rules with Reviewer rules
-    if role == SubagentRole::Reviewer {
-        let executor_rules = subagent_rules(SubagentRole::Executor);
-        let reviewer_rules = subagent_rules(SubagentRole::Reviewer);
-        agent.instructions = agent.instructions.replace(executor_rules, reviewer_rules);
+    // PREPEND rules as the FIRST thing in instructions.
+    // Rules must come before agent AGENTS.md, ward context, specs — everything.
+    // The agent reads rules first, then context. Rules frame all decisions.
+    let rules = subagent_rules(role);
+    let original_instructions = std::mem::take(&mut agent.instructions);
+    agent.instructions = format!("{}\n\n{}", rules, original_instructions);
+
+    // Skill hints (one line)
+    if !request.skills.is_empty() {
+        let skill_names = request.skills.join(", ");
+        agent.instructions.push_str(&format!(
+            "\nRecommended skills: {}. Use load_skill to load any you need.\n",
+            skill_names
+        ));
     }
 
     // Inject output contract into child agent instructions when schema is provided
