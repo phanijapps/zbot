@@ -175,20 +175,22 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
         out.push_str(r#"
 ## Execution Plan — SDLC Pattern
 
-You are the orchestrator. Design and execute this pipeline using delegate_to_agent:
+You are the orchestrator. Execute this pipeline:
 
-1. **Specs** (YOU — do not delegate): Write one spec per module in specs/<subdirectory>/. Under 3KB each.
+1. **Specs** (YOU — do not delegate): Write one spec per module in specs/<subdirectory>/. One apply_patch per spec. Under 3KB each.
 2. **Coding** (delegate to code-agent): Build core/ modules + task scripts per specs.
-3. **Code Review** (delegate to code-agent with skills: [code-review]): Review code against specs. Expects RESULT: APPROVED or RESULT: DEFECTS.
-4. **Domain Validation** (delegate to data-analyst/research-agent with skills: [domain-validation]): Run code, validate output quality. Expects RESULT: APPROVED or RESULT: DEFECTS.
+3. **Code Review** (delegate to code-agent, skills: [code-review]): Review code against specs. Expects RESULT: APPROVED or DEFECTS.
+4. **Domain Validation** (delegate to data-analyst/research-agent, skills: [domain-validation]): Run code, validate output. Expects RESULT: APPROVED or DEFECTS.
 5. **Output** (delegate or do yourself): Produce final deliverable.
 
-Feedback loops: if review/validation returns DEFECTS, re-delegate to coding with the defect list. Repeat until APPROVED.
+If review/validation returns DEFECTS, re-delegate to coding with the defect list.
 
-### Delegation Rules
-- Subagent already has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use) or cat files.
+### Discipline
+- Skills and agents are in intent analysis above. Do NOT call list_skills or list_agents.
+- Update plan ONLY at phase transitions (after specs, after each callback, at completion). Not between tool calls.
+- Subagent has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use) or read files.
 - Pass skills in the `skills` parameter.
-- Keep tasks under 4000 chars — reference spec paths, don't inline content.
+- Keep tasks under 4000 chars.
 - Do NOT poll with shell. System sends callback automatically. Stop and wait.
 "#);
     }
