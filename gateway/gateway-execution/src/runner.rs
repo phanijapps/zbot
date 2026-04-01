@@ -2077,8 +2077,11 @@ pub fn auto_update_agents_md_with_lang_configs(
         return;
     }
 
-    let lang_configs =
-        gateway_services::lang_config::load_all_lang_configs(lang_configs_dir).unwrap_or_default();
+    let lang_configs = {
+        let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
+            .unwrap_or_default();
+        gateway_services::lang_config::compile_all(&raw)
+    };
 
     let mut sections = Vec::new();
 
@@ -2115,7 +2118,7 @@ pub fn auto_update_agents_md_with_lang_configs(
                     }
                     let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
                     // Accept if any lang config matches, or if it's .py (hardcoded fallback)
-                    gateway_services::lang_config::LangConfig::find_for_extension(&lang_configs, ext).is_some()
+                    gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext).is_some()
                         || ext == "py"
                 })
                 .collect();
@@ -2130,7 +2133,7 @@ pub fn auto_update_agents_md_with_lang_configs(
 
                     sections.push(format!("### core/{}\n", name));
 
-                    if let Some(config) = gateway_services::lang_config::LangConfig::find_for_extension(&lang_configs, ext) {
+                    if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
                         // Language config path: use config's extraction methods
                         let desc = config.extract_first_docstring(&path).unwrap_or_default();
                         if !desc.is_empty() {

@@ -49,8 +49,94 @@ impl LangConfig {
             .find(|c| c.file_extensions.iter().any(|e| e == ext))
     }
 
+    /// Compile this config into a [`CompiledLangConfig`] with pre-built regexes.
+    ///
+    /// Patterns that fail to compile are skipped with a warning. The returned
+    /// `CompiledLangConfig` is the runtime type used for extraction.
+    pub fn compile(&self) -> CompiledLangConfig {
+        let compiled_patterns = self
+            .signature_patterns
+            .iter()
+            .filter_map(|(kind, pattern_str)| {
+                match Regex::new(pattern_str) {
+                    Ok(re) => Some((kind.clone(), re)),
+                    Err(e) => {
+                        tracing::warn!(
+                            "Invalid signature pattern for '{}' in language '{}': {}",
+                            kind,
+                            self.language,
+                            e
+                        );
+                        None
+                    }
+                }
+            })
+            .collect();
+
+        let compiled_docstring = self.docstring_pattern.as_deref().and_then(|pattern_str| {
+            match Regex::new(pattern_str) {
+                Ok(re) => Some(re),
+                Err(e) => {
+                    tracing::warn!(
+                        "Invalid docstring pattern for language '{}': {}",
+                        self.language,
+                        e
+                    );
+                    None
+                }
+            }
+        });
+
+        CompiledLangConfig {
+            language: self.language.clone(),
+            file_extensions: self.file_extensions.clone(),
+            compiled_patterns,
+            compiled_docstring,
+            conventions: self.conventions.clone(),
+        }
+    }
+}
+
+/// Compiled version of [`LangConfig`] with pre-built regexes.
+///
+/// Created via [`LangConfig::compile`] or [`compile_all`]. Holds the same
+/// metadata as `LangConfig` plus pre-compiled `Regex` objects so patterns are
+/// not recompiled on every file scan.
+///
+/// `Regex` does not implement `Clone` or `Serialize`/`Deserialize`, so this
+/// type cannot derive those traits. Use `LangConfig` for serialization.
+pub struct CompiledLangConfig {
+    /// Human-readable language name (e.g. `"python"`, `"rust"`)
+    pub language: String,
+
+    /// File extensions this config applies to (e.g. `["py"]`, `["rs"]`)
+    pub file_extensions: Vec<String>,
+
+    /// Pre-compiled signature patterns: `(kind, regex)` pairs.
+    compiled_patterns: Vec<(String, Regex)>,
+
+    /// Pre-compiled docstring pattern, if any.
+    compiled_docstring: Option<Regex>,
+
+    /// Optional language conventions (informational).
+    pub conventions: Vec<String>,
+}
+
+impl CompiledLangConfig {
+    /// Find the first compiled config whose `file_extensions` contains `ext`.
+    ///
+    /// `ext` should be the bare extension without a leading dot (e.g. `"py"`).
+    pub fn find_for_extension<'a>(
+        configs: &'a [CompiledLangConfig],
+        ext: &str,
+    ) -> Option<&'a CompiledLangConfig> {
+        configs
+            .iter()
+            .find(|c| c.file_extensions.iter().any(|e| e == ext))
+    }
+
     /// Extract all function/class signatures from `file_path` using this config's
-    /// `signature_patterns`.
+    /// pre-compiled `signature_patterns`.
     ///
     /// Each pattern is applied to the full file content. For every match, capture
     /// group 1 is collected and trimmed. Returns an empty vec when the file cannot
@@ -66,20 +152,7 @@ impl LangConfig {
 
         let mut signatures = Vec::new();
 
-        for (kind, pattern_str) in &self.signature_patterns {
-            let re = match Regex::new(pattern_str) {
-                Ok(r) => r,
-                Err(e) => {
-                    tracing::warn!(
-                        "Invalid signature pattern for '{}' in language '{}': {}",
-                        kind,
-                        self.language,
-                        e
-                    );
-                    continue;
-                }
-            };
-
+        for (_kind, re) in &self.compiled_patterns {
             for caps in re.captures_iter(&content) {
                 if let Some(m) = caps.get(1) {
                     let sig = m.as_str().trim().to_string();
@@ -93,12 +166,13 @@ impl LangConfig {
         signatures
     }
 
-    /// Extract the first docstring from `file_path` using `docstring_pattern`.
+    /// Extract the first docstring from `file_path` using the pre-compiled
+    /// `docstring_pattern`.
     ///
     /// Returns `None` when there is no pattern configured, the file cannot be
     /// read, or the pattern does not match. Capture group 1 is returned.
     pub fn extract_first_docstring(&self, file_path: &Path) -> Option<String> {
-        let pattern_str = self.docstring_pattern.as_deref()?;
+        let re = self.compiled_docstring.as_ref()?;
 
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
@@ -108,22 +182,19 @@ impl LangConfig {
             }
         };
 
-        let re = match Regex::new(pattern_str) {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(
-                    "Invalid docstring pattern for language '{}': {}",
-                    self.language,
-                    e
-                );
-                return None;
-            }
-        };
-
         re.captures(&content)
             .and_then(|caps| caps.get(1))
             .map(|m| m.as_str().trim().to_string())
     }
+}
+
+/// Compile all configs in `configs` into [`CompiledLangConfig`] instances.
+///
+/// This is the standard bridge between the deserialization layer (`LangConfig`)
+/// and the runtime extraction layer (`CompiledLangConfig`). Call once after
+/// loading configs, then reuse the compiled slice across all file scans.
+pub fn compile_all(configs: &[LangConfig]) -> Vec<CompiledLangConfig> {
+    configs.iter().map(|c| c.compile()).collect()
 }
 
 /// Load a single language config from a YAML file.
@@ -326,7 +397,7 @@ signature_patterns:
     }
 
     // -------------------------------------------------------------------------
-    // find_for_extension
+    // find_for_extension (LangConfig)
     // -------------------------------------------------------------------------
 
     #[test]
@@ -357,6 +428,67 @@ signature_patterns:
     }
 
     // -------------------------------------------------------------------------
+    // compile / compile_all
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_compile_preserves_metadata() {
+        let dir = tempdir().unwrap();
+        let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
+        let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
+
+        assert_eq!(compiled.language, "python");
+        assert_eq!(compiled.file_extensions, vec!["py"]);
+        assert_eq!(compiled.conventions.len(), 2);
+    }
+
+    #[test]
+    fn test_compile_all_returns_one_per_config() {
+        let dir = tempdir().unwrap();
+        write_yaml(dir.path(), "python.yaml", python_yaml());
+        let rust_yaml = r#"
+language: rust
+file_extensions:
+  - rs
+signature_patterns:
+  function: "(?m)^(pub fn \\w+)"
+"#;
+        write_yaml(dir.path(), "rust.yaml", rust_yaml);
+
+        let configs = load_all_lang_configs(dir.path()).unwrap();
+        let compiled = compile_all(&configs);
+        assert_eq!(compiled.len(), 2);
+    }
+
+    // -------------------------------------------------------------------------
+    // CompiledLangConfig::find_for_extension
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn test_compiled_find_for_extension_matches() {
+        let dir = tempdir().unwrap();
+        write_yaml(dir.path(), "python.yaml", python_yaml());
+        let configs = load_all_lang_configs(dir.path()).unwrap();
+        let compiled = compile_all(&configs);
+
+        let found = CompiledLangConfig::find_for_extension(&compiled, "py");
+        assert!(found.is_some());
+        assert_eq!(found.unwrap().language, "python");
+    }
+
+    #[test]
+    fn test_compiled_find_for_extension_no_match_returns_none() {
+        let dir = tempdir().unwrap();
+        write_yaml(dir.path(), "python.yaml", python_yaml());
+        let configs = load_all_lang_configs(dir.path()).unwrap();
+        let compiled = compile_all(&configs);
+
+        let found = CompiledLangConfig::find_for_extension(&compiled, "js");
+        assert!(found.is_none());
+    }
+
+    // -------------------------------------------------------------------------
     // extract_signatures
     // -------------------------------------------------------------------------
 
@@ -365,6 +497,7 @@ signature_patterns:
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
         let py_content = r#""""Module docstring."""
 
@@ -382,7 +515,7 @@ class Dog(Animal):
 "#;
         let py_file = write_python_file(dir.path(), "sample.py", py_content);
 
-        let sigs = config.extract_signatures(&py_file);
+        let sigs = compiled.extract_signatures(&py_file);
 
         // Should find both functions and both classes
         assert!(sigs.iter().any(|s| s.contains("calculate")), "missing calculate: {:?}", sigs);
@@ -396,10 +529,11 @@ class Dog(Animal):
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
         let py_file = write_python_file(dir.path(), "empty.py", "");
 
-        let sigs = config.extract_signatures(&py_file);
+        let sigs = compiled.extract_signatures(&py_file);
         assert!(sigs.is_empty());
     }
 
@@ -408,8 +542,9 @@ class Dog(Animal):
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
-        let sigs = config.extract_signatures(Path::new("/nonexistent/file.py"));
+        let sigs = compiled.extract_signatures(Path::new("/nonexistent/file.py"));
         assert!(sigs.is_empty());
     }
 
@@ -422,6 +557,7 @@ class Dog(Animal):
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
         let py_content = r#""""This is the module docstring."""
 
@@ -430,7 +566,7 @@ def foo():
 "#;
         let py_file = write_python_file(dir.path(), "module.py", py_content);
 
-        let docstring = config.extract_first_docstring(&py_file);
+        let docstring = compiled.extract_first_docstring(&py_file);
         assert!(docstring.is_some());
         assert!(docstring.unwrap().contains("module docstring"));
     }
@@ -440,10 +576,11 @@ def foo():
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
         let py_file = write_python_file(dir.path(), "no_doc.py", "x = 1\ny = 2\n");
 
-        let docstring = config.extract_first_docstring(&py_file);
+        let docstring = compiled.extract_first_docstring(&py_file);
         assert!(docstring.is_none());
     }
 
@@ -459,10 +596,11 @@ signature_patterns:
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "bash.yaml", yaml);
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
         let sh_file = write_python_file(dir.path(), "script.sh", "#!/bin/bash\necho hi\n");
 
-        let docstring = config.extract_first_docstring(&sh_file);
+        let docstring = compiled.extract_first_docstring(&sh_file);
         assert!(docstring.is_none());
     }
 
@@ -471,8 +609,9 @@ signature_patterns:
         let dir = tempdir().unwrap();
         let config_path = write_yaml(dir.path(), "python.yaml", python_yaml());
         let config = load_lang_config(&config_path).unwrap();
+        let compiled = config.compile();
 
-        let docstring = config.extract_first_docstring(Path::new("/nonexistent/file.py"));
+        let docstring = compiled.extract_first_docstring(Path::new("/nonexistent/file.py"));
         assert!(docstring.is_none());
     }
 }
