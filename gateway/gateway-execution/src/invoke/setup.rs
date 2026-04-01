@@ -303,22 +303,24 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
 /// - Platform commands (PowerShell vs bash)
 /// - Tool syntax (apply_patch, shell, etc.)
 pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role: SubagentRole) -> String {
+    // OS context: platform-correct commands (bash vs PowerShell). ~500B. Essential.
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
         .unwrap_or_default();
 
-    let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
-        .map(|f| String::from_utf8_lossy(&f.data).to_string())
-        .unwrap_or_default();
-
+    // Memory shard: when to save facts for self-healing across sessions. ~2KB.
     let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
+    // NOTE: tooling_skills.md (~3KB) is intentionally NOT included.
+    // The LLM knows apply_patch/shell syntax. If it makes a format mistake,
+    // the error message from the tool tells it how to fix it. Self-healing > training wheels.
+
     let rules = subagent_rules(role);
 
     format!(
-        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}{}",
-        instructions, os_context, tooling, memory_shard, rules
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}{}",
+        instructions, os_context, memory_shard, rules
     )
 }
 

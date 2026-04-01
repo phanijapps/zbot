@@ -152,31 +152,11 @@ pub async fn spawn_delegated_agent(
 
     // Pre-load requested skills into agent instructions
     if !request.skills.is_empty() {
-        let mut skill_sections = String::new();
-        for skill_name in &request.skills {
-            match skill_service.get(skill_name).await {
-                Ok(skill) => {
-                    skill_sections.push_str(&format!(
-                        "\n## Skill: {}\n{}\n",
-                        skill.name, skill.instructions
-                    ));
-                }
-                Err(e) => {
-                    tracing::warn!(skill = %skill_name, error = %e, "Failed to pre-load skill for subagent");
-                }
-            }
-        }
-        if !skill_sections.is_empty() {
-            agent.instructions.push_str(&format!(
-                "\n# Pre-Loaded Skills\n{}\n",
-                skill_sections
-            ));
-        }
-        tracing::info!(
-            child_agent = %request.child_agent_id,
-            skills_loaded = request.skills.len(),
-            "Pre-loaded skills for subagent"
-        );
+        let skill_names = request.skills.join(", ");
+        agent.instructions.push_str(&format!(
+            "\nRecommended skills: {}. Use load_skill to load any you need.\n",
+            skill_names
+        ));
     }
 
     // Detect subagent role for rule injection
