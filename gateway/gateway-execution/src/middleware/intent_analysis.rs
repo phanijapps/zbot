@@ -264,12 +264,13 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
 **The specs node is YOUR job.** Do NOT delegate spec writing. You have the full context from intent analysis — write the specs yourself using apply_patch, then delegate the remaining nodes.
 
 When delegating other nodes to subagents:
-1. Include the node's task description and relevant context (ward name, data paths, what prior nodes produced)
-2. Pass skills in the `skills` parameter so they are pre-loaded for the subagent
-3. Keep delegation tasks under 4000 chars — be concise, reference spec files by path instead of inlining content
-4. After each node completes via callback, verify output before proceeding to the next node
-5. On failure: fix and retry the node, don't skip to the next one
-6. Do NOT poll for subagent completion with shell commands. The system sends you a callback message automatically when the subagent finishes. Just stop and wait.
+1. The subagent already has the ward set as its working directory — do NOT tell it to call ward(use). All paths are relative to the ward root.
+2. The subagent already has AGENTS.md and spec file paths pre-loaded — do NOT tell it to read them. Just reference spec paths (e.g., "implement per specs/spy-technical/01-data-collection.md").
+3. Pass skills in the `skills` parameter so they are pre-loaded for the subagent.
+4. Keep delegation tasks under 4000 chars — be concise, don't inline spec content.
+5. After each node completes via callback, verify output before proceeding to the next node.
+6. On failure: fix and retry the node, don't skip to the next one.
+7. Do NOT poll for subagent completion with shell commands. The system sends you a callback automatically. Just stop and wait.
 "#);
     }
 

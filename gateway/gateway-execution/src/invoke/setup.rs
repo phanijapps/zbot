@@ -274,8 +274,11 @@ pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
 pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
         SubagentRole::Executor => "\n\n# --- SUBAGENT RULES ---\n\
-            You are a specialist executing a specific task. Do NOT create complex plans.\n\
-            Execute your task directly in as few tool calls as possible.\n\
+            You are a specialist executing a specific task.\n\
+            Your working directory is already set to the ward — use relative paths for everything.\n\
+            Do NOT call ward(use) — it's already set. Do NOT cat AGENTS.md — it's in your context.\n\
+            Read specs by path (e.g., `cat specs/topic/01-module.md`), then write ALL code with apply_patch, then run.\n\
+            Write all files first, then test. Do not write-run-debug in a loop.\n\
             Use apply_patch for ALL file creation and editing.\n\
             If your task fails after 2 attempts, respond with what you accomplished and what failed.\n",
         SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
