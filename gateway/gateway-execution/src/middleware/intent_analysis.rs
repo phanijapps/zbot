@@ -184,13 +184,14 @@ Write one spec per module in specs/<subdirectory>/. One apply_patch per spec. Un
 After specs, create `specs/<subdirectory>/tasks.json` — an ordered task list for the code-agent.
 Each task has: id, action (create/run/verify), file or command, spec_ref, depends_on, status (pending).
 Core module creates come FIRST (no dependencies). Task scripts depend on core modules. Run/verify depend on creates.
+Every task MUST have: id, action, description, acceptance criteria, spec_ref, depends_on, status.
 Example:
 ```json
 {"tasks":[
-  {"id":1,"action":"create","file":"core/options.py","spec_ref":"03-options.md#core-module-candidates","depends_on":[],"status":"pending"},
-  {"id":2,"action":"create","file":"stocks/amd/collect.py","spec_ref":"01-data.md","depends_on":[1],"status":"pending"},
-  {"id":3,"action":"run","command":"python3 stocks/amd/collect.py","depends_on":[2],"status":"pending"},
-  {"id":4,"action":"verify","expect":["stocks/amd/data/ohlcv.csv"],"depends_on":[3],"status":"pending"}
+  {"id":1,"action":"create","file":"core/options.py","description":"Options chain utilities — IV calc, chain parsing","spec_ref":"03-options.md#core-module-candidates","acceptance":"Exports: calculate_iv(chain,price)->float, parse_chain(raw)->dict. Importable.","depends_on":[],"status":"pending"},
+  {"id":2,"action":"create","file":"stocks/amd/collect.py","description":"AMD data collection — imports core.data_fetcher, core.options","spec_ref":"01-data.md","acceptance":"Creates: ohlcv.csv (200+ rows), fundamentals.json, options_chain.json","depends_on":[1],"status":"pending"},
+  {"id":3,"action":"run","command":"python3 stocks/amd/collect.py","description":"Execute data collection","acceptance":"Exit 0, all data files created","depends_on":[2],"status":"pending"},
+  {"id":4,"action":"verify","command":"ls -la stocks/amd/data/","description":"Verify outputs","acceptance":"ohlcv.csv, fundamentals.json, options_chain.json exist, non-zero","depends_on":[3],"status":"pending"}
 ]}
 ```
 
