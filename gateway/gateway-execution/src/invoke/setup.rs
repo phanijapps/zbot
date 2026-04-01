@@ -274,7 +274,9 @@ pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
 pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
         SubagentRole::Executor => "\n\n# RULES\n\
-            CWD is the ward. Specs are in your context. Do NOT call ward(use) or cat files already provided.\n\
+            CWD is the ward. Specs and AGENTS.md are in your context. Do NOT call ward(use) or cat files already provided.\n\
+            Reusable functions go in core/<module>.py. Task scripts go in <task-dir>/. NEVER put reusable code in task dirs.\n\
+            Check AGENTS.md Core Modules — extend existing modules before creating new ones.\n\
             Write ALL files with apply_patch first. Run ONCE with shell. If it fails, fix and run once more.\n\
             Respond with: ## Result (what you built) and ## Learnings (any gotchas discovered).\n",
         SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
