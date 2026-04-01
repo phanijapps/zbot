@@ -1309,10 +1309,23 @@ impl ExecutionRunner {
                                     // Capture recommended skills for post-execution scaffolding
                                     recommended_skills = analysis.recommended_skills.clone();
 
+                                    // Collect spec guidance from recommended skills' ward_setup
+                                    let spec_guidance = {
+                                        let mut guidances = Vec::new();
+                                        for skill_name in &analysis.recommended_skills {
+                                            if let Ok(Some(ws)) = self.skill_service.get_ward_setup(skill_name).await {
+                                                if let Some(ref g) = ws.spec_guidance {
+                                                    guidances.push(g.clone());
+                                                }
+                                            }
+                                        }
+                                        if guidances.is_empty() { None } else { Some(guidances.join("\n\n")) }
+                                    };
+
                                     // Inject intent analysis into agent instructions
                                     // so the agent can follow ward/skill/strategy recommendations
                                     agent_for_build.instructions.push_str(
-                                        &format_intent_injection(&analysis, None),
+                                        &format_intent_injection(&analysis, spec_guidance.as_deref()),
                                     );
                                 }
                                 Err(e) => {
@@ -1962,6 +1975,28 @@ fn extract_purpose_section(agents_md_path: &std::path::Path, ward_id: &str) -> S
     format!("Domain workspace for {} projects.", ward_id)
 }
 
+fn extract_conventions_section(agents_md_path: &std::path::Path) -> Option<Vec<String>> {
+    let content = std::fs::read_to_string(agents_md_path).ok()?;
+    let mut in_conventions = false;
+    let mut conventions = Vec::new();
+    for line in content.lines() {
+        if line.starts_with("## Conventions") {
+            in_conventions = true;
+            continue;
+        }
+        if in_conventions {
+            if line.starts_with("## ") {
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.starts_with("- ") {
+                conventions.push(trimmed.to_string());
+            }
+        }
+    }
+    if conventions.is_empty() { None } else { Some(conventions) }
+}
+
 /// Format a byte count as a human-readable size string (e.g. "125 KB", "8 KB", "1.2 MB").
 fn format_file_size(bytes: u64) -> String {
     if bytes >= 1_048_576 {
@@ -2156,6 +2191,14 @@ pub fn auto_update_agents_md_with_lang_configs(
                     sections.push("\n".to_string());
                 }
             }
+        }
+    }
+
+    // ── Conventions (preserved from existing AGENTS.md) ──
+    if let Some(conventions) = extract_conventions_section(&agents_md_path) {
+        sections.push("\n## Conventions\n".to_string());
+        for item in &conventions {
+            sections.push(format!("{}\n", item));
         }
     }
 
