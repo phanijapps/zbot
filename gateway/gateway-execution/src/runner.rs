@@ -715,6 +715,7 @@ impl ExecutionRunner {
                 log_service.clone(),
                 state_service.clone(),
                 delegation_tx,
+                paths.vault_dir().clone(),
             )
             .with_batch_writer(batch_writer.clone());
 
@@ -882,23 +883,14 @@ impl ExecutionRunner {
                     )
                     .await;
 
-                    // Scaffold ward structure from skill configs (idempotent — skips existing)
+                    // Auto-update ward AGENTS.md after root execution completes
+                    // (scaffolding now happens at ward creation time in the WardChanged handler)
                     let session_ward = state_service
                         .get_session(&session_id)
                         .ok()
                         .flatten()
                         .and_then(|s| s.ward_id);
                     if let Some(ref ward_id) = session_ward {
-                        if !recommended_skills.is_empty() {
-                            scaffold_ward_from_skills(
-                                paths.vault_dir(),
-                                &skill_service,
-                                ward_id,
-                                &recommended_skills,
-                            ).await;
-                        }
-
-                        // Auto-update ward AGENTS.md after root execution completes
                         auto_update_agents_md(paths.vault_dir(), ward_id);
                     }
 
@@ -1629,6 +1621,7 @@ async fn invoke_continuation(
             log_service.clone(),
             state_service.clone(),
             delegation_tx,
+            paths.vault_dir().clone(),
         )
         .with_batch_writer(batch_writer.clone());
 
@@ -2057,40 +2050,6 @@ fn collect_data_files_recursive(
                 result.push((rel, size));
             }
         }
-    }
-}
-
-/// Scaffold a ward from skill `ward_setup` configs.
-///
-/// Reads recommended skills from intent analysis, fetches their `ward_setup`
-/// frontmatter, and calls `scaffold_ward` to create directories and AGENTS.md.
-/// Best-effort: failures are logged but don't crash execution.
-async fn scaffold_ward_from_skills(
-    vault_dir: &std::path::Path,
-    skill_service: &gateway_services::SkillService,
-    ward_id: &str,
-    recommended_skills: &[String],
-) {
-    let ward_dir = vault_dir.join("wards").join(ward_id);
-    if !ward_dir.exists() {
-        tracing::debug!(ward = %ward_id, "Ward directory does not exist — skipping scaffolding");
-        return;
-    }
-
-    let mut setups = Vec::new();
-    for skill_name in recommended_skills {
-        match skill_service.get_ward_setup(skill_name).await {
-            Ok(Some(ws)) => setups.push(ws),
-            Ok(None) => {} // Skill has no ward_setup — skip
-            Err(e) => {
-                tracing::warn!(skill = %skill_name, error = %e, "Failed to read skill ward_setup");
-            }
-        }
-    }
-
-    if !setups.is_empty() {
-        crate::middleware::ward_scaffold::scaffold_ward(&ward_dir, ward_id, &setups);
-        tracing::info!(ward = %ward_id, skill_count = setups.len(), "Ward scaffolded from skill configs");
     }
 }
 

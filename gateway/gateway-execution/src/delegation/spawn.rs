@@ -421,6 +421,7 @@ fn spawn_execution_task(
             log_service.clone(),
             state_service.clone(),
             delegation_tx,
+            paths.vault_dir().clone(),
         )
         .with_batch_writer(batch_writer.clone());
 

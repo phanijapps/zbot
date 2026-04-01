@@ -35,6 +35,7 @@ tokio-stream = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }

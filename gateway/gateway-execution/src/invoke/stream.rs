@@ -4,9 +4,11 @@
 
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
+use gateway_services::skills::{SkillFrontmatter, WardSetup};
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
 use agent_runtime::StreamEvent;
 use execution_state::{AgentExecution, DelegationType, StateService};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -42,6 +44,8 @@ pub struct StreamContext {
     pub delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     /// Batch writer for non-blocking DB writes (token updates, logs)
     pub batch_writer: Option<BatchWriterHandle>,
+    /// Vault directory root — needed for ward scaffolding at creation time
+    pub vault_dir: PathBuf,
 }
 
 impl StreamContext {
@@ -55,6 +59,7 @@ impl StreamContext {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
         delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+        vault_dir: PathBuf,
     ) -> Self {
         Self {
             agent_id,
@@ -66,6 +71,7 @@ impl StreamContext {
             state_service,
             delegation_tx,
             batch_writer: None,
+            vault_dir,
         }
     }
 
@@ -239,6 +245,7 @@ pub fn handle_delegation(
     context: &Option<serde_json::Value>,
     max_iterations: Option<u32>,
     output_schema: &Option<serde_json::Value>,
+    skills: &[String],
 ) {
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
@@ -288,6 +295,7 @@ pub fn handle_delegation(
         context: context.clone(),
         max_iterations,
         output_schema: output_schema.clone(),
+        skills: skills.to_vec(),
     });
 
     log_delegation(ctx, child_agent, task);
@@ -312,10 +320,11 @@ pub fn process_stream_event(
         context,
         max_iterations,
         output_schema,
+        skills,
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema);
+        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills);
     }
 
     // Log based on event type
@@ -350,6 +359,27 @@ pub fn process_stream_event(
             // Persist ward_id to session so it survives across continuations
             if let Err(e) = ctx.state_service.update_session_ward(&ctx.session_id, ward_id) {
                 tracing::warn!("Failed to update session ward: {}", e);
+            }
+
+            // Scaffold ward structure from skill ward_setup configs.
+            // This runs synchronously before the agent's next turn, so
+            // subagents that enter the ward find directories already present.
+            let ward_dir = ctx.vault_dir.join("wards").join(ward_id);
+            if ward_dir.exists() {
+                let skills_dir = ctx.vault_dir.join("skills");
+                let setups = collect_ward_setups_from_disk(&skills_dir);
+                if !setups.is_empty() {
+                    crate::middleware::ward_scaffold::scaffold_ward(&ward_dir, ward_id, &setups);
+                    tracing::info!(ward = %ward_id, "Ward scaffolded at creation time");
+                }
+
+                // Auto-update AGENTS.md so the agent sees conventions immediately
+                let lang_configs_dir = ctx.vault_dir.join("config").join("wards");
+                crate::runner::auto_update_agents_md_with_lang_configs(
+                    &ctx.vault_dir,
+                    ward_id,
+                    &lang_configs_dir,
+                );
             }
         }
         StreamEvent::SessionTitleChanged { ref title, .. } => {
@@ -532,6 +562,58 @@ impl ToolCallAccumulator {
     pub fn len(&self) -> usize {
         self.calls.len()
     }
+}
+
+// ============================================================================
+// WARD SCAFFOLDING HELPERS
+// ============================================================================
+
+/// Read `ward_setup` from all skill `SKILL.md` files on disk.
+///
+/// Synchronous — safe to call from the stream callback. Parses YAML
+/// frontmatter from each `{skills_dir}/{name}/SKILL.md` and collects any
+/// `ward_setup` configs found.
+fn collect_ward_setups_from_disk(skills_dir: &Path) -> Vec<WardSetup> {
+    let mut setups = Vec::new();
+    if !skills_dir.exists() {
+        return setups;
+    }
+
+    let entries = match std::fs::read_dir(skills_dir) {
+        Ok(e) => e,
+        Err(_) => return setups,
+    };
+
+    for entry in entries.flatten() {
+        let skill_md = entry.path().join("SKILL.md");
+        if !skill_md.exists() {
+            continue;
+        }
+        if let Ok(content) = std::fs::read_to_string(&skill_md) {
+            if let Some(yaml) = extract_yaml_frontmatter(&content) {
+                if let Ok(fm) = serde_yaml::from_str::<SkillFrontmatter>(yaml) {
+                    if let Some(ws) = fm.ward_setup {
+                        setups.push(ws);
+                    }
+                }
+            }
+        }
+    }
+    setups
+}
+
+/// Extract the YAML frontmatter block from a `---`-delimited document.
+///
+/// Returns the trimmed content between the first pair of `---` markers,
+/// or `None` if the document doesn't start with `---`.
+fn extract_yaml_frontmatter(content: &str) -> Option<&str> {
+    let content = content.trim_start();
+    if !content.starts_with("---") {
+        return None;
+    }
+    let after_first = &content[3..];
+    let end = after_first.find("\n---")?;
+    Some(after_first[..end].trim())
 }
 
 #[cfg(test)]
