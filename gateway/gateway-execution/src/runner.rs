@@ -717,7 +717,8 @@ impl ExecutionRunner {
                 delegation_tx,
                 paths.vault_dir().clone(),
             )
-            .with_batch_writer(batch_writer.clone());
+            .with_batch_writer(batch_writer.clone())
+            .with_recommended_skills(recommended_skills.clone());
 
             let mut response_acc = ResponseAccumulator::new();
             let mut tool_acc = ToolCallAccumulator::new();

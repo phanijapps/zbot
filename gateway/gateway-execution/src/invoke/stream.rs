@@ -46,6 +46,8 @@ pub struct StreamContext {
     pub batch_writer: Option<BatchWriterHandle>,
     /// Vault directory root — needed for ward scaffolding at creation time
     pub vault_dir: PathBuf,
+    /// Skills recommended by intent analysis — used to scope ward scaffolding
+    pub recommended_skills: Vec<String>,
 }
 
 impl StreamContext {
@@ -72,12 +74,19 @@ impl StreamContext {
             delegation_tx,
             batch_writer: None,
             vault_dir,
+            recommended_skills: Vec::new(),
         }
     }
 
     /// Attach a batch writer for non-blocking DB writes.
     pub fn with_batch_writer(mut self, writer: BatchWriterHandle) -> Self {
         self.batch_writer = Some(writer);
+        self
+    }
+
+    /// Set recommended skills from intent analysis — scopes ward scaffolding.
+    pub fn with_recommended_skills(mut self, skills: Vec<String>) -> Self {
+        self.recommended_skills = skills;
         self
     }
 }
@@ -361,16 +370,20 @@ pub fn process_stream_event(
                 tracing::warn!("Failed to update session ward: {}", e);
             }
 
-            // Scaffold ward structure from skill ward_setup configs.
-            // This runs synchronously before the agent's next turn, so
-            // subagents that enter the ward find directories already present.
+            // Scaffold ward structure from RECOMMENDED skills only (not all skills on disk).
+            // This prevents life-os directories appearing in financial-analysis wards, etc.
             let ward_dir = ctx.vault_dir.join("wards").join(ward_id);
             if ward_dir.exists() {
                 let skills_dir = ctx.vault_dir.join("skills");
-                let setups = collect_ward_setups_from_disk(&skills_dir);
+                let setups = if ctx.recommended_skills.is_empty() {
+                    // No intent analysis (simple approach or fallback) — use coding skill only
+                    collect_ward_setup_for_skill(&skills_dir, "coding")
+                } else {
+                    collect_ward_setups_for_skills(&skills_dir, &ctx.recommended_skills)
+                };
                 if !setups.is_empty() {
                     crate::middleware::ward_scaffold::scaffold_ward(&ward_dir, ward_id, &setups);
-                    tracing::info!(ward = %ward_id, "Ward scaffolded at creation time");
+                    tracing::info!(ward = %ward_id, skills = ?ctx.recommended_skills, "Ward scaffolded from recommended skills");
                 }
 
                 // Copy ralph.py (task runner) from shared ward if not already present
@@ -577,38 +590,35 @@ impl ToolCallAccumulator {
 // WARD SCAFFOLDING HELPERS
 // ============================================================================
 
-/// Read `ward_setup` from all skill `SKILL.md` files on disk.
+/// Read `ward_setup` from specific skills' SKILL.md files.
 ///
-/// Synchronous — safe to call from the stream callback. Parses YAML
-/// frontmatter from each `{skills_dir}/{name}/SKILL.md` and collects any
-/// `ward_setup` configs found.
-fn collect_ward_setups_from_disk(skills_dir: &Path) -> Vec<WardSetup> {
+/// Only reads skills in `skill_names` — prevents life-os dirs in coding wards, etc.
+fn collect_ward_setups_for_skills(skills_dir: &Path, skill_names: &[String]) -> Vec<WardSetup> {
     let mut setups = Vec::new();
-    if !skills_dir.exists() {
-        return setups;
-    }
-
-    let entries = match std::fs::read_dir(skills_dir) {
-        Ok(e) => e,
-        Err(_) => return setups,
-    };
-
-    for entry in entries.flatten() {
-        let skill_md = entry.path().join("SKILL.md");
-        if !skill_md.exists() {
-            continue;
-        }
-        if let Ok(content) = std::fs::read_to_string(&skill_md) {
-            if let Some(yaml) = extract_yaml_frontmatter(&content) {
-                if let Ok(fm) = serde_yaml::from_str::<SkillFrontmatter>(yaml) {
-                    if let Some(ws) = fm.ward_setup {
-                        setups.push(ws);
-                    }
-                }
-            }
-        }
+    for name in skill_names {
+        setups.extend(collect_ward_setup_for_skill(skills_dir, name));
     }
     setups
+}
+
+/// Read `ward_setup` from a single skill's SKILL.md.
+fn collect_ward_setup_for_skill(skills_dir: &Path, skill_name: &str) -> Vec<WardSetup> {
+    let skill_md = skills_dir.join(skill_name).join("SKILL.md");
+    if !skill_md.exists() {
+        return vec![];
+    }
+    let content = match std::fs::read_to_string(&skill_md) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let yaml = match extract_yaml_frontmatter(&content) {
+        Some(y) => y,
+        None => return vec![],
+    };
+    match serde_yaml::from_str::<SkillFrontmatter>(yaml) {
+        Ok(fm) => fm.ward_setup.into_iter().collect(),
+        Err(_) => vec![],
+    }
 }
 
 /// Extract the YAML frontmatter block from a `---`-delimited document.
