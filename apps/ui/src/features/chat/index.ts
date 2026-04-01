@@ -32,3 +32,6 @@ export { MissionControl } from "./MissionControl";
 
 export { useMissionControl } from "./mission-hooks";
 export type { NarrativeBlock, MissionState, IntentAnalysis } from "./mission-hooks";
+
+export { IntentAnalysisBlock } from "./IntentAnalysisBlock";
+export type { IntentAnalysisBlockProps } from "./IntentAnalysisBlock";

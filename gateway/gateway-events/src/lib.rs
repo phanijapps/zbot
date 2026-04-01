@@ -270,6 +270,12 @@ pub enum GatewayEvent {
         title: String,
     },
 
+    /// Intent analysis started for a root session (pre-execution)
+    IntentAnalysisStarted {
+        session_id: String,
+        execution_id: String,
+    },
+
     /// Intent analysis completed for a root session
     IntentAnalysisComplete {
         session_id: String,
@@ -313,6 +319,7 @@ impl GatewayEvent {
             Self::PlanUpdate { .. } => None,
             Self::IterationsExtended { .. } => None,
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
         }
     }
@@ -346,6 +353,7 @@ impl GatewayEvent {
             Self::PlanUpdate { session_id, .. } => Some(session_id),
             Self::IterationsExtended { session_id, .. } => Some(session_id),
             Self::SessionTitleChanged { session_id, .. } => Some(session_id),
+            Self::IntentAnalysisStarted { session_id, .. } => Some(session_id),
             Self::IntentAnalysisComplete { session_id, .. } => Some(session_id),
         }
     }
@@ -386,6 +394,7 @@ impl GatewayEvent {
             Self::PlanUpdate { execution_id, .. } => Some(execution_id),
             Self::IterationsExtended { execution_id, .. } => Some(execution_id),
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { execution_id, .. } => Some(execution_id),
             Self::IntentAnalysisComplete { execution_id, .. } => Some(execution_id),
         }
     }
@@ -423,6 +432,7 @@ impl GatewayEvent {
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
         }
     }

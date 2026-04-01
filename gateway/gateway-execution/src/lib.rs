@@ -52,7 +52,7 @@ pub use lifecycle::{
     stop_execution, SessionSetup,
 };
 pub use invoke::{new_workspace_cache, WorkspaceCache};
-pub use runner::ExecutionRunner;
+pub use runner::{ExecutionRunner, OnSessionReady};
 pub use distillation::SessionDistiller;
 pub use recall::{MemoryRecall, RecallResult, GraphContext, format_recalled_facts, format_combined_recall, format_prioritized_recall};
 pub use archiver::SessionArchiver;

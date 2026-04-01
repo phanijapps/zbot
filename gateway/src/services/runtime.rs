@@ -225,6 +225,40 @@ impl RuntimeService {
         runner.invoke(config, message.to_string()).await
     }
 
+    /// Invoke an agent with hook context and a session-ready callback.
+    ///
+    /// The callback fires after session creation but before any events are
+    /// emitted, allowing the caller to subscribe before intent analysis fires.
+    pub async fn invoke_with_hook_and_callback(
+        &self,
+        agent_id: &str,
+        conversation_id: &str,
+        message: &str,
+        hook_context: HookContext,
+        session_id: Option<String>,
+        on_session_ready: Option<gateway_execution::OnSessionReady>,
+    ) -> Result<(ExecutionHandle, String), String> {
+        let runner = self.runner.as_ref().ok_or_else(|| {
+            "Runtime not initialized with executor. Call with_runner() first.".to_string()
+        })?;
+
+        let paths = self.paths.clone().ok_or_else(|| {
+            "Vault paths not set".to_string()
+        })?;
+
+        let mut config = ExecutionConfig::new(
+            agent_id.to_string(),
+            conversation_id.to_string(),
+            paths.vault_dir().clone(),
+        ).with_hook_context(hook_context);
+
+        if let Some(sid) = session_id {
+            config = config.with_session_id(sid);
+        }
+
+        runner.invoke_with_callback(config, message.to_string(), on_session_ready).await
+    }
+
     /// Invoke with a placeholder response (for testing without LLM).
     pub async fn invoke_placeholder(
         &self,

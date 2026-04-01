@@ -16,10 +16,16 @@ use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPat
 use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 
-use crate::middleware::intent_analysis::{analyze_intent, index_resources, inject_intent_context};
+/// Callback invoked after session creation but before any events are emitted.
+/// Receives the session_id so the caller can set up subscriptions before events fire.
+pub type OnSessionReady = Box<dyn FnOnce(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
+use crate::middleware::intent_analysis::{analyze_intent, format_intent_injection, index_resources};
 
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
@@ -506,6 +512,20 @@ impl ExecutionRunner {
         config: ExecutionConfig,
         message: String,
     ) -> Result<(ExecutionHandle, String), String> {
+        self.invoke_with_callback(config, message, None).await
+    }
+
+    /// Invoke an agent with an optional session-ready callback.
+    ///
+    /// The callback fires after session creation but before any events are
+    /// emitted, allowing the caller to set up subscriptions before intent
+    /// analysis events fire.
+    pub async fn invoke_with_callback(
+        &self,
+        config: ExecutionConfig,
+        message: String,
+        on_session_ready: Option<OnSessionReady>,
+    ) -> Result<(ExecutionHandle, String), String> {
         let handle = ExecutionHandle::new(config.max_iterations);
         let handle_clone = handle.clone();
 
@@ -545,6 +565,11 @@ impl ExecutionRunner {
         {
             let mut handles = self.handles.write().await;
             handles.insert(config.conversation_id.clone(), handle.clone());
+        }
+
+        // Notify caller so it can subscribe before events fire
+        if let Some(callback) = on_session_ready {
+            callback(session_id.clone()).await;
         }
 
         // Emit start event
@@ -1176,9 +1201,16 @@ impl ExecutionRunner {
             builder = builder.with_connector_provider(cp);
         }
 
-        // Intent analysis for root agent first turns
+        // Intent analysis for root agent first turns only.
+        // Note: execution_logs stores execution_id in the session_id column,
+        // so we query by execution_id to find prior intent logs.
         let mut agent_for_build = agent.clone();
-        if is_root {
+        let already_analyzed = if is_root {
+            self.log_service.has_intent_log(execution_id)
+        } else {
+            false
+        };
+        if is_root && !already_analyzed {
             if let Some(ref fs) = fact_store_for_indexing {
                 // Index resources (fast DB upsert — no LLM call)
                 index_resources(
@@ -1192,13 +1224,22 @@ impl ExecutionRunner {
 
                 // Run intent analysis if user message is present
                 if let Some(msg) = user_message {
+                    // Emit started event so UI can show "Analyzing..."
+                    self.event_bus
+                        .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
+                            session_id: session_id.to_string(),
+                            execution_id: execution_id.to_string(),
+                        })
+                        .await;
+
                     // Build temporary LLM client for analysis
                     let llm_config = agent_runtime::LlmConfig::new(
                         provider.base_url.clone(),
                         provider.api_key.clone(),
                         agent.model.clone(),
                         provider.id.clone().unwrap_or_else(|| provider.name.clone()),
-                    );
+                    )
+                    .with_max_tokens(8192); // Intent analysis JSON can be 3-5KB for graph tasks with full execution graphs
                     match agent_runtime::OpenAiClient::new(llm_config) {
                         Ok(raw_client) => {
                             let retrying = agent_runtime::RetryingLlmClient::new(
@@ -1210,9 +1251,6 @@ impl ExecutionRunner {
                                 &retrying,
                                 msg,
                                 fs.as_ref(),
-                                &self.skill_service,
-                                &self.agent_service,
-                                &self.paths,
                             )
                             .await
                             {
@@ -1221,12 +1259,6 @@ impl ExecutionRunner {
                                         primary_intent = %analysis.primary_intent,
                                         approach = %analysis.execution_strategy.approach,
                                         "Intent analysis succeeded"
-                                    );
-
-                                    // Inject into system prompt
-                                    inject_intent_context(
-                                        &mut agent_for_build.instructions,
-                                        &analysis,
                                     );
 
                                     // Emit IntentAnalysisComplete event
@@ -1256,14 +1288,63 @@ impl ExecutionRunner {
                                         .with_metadata(meta);
                                         let _ = self.log_service.log(log_entry);
                                     }
+
+                                    // Inject intent analysis into agent instructions
+                                    // so the agent can follow ward/skill/strategy recommendations
+                                    agent_for_build.instructions.push_str(
+                                        &format_intent_injection(&analysis),
+                                    );
                                 }
                                 Err(e) => {
                                     tracing::warn!("Intent analysis failed (non-fatal): {}", e);
+                                    // Fallback: emit minimal analysis so UI gets a block
+                                    // and agent receives ward naming guidance
+                                    self.event_bus
+                                        .publish(GatewayEvent::IntentAnalysisComplete {
+                                            session_id: session_id.to_string(),
+                                            execution_id: execution_id.to_string(),
+                                            primary_intent: "general".to_string(),
+                                            hidden_intents: vec![],
+                                            recommended_skills: vec![],
+                                            recommended_agents: vec![],
+                                            ward_recommendation: serde_json::json!({
+                                                "action": "create_new",
+                                                "ward_name": "scratch",
+                                                "subdirectory": null,
+                                                "reason": "Intent analysis failed — using scratch ward"
+                                            }),
+                                            execution_strategy: serde_json::json!({
+                                                "approach": "simple",
+                                                "explanation": "Intent analysis unavailable"
+                                            }),
+                                        })
+                                        .await;
                                 }
                             }
                         }
                         Err(e) => {
                             tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
+                            // Fallback: emit minimal analysis event
+                            self.event_bus
+                                .publish(GatewayEvent::IntentAnalysisComplete {
+                                    session_id: session_id.to_string(),
+                                    execution_id: execution_id.to_string(),
+                                    primary_intent: "general".to_string(),
+                                    hidden_intents: vec![],
+                                    recommended_skills: vec![],
+                                    recommended_agents: vec![],
+                                    ward_recommendation: serde_json::json!({
+                                        "action": "create_new",
+                                        "ward_name": "scratch",
+                                        "subdirectory": null,
+                                        "reason": "LLM client creation failed — using scratch ward"
+                                    }),
+                                    execution_strategy: serde_json::json!({
+                                        "approach": "simple",
+                                        "explanation": "Intent analysis unavailable (no LLM client)"
+                                    }),
+                                })
+                                .await;
                         }
                     }
                 }

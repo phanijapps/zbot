@@ -17,7 +17,7 @@ import type { UploadedFile } from "./ChatInput";
 
 export interface NarrativeBlock {
   id: string;
-  type: "user" | "recall" | "tool" | "delegation" | "plan" | "response";
+  type: "user" | "recall" | "tool" | "delegation" | "plan" | "response" | "intent_analysis";
   timestamp: string;
   /** Shape depends on `type` — see block components for expected props */
   data: Record<string, unknown>;
@@ -657,6 +657,29 @@ export function useMissionControl() {
         break;
       }
 
+      case "ward_changed": {
+        const wardId = (event.ward_id ?? "") as string;
+        if (wardId) {
+          setActiveWard({ name: wardId, content: "" });
+        }
+        break;
+      }
+
+      case "intent_analysis_started": {
+        // Create a streaming intent analysis block
+        setBlocks((prev) => [
+          ...prev,
+          {
+            id: "intent-streaming",
+            type: "intent_analysis",
+            timestamp: now(),
+            data: {},
+            isStreaming: true,
+          },
+        ]);
+        break;
+      }
+
       case "intent_analysis_complete": {
         const wardRec = event.ward_recommendation as Record<string, unknown> | undefined;
         const execStrat = event.execution_strategy as Record<string, unknown> | undefined;
@@ -678,6 +701,33 @@ export function useMissionControl() {
           },
         };
         setIntentAnalysis(ia);
+
+        // Update the streaming intent_analysis block with full data
+        setBlocks((prev) => {
+          const idx = prev.findIndex(
+            (b) => b.type === "intent_analysis" && b.isStreaming,
+          );
+          if (idx >= 0) {
+            const updated = [...prev];
+            updated[idx] = {
+              ...updated[idx],
+              data: { analysis: ia },
+              isStreaming: false,
+            };
+            return updated;
+          }
+          // If no streaming block exists (e.g. replay), create a complete one
+          return [
+            ...prev,
+            {
+              id: crypto.randomUUID(),
+              type: "intent_analysis",
+              timestamp: now(),
+              data: { analysis: ia },
+              isStreaming: false,
+            },
+          ];
+        });
         break;
       }
 
@@ -955,6 +1005,16 @@ export function useMissionControl() {
               continue;
             }
 
+            // Ward tool — extract ward name for sidebar
+            if (toolName === "ward" || toolName === "set_ward" || toolName === "enter_ward") {
+              const args = meta?.args as Record<string, unknown> | undefined;
+              const wardName = (args?.name ?? args?.ward_name ?? args?.ward_id ?? "") as string;
+              if (wardName) {
+                setActiveWard({ name: wardName, content: "" });
+              }
+              continue;
+            }
+
             if (toolName === "memory" && log.message.includes("recall")) {
               loadedBlocks.push({
                 id: log.id,
@@ -987,11 +1047,30 @@ export function useMissionControl() {
               });
             }
           } else if (log.category === "tool_result") {
-            // Find matching tool block and add output
-            const lastTool = [...loadedBlocks].reverse().find(b => b.type === "tool" && !b.data.output);
-            if (lastTool) {
-              lastTool.data.output = log.message.slice(0, 500);
-              lastTool.data.isError = log.level === "error";
+            // Find matching tool/recall block and add output
+            const lastBlock = [...loadedBlocks].reverse().find(b => (b.type === "tool" || b.type === "recall") && !b.data.output);
+            if (lastBlock) {
+              if (lastBlock.type === "recall" && log.message) {
+                lastBlock.data.raw = log.message.slice(0, 2000);
+                // Extract recalled facts for the sidebar
+                try {
+                  const parsed = JSON.parse(log.message);
+                  const facts = (parsed.results ?? parsed.facts ?? []) as Array<Record<string, unknown>>;
+                  if (facts.length > 0) {
+                    setRecalledFacts(facts.map((f) => ({
+                      key: (f.key ?? "") as string,
+                      content: (f.content ?? f.text ?? "") as string,
+                      category: (f.category ?? "") as string,
+                      confidence: (f.confidence ?? f.score) as number | undefined,
+                    })));
+                  }
+                } catch {
+                  // Not JSON — just leave the raw text
+                }
+              } else {
+                lastBlock.data.output = log.message.slice(0, 500);
+                lastBlock.data.isError = log.level === "error";
+              }
             }
           } else if (log.category === "response" && log.message.length > 0) {
             loadedBlocks.push({
@@ -1014,7 +1093,7 @@ export function useMissionControl() {
           } else if (log.category === "intent" && log.metadata) {
             try {
               const meta = typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
-              setIntentAnalysis({
+              const ia: IntentAnalysis = {
                 primaryIntent: meta.primary_intent ?? "",
                 hiddenIntents: meta.hidden_intents ?? [],
                 recommendedSkills: meta.recommended_skills ?? [],
@@ -1030,6 +1109,19 @@ export function useMissionControl() {
                   graph: meta.execution_strategy?.graph,
                   explanation: meta.execution_strategy?.explanation ?? "",
                 },
+              };
+              setIntentAnalysis(ia);
+              // Populate ward from intent analysis if not already set
+              if (ia.wardRecommendation.wardName) {
+                setActiveWard((prev) => prev ?? { name: ia.wardRecommendation.wardName, content: ia.wardRecommendation.reason });
+              }
+              // Create a narrative block for the intent analysis
+              loadedBlocks.push({
+                id: log.id,
+                type: "intent_analysis",
+                timestamp: log.timestamp,
+                data: { analysis: ia },
+                isStreaming: false,
               });
             } catch {
               // Ignore malformed intent metadata

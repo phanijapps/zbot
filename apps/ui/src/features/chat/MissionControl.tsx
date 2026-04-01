@@ -56,7 +56,15 @@ export function MissionControl() {
       />
 
       <div className="mission-control__body">
-        <ExecutionNarrative blocks={state.blocks} status={state.status} />
+        <div className="mission-control__main">
+          <ExecutionNarrative blocks={state.blocks} status={state.status} />
+          <div className="mission-control__input">
+            <ChatInput
+              onSend={sendMessage}
+              disabled={isDisabled}
+            />
+          </div>
+        </div>
 
         <div className="mission-control__sidebar">
           <IntelligenceFeed
@@ -67,13 +75,6 @@ export function MissionControl() {
             intentAnalysis={state.intentAnalysis}
           />
         </div>
-      </div>
-
-      <div className="mission-control__input">
-        <ChatInput
-          onSend={sendMessage}
-          disabled={isDisabled}
-        />
       </div>
     </div>
   );

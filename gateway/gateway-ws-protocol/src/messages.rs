@@ -412,6 +412,14 @@ pub enum ServerMessage {
         seq: Option<u64>,
     },
 
+    /// Intent analysis started for a root session (shows "Analyzing..." in UI).
+    IntentAnalysisStarted {
+        session_id: String,
+        execution_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
+
     /// Intent analysis completed for a root session.
     IntentAnalysisComplete {
         session_id: String,
@@ -511,6 +519,7 @@ impl ServerMessage {
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
             Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
             | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
@@ -592,6 +601,9 @@ impl ServerMessage {
             }
             Self::SessionTitleChanged { session_id, title, .. } => {
                 Self::SessionTitleChanged { session_id, title, seq: Some(seq) }
+            }
+            Self::IntentAnalysisStarted { session_id, execution_id, seq: _ } => {
+                Self::IntentAnalysisStarted { session_id, execution_id, seq: Some(seq) }
             }
             Self::IntentAnalysisComplete { session_id, execution_id, primary_intent, hidden_intents, recommended_skills, recommended_agents, ward_recommendation, execution_strategy, .. } => {
                 Self::IntentAnalysisComplete { session_id, execution_id, primary_intent, hidden_intents, recommended_skills, recommended_agents, ward_recommendation, execution_strategy, seq: Some(seq) }

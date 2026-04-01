@@ -355,6 +355,13 @@ impl<D: DbProvider> LogService<D> {
         }
     }
 
+    /// Check whether a session already has an intent analysis log.
+    pub fn has_intent_log(&self, session_id: &str) -> bool {
+        self.repo
+            .has_category_log(session_id, "intent")
+            .unwrap_or(false)
+    }
+
     /// Delete a session and its logs.
     pub fn delete_session(&self, session_id: &str) -> Result<u64, String> {
         self.repo.delete_session(session_id)

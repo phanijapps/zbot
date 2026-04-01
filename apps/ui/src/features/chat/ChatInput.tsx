@@ -91,7 +91,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   };
 
   return (
-    <div>
+    <div style={{ width: "100%" }}>
       {/* Pending attachment chips */}
       {attachments.length > 0 && (
         <div className="chat-input__chips">
@@ -119,7 +119,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
           onKeyDown={handleKeyDown}
           placeholder="Type a message..."
           disabled={isDisabled}
-          rows={1}
+          rows={2}
         />
 
         {/* Actions positioned inside the field */}
@@ -130,7 +130,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             onClick={() => fileInputRef.current?.click()}
             disabled={isDisabled}
           >
-            <Paperclip style={{ width: 16, height: 16 }} />
+            <Paperclip style={{ width: 18, height: 18 }} />
           </button>
           <input
             ref={fileInputRef}
@@ -149,7 +149,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             onClick={() => imageInputRef.current?.click()}
             disabled={isDisabled}
           >
-            <ImagePlus style={{ width: 16, height: 16 }} />
+            <ImagePlus style={{ width: 18, height: 18 }} />
           </button>
           <input
             ref={imageInputRef}
@@ -169,7 +169,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
             disabled={!canSend || isDisabled}
             title="Send message"
           >
-            <ArrowUp style={{ width: 16, height: 16 }} />
+            <ArrowUp style={{ width: 18, height: 18 }} />
           </button>
         </div>
       </div>

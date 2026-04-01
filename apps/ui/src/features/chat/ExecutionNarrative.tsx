@@ -9,8 +9,7 @@ import { UserMessage } from "./UserMessage";
 import { AgentResponse } from "./AgentResponse";
 import { RecallBlock } from "./RecallBlock";
 import { ToolExecutionBlock } from "./ToolExecutionBlock";
-import { DelegationBlock } from "./DelegationBlock";
-import { PlanBlock } from "./PlanBlock";
+import { IntentAnalysisBlock } from "./IntentAnalysisBlock";
 
 // ============================================================================
 // Types
@@ -77,78 +76,94 @@ export function ExecutionNarrative({ blocks, status }: ExecutionNarrativeProps) 
         </div>
       )}
 
-      {blocks.map((block) => {
-        switch (block.type) {
-          case "user":
-            return (
-              <UserMessage
-                key={block.id}
-                content={(block.data.content ?? "") as string}
-                timestamp={(block.data.timestamp ?? block.timestamp) as string}
-                attachments={block.data.attachments as string[] | undefined}
-              />
-            );
+      {(() => {
+        // Collect tool block indices to show only the last 2
+        const toolIndices: number[] = [];
+        blocks.forEach((b, i) => { if (b.type === "tool") toolIndices.push(i); });
+        const hiddenToolCount = Math.max(0, toolIndices.length - 2);
+        const hiddenToolSet = new Set(toolIndices.slice(0, hiddenToolCount));
+        // Track whether the collapsed summary has been rendered
+        let collapsedSummaryRendered = false;
 
-          case "recall":
-            return (
-              <RecallBlock
-                key={block.id}
-                raw={(block.data.raw ?? "") as string}
-              />
-            );
-
-          case "tool":
-            return (
-              <ToolExecutionBlock
-                key={block.id}
-                toolName={(block.data.toolName ?? "") as string}
-                input={(block.data.input ?? "") as string}
-                output={block.data.output as string | undefined}
-                durationMs={block.data.durationMs as number | undefined}
-                isError={block.data.isError as boolean | undefined}
-                isExpanded={expandedTools.has(block.id)}
-                onToggle={() => toggleToolExpand(block.id)}
-              />
-            );
-
-          case "delegation":
-            return (
-              <DelegationBlock
-                key={block.id}
-                agentId={(block.data.agentId ?? "") as string}
-                task={(block.data.task ?? "") as string}
-                status={(block.data.status ?? "active") as "active" | "completed" | "error"}
-                toolCallCount={block.data.toolCallCount as number | undefined}
-                tokenCount={block.data.tokenCount as number | undefined}
-                durationMs={block.data.durationMs as number | undefined}
-                result={block.data.result as string | undefined}
-              />
-            );
-
-          case "plan":
-            return (
-              <PlanBlock
-                key={block.id}
-                steps={(block.data.steps ?? []) as Array<{ text: string; status: "done" | "active" | "pending" }>}
-              />
-            );
-
-          case "response":
-            return (
-              <AgentResponse
-                key={block.id}
-                content={(block.data.content ?? "") as string}
-                timestamp={(block.data.timestamp ?? block.timestamp) as string}
-              />
-            );
-
-          default:
+        return blocks.map((block, idx) => {
+          // Collapse older tool calls into a single summary line
+          if (block.type === "tool" && hiddenToolSet.has(idx)) {
+            if (!collapsedSummaryRendered) {
+              collapsedSummaryRendered = true;
+              return (
+                <div key="tool-collapsed" className="tool-collapsed">
+                  <span className="tool-collapsed__icon">&#9881;</span>
+                  <span>{hiddenToolCount} tool call{hiddenToolCount > 1 ? "s" : ""} completed</span>
+                </div>
+              );
+            }
             return null;
-        }
-      })}
+          }
+
+          switch (block.type) {
+            case "user":
+              return (
+                <UserMessage
+                  key={block.id}
+                  content={(block.data.content ?? "") as string}
+                  timestamp={(block.data.timestamp ?? block.timestamp) as string}
+                  attachments={block.data.attachments as string[] | undefined}
+                />
+              );
+
+            case "recall":
+              return (
+                <RecallBlock
+                  key={block.id}
+                  raw={(block.data.raw ?? "") as string}
+                />
+              );
+
+            case "tool":
+              return (
+                <ToolExecutionBlock
+                  key={block.id}
+                  toolName={(block.data.toolName ?? "") as string}
+                  input={(block.data.input ?? "") as string}
+                  output={block.data.output as string | undefined}
+                  durationMs={block.data.durationMs as number | undefined}
+                  isError={block.data.isError as boolean | undefined}
+                  isExpanded={expandedTools.has(block.id)}
+                  onToggle={() => toggleToolExpand(block.id)}
+                />
+              );
+
+            // Delegation and plan blocks render only in the sidebar
+            case "delegation":
+            case "plan":
+              return null;
+
+            case "response":
+              return (
+                <AgentResponse
+                  key={block.id}
+                  content={(block.data.content ?? "") as string}
+                  timestamp={(block.data.timestamp ?? block.timestamp) as string}
+                />
+              );
+
+            case "intent_analysis":
+              return (
+                <IntentAnalysisBlock
+                  key={block.id}
+                  analysis={block.data.analysis as import("./mission-hooks").IntentAnalysis | null ?? null}
+                  isStreaming={block.isStreaming}
+                />
+              );
+
+            default:
+              return null;
+          }
+        });
+      })()}
 
       {/* Thinking indicator — shows when running and last block is user or no response yet */}
-      {status === "running" && blocks.length > 0 && !blocks.some(b => b.type === 'response' && b.isStreaming) && (
+      {status === "running" && blocks.length > 0 && !blocks.some(b => (b.type === 'response' || b.type === 'intent_analysis') && b.isStreaming) && (
         (() => {
           const lastBlock = blocks[blocks.length - 1];
           const isWaiting = lastBlock?.type === 'user' ||

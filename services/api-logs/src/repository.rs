@@ -271,6 +271,16 @@ impl<D: DbProvider> LogsRepository<D> {
         })
     }
 
+    /// Check whether a session has at least one log with the given category.
+    pub fn has_category_log(&self, session_id: &str, category: &str) -> Result<bool, String> {
+        self.db.with_connection(|conn| {
+            let exists: bool = conn
+                .prepare("SELECT 1 FROM execution_logs WHERE session_id = ? AND category = ? LIMIT 1")?
+                .exists(params![session_id, category])?;
+            Ok(exists)
+        })
+    }
+
     /// Get child sessions for a parent session.
     pub fn get_child_sessions(&self, parent_session_id: &str) -> Result<Vec<String>, String> {
         self.db.with_connection(|conn| {

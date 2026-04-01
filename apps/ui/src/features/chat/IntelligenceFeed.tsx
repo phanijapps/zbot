@@ -141,74 +141,101 @@ export function IntelligenceFeed({
       )}
 
       {/* Active Ward */}
-      <div className="intel-section">
-        <div className="intel-section__title">Active Ward</div>
-        {ward ? (
-          <div>
-            <div className="intel-ward__name">{ward.name}</div>
+      <details className="intel-section" open>
+        <summary className="intel-section__header">
+          <span className="intel-section__icon">&#x1f3ef;</span>
+          Ward
+          {ward && <span className="intel-badge">{ward.name}</span>}
+        </summary>
+        <div className="intel-section__body">
+          {ward ? (
             <div className="intel-ward__content">
               {ward.content.length > 200 ? ward.content.slice(0, 200) + "..." : ward.content}
             </div>
-          </div>
-        ) : (
-          <div className="intel-empty">No active ward</div>
-        )}
-      </div>
+          ) : (
+            <div className="intel-empty">No active ward</div>
+          )}
+        </div>
+      </details>
 
       {/* Recalled Facts */}
-      <div className="intel-section">
-        <div className="intel-section__title">Recalled Facts</div>
-        {recalledFacts.length === 0 ? (
-          <div className="intel-empty">{"\u2014"}</div>
-        ) : (
-          recalledFacts.map((fact, i) => (
-            <div
-              key={`${fact.key}-${i}`}
-              className={`intel-fact${fact.category === "correction" ? " intel-fact--correction" : ""}`}
-            >
-              {fact.content || fact.key}
-            </div>
-          ))
-        )}
-      </div>
+      <details className="intel-section">
+        <summary className="intel-section__header">
+          <span className="intel-section__icon">&#x1f4a1;</span>
+          Recalled Facts
+          {recalledFacts.length > 0 && (
+            <span className="intel-badge">{recalledFacts.length}</span>
+          )}
+        </summary>
+        <div className="intel-section__body">
+          {recalledFacts.length === 0 ? (
+            <div className="intel-empty">{"\u2014"}</div>
+          ) : (
+            recalledFacts.map((fact, i) => (
+              <div
+                key={`${fact.key}-${i}`}
+                className={`intel-fact${fact.category === "correction" ? " intel-fact--correction" : ""}`}
+              >
+                {fact.content || fact.key}
+              </div>
+            ))
+          )}
+        </div>
+      </details>
 
       {/* Subagents */}
-      <div className="intel-section">
-        <div className="intel-section__title">Subagents</div>
-        {subagents.length === 0 ? (
-          <div className="intel-empty">{"\u2014"}</div>
-        ) : (
-          subagents.map((sa, i) => (
-            <div key={`${sa.agentId}-${i}`} className="intel-subagent">
-              <span className="intel-subagent__name">
-                <span
-                  className="intel-subagent__dot"
-                  style={{ background: SUBAGENT_DOT_COLOR[sa.status] || "var(--muted-foreground)" }}
-                />
-                {sa.agentId}
-              </span>
-              <span className="intel-subagent__task">
-                {sa.task}
-              </span>
-            </div>
-          ))
-        )}
-      </div>
+      <details className="intel-section" open={subagents.some((s) => s.status === "active")}>
+        <summary className="intel-section__header">
+          <span className="intel-section__icon">&#x1f916;</span>
+          Subagents
+          {subagents.length > 0 && (
+            <span className="intel-badge">{subagents.filter((s) => s.status === "active").length} active</span>
+          )}
+        </summary>
+        <div className="intel-section__body">
+          {subagents.length === 0 ? (
+            <div className="intel-empty">{"\u2014"}</div>
+          ) : (
+            subagents.map((sa, i) => (
+              <div key={`${sa.agentId}-${i}`} className="intel-subagent">
+                <span className="intel-subagent__name">
+                  <span
+                    className="intel-subagent__dot"
+                    style={{ background: SUBAGENT_DOT_COLOR[sa.status] || "var(--muted-foreground)" }}
+                  />
+                  {sa.agentId}
+                </span>
+                <span className="intel-subagent__task">{sa.task}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </details>
 
       {/* Plan */}
-      <div className="intel-section">
-        <div className="intel-section__title">Plan</div>
-        {plan.length === 0 ? (
-          <div className="intel-empty">{"\u2014"}</div>
-        ) : (
-          plan.map((step, i) => (
-            <div key={i} className={`plan-block__step plan-block__step--${step.status}`}>
-              <span>{STEP_ICON[step.status] || "\u25CB"}</span>
-              <span>{step.text}</span>
-            </div>
-          ))
-        )}
-      </div>
+      <details className="intel-section" open>
+        <summary className="intel-section__header">
+          <span className="intel-section__icon">&#x1f4cb;</span>
+          Execution Plan
+          {plan.length > 0 && (
+            <span className="intel-plan__progress">
+              {plan.filter((s) => s.status === "done").length}/{plan.length}
+            </span>
+          )}
+        </summary>
+        <div className="intel-section__body">
+          {plan.length === 0 ? (
+            <div className="intel-empty">{"\u2014"}</div>
+          ) : (
+            plan.map((step, i) => (
+              <div key={i} className={`intel-plan__step intel-plan__step--${step.status}`}>
+                <span className="intel-plan__icon">{STEP_ICON[step.status] || "\u25CB"}</span>
+                <span className="intel-plan__text">{step.text}</span>
+              </div>
+            ))
+          )}
+        </div>
+      </details>
     </div>
   );
 }
