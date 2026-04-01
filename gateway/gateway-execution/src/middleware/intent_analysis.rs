@@ -87,78 +87,35 @@ pub struct EdgeCondition {
 // LLM prompt
 // ---------------------------------------------------------------------------
 
-const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer for an AI agent platform.
-
-Given a user request and the platform's available resources, your job is to:
-1. Identify the primary intent behind the request
-2. Discover hidden/implicit intents the user hasn't stated but would expect
-3. Recommend which skills and agents would help
-4. Recommend the right ward (project workspace) — reuse existing or create new
-5. Design an execution graph when orchestration is needed
-
-## Ward Philosophy
-Wards are reusable project workspaces organized by DOMAIN, not by task. Think of them as permanent libraries:
-- "financial-analysis" for ALL stock/options/market work
-- "math-tutor" for ALL math work
-- "research-hub" for general research projects
-If an existing ward matches the domain, REUSE it. Only create new for genuinely new domains.
+const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. Given a user request and available resources, determine intent, ward, and execution approach.
 
 ## Rules
-- Hidden intents must be actionable instructions, not labels
-- Every non-trivial execution must end with a quality verification node
-- Use conditional edges when outcomes determine next steps
-- CRITICAL: Skills and agents are DIFFERENT things. Skills are loaded with load_skill(). Agents are delegated to with delegate_to_agent().
-- In "recommended_skills": use skill names from the "Relevant Skills" list. These are SKILLS, not agents.
-- In "recommended_agents" and graph node "agent" fields: use ONLY agent names from the "Relevant Agents" list or "root". NEVER put a skill name (like "coding" or "ml-pipeline-builder") as an agent. Any invalid agent name will crash.
-- SDLC Pattern (use when the task involves writing code that produces data, analysis, or reports):
-  Node sequence: specs → coding → code_review → domain_validation → output
-  - specs (agent: root, skills: [coding]): Write detailed implementation specs in specs/<domain>/*.md
-  - coding (agent: code-agent, skills: [coding, ...domain skills]): Build core/ modules + task scripts per spec. Test each module.
-  - code_review (agent: code-agent, skills: [code-review]): Review code against specs. Run tests. Report RESULT: APPROVED or RESULT: DEFECTS.
-  - domain_validation (agent: data-analyst or research-agent, skills: [domain-validation, ...domain skills]): Run code, evaluate output quality. Report RESULT: APPROVED or RESULT: DEFECTS.
-  - output (agent: writing-agent or root, skills: [premium-report or relevant]): Produce final deliverable.
-  Use conditional edges for feedback loops:
-    code_review → coding (when: "DEFECTS found — code needs fixes")
-    code_review → domain_validation (when: "APPROVED — code is clean")
-    domain_validation → coding (when: "DEFECTS found — output quality issues")
-    domain_validation → output (when: "APPROVED — data quality verified")
-- If the request is simple (greeting, quick question), use approach "simple" with no graph
-- Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
-- Any graph node that creates or modifies files MUST include "coding" in its skills list.
-- When approach is "graph" and the task involves writing code:
-  - The FIRST node must be a spec-writing node (id: "specs", agent: "root", skills: ["coding"])
-  - This node reads AGENTS.md, existing core modules, and writes detailed specs in specs/<domain>/*.md
-  - Subsequent nodes implement against those specs
-  - Do NOT combine spec writing with implementation in the same node
+- Hidden intents: actionable instructions the user didn't state but expects. Not labels.
+- Skills and agents are DIFFERENT. Skills = load_skill(). Agents = delegate_to_agent(). Never mix them.
+- recommended_skills: from the "Relevant Skills" list only.
+- recommended_agents: from the "Relevant Agents" list or "root" only. Never put skill names as agents.
+- Wards are domain-level workspaces (e.g., "financial-analysis"), not task-specific. Reuse existing wards.
+- approach "simple" for greetings, quick questions, single-step tasks.
+- approach "graph" when the task needs multiple agents, code, or multi-step orchestration.
 
 ## Output Format
-Respond with ONLY a JSON object (no markdown fences, no explanation) matching this schema:
+Respond with ONLY a JSON object (no markdown fences):
 {
-  "primary_intent": "string -- the core intent category",
-  "hidden_intents": ["string -- actionable instruction for each hidden intent"],
-  "recommended_skills": ["skill-name from the list"],
-  "recommended_agents": ["agent-name from the list"],
+  "primary_intent": "string",
+  "hidden_intents": ["actionable instruction for each hidden intent"],
+  "recommended_skills": ["skill-name"],
+  "recommended_agents": ["agent-name"],
   "ward_recommendation": {
     "action": "use_existing | create_new",
-    "ward_name": "domain-level name like financial-analysis, math-tutor, research-hub",
-    "subdirectory": "task-specific subdir like stocks/spy, trinomials -- null for simple tasks",
-    "reason": "why this ward"
+    "ward_name": "domain-level name",
+    "subdirectory": "task-specific subdir or null",
+    "reason": "why"
   },
   "execution_strategy": {
     "approach": "simple | graph",
-    "graph": {
-      "nodes": [{"id": "A", "task": "description", "agent": "agent-name or root", "skills": ["skill-name"]}],
-      "edges": [
-        {"from": "A", "to": "B"},
-        {"from": "B", "conditions": [{"when": "natural language condition", "to": "C or END"}]}
-      ]
-    },
-    "explanation": "string -- why this orchestration shape, which nodes run in parallel"
+    "explanation": "one sentence — why this approach"
   }
-}
-
-Only include the "graph" field when approach is "graph".
-When approach is "simple", omit the graph entirely."#;
+}"#;
 
 // ---------------------------------------------------------------------------
 // format_intent_injection — appended to agent instructions so the agent
@@ -213,64 +170,26 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
         out.push_str(&format!("{}\n", es.explanation));
     }
 
-    // Execution graph — full plan for the root agent to follow
-    if let Some(ref graph) = es.graph {
-        out.push_str("\n## Execution Plan\n\n");
-        out.push_str("Follow this plan by delegating to the specified agents. \
-            Skills listed per node are **primary, not exclusive** — subagents can discover \
-            and load any skill they need via `load_skill`.\n\n");
-
-        // Nodes
-        out.push_str("### Nodes\n\n");
-        for node in &graph.nodes {
-            out.push_str(&format!(
-                "**{}** → `{}` (agent: `{}`)\n",
-                node.id, node.task, node.agent
-            ));
-            if !node.skills.is_empty() {
-                out.push_str(&format!(
-                    "  Primary skills: {}\n",
-                    node.skills.join(", ")
-                ));
-            }
-        }
-
-        // Edges
-        out.push_str("\n### Flow\n\n");
-        for edge in &graph.edges {
-            match edge {
-                GraphEdge::Direct { from, to } => {
-                    out.push_str(&format!("{} → {}\n", from, to));
-                }
-                GraphEdge::Conditional { from, conditions } => {
-                    for cond in conditions {
-                        out.push_str(&format!(
-                            "{} → {} (when: {})\n",
-                            from, cond.to, cond.when
-                        ));
-                    }
-                }
-            }
-        }
-
-        if let Some(max) = graph.max_cycles {
-            out.push_str(&format!("\nMax cycles: {}\n", max));
-        }
-
-        // Delegation guidance
+    // SDLC pattern for graph approach — root designs and executes the graph
+    if es.approach == "graph" {
         out.push_str(r#"
+## Execution Plan — SDLC Pattern
+
+You are the orchestrator. Design and execute this pipeline using delegate_to_agent:
+
+1. **Specs** (YOU — do not delegate): Write one spec per module in specs/<subdirectory>/. Under 3KB each.
+2. **Coding** (delegate to code-agent): Build core/ modules + task scripts per specs.
+3. **Code Review** (delegate to code-agent with skills: [code-review]): Review code against specs. Expects RESULT: APPROVED or RESULT: DEFECTS.
+4. **Domain Validation** (delegate to data-analyst/research-agent with skills: [domain-validation]): Run code, validate output quality. Expects RESULT: APPROVED or RESULT: DEFECTS.
+5. **Output** (delegate or do yourself): Produce final deliverable.
+
+Feedback loops: if review/validation returns DEFECTS, re-delegate to coding with the defect list. Repeat until APPROVED.
+
 ### Delegation Rules
-
-**The specs node is YOUR job.** Do NOT delegate spec writing. You have the full context from intent analysis — write the specs yourself using apply_patch, then delegate the remaining nodes.
-
-When delegating other nodes to subagents:
-1. The subagent already has the ward set as its working directory — do NOT tell it to call ward(use). All paths are relative to the ward root.
-2. The subagent already has AGENTS.md and spec file paths pre-loaded — do NOT tell it to read them. Just reference spec paths (e.g., "implement per specs/spy-technical/01-data-collection.md").
-3. Pass skills in the `skills` parameter so they are pre-loaded for the subagent.
-4. Keep delegation tasks under 4000 chars — be concise, don't inline spec content.
-5. After each node completes via callback, verify output before proceeding to the next node.
-6. On failure: fix and retry the node, don't skip to the next one.
-7. Do NOT poll for subagent completion with shell commands. The system sends you a callback automatically. Just stop and wait.
+- Subagent already has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use) or cat files.
+- Pass skills in the `skills` parameter.
+- Keep tasks under 4000 chars — reference spec paths, don't inline content.
+- Do NOT poll with shell. System sends callback automatically. Stop and wait.
 "#);
     }
 
