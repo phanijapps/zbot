@@ -826,6 +826,47 @@ fn build_crash_report(
         report.push_str("\nPARTIAL WORK COMPLETED:\nNo plan was created\n");
     }
 
+    // Check ralph.py tasks.json status if available in the ward
+    if let Ok(Some(session)) = state_service.get_session(parent_session_id) {
+        if let Some(ward_id) = &session.ward_id {
+            let ward_dir = paths.ward_dir(ward_id);
+            let ralph = ward_dir.join("ralph.py");
+            if ralph.exists() {
+                // Find any tasks.json files in specs/
+                let specs_dir = ward_dir.join("specs");
+                if specs_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&specs_dir) {
+                        for entry in entries.flatten() {
+                            let tasks_json = entry.path().join("tasks.json");
+                            if tasks_json.exists() {
+                                // Run ralph.py status to get task completion state
+                                if let Ok(output) = std::process::Command::new("python3")
+                                    .arg(&ralph)
+                                    .arg("status")
+                                    .arg(&tasks_json)
+                                    .current_dir(&ward_dir)
+                                    .output()
+                                {
+                                    let status = String::from_utf8_lossy(&output.stdout);
+                                    if !status.trim().is_empty() {
+                                        let rel_path = tasks_json.strip_prefix(&ward_dir)
+                                            .map(|p| p.display().to_string())
+                                            .unwrap_or_else(|_| tasks_json.display().to_string());
+                                        report.push_str(&format!(
+                                            "\nTASK RUNNER STATUS ({}):\n  {}\n\
+                                             \nTO RESUME: Re-delegate with \"Continue processing {}\" — ralph.py tracks completion state.\n",
+                                            rel_path, status.trim(), rel_path
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // List files in the ward (if one is active for this session)
     if let Ok(Some(session)) = state_service.get_session(parent_session_id) {
         if let Some(ward_id) = &session.ward_id {
