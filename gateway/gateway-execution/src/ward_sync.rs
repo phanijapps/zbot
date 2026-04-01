@@ -3,7 +3,7 @@
 // Generate a human-readable ward knowledge file from distilled facts.
 // ============================================================================
 
-//! Produces `{ward_path}/memory/ward.md` — a portable, human-readable summary
+//! Produces `{ward_path}/memory-bank/ward.md` — a portable, human-readable summary
 //! of distilled knowledge scoped to a ward. Auto-generated after each
 //! distillation; not a source of truth (the SQLite store is). If deleted,
 //! it is regenerated on the next distillation cycle.
@@ -14,7 +14,7 @@ use gateway_database::MemoryRepository;
 
 /// Generate a human-readable ward knowledge file from distilled facts.
 ///
-/// Written to `{ward_path}/memory/ward.md`. Auto-generated, not a source of truth.
+/// Written to `{ward_path}/memory-bank/ward.md`. Auto-generated, not a source of truth.
 /// If deleted, regenerated on next distillation.
 pub fn generate_ward_knowledge_file(
     ward_path: &Path,
@@ -95,7 +95,7 @@ pub fn generate_ward_knowledge_file(
     }
 
     // 6. Write file
-    let memory_dir = ward_path.join("memory");
+    let memory_dir = ward_path.join("memory-bank");
     if let Err(e) = std::fs::create_dir_all(&memory_dir) {
         return Err(format!("Failed to create memory dir: {}", e));
     }
@@ -121,7 +121,7 @@ mod tests {
 
         // Without a real MemoryRepository we can't call generate_ward_knowledge_file,
         // but we verify the module compiles and the directory logic works.
-        let memory_dir = ward_path.join("memory");
+        let memory_dir = ward_path.join("memory-bank");
         std::fs::create_dir_all(&memory_dir).unwrap();
         let file_path = memory_dir.join("ward.md");
         std::fs::write(&file_path, "# test").unwrap();

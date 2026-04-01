@@ -2088,12 +2088,26 @@ pub fn auto_update_agents_md_with_lang_configs(
     sections.push(format!("\n## Purpose\n{}\n", purpose));
 
     // ── Ward Documentation ──
-    let memory_dir_exists = ward_dir.join("memory").exists();
-    if memory_dir_exists {
+    let memory_bank_exists = ward_dir.join("memory-bank").exists();
+    if memory_bank_exists {
         sections.push("## Ward Documentation\n".to_string());
-        sections.push("- [memory/ward.md](memory/ward.md) — Domain history and session log\n".to_string());
-        sections.push("- [memory/structure.md](memory/structure.md) — Code organization conventions\n".to_string());
-        sections.push("- [memory/techstack.md](memory/techstack.md) — Runtime environment and packages\n\n".to_string());
+        sections.push("- [memory-bank/ward.md](memory-bank/ward.md) — Domain knowledge and session learnings\n".to_string());
+        // List any other docs in memory-bank/
+        if let Ok(entries) = std::fs::read_dir(ward_dir.join("memory-bank")) {
+            let mut docs: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    e.path().is_file() && name.ends_with(".md") && name != "ward.md"
+                })
+                .collect();
+            docs.sort_by_key(|e| e.file_name());
+            for entry in &docs {
+                let name = entry.file_name().to_string_lossy().to_string();
+                sections.push(format!("- [memory-bank/{}](memory-bank/{}) \n", name, name));
+            }
+        }
+        sections.push("\n".to_string());
     }
 
     // ── Core Modules with function signatures ──
