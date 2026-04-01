@@ -129,6 +129,11 @@ impl VaultPaths {
         self.vault_dir.join("wards").join(ward_id)
     }
 
+    /// Path to `config/wards/` — language config directory for ward indexing
+    pub fn ward_lang_configs_dir(&self) -> PathBuf {
+        self.vault_dir.join("config").join("wards")
+    }
+
     /// Get the base vault directory
     pub fn vault_dir(&self) -> &PathBuf {
         &self.vault_dir
