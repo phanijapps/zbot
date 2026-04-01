@@ -2364,10 +2364,25 @@ pub fn auto_update_agents_md_with_lang_configs(
         })
         .unwrap_or_else(|| "tasks/{name}/".to_string());
 
+    // ── Task Runner ──
+    let ralph_exists = ward_dir.join("ralph.py").exists();
+    if ralph_exists {
+        sections.push("## Task Runner (ralph.py)\n".to_string());
+        sections.push("Use `ralph.py` to process `tasks.json` files in specs/:\n".to_string());
+        sections.push("```\n".to_string());
+        sections.push("python3 ralph.py next <tasks.json>       # Get next pending task\n".to_string());
+        sections.push("python3 ralph.py complete <tasks.json> N  # Mark task N complete\n".to_string());
+        sections.push("python3 ralph.py fail <tasks.json> N msg  # Mark task N failed\n".to_string());
+        sections.push("python3 ralph.py status <tasks.json>      # Show progress summary\n".to_string());
+        sections.push("```\n\n".to_string());
+    }
+
+    // ── How to Code ──
     sections.push("## How to Code\n".to_string());
-    sections.push("1. Write code files with apply_patch, run with the appropriate command for the language\n".to_string());
-    sections.push("2. Import/source from core/ for shared modules\n".to_string());
-    sections.push("3. Data files go in task subdirectories, output files in output/\n".to_string());
+    sections.push("1. Reusable functions → core/. Task scripts → task subdirectories.\n".to_string());
+    sections.push("2. Import from core/ — never duplicate existing modules.\n".to_string());
+    sections.push("3. Use apply_patch for all file operations. Max 100 lines per file.\n".to_string());
+    sections.push("4. If tasks.json exists, use ralph.py to process tasks in order.\n".to_string());
 
     // ── Timestamp ──
     sections.push(format!(
