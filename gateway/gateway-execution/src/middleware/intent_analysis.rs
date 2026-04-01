@@ -97,6 +97,7 @@ const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. Given a user
 - Wards are domain-level workspaces (e.g., "financial-analysis"), not task-specific. Reuse existing wards.
 - approach "simple" for greetings, quick questions, single-step tasks.
 - approach "graph" when the task needs multiple agents, code, or multi-step orchestration.
+- When approach is "graph", ALWAYS include "coding" in recommended_skills — it provides the ward structure and task runner.
 
 ## Output Format
 Respond with ONLY a JSON object (no markdown fences):
