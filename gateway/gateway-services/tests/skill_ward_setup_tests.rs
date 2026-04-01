@@ -1,13 +1,13 @@
 //! Tests for WardSetup frontmatter parsing in skills.
 
-use gateway_services::{SkillFrontmatterPublic, WardAgentsMdConfig, WardSetup};
+use gateway_services::{SkillFrontmatter, WardAgentsMdConfig, WardSetup};
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn parse_public_frontmatter(yaml: &str) -> SkillFrontmatterPublic {
-    serde_yaml::from_str(yaml).expect("YAML should parse into SkillFrontmatterPublic")
+fn parse_public_frontmatter(yaml: &str) -> SkillFrontmatter {
+    serde_yaml::from_str(yaml).expect("YAML should parse into SkillFrontmatter")
 }
 
 // ---------------------------------------------------------------------------

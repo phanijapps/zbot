@@ -36,5 +36,5 @@ pub use plugin_service::PluginService;
 pub use providers::ProviderService;
 pub use recall_config::RecallConfig;
 pub use settings::{AppSettings, SettingsService};
-pub use skills::{SkillFrontmatterPublic, SkillService, WardAgentsMdConfig, WardSetup};
+pub use skills::{SkillFrontmatter, SkillService, WardAgentsMdConfig, WardSetup};
 pub use watcher::{FileWatcher, WatchConfig};

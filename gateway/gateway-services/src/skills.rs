@@ -43,22 +43,9 @@ pub struct WardAgentsMdConfig {
     pub conventions: Vec<String>,
 }
 
-/// Skill frontmatter stored in SKILL.md (internal)
+/// Skill frontmatter stored in SKILL.md.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SkillFrontmatter {
-    name: String,
-    #[serde(rename = "displayName", default)]
-    display_name: Option<String>,
-    description: String,
-    #[serde(default)]
-    category: Option<String>,
-    #[serde(default)]
-    ward_setup: Option<WardSetup>,
-}
-
-/// Public version of SkillFrontmatter for external consumers.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SkillFrontmatterPublic {
+pub struct SkillFrontmatter {
     pub name: String,
     #[serde(rename = "displayName", default)]
     pub display_name: Option<String>,
