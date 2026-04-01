@@ -277,6 +277,21 @@ impl SkillService {
     }
 
     fn write_skill_md(&self, skill_dir: &PathBuf, skill: &Skill) -> Result<(), String> {
+        // Preserve existing ward_setup from the current SKILL.md, if any.
+        // The Skill struct does not carry ward_setup, so a naive write would silently
+        // strip it.  Read the existing file and extract the field before overwriting.
+        let existing_ward_setup = {
+            let path = skill_dir.join("SKILL.md");
+            if path.exists() {
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|content| self.parse_frontmatter(&content).ok())
+                    .and_then(|(fm, _)| fm.ward_setup)
+            } else {
+                None
+            }
+        };
+
         let frontmatter = SkillFrontmatter {
             name: skill.name.clone(),
             display_name: if skill.display_name.is_empty() {
@@ -290,9 +305,7 @@ impl SkillService {
             } else {
                 Some(skill.category.clone())
             },
-            // ward_setup is not written back through the Skill API (it's managed in SKILL.md
-            // directly); preserve as None when writing from Skill struct.
-            ward_setup: None,
+            ward_setup: existing_ward_setup,
         };
 
         let content = format!(
@@ -338,5 +351,74 @@ impl SkillService {
             })
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_service(dir: &TempDir) -> SkillService {
+        SkillService::new(dir.path().to_path_buf())
+    }
+
+    /// Writing a skill back (simulating an update) must not strip ward_setup.
+    #[tokio::test]
+    async fn test_write_skill_preserves_ward_setup() {
+        let tmp = TempDir::new().expect("tempdir");
+        let service = make_service(&tmp);
+
+        // Create skill directory and an initial SKILL.md that contains ward_setup.
+        let skill_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+
+        let initial_md = r#"---
+name: my-skill
+description: A test skill
+ward_setup:
+  directories:
+    - src
+  language_skills:
+    - rust
+---
+
+Do something useful.
+"#;
+        fs::write(skill_dir.join("SKILL.md"), initial_md).expect("write initial SKILL.md");
+
+        // Build a Skill struct (no ward_setup field — mirrors what the API provides).
+        let skill = Skill {
+            id: "my-skill".to_string(),
+            name: "my-skill".to_string(),
+            display_name: "My Skill".to_string(),
+            description: "A test skill".to_string(),
+            category: "general".to_string(),
+            instructions: "Do something useful.".to_string(),
+            created_at: None,
+        };
+
+        // Simulate an update write.
+        service
+            .write_skill_md(&skill_dir, &skill)
+            .expect("write_skill_md");
+
+        // Read back and verify ward_setup survived.
+        let written = fs::read_to_string(skill_dir.join("SKILL.md")).expect("read back");
+        let (fm, _body) = service
+            .parse_frontmatter(&written)
+            .expect("parse written frontmatter");
+
+        let ward_setup = fm.ward_setup.expect("ward_setup must be preserved");
+        assert!(
+            ward_setup.directories.contains(&"src".to_string()),
+            "directories must be preserved; got {:?}",
+            ward_setup.directories
+        );
+        assert!(
+            ward_setup.language_skills.contains(&"rust".to_string()),
+            "language_skills must be preserved; got {:?}",
+            ward_setup.language_skills
+        );
     }
 }
