@@ -608,8 +608,8 @@ impl ExecutionRunner {
         }
 
         // Create executor (restore ward_id from existing session if available)
-        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message), &execution_id).await {
-            Ok(e) => e,
+        let (executor, recommended_skills) = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message), &execution_id).await {
+            Ok(result) => result,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
                     .await;
@@ -661,6 +661,7 @@ impl ExecutionRunner {
             session_id.clone(),
             execution_id,
             history,
+            recommended_skills,
         );
 
         Ok((handle, session_id))
@@ -676,6 +677,7 @@ impl ExecutionRunner {
         session_id: String,
         execution_id: String,
         history: Vec<ChatMessage>,
+        recommended_skills: Vec<String>,
     ) {
         let event_bus = self.event_bus.clone();
         let agent_id = config.agent_id.clone();
@@ -693,6 +695,7 @@ impl ExecutionRunner {
         let paths = self.paths.clone();
         let delegation_registry = self.delegation_registry.clone();
         let handles = self.handles.clone();
+        let skill_service = self.skill_service.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -879,13 +882,23 @@ impl ExecutionRunner {
                     )
                     .await;
 
-                    // Auto-update ward AGENTS.md after root execution completes
+                    // Scaffold ward structure from skill configs (idempotent — skips existing)
                     let session_ward = state_service
                         .get_session(&session_id)
                         .ok()
                         .flatten()
                         .and_then(|s| s.ward_id);
                     if let Some(ref ward_id) = session_ward {
+                        if !recommended_skills.is_empty() {
+                            scaffold_ward_from_skills(
+                                paths.vault_dir(),
+                                &skill_service,
+                                ward_id,
+                                &recommended_skills,
+                            ).await;
+                        }
+
+                        // Auto-update ward AGENTS.md after root execution completes
                         auto_update_agents_md(paths.vault_dir(), ward_id);
                     }
 
@@ -1128,6 +1141,9 @@ impl ExecutionRunner {
     }
 
     /// Create an executor for the agent using the ExecutorBuilder.
+    ///
+    /// Returns the executor and any recommended skill IDs from intent analysis
+    /// (empty when analysis is skipped or fails).
     async fn create_executor(
         &self,
         agent: &gateway_services::agents::Agent,
@@ -1138,7 +1154,7 @@ impl ExecutionRunner {
         is_root: bool,
         user_message: Option<&str>,
         execution_id: &str,
-    ) -> Result<AgentExecutor, String> {
+    ) -> Result<(AgentExecutor, Vec<String>), String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
         let available_skills = collect_skills_summary(&self.skill_service).await;
@@ -1205,6 +1221,7 @@ impl ExecutionRunner {
         // Note: execution_logs stores execution_id in the session_id column,
         // so we query by execution_id to find prior intent logs.
         let mut agent_for_build = agent.clone();
+        let mut recommended_skills: Vec<String> = Vec::new();
         let already_analyzed = if is_root {
             self.log_service.has_intent_log(execution_id)
         } else {
@@ -1289,6 +1306,9 @@ impl ExecutionRunner {
                                         let _ = self.log_service.log(log_entry);
                                     }
 
+                                    // Capture recommended skills for post-execution scaffolding
+                                    recommended_skills = analysis.recommended_skills.clone();
+
                                     // Inject intent analysis into agent instructions
                                     // so the agent can follow ward/skill/strategy recommendations
                                     agent_for_build.instructions.push_str(
@@ -1369,7 +1389,7 @@ impl ExecutionRunner {
             }
         }
 
-        builder
+        let executor = builder
             .build(
                 &agent_for_build,
                 provider,
@@ -1381,7 +1401,9 @@ impl ExecutionRunner {
                 &self.mcp_service,
                 ward_id,
             )
-            .await
+            .await?;
+
+        Ok((executor, recommended_skills))
     }
 
     /// Emit an error event.
@@ -2000,6 +2022,39 @@ fn collect_data_files_recursive(
                 result.push((rel, size));
             }
         }
+    }
+}
+
+/// Scaffold a ward from skill `ward_setup` configs.
+///
+/// Reads recommended skills from intent analysis, fetches their `ward_setup`
+/// frontmatter, and calls `scaffold_ward` to create directories and AGENTS.md.
+/// Best-effort: failures are logged but don't crash execution.
+async fn scaffold_ward_from_skills(
+    vault_dir: &std::path::Path,
+    skill_service: &gateway_services::SkillService,
+    ward_id: &str,
+    recommended_skills: &[String],
+) {
+    let ward_dir = vault_dir.join("wards").join(ward_id);
+    if !ward_dir.exists() {
+        return;
+    }
+
+    let mut setups = Vec::new();
+    for skill_name in recommended_skills {
+        match skill_service.get_ward_setup(skill_name).await {
+            Ok(Some(ws)) => setups.push(ws),
+            Ok(None) => {} // Skill has no ward_setup — skip
+            Err(e) => {
+                tracing::warn!(skill = %skill_name, error = %e, "Failed to read skill ward_setup");
+            }
+        }
+    }
+
+    if !setups.is_empty() {
+        crate::middleware::ward_scaffold::scaffold_ward(&ward_dir, ward_id, &setups);
+        tracing::info!(ward = %ward_id, skill_count = setups.len(), "Ward scaffolded from skill configs");
     }
 }
 
