@@ -177,20 +177,44 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
 
 You are the orchestrator. Execute this pipeline:
 
-1. **Specs** (YOU — do not delegate): Write one spec per module in specs/<subdirectory>/. One apply_patch per spec. Under 3KB each.
-2. **Coding** (delegate to code-agent): Build core/ modules + task scripts per specs.
-3. **Code Review** (delegate to code-agent, skills: [code-review]): Review code against specs. Expects RESULT: APPROVED or DEFECTS.
-4. **Domain Validation** (delegate to data-analyst/research-agent, skills: [domain-validation]): Run code, validate output. Expects RESULT: APPROVED or DEFECTS.
-5. **Output** (delegate or do yourself): Produce final deliverable.
+### Phase 1: Specs (YOU — do not delegate)
+Write one spec per module in specs/<subdirectory>/. One apply_patch per spec. Under 3KB each.
+
+### Phase 2: Tasks.json (YOU — do not delegate)
+After specs, create `specs/<subdirectory>/tasks.json` — an ordered task list for the code-agent.
+Each task has: id, action (create/run/verify), file or command, spec_ref, depends_on, status (pending).
+Core module creates come FIRST (no dependencies). Task scripts depend on core modules. Run/verify depend on creates.
+Example:
+```json
+{"tasks":[
+  {"id":1,"action":"create","file":"core/options.py","spec_ref":"03-options.md#core-module-candidates","depends_on":[],"status":"pending"},
+  {"id":2,"action":"create","file":"stocks/amd/collect.py","spec_ref":"01-data.md","depends_on":[1],"status":"pending"},
+  {"id":3,"action":"run","command":"python3 stocks/amd/collect.py","depends_on":[2],"status":"pending"},
+  {"id":4,"action":"verify","expect":["stocks/amd/data/ohlcv.csv"],"depends_on":[3],"status":"pending"}
+]}
+```
+
+### Phase 3: Coding (delegate to code-agent)
+Delegate with: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
+The code-agent uses `ralph.py` (at ward root) to get next task, execute it, mark complete/fail.
+
+### Phase 4: Review (delegate to code-agent, skills: [code-review])
+Review code against specs. Expects RESULT: APPROVED or DEFECTS.
+
+### Phase 5: Validation (delegate to data-analyst/research-agent, skills: [domain-validation])
+Run code, validate output. Expects RESULT: APPROVED or DEFECTS.
+
+### Phase 6: Output (delegate or do yourself)
+Produce final deliverable.
 
 If review/validation returns DEFECTS, re-delegate to coding with the defect list.
 
 ### Discipline
-- Skills and agents are in intent analysis above. Do NOT call list_skills or list_agents.
-- Update plan ONLY at phase transitions (after specs, after each callback, at completion). Not between tool calls.
+- Do NOT call list_skills or list_agents.
+- Update plan ONLY at phase transitions.
 - Subagent has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use) or read files.
 - Pass skills in the `skills` parameter.
-- Keep tasks under 4000 chars.
+- Keep delegation tasks under 4000 chars.
 - Do NOT poll with shell. System sends callback automatically. Stop and wait.
 "#);
     }

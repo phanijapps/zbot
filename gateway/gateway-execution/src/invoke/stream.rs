@@ -373,6 +373,15 @@ pub fn process_stream_event(
                     tracing::info!(ward = %ward_id, "Ward scaffolded at creation time");
                 }
 
+                // Copy ralph.py (task runner) from shared ward if not already present
+                let ralph_src = ctx.vault_dir.join("wards").join("shared").join("ralph.py");
+                let ralph_dst = ward_dir.join("ralph.py");
+                if ralph_src.exists() && !ralph_dst.exists() {
+                    if let Err(e) = std::fs::copy(&ralph_src, &ralph_dst) {
+                        tracing::warn!("Failed to copy ralph.py to ward: {}", e);
+                    }
+                }
+
                 // Auto-update AGENTS.md so the agent sees conventions immediately
                 let lang_configs_dir = ctx.vault_dir.join("config").join("wards");
                 crate::runner::auto_update_agents_md_with_lang_configs(
