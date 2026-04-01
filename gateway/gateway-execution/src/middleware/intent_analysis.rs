@@ -110,6 +110,18 @@ If an existing ward matches the domain, REUSE it. Only create new for genuinely 
 - CRITICAL: Skills and agents are DIFFERENT things. Skills are loaded with load_skill(). Agents are delegated to with delegate_to_agent().
 - In "recommended_skills": use skill names from the "Relevant Skills" list. These are SKILLS, not agents.
 - In "recommended_agents" and graph node "agent" fields: use ONLY agent names from the "Relevant Agents" list or "root". NEVER put a skill name (like "coding" or "ml-pipeline-builder") as an agent. Any invalid agent name will crash.
+- SDLC Pattern (use when the task involves writing code that produces data, analysis, or reports):
+  Node sequence: specs → coding → code_review → domain_validation → output
+  - specs (agent: root, skills: [coding]): Write detailed implementation specs in specs/<domain>/*.md
+  - coding (agent: code-agent, skills: [coding, ...domain skills]): Build core/ modules + task scripts per spec. Test each module.
+  - code_review (agent: code-agent, skills: [code-review]): Review code against specs. Run tests. Report RESULT: APPROVED or RESULT: DEFECTS.
+  - domain_validation (agent: data-analyst or research-agent, skills: [domain-validation, ...domain skills]): Run code, evaluate output quality. Report RESULT: APPROVED or RESULT: DEFECTS.
+  - output (agent: writing-agent or root, skills: [premium-report or relevant]): Produce final deliverable.
+  Use conditional edges for feedback loops:
+    code_review → coding (when: "DEFECTS found — code needs fixes")
+    code_review → domain_validation (when: "APPROVED — code is clean")
+    domain_validation → coding (when: "DEFECTS found — output quality issues")
+    domain_validation → output (when: "APPROVED — data quality verified")
 - If the request is simple (greeting, quick question), use approach "simple" with no graph
 - Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
 - Any graph node that creates or modifies files MUST include "coding" in its skills list.
