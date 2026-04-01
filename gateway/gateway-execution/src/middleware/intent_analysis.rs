@@ -201,6 +201,63 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<
         out.push_str(&format!("{}\n", es.explanation));
     }
 
+    // Execution graph — full plan for the root agent to follow
+    if let Some(ref graph) = es.graph {
+        out.push_str("\n## Execution Plan\n\n");
+        out.push_str("Follow this plan by delegating to the specified agents. \
+            Skills listed per node are **primary, not exclusive** — subagents can discover \
+            and load any skill they need via `load_skill`.\n\n");
+
+        // Nodes
+        out.push_str("### Nodes\n\n");
+        for node in &graph.nodes {
+            out.push_str(&format!(
+                "**{}** → `{}` (agent: `{}`)\n",
+                node.id, node.task, node.agent
+            ));
+            if !node.skills.is_empty() {
+                out.push_str(&format!(
+                    "  Primary skills: {}\n",
+                    node.skills.join(", ")
+                ));
+            }
+        }
+
+        // Edges
+        out.push_str("\n### Flow\n\n");
+        for edge in &graph.edges {
+            match edge {
+                GraphEdge::Direct { from, to } => {
+                    out.push_str(&format!("{} → {}\n", from, to));
+                }
+                GraphEdge::Conditional { from, conditions } => {
+                    for cond in conditions {
+                        out.push_str(&format!(
+                            "{} → {} (when: {})\n",
+                            from, cond.to, cond.when
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(max) = graph.max_cycles {
+            out.push_str(&format!("\nMax cycles: {}\n", max));
+        }
+
+        // Delegation guidance
+        out.push_str(r#"
+### Delegation Rules
+
+When delegating a graph node to a subagent:
+1. Include the node's task description and relevant context (ward name, data paths, what prior nodes produced)
+2. Tell the subagent which skills are recommended but DO NOT restrict them — they can use any skill
+3. Keep delegation tasks under 4000 chars — split into multiple delegations if needed
+4. After each node completes, verify output before proceeding to the next node
+5. On failure: fix and retry the node, don't skip to the next one
+"#);
+    }
+
     // Ward rules — always included regardless of approach
     out.push_str(r#"
 **Ward Rule:** ALL code must be written inside a ward. If you need to write code:
