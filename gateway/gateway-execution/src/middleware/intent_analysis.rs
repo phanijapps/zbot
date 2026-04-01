@@ -288,10 +288,11 @@ When delegating other nodes to subagents:
 - Archived specs are searchable via knowledge graph for future context
 
 **Spec Structure — ONE spec per functional unit, NOT one giant file:**
-Write separate spec files for each distinct piece of functionality:
-- `specs/{topic}/01-data-collection.md` — fetching and storing raw data
-- `specs/{topic}/02-technical-analysis.md` — computing indicators
-- `specs/{topic}/03-options-analysis.md` — options chain analysis
+Write separate spec files in `specs/` using the subdirectory name as topic:
+- `specs/spy-technical/01-data-collection.md` — fetching and storing raw data
+- `specs/spy-technical/02-technical-analysis.md` — computing indicators
+- `specs/spy-technical/03-options-analysis.md` — options chain analysis
+The path is `specs/<subdirectory-name>/`, NOT `specs/<ward-name>/`. Do NOT nest the ward name inside specs/.
 Each spec should be under 3KB. If a spec is growing large, split it.
 
 **Spec Quality — MANDATORY sections for every spec:**
