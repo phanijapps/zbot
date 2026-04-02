@@ -274,9 +274,9 @@ pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
 pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
         SubagentRole::Executor => "\n\n# RULES\n\
-            Execute the task. Write files with apply_patch. Run with shell. Respond when done.\n\
-            Reusable code → core/. Task-specific → task dir. If a pip package is missing, install it.\n\
-            Respond with: files created, commands run, any errors or learnings.\n",
+            First: enter ward, read AGENTS.md + memory-bank/core_docs.md. Reuse core/ — never recreate.\n\
+            Execute with apply_patch + shell. Extract reusable functions to core/ when done.\n\
+            Respond with: files created, commands run, errors.\n",
         SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
             1. Read the specs and the implementation carefully before forming opinions.\n\
