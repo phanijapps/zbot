@@ -744,6 +744,7 @@ impl AgentExecutor {
                                 wait_for_result: delegate.wait_for_result,
                                 max_iterations: delegate.max_iterations,
                                 output_schema: delegate.output_schema.clone(),
+                                skills: delegate.skills.clone(),
                             });
                             // Delegation claim is set atomically by the delegate tool via try_claim
                         }
@@ -1382,36 +1383,41 @@ impl ProgressTracker {
         let args_hash = Self::hash_args(args);
 
         // Exact repetition detection — same tool+args in last 5 calls
+        // Only penalize FAILED exact repeats. Successful calls with same args
+        // (e.g., ralph.py next) are legitimate workflow patterns.
         let is_exact_repeat = self
             .recent_tool_calls
             .iter()
             .any(|(n, h)| n == name && *h == args_hash);
-        if is_exact_repeat {
+        if is_exact_repeat && !succeeded {
             self.score -= 3;
         }
 
         // Tool diversity scoring via rolling window
-        self.tool_name_window.push_back(name.to_string());
-        if self.tool_name_window.len() > 20 {
-            self.tool_name_window.pop_front();
+        // Only track FAILED calls for diversity scoring. Subagents with 4 tools
+        // (shell, apply_patch, load_skill, respond) naturally have low diversity
+        // ratios even when productive. Penalizing low diversity on successful
+        // calls kills productive ralph.py workflows.
+        if !succeeded {
+            self.tool_name_window.push_back(name.to_string());
+            if self.tool_name_window.len() > 20 {
+                self.tool_name_window.pop_front();
+            }
         }
 
-        // Score diversity every 10 calls once we have enough data
+        // Score diversity every 10 FAILED calls (not total calls)
         self.window_tool_calls += 1;
-        if self.window_tool_calls % 10 == 0 && self.tool_name_window.len() >= 10 {
+        if !succeeded && self.tool_name_window.len() >= 10 && self.tool_name_window.len() % 5 == 0 {
             let distinct: HashSet<&str> = self.tool_name_window.iter().map(|s| s.as_str()).collect();
             let ratio = distinct.len() as f32 / self.tool_name_window.len() as f32;
 
             if ratio <= 0.15 {
-                // 1-2 unique tools in 20 calls — definitely stuck
+                // Same tool failing repeatedly — definitely stuck
                 self.score -= 8;
             } else if ratio <= 0.25 {
-                // 3-5 unique tools in 20 calls — suspicious
                 self.score -= 3;
-            } else {
-                // Good diversity
-                self.score += 2;
             }
+            // No positive score for diversity — success bonus handles that
         }
 
         // First-ever use of a tool gets a small bonus
@@ -1419,8 +1425,12 @@ impl ProgressTracker {
             self.score += 1;
         }
 
-        // No per-success bonus: +1 per success inflated scores and masked stuck loops.
-        // Diversity, planning, and respond bonuses are sufficient positive signals.
+        // Successful tool calls get a small bonus to offset any accidental penalties.
+        // This keeps productive agents alive. Stuck agents still die because
+        // failures accumulate penalties faster than successes add bonuses.
+        if succeeded {
+            self.score += 1;
+        }
 
         // Track for exact-repetition detection (keep last 5)
         self.recent_tool_calls.push_back((name.to_string(), args_hash));
@@ -1854,9 +1864,9 @@ mod progress_tracker_tests {
     fn test_repeated_calls_prevent_extension() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // Same tool+args 5 times
+        // Same tool+args 5 times, all failed
         for _ in 0..5 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         // First call: +1 (unique) = 1
         // Subsequent 4 calls: -3 (repeat) each = -12
@@ -1916,7 +1926,7 @@ mod progress_tracker_tests {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
         for _ in 0..6 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         let diagnosis = tracker.diagnosis();
         assert!(
@@ -1950,16 +1960,17 @@ mod progress_tracker_tests {
     #[test]
     fn test_low_diversity_loop_detected() {
         let mut tracker = ProgressTracker::new(3);
-        // Simulate write+shell loop for 20 iterations (different args each time)
+        // Simulate write+shell loop for 20 iterations, all failed (different args each time)
         for i in 0..20 {
             let tool = if i % 2 == 0 { "write" } else { "shell" };
-            tracker.record_tool_call(tool, &json!({"i": i}), true);
+            tracker.record_tool_call(tool, &json!({"i": i}), false);
         }
-        // After 20 calls (no per-success bonus):
+        // After 20 failed calls:
         // 2 unique tools (+1 each = +2)
-        // At call 10: diversity = 2/10 = 0.20 <= 0.25 → -3
-        // At call 20: diversity = 2/20 = 0.10 <= 0.15 → -8
-        // Total: +2 - 3 - 8 = -9
+        // At 10 failed calls: diversity = 2/10 = 0.20 <= 0.25 → -3
+        // At 15 failed calls: diversity = 2/15 = 0.13 <= 0.15 → -8
+        // At 20 failed calls: diversity = 2/20 = 0.10 <= 0.15 → -8
+        // Total: +2 - 3 - 8 - 8 = -17
         assert!(
             tracker.score < 0,
             "Low-diversity loop should have negative score, got: {}",
@@ -1970,14 +1981,14 @@ mod progress_tracker_tests {
     #[test]
     fn test_high_diversity_extends() {
         let mut tracker = ProgressTracker::new(3);
-        // Use 10 unique tools in 10 calls
+        // Use 10 unique tools in 10 calls (all succeed)
         let tools = ["read", "write", "shell", "edit", "grep", "glob", "memory", "todo", "ward", "respond"];
         for (i, tool) in tools.iter().enumerate() {
             tracker.record_tool_call(tool, &json!({"i": i}), true);
         }
-        // 10 unique tools: +1 each = 10 (no per-success bonus)
-        // At call 10: diversity = 10/10 = 1.0 > 0.25 → +2
-        // Total: 10 + 2 = 12
+        // 10 unique tools: +1 each = 10, +1 success each = 10
+        // No diversity check (only tracks failed calls, none here)
+        // Total: 10 + 10 = 20
         assert!(tracker.score > 0, "High diversity should produce positive score, got: {}", tracker.score);
         assert!(tracker.should_extend(), "High diversity should allow extension");
     }
@@ -1986,15 +1997,15 @@ mod progress_tracker_tests {
     fn test_early_stop_deeply_stuck() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // Same exact tool+args repeated — triggers repetition penalty and diversity penalty
-        // With no per-success bonus, score drops fast:
+        // Same exact tool+args repeated, all failed — triggers repetition and diversity penalties
         // Call 1: +1 (unique) = 1
         // Calls 2-20: -3 (repeat) each = -57
-        // At call 10: diversity ≤ 0.15 → -8
-        // At call 20: diversity ≤ 0.15 → -8
-        // Total: 1 - 57 - 8 - 8 = -72
+        // At 10 failed calls: diversity = 1/10 ≤ 0.15 → -8
+        // At 15 failed calls: diversity = 1/15 ≤ 0.15 → -8
+        // At 20 failed calls: diversity = 1/20 ≤ 0.15 → -8
+        // Total: 1 - 57 - 8 - 8 - 8 = -80
         for _ in 0..20 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         // With 10+ window_tool_calls and deeply negative score, should be stuck
         assert!(
@@ -2018,10 +2029,10 @@ mod progress_tracker_tests {
     #[test]
     fn test_tool_name_window_preserved_across_extensions() {
         let mut tracker = ProgressTracker::new(3);
-        // Add some tool calls to fill the name window
+        // Add some failed tool calls to fill the name window (only failed calls tracked)
         for i in 0..10 {
             let tool = if i % 2 == 0 { "write" } else { "shell" };
-            tracker.record_tool_call(tool, &json!({"i": i}), true);
+            tracker.record_tool_call(tool, &json!({"i": i}), false);
         }
         assert_eq!(tracker.tool_name_window.len(), 10);
 
@@ -2079,8 +2090,8 @@ mod progress_tracker_tests {
             ]}),
             true,
         );
-        // +3 base + 2 items + 1 unique tool = 6 (no per-success bonus)
-        assert_eq!(tracker.score, 6);
+        // +3 base + 2 items + 1 unique tool + 1 success = 7
+        assert_eq!(tracker.score, 7);
     }
 
     #[test]
@@ -2095,8 +2106,8 @@ mod progress_tracker_tests {
             &json!({"action": "update", "id": "1", "completed": true}),
             true,
         );
-        // +2 completion bonus (unique tool bonus already used, no per-success bonus)
-        assert_eq!(tracker.score, score_after_add + 2);
+        // +2 completion bonus + 1 success (unique tool bonus already used)
+        assert_eq!(tracker.score, score_after_add + 3);
         assert_eq!(tracker.plan_items_completed, 1);
     }
 
@@ -2108,8 +2119,8 @@ mod progress_tracker_tests {
             &json!({"action": "update", "id": "1", "completed": false}),
             true,
         );
-        // Only +1 unique tool = 1, no completion bonus, no per-success bonus
-        assert_eq!(tracker.score, 1);
+        // +1 unique tool + 1 success = 2, no completion bonus
+        assert_eq!(tracker.score, 2);
         assert_eq!(tracker.plan_items_completed, 0);
     }
 
@@ -2171,30 +2182,30 @@ mod progress_tracker_tests {
 
     #[test]
     fn test_should_extend_penalizes_no_plan() {
-        // Score 1 without plan → effective -2 → no extend
-        let mut tracker = ProgressTracker::new(3);
-        tracker.record_tool_call("read", &json!({}), true); // +1 unique (no per-success bonus)
-        assert!(!tracker.has_plan);
-        assert_eq!(tracker.score, 1);
-        assert!(!tracker.should_extend(), "Score 1 without plan should not extend (effective -2)");
-
         // Score 2 without plan → effective -1 → no extend
-        let mut tracker2 = ProgressTracker::new(3);
-        tracker2.record_tool_call("read", &json!({}), true); // +1
-        tracker2.record_tool_call("write", &json!({}), true); // +1
-        assert!(!tracker2.has_plan);
-        assert_eq!(tracker2.score, 2);
-        assert!(!tracker2.should_extend(), "Score 2 without plan should not extend (effective -1)");
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({}), true); // +1 unique + 1 success = 2
+        assert!(!tracker.has_plan);
+        assert_eq!(tracker.score, 2);
+        assert!(!tracker.should_extend(), "Score 2 without plan should not extend (effective -1)");
 
-        // Score 4+ without plan → effective 1+ → extends
+        // Score 4 without plan → effective 1 → extends (but let's test score 3 first)
+        let mut tracker2 = ProgressTracker::new(3);
+        tracker2.record_tool_call("read", &json!({}), true); // +2
+        tracker2.record_tool_call("write", &json!({}), true); // +2
+        assert!(!tracker2.has_plan);
+        assert_eq!(tracker2.score, 4);
+        assert!(tracker2.should_extend(), "Score 4 without plan should extend (effective 1)");
+
+        // Score 8 without plan → effective 5 → extends
         let mut tracker3 = ProgressTracker::new(3);
-        tracker3.record_tool_call("read", &json!({}), true); // +1
-        tracker3.record_tool_call("write", &json!({}), true); // +1
-        tracker3.record_tool_call("shell", &json!({}), true); // +1
-        tracker3.record_tool_call("edit", &json!({}), true); // +1
+        tracker3.record_tool_call("read", &json!({}), true); // +2
+        tracker3.record_tool_call("write", &json!({}), true); // +2
+        tracker3.record_tool_call("shell", &json!({}), true); // +2
+        tracker3.record_tool_call("edit", &json!({}), true); // +2
         assert!(!tracker3.has_plan);
-        assert_eq!(tracker3.score, 4);
-        assert!(tracker3.should_extend(), "Score 4 without plan should extend (effective 1)");
+        assert_eq!(tracker3.score, 8);
+        assert!(tracker3.should_extend(), "Score 8 without plan should extend (effective 5)");
     }
 
     #[test]
@@ -2269,9 +2280,9 @@ mod progress_tracker_tests {
     fn test_is_clearly_stuck_requires_10_calls() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // 9 repeated calls — not enough to trigger
+        // 9 repeated failed calls — not enough window_tool_calls to trigger
         for _ in 0..9 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         assert!(
             !tracker.is_clearly_stuck(),
@@ -2280,7 +2291,7 @@ mod progress_tracker_tests {
             tracker.score
         );
         // 10th call pushes over the threshold
-        tracker.record_tool_call("read", &args, true);
+        tracker.record_tool_call("read", &args, false);
         assert!(
             tracker.is_clearly_stuck(),
             "Should be stuck at {} calls with score {}",
@@ -2294,9 +2305,9 @@ mod progress_tracker_tests {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
         for _ in 0..15 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
-        // Score should be deeply negative: +1(unique) - 14*3(repeats) - 8(div@10) = 1-42-8 = -49
+        // Score: +1(unique) - 14*3(repeats) - 8(div@10) - 8(div@15) = 1-42-8-8 = -57
         assert!(
             tracker.score <= -12,
             "Score should be <= -12 after 15 exact repeats, got: {}",
