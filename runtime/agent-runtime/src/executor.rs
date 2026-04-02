@@ -171,6 +171,11 @@ pub struct ExecutorConfig {
     /// Hook called before every LLM call to transform the message context.
     /// Default: None (messages passed through unchanged).
     pub transform_context: Option<TransformContextHook>,
+
+    /// Task complexity level: "S", "M", "L", "XL".
+    /// When set, applies complexity-based iteration budgets:
+    /// S=15, M=30, L=50, XL=100.
+    pub complexity: Option<String>,
 }
 
 impl ExecutorConfig {
@@ -204,6 +209,7 @@ impl ExecutorConfig {
             after_tool_call: None,
             tool_execution_mode: ToolExecutionMode::default(),
             transform_context: None,
+            complexity: None,
         }
     }
 
@@ -244,6 +250,7 @@ impl fmt::Debug for ExecutorConfig {
             .field("after_tool_call", &self.after_tool_call.as_ref().map(|_| "<hook>"))
             .field("tool_execution_mode", &self.tool_execution_mode)
             .field("transform_context", &self.transform_context.as_ref().map(|_| "<hook>"))
+            .field("complexity", &self.complexity)
             .finish()
     }
 }
@@ -489,6 +496,9 @@ impl AgentExecutor {
         // Track whether the turn budget nudge has been sent (max 1)
         let mut turn_budget_nudge_sent = false;
 
+        // Track message count to skip redundant compaction estimation
+        let mut last_compaction_check_msg_count: usize = 0;
+
         // Track which fact keys have been injected via recall (initial + mid-session).
         // Seeded from initial recall keys; extended by mid-session recall hook results.
         let mut recall_injected_keys = self.recall_initial_keys.clone();
@@ -553,6 +563,46 @@ impl AgentExecutor {
                 );
             }
 
+            // Complexity-based budget enforcement
+            if let Some(ref complexity) = self.config.complexity {
+                let (hard_budget, soft_budget) = match complexity.as_str() {
+                    "S" => (15u32, 12u32),
+                    "M" => (30, 24),
+                    "L" => (50, 40),
+                    "XL" => (100, 80),
+                    _ => (0, 0),
+                };
+
+                if hard_budget > 0 {
+                    let iters = progress_tracker.total_iterations;
+                    if iters >= hard_budget {
+                        // Hard budget exceeded: inject urgent message
+                        current_messages.push(ChatMessage::user(format!(
+                            "[STEER: System] Budget exceeded ({}/{} iterations for {} task).                              Respond NOW with what you have. Do not start new work.",
+                            iters, hard_budget, complexity
+                        )));
+                        tracing::warn!(
+                            complexity = %complexity,
+                            iterations = iters,
+                            budget = hard_budget,
+                            "Complexity hard budget reached"
+                        );
+                    } else if iters == soft_budget {
+                        // Soft budget: nudge exactly once (when iters == soft_budget)
+                        current_messages.push(ChatMessage::user(format!(
+                            "[STEER: System] You've used {}/{} iterations for a {} task.                              Wrap up or simplify your approach.",
+                            iters, hard_budget, complexity
+                        )));
+                        tracing::info!(
+                            complexity = %complexity,
+                            iterations = iters,
+                            budget = hard_budget,
+                            "Complexity soft budget nudge sent"
+                        );
+                    }
+                }
+            }
+
             // Advisory stuck-detection: inject nudge once, hard-stop only as safety valve
             if progress_tracker.is_clearly_stuck() {
                 if !stuck_nudge_sent {
@@ -588,7 +638,12 @@ impl AgentExecutor {
 
             // Token-budget auto-compaction trigger.
             // When cumulative tokens approach 80% of the context window, trim old messages.
-            if self.config.context_window_tokens > 0 {
+            // Skip the check entirely if no new messages have been added since last check —
+            // avoids redundant threshold evaluation in tight tool-calling loops.
+            if self.config.context_window_tokens > 0
+                && current_messages.len() > last_compaction_check_msg_count
+            {
+                last_compaction_check_msg_count = current_messages.len();
                 let threshold = (self.config.context_window_tokens * 80) / 100;
                 if total_tokens_in > threshold {
                     // Pre-compaction memory flush: inject a nudge to save important facts
@@ -2803,5 +2858,51 @@ mod hook_tests {
         hook(&mut messages);
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[1].content, "injected");
+    }
+
+    #[test]
+    fn test_complexity_budget_lookup() {
+        fn budget_for(complexity: Option<&str>) -> (u32, u32) {
+            match complexity {
+                Some("S") => (15, 12),
+                Some("M") => (30, 24),
+                Some("L") => (50, 40),
+                Some("XL") => (100, 80),
+                _ => (0, 0),
+            }
+        }
+        assert_eq!(budget_for(Some("S")), (15, 12));
+        assert_eq!(budget_for(Some("M")), (30, 24));
+        assert_eq!(budget_for(Some("L")), (50, 40));
+        assert_eq!(budget_for(Some("XL")), (100, 80));
+        assert_eq!(budget_for(None), (0, 0));
+    }
+}
+
+#[cfg(test)]
+mod token_cache_tests {
+    #[test]
+    fn test_token_estimate_cache() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<u64, usize> = HashMap::new();
+
+        fn content_hash(content: &str) -> u64 {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            content.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let msg = "Hello world this is a test message";
+        let hash = content_hash(msg);
+
+        // Cache miss
+        assert!(!cache.contains_key(&hash));
+        let estimate = msg.len() / 4 + 4;
+        cache.insert(hash, estimate);
+
+        // Cache hit
+        assert_eq!(cache.get(&hash), Some(&estimate));
     }
 }
