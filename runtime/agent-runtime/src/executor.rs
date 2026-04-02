@@ -292,6 +292,8 @@ pub struct AgentExecutor {
     recall_every_n_turns: u32,
     /// Keys of facts already injected at session start (seeds the dedup set).
     recall_initial_keys: HashSet<String>,
+    /// Optional steering queue for mid-execution message injection.
+    steering_queue: Option<std::sync::Mutex<crate::steering::SteeringQueue>>,
 }
 
 impl AgentExecutor {
@@ -319,6 +321,7 @@ impl AgentExecutor {
             recall_hook: None,
             recall_every_n_turns: 0,
             recall_initial_keys: HashSet::new(),
+            steering_queue: None,
         })
     }
 
@@ -343,6 +346,16 @@ impl AgentExecutor {
         self.recall_hook = Some(Arc::new(hook));
         self.recall_every_n_turns = every_n_turns;
         self.recall_initial_keys = initial_keys;
+    }
+
+    /// Attach a steering queue to this executor.
+    ///
+    /// Call this before `execute_stream`. The returned `SteeringHandle` can be
+    /// shared with the UI, parent agents, or budget enforcers.
+    pub fn enable_steering(&mut self) -> crate::steering::SteeringHandle {
+        let (queue, handle) = crate::steering::SteeringQueue::new();
+        self.steering_queue = Some(std::sync::Mutex::new(queue));
+        handle
     }
 
     /// Get the middleware pipeline
@@ -645,6 +658,22 @@ impl AgentExecutor {
                                 "Mid-session recall failed"
                             );
                         }
+                    }
+                }
+            }
+
+            // Drain steering queue: inject any pending steering messages
+            if let Some(ref steering_mutex) = self.steering_queue {
+                if let Ok(mut queue) = steering_mutex.lock() {
+                    let steering_messages = queue.drain();
+                    for msg in steering_messages {
+                        let formatted = format!("[STEER: {}] {}", msg.source, msg.content);
+                        current_messages.push(ChatMessage::user(formatted));
+                        tracing::info!(
+                            source = %msg.source,
+                            priority = ?msg.priority,
+                            "Injected steering message"
+                        );
                     }
                 }
             }
@@ -2734,5 +2763,17 @@ mod hook_tests {
         let result = format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason);
         assert!(result.contains("blocked"));
         assert!(result.contains(reason));
+    }
+
+    #[test]
+    fn test_steering_message_format() {
+        use crate::steering::{SteeringSource, SteeringMessage, SteeringPriority};
+        let msg = SteeringMessage {
+            content: "Wrap up now".to_string(),
+            source: SteeringSource::System,
+            priority: SteeringPriority::Normal,
+        };
+        let formatted = format!("[STEER: {}] {}", msg.source, msg.content);
+        assert_eq!(formatted, "[STEER: System] Wrap up now");
     }
 }
