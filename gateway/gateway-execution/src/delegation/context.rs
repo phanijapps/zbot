@@ -45,6 +45,9 @@ pub struct DelegationRequest {
     /// When provided, the child's system prompt is augmented with an output
     /// contract requiring a JSON response matching this schema.
     pub output_schema: Option<Value>,
+
+    /// Skills to pre-load for the subagent.
+    pub skills: Vec<String>,
 }
 
 // ============================================================================

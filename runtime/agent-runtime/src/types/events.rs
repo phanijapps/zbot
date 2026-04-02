@@ -134,6 +134,7 @@ pub enum StreamEvent {
         wait_for_result: bool,
         max_iterations: Option<u32>,
         output_schema: Option<Value>,
+        skills: Vec<String>,
     },
 
     /// Plan update action from the update_plan tool.
