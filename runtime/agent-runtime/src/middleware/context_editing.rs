@@ -16,6 +16,49 @@ use crate::middleware::config::ContextEditingConfig;
 use crate::middleware::token_counter::estimate_total_tokens;
 use serde_json::json;
 
+/// Compress an assistant message into a one-line summary.
+///
+/// Extracts tool names and file paths from tool_calls arguments.
+/// Pure pattern matching — no LLM call.
+///
+/// Format: `[Turn N: tool1(file1), tool2(file2)]` or `[Turn N: <truncated reasoning>]`
+fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) -> String {
+    if let Some(ref tool_calls) = msg.tool_calls {
+        let summaries: Vec<String> = tool_calls.iter().map(|tc| {
+            let path = extract_file_path(&tc.arguments);
+            match path {
+                Some(p) => format!("{}({})", tc.name, p),
+                None => tc.name.clone(),
+            }
+        }).collect();
+
+        format!("[Turn {}: {}]", turn_number, summaries.join(", "))
+    } else if !msg.content.is_empty() {
+        let truncated: String = msg.content.chars().take(60).collect();
+        let ellipsis = if msg.content.len() > 60 { "..." } else { "" };
+        format!("[Turn {}: {}{}]", turn_number, truncated, ellipsis)
+    } else {
+        format!("[Turn {}]", turn_number)
+    }
+}
+
+/// Extract a file path from tool call arguments.
+///
+/// Looks for common keys: "path", "file_path", "file", "filename".
+fn extract_file_path(args: &serde_json::Value) -> Option<String> {
+    let path_keys = ["path", "file_path", "file", "filename"];
+    if let Some(obj) = args.as_object() {
+        for key in &path_keys {
+            if let Some(val) = obj.get(*key) {
+                if let Some(s) = val.as_str() {
+                    return Some(s.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Build an index mapping tool_call_id → tool_name from all assistant messages.
 /// This is O(n) over messages, enabling O(1) lookups instead of O(n) backwards search.
 fn build_tool_call_index(messages: &[ChatMessage]) -> std::collections::HashMap<String, String> {
@@ -819,5 +862,65 @@ mod tests {
         assert_eq!(indices.len(), 2);
         assert!(indices.contains(&1)); // Skill at index 1
         assert!(indices.contains(&3)); // Resource at index 3 cascaded
+    }
+
+    #[test]
+    fn test_compress_assistant_message_with_tool_calls() {
+        let tool1 = ToolCall::new(
+            "call_a".to_string(),
+            "write_file".to_string(),
+            json!({"path": "src/main.rs", "content": "fn main() {}"}),
+        );
+        let tool2 = ToolCall::new(
+            "call_b".to_string(),
+            "read_file".to_string(),
+            json!({"path": "src/lib.rs"}),
+        );
+        let msg = ChatMessage {
+            role: "assistant".to_string(),
+            content: "Let me create the main file and read the lib file for context.".to_string(),
+            tool_calls: Some(vec![tool1, tool2]),
+            tool_call_id: None,
+        };
+
+        let compressed = compress_assistant_message(&msg, 3);
+        assert!(compressed.starts_with("[Turn 3:"));
+        assert!(compressed.contains("write_file"));
+        assert!(compressed.contains("read_file"));
+        assert!(compressed.contains("src/main.rs"));
+        assert!(compressed.contains("src/lib.rs"));
+        assert!(compressed.len() < msg.content.len() + 200);
+    }
+
+    #[test]
+    fn test_compress_assistant_message_no_tool_calls() {
+        let msg = ChatMessage {
+            role: "assistant".to_string(),
+            content: "I'll help you with that. Let me think about the best approach for implementing this feature. We need to consider several factors including performance and maintainability.".to_string(),
+            tool_calls: None,
+            tool_call_id: None,
+        };
+
+        let compressed = compress_assistant_message(&msg, 5);
+        assert!(compressed.starts_with("[Turn 5:"));
+        assert!(compressed.len() < 100);
+    }
+
+    #[test]
+    fn test_compress_extracts_file_paths() {
+        let tool = ToolCall::new(
+            "call_x".to_string(),
+            "edit_file".to_string(),
+            json!({"path": "core/data_fetcher.py", "old_text": "x", "new_text": "y"}),
+        );
+        let msg = ChatMessage {
+            role: "assistant".to_string(),
+            content: "".to_string(),
+            tool_calls: Some(vec![tool]),
+            tool_call_id: None,
+        };
+
+        let compressed = compress_assistant_message(&msg, 1);
+        assert!(compressed.contains("core/data_fetcher.py"));
     }
 }
