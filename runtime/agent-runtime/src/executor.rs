@@ -19,7 +19,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
 use std::pin::Pin;
 use std::future::Future;
@@ -770,225 +770,269 @@ impl AgentExecutor {
                 });
             }
 
-            // Execute all tools concurrently
-            let tool_futures: Vec<_> = tool_calls.iter().map(|tc| {
-                let ctx = shared_tool_context.clone();
-                let tool_id = tc.id.clone();
-                let tool_name = tc.name.clone();
-                let args = tc.arguments.clone();
-                async move {
-                    tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
-                    self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+            // Check beforeToolCall hook for each tool
+            let mut blocked_results: HashMap<String, String> = HashMap::new();
+            if let Some(ref hook) = self.config.before_tool_call {
+                for tc in &tool_calls {
+                    match hook(&tc.name, &tc.arguments) {
+                        ToolCallDecision::Allow => {}
+                        ToolCallDecision::Block { reason } => {
+                            blocked_results.insert(
+                                tc.id.clone(),
+                                format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason),
+                            );
+                        }
+                    }
                 }
-            }).collect();
+            }
+
+            // Execute all tools concurrently (skip blocked tools)
+            let tool_futures: Vec<_> = tool_calls.iter()
+                .filter(|tc| !blocked_results.contains_key(&tc.id))
+                .map(|tc| {
+                    let ctx = shared_tool_context.clone();
+                    let tool_id = tc.id.clone();
+                    let tool_name = tc.name.clone();
+                    let args = tc.arguments.clone();
+                    async move {
+                        tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
+                        self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+                    }
+                }).collect();
 
             let results = futures::future::join_all(tool_futures).await;
 
-            // Process results in original order
-            for (tool_call, result) in tool_calls.iter().zip(results) {
+            // Build a map of executed results (keyed by tool_call id)
+            let executed_tools: Vec<&ToolCall> = tool_calls.iter()
+                .filter(|tc| !blocked_results.contains_key(&tc.id))
+                .collect();
+            let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> = HashMap::new();
+            for (tc, result) in executed_tools.into_iter().zip(results) {
+                executed_results.insert(tc.id.clone(), result);
+            }
+
+            // Process results in original tool_call order
+            for tool_call in &tool_calls {
                 let tool_name = &tool_call.name;
 
-                match result {
-                    Ok(tool_result) => {
-                        let output = tool_result.output;
-                        let actions = tool_result.actions;
+                if let Some(blocked_result) = blocked_results.remove(&tool_call.id) {
+                    // Blocked by beforeToolCall hook
+                    current_messages.push(ChatMessage {
+                        role: "tool".to_string(),
+                        content: blocked_result,
+                        tool_calls: None,
+                        tool_call_id: Some(tool_call.id.clone()),
+                    });
+                    on_event(StreamEvent::ToolResult {
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                        tool_id: tool_call.id.clone(),
+                        result: "[blocked by hook]".to_string(),
+                        error: None,
+                    });
+                    progress_tracker.record_tool_call(&tool_call.name, &tool_call.arguments, false);
+                } else if let Some(result) = executed_results.remove(&tool_call.id) {
+                    match result {
+                        Ok(tool_result) => {
+                            let output = tool_result.output;
+                            let actions = tool_result.actions;
 
-                        tracing::debug!("Tool result: {}", output);
+                            tracing::debug!("Tool result: {}", output);
 
-                        // Track progress: tool succeeded
-                        progress_tracker.record_tool_call(tool_name, &tool_call.arguments, true);
+                            // Track progress: tool succeeded
+                            progress_tracker.record_tool_call(tool_name, &tool_call.arguments, true);
 
-                        // Check for respond action
-                        if let Some(respond) = &actions.respond {
-                            on_event(StreamEvent::ActionRespond {
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                message: respond.message.clone(),
-                                format: respond.format.clone(),
-                                conversation_id: respond.conversation_id.clone(),
-                                session_id: respond.session_id.clone(),
-                            });
-                            should_stop_after_respond = true;
-                            progress_tracker.record_respond();
-                            tracing::debug!("Respond action detected, will stop after current tool batch");
-                        }
-
-                        // Check for delegate action
-                        if let Some(delegate) = &actions.delegate {
-                            on_event(StreamEvent::ActionDelegate {
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                agent_id: delegate.agent_id.clone(),
-                                task: delegate.task.clone(),
-                                context: delegate.context.clone(),
-                                wait_for_result: delegate.wait_for_result,
-                                max_iterations: delegate.max_iterations,
-                                output_schema: delegate.output_schema.clone(),
-                                skills: delegate.skills.clone(),
-                            });
-                            // Delegation claim is set atomically by the delegate tool via try_claim
-                        }
-
-                        // Check for generative UI markers
-                        if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
-                            // Check for show_content marker
-                            if parsed.get("__show_content")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let content_type = parsed.get("content_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("text").to_string();
-                                let title = parsed.get("title")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Content").to_string();
-                                let content = parsed.get("content")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("").to_string();
-                                let metadata = parsed.get("metadata").cloned();
-                                let file_path = parsed.get("file_path")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                let is_attachment = parsed.get("is_attachment")
-                                    .and_then(|v| v.as_bool());
-                                let base64 = parsed.get("base64")
-                                    .and_then(|v| v.as_bool());
-
-                                on_event(StreamEvent::ShowContent {
+                            // Check for respond action
+                            if let Some(respond) = &actions.respond {
+                                on_event(StreamEvent::ActionRespond {
                                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                    content_type,
-                                    title,
-                                    content,
-                                    metadata,
-                                    file_path,
-                                    is_attachment,
-                                    base64,
+                                    message: respond.message.clone(),
+                                    format: respond.format.clone(),
+                                    conversation_id: respond.conversation_id.clone(),
+                                    session_id: respond.session_id.clone(),
                                 });
+                                should_stop_after_respond = true;
+                                progress_tracker.record_respond();
+                                tracing::debug!("Respond action detected, will stop after current tool batch");
                             }
 
-                            // Check for request_input marker
-                            if parsed.get("__request_input")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let form_id = parsed.get("form_id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(&format!("form_{}", chrono::Utc::now().timestamp()))
-                                    .to_string();
-                                let form_type = parsed.get("form_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("json_schema").to_string();
-                                let title = parsed.get("title")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Input Required").to_string();
-                                let description = parsed.get("description")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                let schema = parsed.get("schema")
-                                    .cloned()
-                                    .unwrap_or_else(|| json!({}));
-                                let submit_button = parsed.get("submit_button")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-
-                                on_event(StreamEvent::RequestInput {
+                            // Check for delegate action
+                            if let Some(delegate) = &actions.delegate {
+                                on_event(StreamEvent::ActionDelegate {
                                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                    form_id,
-                                    form_type,
-                                    title,
-                                    description,
-                                    schema,
-                                    submit_button,
+                                    agent_id: delegate.agent_id.clone(),
+                                    task: delegate.task.clone(),
+                                    context: delegate.context.clone(),
+                                    wait_for_result: delegate.wait_for_result,
+                                    max_iterations: delegate.max_iterations,
+                                    output_schema: delegate.output_schema.clone(),
+                                    skills: delegate.skills.clone(),
                                 });
+                                // Delegation claim is set atomically by the delegate tool via try_claim
                             }
 
-                            // Check for ward_changed marker (from ward tool)
-                            if parsed.get("__ward_changed__")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                if let Some(ward_id) = parsed.get("ward_id").and_then(|v| v.as_str()) {
-                                    on_event(StreamEvent::WardChanged {
+                            // Check for generative UI markers
+                            if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
+                                // Check for show_content marker
+                                if parsed.get("__show_content")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    let content_type = parsed.get("content_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("text").to_string();
+                                    let title = parsed.get("title")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Content").to_string();
+                                    let content = parsed.get("content")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("").to_string();
+                                    let metadata = parsed.get("metadata").cloned();
+                                    let file_path = parsed.get("file_path")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    let is_attachment = parsed.get("is_attachment")
+                                        .and_then(|v| v.as_bool());
+                                    let base64 = parsed.get("base64")
+                                        .and_then(|v| v.as_bool());
+
+                                    on_event(StreamEvent::ShowContent {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                        ward_id: ward_id.to_string(),
+                                        content_type,
+                                        title,
+                                        content,
+                                        metadata,
+                                        file_path,
+                                        is_attachment,
+                                        base64,
                                     });
+                                }
+
+                                // Check for request_input marker
+                                if parsed.get("__request_input")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    let form_id = parsed.get("form_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(&format!("form_{}", chrono::Utc::now().timestamp()))
+                                        .to_string();
+                                    let form_type = parsed.get("form_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("json_schema").to_string();
+                                    let title = parsed.get("title")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Input Required").to_string();
+                                    let description = parsed.get("description")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    let schema = parsed.get("schema")
+                                        .cloned()
+                                        .unwrap_or_else(|| json!({}));
+                                    let submit_button = parsed.get("submit_button")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
+                                    on_event(StreamEvent::RequestInput {
+                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                        form_id,
+                                        form_type,
+                                        title,
+                                        description,
+                                        schema,
+                                        submit_button,
+                                    });
+                                }
+
+                                // Check for ward_changed marker (from ward tool)
+                                if parsed.get("__ward_changed__")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    if let Some(ward_id) = parsed.get("ward_id").and_then(|v| v.as_str()) {
+                                        on_event(StreamEvent::WardChanged {
+                                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                            ward_id: ward_id.to_string(),
+                                        });
+                                    }
+                                }
+
+                                // Check for plan_update marker
+                                if parsed.get("__plan_update")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
+                                    let explanation = parsed.get("explanation")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
+                                    on_event(StreamEvent::ActionPlanUpdate {
+                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                        plan,
+                                        explanation,
+                                    });
+                                }
+
+                                // Check for session_title_changed marker
+                                if parsed.get("__session_title_changed__")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+                                        on_event(StreamEvent::SessionTitleChanged {
+                                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                            title: title.to_string(),
+                                        });
+                                    }
                                 }
                             }
 
-                            // Check for plan_update marker
-                            if parsed.get("__plan_update")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
-                                let explanation = parsed.get("explanation")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
+                            on_event(StreamEvent::ToolResult {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                tool_id: tool_call.id.clone(),
+                                result: output.clone(),
+                                error: None,
+                            });
 
-                                on_event(StreamEvent::ActionPlanUpdate {
-                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                    plan,
-                                    explanation,
-                                });
-                            }
+                            // Process tool result (potentially offload large results to filesystem)
+                            let processed_output = self.process_tool_result(tool_name, output);
 
-                            // Check for session_title_changed marker
-                            if parsed.get("__session_title_changed__")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
-                                    on_event(StreamEvent::SessionTitleChanged {
-                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                        title: title.to_string(),
-                                    });
-                                }
-                            }
+                            // Truncate if still over budget (safety net when offload is disabled)
+                            let processed_output = truncate_tool_result(
+                                processed_output,
+                                self.config.max_tool_result_chars,
+                            );
+
+                            // Add tool result message
+                            current_messages.push(ChatMessage {
+                                role: "tool".to_string(),
+                                content: processed_output,
+                                tool_calls: None,
+                                tool_call_id: Some(tool_call.id.clone()),
+                            });
                         }
+                        Err(e) => {
+                            tracing::debug!("Tool error: {}", e);
 
-                        on_event(StreamEvent::ToolResult {
-                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            tool_id: tool_call.id.clone(),
-                            result: output.clone(),
-                            error: None,
-                        });
+                            // Track progress: tool failed
+                            progress_tracker.record_tool_call(tool_name, &tool_call.arguments, false);
+                            progress_tracker.record_error(&e);
 
-                        // Process tool result (potentially offload large results to filesystem)
-                        let processed_output = self.process_tool_result(tool_name, output);
+                            on_event(StreamEvent::ToolResult {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                tool_id: tool_call.id.clone(),
+                                result: String::new(),
+                                error: Some(e.clone()),
+                            });
 
-                        // Truncate if still over budget (safety net when offload is disabled)
-                        let processed_output = truncate_tool_result(
-                            processed_output,
-                            self.config.max_tool_result_chars,
-                        );
-
-                        // Add tool result message
-                        current_messages.push(ChatMessage {
-                            role: "tool".to_string(),
-                            content: processed_output,
-                            tool_calls: None,
-                            tool_call_id: Some(tool_call.id.clone()),
-                        });
-                    }
-                    Err(e) => {
-                        tracing::debug!("Tool error: {}", e);
-
-                        // Track progress: tool failed
-                        progress_tracker.record_tool_call(tool_name, &tool_call.arguments, false);
-                        progress_tracker.record_error(&e);
-
-                        on_event(StreamEvent::ToolResult {
-                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            tool_id: tool_call.id.clone(),
-                            result: String::new(),
-                            error: Some(e.clone()),
-                        });
-
-                        // Add error result message
-                        current_messages.push(ChatMessage {
-                            role: "tool".to_string(),
-                            content: json!({"error": e}).to_string(),
-                            tool_calls: None,
-                            tool_call_id: Some(tool_call.id.clone()),
-                        });
+                            // Add error result message
+                            current_messages.push(ChatMessage {
+                                role: "tool".to_string(),
+                                content: json!({"error": e}).to_string(),
+                                tool_calls: None,
+                                tool_call_id: Some(tool_call.id.clone()),
+                            });
+                        }
                     }
                 }
 
@@ -2557,5 +2601,13 @@ mod hook_tests {
             ToolCallDecision::Block { reason } => assert_eq!(reason, "dangerous"),
             _ => panic!("Expected Block"),
         }
+    }
+
+    #[test]
+    fn test_before_tool_call_block_returns_reason() {
+        let reason = "Ward boundary violation";
+        let result = format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason);
+        assert!(result.contains("blocked"));
+        assert!(result.contains(reason));
     }
 }
