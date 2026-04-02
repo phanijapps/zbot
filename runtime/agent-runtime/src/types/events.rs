@@ -133,6 +133,8 @@ pub enum StreamEvent {
         context: Option<Value>,
         wait_for_result: bool,
         max_iterations: Option<u32>,
+        output_schema: Option<Value>,
+        skills: Vec<String>,
     },
 
     /// Plan update action from the update_plan tool.
@@ -206,6 +208,18 @@ pub enum StreamEvent {
         /// Human-readable reason for extension
         reason: String,
     },
+
+    // ========================================================================
+    // SESSION EVENTS
+    // ========================================================================
+
+    /// Session title changed via set_session_title tool.
+    #[serde(rename = "session_title_changed")]
+    SessionTitleChanged {
+        timestamp: u64,
+        /// The new session title
+        title: String,
+    },
 }
 
 impl StreamEvent {
@@ -230,7 +244,8 @@ impl StreamEvent {
             | Self::Heartbeat { timestamp, .. }
             | Self::ContextState { timestamp, .. }
             | Self::WardChanged { timestamp, .. }
-            | Self::IterationsExtended { timestamp, .. } => *timestamp,
+            | Self::IterationsExtended { timestamp, .. }
+            | Self::SessionTitleChanged { timestamp, .. } => *timestamp,
         }
     }
 

@@ -5,6 +5,7 @@
 
 pub mod apply_patch;
 pub mod graph;
+pub mod session_title;
 pub mod skills;
 pub mod shell;
 pub mod todos;
@@ -12,6 +13,7 @@ pub mod update_plan;
 
 pub use apply_patch::ApplyPatchTool;
 pub use graph::ExecutionGraphTool;
+pub use session_title::SetSessionTitleTool;
 pub use shell::ShellTool;
 pub use todos::TodoTool;
 pub use update_plan::UpdatePlanTool;

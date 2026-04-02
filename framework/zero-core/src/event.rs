@@ -172,6 +172,17 @@ pub struct DelegateAction {
     /// Optional max iterations for the subagent execution loop.
     #[serde(default)]
     pub max_iterations: Option<u32>,
+
+    /// Optional JSON Schema the child agent's response must conform to.
+    ///
+    /// When provided, the child is instructed to respond with ONLY a JSON
+    /// object matching this schema.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
+
+    /// Skills to pre-load for the subagent.
+    #[serde(default)]
+    pub skills: Vec<String>,
 }
 
 impl EventActions {

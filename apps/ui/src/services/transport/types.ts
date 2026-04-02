@@ -392,7 +392,7 @@ export type UnsubscribeFn = () => void;
 // ============================================================================
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system";
+export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system" | "response" | "intent";
 export type SessionStatus = "running" | "completed" | "error" | "stopped";
 
 /** A single execution log entry (snake_case from API) */
@@ -416,6 +416,8 @@ export interface LogSession {
   conversation_id: string;
   agent_id: string;
   agent_name: string;
+  /** Title derived from the first user message in the session */
+  title?: string;
   parent_session_id?: string;
   started_at: string;
   ended_at?: string;

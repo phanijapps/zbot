@@ -13,6 +13,7 @@
 
 pub mod agent_registry;
 pub mod agents;
+pub mod lang_config;
 pub mod logging;
 pub mod mcp;
 pub mod models;
@@ -25,6 +26,7 @@ pub mod skills;
 pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
+pub use lang_config::{load_all_lang_configs, load_lang_config, LangConfig};
 pub use agents::AgentService;
 pub use models::ModelRegistry;
 pub use logging::LogSettings;
@@ -34,5 +36,5 @@ pub use plugin_service::PluginService;
 pub use providers::ProviderService;
 pub use recall_config::RecallConfig;
 pub use settings::{AppSettings, SettingsService};
-pub use skills::SkillService;
+pub use skills::{SkillFrontmatter, SkillService, WardAgentsMdConfig, WardSetup};
 pub use watcher::{FileWatcher, WatchConfig};

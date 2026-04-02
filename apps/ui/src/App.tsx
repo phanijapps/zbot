@@ -4,7 +4,7 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import { BrowserRouter, Routes, Route, Navigate, Link, useLocation, useNavigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, Link, useLocation } from "react-router-dom";
 import { Toaster } from "sonner";
 import {
   Bot,
@@ -17,6 +17,7 @@ import {
   Plug,
   Brain,
   Network,
+  MessageSquare,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
@@ -27,7 +28,7 @@ import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { WebMemoryPanel } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
-import { ChatSlider } from "./components/ChatSlider";
+// ChatSlider removed — chat is now the home route, no longer in a slide-over
 import { ThemeToggle } from "./components/ThemeToggle";
 
 // ============================================================================
@@ -170,8 +171,8 @@ function App() {
       <WebAppShell connectionStatus={connectionStatus}>
         <Routes>
           {/* Active pages */}
-          <Route path="/" element={<WebOpsDashboard />} />
-          <Route path="/chat" element={<WebOpsDashboard />} />
+          <Route path="/" element={<WebChatPanel />} />
+          <Route path="/dashboard" element={<WebOpsDashboard />} />
           <Route path="/logs" element={<WebLogsPanel />} />
           <Route path="/memory" element={<WebMemoryPanel />} />
           <Route path="/observatory" element={<ObservatoryPage />} />
@@ -180,6 +181,7 @@ function App() {
           <Route path="/settings" element={<WebSettingsPanel />} />
 
           {/* Redirects from old routes */}
+          <Route path="/chat" element={<Navigate to="/" replace />} />
           <Route path="/providers" element={<Navigate to="/settings" replace />} />
           <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
           <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
@@ -216,7 +218,8 @@ const navGroups: NavGroup[] = [
   {
     // Main group - no label
     items: [
-      { to: "/", label: "Dashboard", icon: LayoutDashboard },
+      { to: "/", label: "Chat", icon: MessageSquare },
+      { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
       { to: "/observatory", label: "Observatory", icon: Network },
@@ -238,15 +241,6 @@ const navGroups: NavGroup[] = [
 ];
 
 function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const isChatOpen = location.pathname === "/chat";
-
-  const handleCloseChat = () => {
-    // Navigate back to dashboard when closing chat
-    navigate("/");
-  };
-
   return (
     <div className="app-shell">
       <nav className="sidebar">
@@ -285,11 +279,6 @@ function WebAppShell({ children, connectionStatus }: WebAppShellProps) {
       </nav>
 
       <main className="flex-1 overflow-hidden">{children}</main>
-
-      {/* Chat Slider - overlays content when open */}
-      <ChatSlider isOpen={isChatOpen} onClose={handleCloseChat}>
-        <WebChatPanel />
-      </ChatSlider>
     </div>
   );
 }

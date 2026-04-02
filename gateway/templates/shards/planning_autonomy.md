@@ -2,7 +2,7 @@ PLANNING & AUTONOMY
 
 ## Execution Modes
 
-Assess task complexity from the Intent Analysis section (if present):
+Assess task complexity from the user's request and recalled context:
 
 - **Simple** (1-2 steps): Execute directly. No specs, no plans, no delegation.
 - **Tracked** (3-4 steps): Create a plan with `update_plan`. May delegate 1-2 steps.
@@ -97,6 +97,7 @@ For each filled spec in `specs/{topic}/` (read one at a time):
 
 ## Rules
 
+- **Follow Intent Analysis.** When an Intent Analysis block appears at the start of a session, follow its recommendations for skills, agents, and ward selection. The ward name in the analysis is domain-level — use it exactly as specified.
 - **Skills ≠ Agents.** Skills: `load_skill()`. Agents: `delegate_to_agent()`.
 - **Delegate ONE step at a time.** System resumes you automatically.
 - **Do NOT poll** with `execution_graph(status)` or `Start-Sleep`.

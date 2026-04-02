@@ -272,9 +272,18 @@ impl ContextEditingMiddleware {
         indices
             .iter()
             .filter_map(|idx| messages.get(*idx))
-            .map(|msg| estimate_total_tokens(&[msg.clone()]))
+            .map(|msg| estimate_message_tokens(msg))
             .sum()
     }
+}
+
+/// Estimate tokens for a single message without cloning.
+fn estimate_message_tokens(msg: &ChatMessage) -> usize {
+    let content_tokens = msg.content.len() / 4;
+    let tool_call_tokens = msg.tool_calls.as_ref()
+        .map(|tc| serde_json::to_string(tc).unwrap_or_default().len() / 4)
+        .unwrap_or(0);
+    content_tokens + tool_call_tokens + 4 // +4 for message overhead
 }
 
 impl Default for ContextEditingMiddleware {
@@ -324,8 +333,8 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
             return Ok(MiddlewareEffect::Proceed);
         }
 
-        // Clone messages for modification
-        let mut modified_messages = messages.clone();
+        // Take ownership of messages (no clone needed — `messages` is already owned)
+        let mut modified_messages = messages;
 
         // Clear the tool results (skill-aware: uses meaningful placeholders for skill loads)
         let unloaded_skills = self.clear_tool_results(

@@ -37,7 +37,7 @@ gateway-ws-protocol = { path = "gateway-ws-protocol" }
 gateway-bridge = { path = "gateway-bridge" }
 
 # Web framework
-axum = { version = "0.7", features = ["ws", "macros"] }
+axum = { version = "0.7", features = ["ws", "macros", "multipart"] }
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 

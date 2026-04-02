@@ -287,7 +287,7 @@ async fn handle_connection(
                     match serde_json::from_str::<ClientMessage>(&text) {
                         Ok(client_msg) => {
                             if let Err(e) =
-                                handle_client_message(&session_id, client_msg, &sessions, &runtime, &subscriptions).await
+                                handle_client_message(&session_id, client_msg, &sessions, &runtime, subscriptions.clone()).await
                             {
                                 warn!("Error handling message: {}", e);
                             }
@@ -321,7 +321,7 @@ async fn handle_client_message(
     msg: ClientMessage,
     sessions: &SessionRegistry,
     runtime: &RuntimeService,
-    subscriptions: &SubscriptionManager,
+    subscriptions: Arc<SubscriptionManager>,
 ) -> Result<()> {
     match msg {
         ClientMessage::Invoke {
@@ -336,6 +336,17 @@ async fn handle_client_message(
                 session_id, agent_id, conversation_id, exec_session_id, message
             );
 
+            // Pre-subscribe to the session_id if continuing an existing session.
+            // For new sessions, the on_session_ready callback handles it.
+            if let Some(ref sid) = exec_session_id {
+                let _ = subscriptions.subscribe_with_scope(
+                    &session_id.to_string(),
+                    sid.clone(),
+                    SubscriptionScope::Session,
+                    Some(SessionScopeState::default()),
+                ).await;
+            }
+
             // Create hook context for WebSocket connection
             let mut hook_context = HookContext::web(session_id);
             hook_context.metadata.insert(
@@ -343,10 +354,27 @@ async fn handle_client_message(
                 serde_json::Value::String(conversation_id.clone()),
             );
 
-            // Invoke the agent via runtime service with hook context
-            // Pass session_id to continue existing session or None to create new
+            // Build callback that subscribes the WS client before any events fire.
+            // This ensures IntentAnalysisStarted/Complete reach the subscriber.
+            let subs = subscriptions.clone();
+            let ws_sid = session_id.to_string();
+            let on_ready: gateway_execution::OnSessionReady = Box::new(move |agent_session_id: String| {
+                Box::pin(async move {
+                    let _ = subs.subscribe_with_scope(
+                        &ws_sid,
+                        agent_session_id,
+                        SubscriptionScope::Session,
+                        Some(SessionScopeState::default()),
+                    ).await;
+                })
+            });
+
+            // Invoke the agent via runtime service with hook context and callback
             match runtime
-                .invoke_with_hook(&agent_id, &conversation_id, &message, hook_context, exec_session_id)
+                .invoke_with_hook_and_callback(
+                    &agent_id, &conversation_id, &message,
+                    hook_context, exec_session_id, Some(on_ready),
+                )
                 .await
             {
                 Ok((_handle, returned_session_id)) => {
@@ -355,23 +383,11 @@ async fn handle_client_message(
                         agent_id, conversation_id, returned_session_id
                     );
 
-                    // Auto-subscribe this WS client to the new session_id so events
-                    // are received immediately (before client explicitly re-subscribes).
-                    // This eliminates the bootstrap problem where the first invoke's events
-                    // would be lost because the client only subscribed by conversation_id (web-xxx)
-                    // but events route by session_id (sess-xxx).
-                    let _ = subscriptions.subscribe_with_scope(
-                        &session_id.to_string(),
-                        returned_session_id.clone(),
-                        SubscriptionScope::Session,
-                        Some(SessionScopeState::default()),
-                    ).await;
-
                     // Notify client of the session_id so it can update its state
                     if let Some(session) = sessions.get(session_id).await {
                         let _ = session.send(ServerMessage::InvokeAccepted {
-                            session_id: returned_session_id.clone(),
-                            conversation_id: conversation_id.clone(),
+                            session_id: returned_session_id,
+                            conversation_id,
                         });
                     }
                 }
@@ -920,6 +936,41 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
             conversation_id,
             seq: None,
         }),
+
+        // Intent analysis started — show "Analyzing..." in UI
+        gateway_events::GatewayEvent::IntentAnalysisStarted {
+            session_id,
+            execution_id,
+        } => Some(ServerMessage::IntentAnalysisStarted {
+            session_id,
+            execution_id,
+            seq: None,
+        }),
+
+        // Intent analysis complete — forwarded so UI sidebar can display results
+        GatewayEvent::IntentAnalysisComplete {
+            session_id, execution_id, primary_intent, hidden_intents,
+            recommended_skills, recommended_agents, ward_recommendation, execution_strategy,
+        } => Some(ServerMessage::IntentAnalysisComplete {
+            session_id,
+            execution_id,
+            primary_intent,
+            hidden_intents,
+            recommended_skills,
+            recommended_agents,
+            ward_recommendation,
+            execution_strategy,
+            seq: None,
+        }),
+
+        // Session title changed
+        GatewayEvent::SessionTitleChanged { session_id, title } => {
+            Some(ServerMessage::SessionTitleChanged {
+                session_id,
+                title,
+                seq: None,
+            })
+        }
     }
 }
 

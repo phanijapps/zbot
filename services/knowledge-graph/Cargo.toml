@@ -26,6 +26,9 @@ thiserror = { workspace = true }
 # Regex for entity extraction
 regex = { workspace = true }
 
+# Async trait
+async-trait = { workspace = true }
+
 # Logging
 tracing = "0.1"
 

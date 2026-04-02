@@ -4,12 +4,12 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
-use knowledge_graph::{GraphStorage, GraphService};
+use knowledge_graph::{GraphStorage, GraphService, SqliteGraphTraversal};
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
-use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
+use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
 use crate::services::{AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
 use agent_runtime::llm::LocalEmbeddingClient;
@@ -17,7 +17,7 @@ use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
-use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository};
+use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -94,6 +94,9 @@ pub struct AppState {
 
     /// Plugin manager for STDIO plugin lifecycle.
     pub plugin_manager: Arc<gateway_bridge::PluginManager>,
+
+    /// Session archiver for offloading old transcripts to compressed files.
+    pub session_archiver: Option<Arc<SessionArchiver>>,
 
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
@@ -196,6 +199,13 @@ impl AppState {
         // Load recall configuration (compiled defaults merged with optional user overrides)
         let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(paths.vault_dir()));
 
+        // Create session archiver for offloading old transcripts to compressed files
+        let archive_path = paths.data_dir().join(&recall_config.session_offload.archive_path);
+        let session_archiver = Arc::new(SessionArchiver::new(
+            db_manager.clone(),
+            archive_path,
+        ));
+
         // Create memory recall with optional graph enrichment and episodic recall
         let mut memory_recall_inner = match &graph_service {
             Some(gs) => {
@@ -215,6 +225,20 @@ impl AppState {
             }
         };
         memory_recall_inner.set_episode_repo(episode_repo.clone());
+
+        // Wire recall log for tracking recalled facts per session (enables predictive recall)
+        let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
+        memory_recall_inner.set_recall_log(recall_log);
+
+        // Wire graph traversal engine for graph-driven expansion in recall
+        if let Some(ref gs) = graph_storage {
+            let traversal = Arc::new(SqliteGraphTraversal::new(
+                gs.clone(),
+                recall_config.graph_traversal.hop_decay,
+            ));
+            memory_recall_inner.set_traversal(traversal);
+        }
+
         let memory_recall = Arc::new(memory_recall_inner);
 
         // Clone embedding client before it's moved into distiller — the runner
@@ -293,6 +317,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
+            session_archiver: Some(session_archiver),
             plugin_manager,
             model_registry,
             workspace_cache,
@@ -360,6 +385,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            session_archiver: None,
             model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
@@ -430,6 +456,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            session_archiver: None,
             model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),

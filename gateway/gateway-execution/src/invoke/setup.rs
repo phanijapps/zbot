@@ -137,7 +137,7 @@ impl<'a> AgentLoader<'a> {
 
         // Append OS context and shards to agent instructions
         // so subagents know platform commands and tool syntax
-        agent.instructions = append_system_context(&agent.instructions, &self.paths);
+        agent.instructions = append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
 
         let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
 
@@ -197,7 +197,7 @@ impl<'a> AgentLoader<'a> {
             Ok(mut agent) => {
                 // Append OS context and shards so pre-configured agents
                 // also know platform commands (PowerShell vs bash, etc.)
-                agent.instructions = append_system_context(&agent.instructions, &self.paths);
+                agent.instructions = append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
                 Ok((agent, provider))
             }
@@ -248,34 +248,80 @@ impl<'a> AgentLoader<'a> {
 // SPECIALIST AGENT HELPERS
 // ============================================================================
 
+/// Subagent execution role — determines which rules are injected.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SubagentRole {
+    /// Write code, build things, run scripts. Strict rules.
+    Executor,
+    /// Review code, validate output, evaluate quality. Relaxed rules.
+    Reviewer,
+}
+
+/// Detect subagent role from task description.
+pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
+    let task_lower = task.to_lowercase();
+    let review_signals = [
+        "review", "validate", "verify", "evaluate",
+        "check quality", "assess", "qa", "audit",
+    ];
+    if review_signals.iter().any(|s| task_lower.contains(s)) {
+        SubagentRole::Reviewer
+    } else {
+        SubagentRole::Executor
+    }
+}
+
+pub fn subagent_rules(role: SubagentRole) -> &'static str {
+    match role {
+        SubagentRole::Executor => "\n\n# RULES\n\
+            Execute the task. Write files with apply_patch. Run with shell. Respond when done.\n\
+            Reusable code → core/. Task-specific → task dir. If a pip package is missing, install it.\n\
+            Respond with: files created, commands run, any errors or learnings.\n",
+        SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
+            You are reviewing work produced by another agent. Think critically and independently.\n\
+            1. Read the specs and the implementation carefully before forming opinions.\n\
+            2. Run the code and examine actual output — don't trust claims.\n\
+            3. Evaluate with domain expertise — are values reasonable? Is data complete?\n\
+            4. Report your findings in structured format.\n\n\
+            ## Report Format\n\
+            End your response with EXACTLY one of:\n\
+            RESULT: APPROVED\n\
+            or\n\
+            RESULT: DEFECTS\n\
+            - {file_or_output}: {issue} (severity: high|medium|low)\n",
+    }
+}
+
 /// Build specialist instructions from OS.md + tooling shard + role preamble.
 /// Does NOT include orchestration/planning instructions — specialists execute, they don't orchestrate.
 /// Append OS context and tooling shard to agent instructions.
 /// This ensures ALL agents (pre-configured and auto-created) know:
 /// - Platform commands (PowerShell vs bash)
 /// - Tool syntax (apply_patch, shell, etc.)
-fn append_system_context(instructions: &str, paths: &SharedVaultPaths) -> String {
+pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role: SubagentRole) -> String {
+    // OS context: platform-correct commands (bash vs PowerShell). ~500B.
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
         .unwrap_or_default();
 
-    let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
-        .map(|f| String::from_utf8_lossy(&f.data).to_string())
-        .unwrap_or_default();
+    // Rules: only append if not already present (delegated agents prepend rules in spawn.rs)
+    let rules = if instructions.contains("# RULES") {
+        "" // Already prepended by spawn.rs
+    } else {
+        subagent_rules(role)
+    };
 
-    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
-        .map(|f| String::from_utf8_lossy(&f.data).to_string())
-        .unwrap_or_default();
-
-    // Subagent discipline: execute directly, don't over-plan
-    let subagent_note = "\n\n# --- SUBAGENT RULES ---\n\
-        You are a specialist executing a specific task. Do NOT create complex plans.\n\
-        Execute your task directly in as few tool calls as possible.\n\
-        Use apply_patch for ALL file creation and editing.\n\
-        If your task fails after 2 attempts, respond with what you accomplished and what failed.\n";
+    // Memory shard only for root agents (subagents don't have memory tool)
+    let memory_shard = if instructions.contains("# RULES") {
+        String::new() // Delegated subagent — no memory tool, no shard needed
+    } else {
+        gateway_templates::Templates::get("shards/memory_learning.md")
+            .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            .unwrap_or_default()
+    };
 
     format!(
-        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}{}",
-        instructions, os_context, tooling, memory_shard, subagent_note
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}{}",
+        instructions, os_context, memory_shard, rules
     )
 }
 

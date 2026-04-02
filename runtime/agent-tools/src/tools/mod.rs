@@ -26,6 +26,7 @@ pub use search::{GrepTool, GlobTool};
 pub use execution::ApplyPatchTool;
 pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
+pub use execution::SetSessionTitleTool;
 pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
 pub use execution::TodoTool;
@@ -145,6 +146,8 @@ pub fn core_tools(
         Arc::new(WardTool::new(fs.clone(), fact_store)),
         // Lightweight plan tracking
         Arc::new(UpdatePlanTool::new()),
+        // Session title (human-readable label for the UI)
+        Arc::new(SetSessionTitleTool::new()),
         // DAG workflow engine for multi-step orchestration
         Arc::new(ExecutionGraphTool::new()),
         // Skill discovery (high priority - encourages delegation)

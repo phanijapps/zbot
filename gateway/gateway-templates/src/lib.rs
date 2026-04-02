@@ -19,7 +19,7 @@ use std::sync::Arc;
 pub struct Templates;
 
 /// Required shards — loaded from config/shards/ if present, otherwise from embedded defaults.
-const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning", "planning_autonomy"];
+const REQUIRED_SHARDS: &[&str] = &["first_turn_protocol", "tooling_skills", "memory_learning", "planning_autonomy"];
 
 // =========================================================================
 // Public API

@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 /// Run migrations for existing databases.
 ///
@@ -147,6 +147,49 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         );
     }
 
+    // v12 → v13: Add recall_log, memory_facts_archive tables; add archived to sessions
+    if version < 13 {
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS recall_log (
+                session_id TEXT NOT NULL,
+                fact_key TEXT NOT NULL,
+                recalled_at TEXT NOT NULL,
+                PRIMARY KEY (session_id, fact_key)
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_recall_log_session ON recall_log(session_id)",
+            [],
+        );
+
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS memory_facts_archive (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                scope TEXT NOT NULL DEFAULT 'agent',
+                category TEXT NOT NULL,
+                key TEXT NOT NULL,
+                content TEXT NOT NULL,
+                confidence REAL NOT NULL DEFAULT 0.8,
+                ward_id TEXT NOT NULL DEFAULT '__global__',
+                mention_count INTEGER NOT NULL DEFAULT 1,
+                source_summary TEXT,
+                embedding BLOB,
+                contradicted_by TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                archived_at TEXT NOT NULL
+            )",
+            [],
+        );
+
+        let _ = conn.execute(
+            "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+    }
+
     Ok(())
 }
 
@@ -181,7 +224,8 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             parent_session_id TEXT,
             thread_id TEXT,
             connector_id TEXT,
-            respond_to TEXT
+            respond_to TEXT,
+            archived INTEGER NOT NULL DEFAULT 0
         )",
         [],
     )?;
@@ -529,6 +573,50 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // RECALL LOG
+    // Tracks which facts were recalled per session for predictive recall
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS recall_log (
+            session_id TEXT NOT NULL,
+            fact_key TEXT NOT NULL,
+            recalled_at TEXT NOT NULL,
+            PRIMARY KEY (session_id, fact_key)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_recall_log_session ON recall_log(session_id)",
+        [],
+    )?;
+
+    // =========================================================================
+    // MEMORY FACTS ARCHIVE
+    // Pruned facts preserved for audit trail
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS memory_facts_archive (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'agent',
+            category TEXT NOT NULL,
+            key TEXT NOT NULL,
+            content TEXT NOT NULL,
+            confidence REAL NOT NULL DEFAULT 0.8,
+            ward_id TEXT NOT NULL DEFAULT '__global__',
+            mention_count INTEGER NOT NULL DEFAULT 1,
+            source_summary TEXT,
+            embedding BLOB,
+            contradicted_by TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            archived_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -650,14 +738,106 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_version_is_12() {
+    fn test_schema_version_is_13() {
         let conn = setup_db();
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 12, "schema version should be 12");
+        assert_eq!(version, 13, "schema version should be 13");
+    }
+
+    #[test]
+    fn test_recall_log_table_exists() {
+        let conn = setup_db();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='recall_log'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "recall_log table should exist");
+
+        // Verify we can insert and query
+        conn.execute(
+            "INSERT INTO recall_log (session_id, fact_key, recalled_at) VALUES ('s1', 'k1', datetime('now'))",
+            [],
+        )
+        .expect("insert into recall_log");
+
+        let fact_key: String = conn
+            .query_row(
+                "SELECT fact_key FROM recall_log WHERE session_id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fact_key, "k1");
+    }
+
+    #[test]
+    fn test_memory_facts_archive_table_exists() {
+        let conn = setup_db();
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_facts_archive'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "memory_facts_archive table should exist");
+
+        // Verify we can insert and query
+        conn.execute(
+            "INSERT INTO memory_facts_archive (id, agent_id, scope, category, key, content, confidence, ward_id, mention_count, created_at, updated_at, archived_at)
+             VALUES ('a1', 'agent1', 'agent', 'pref', 'color', 'blue', 0.9, '__global__', 3, datetime('now'), datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert into memory_facts_archive");
+
+        let content: String = conn
+            .query_row(
+                "SELECT content FROM memory_facts_archive WHERE id = 'a1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(content, "blue");
+    }
+
+    #[test]
+    fn test_sessions_has_archived_column() {
+        let conn = setup_db();
+        // Insert a session and verify archived defaults to 0
+        conn.execute(
+            "INSERT INTO sessions (id, root_agent_id, created_at) VALUES ('s1', 'agent1', datetime('now'))",
+            [],
+        )
+        .expect("insert session");
+
+        let archived: i32 = conn
+            .query_row(
+                "SELECT archived FROM sessions WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 0, "default archived should be 0");
+
+        // Update to archived
+        conn.execute("UPDATE sessions SET archived = 1 WHERE id = 's1'", [])
+            .expect("update archived");
+
+        let archived: i32 = conn
+            .query_row(
+                "SELECT archived FROM sessions WHERE id = 's1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(archived, 1, "archived should be 1 after update");
     }
 
     #[test]

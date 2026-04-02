@@ -10,7 +10,11 @@ use agent_runtime::{
     AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
     OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
 };
-use agent_tools::{core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings};
+use agent_tools::{
+    core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings,
+    // Individual tools for lean subagent registry
+    ShellTool, ApplyPatchTool, LoadSkillTool,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -280,20 +284,28 @@ impl ExecutorBuilder {
     fn build_tool_registry(&self, fs_context: Arc<dyn FileSystemContext>) -> Arc<ToolRegistry> {
         let mut tool_registry = ToolRegistry::new();
 
-        // Load core tools (always enabled, with optional DB-backed fact store)
-        tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
+        if self.is_delegated {
+            // Subagents get 4 tools: execute, don't orchestrate.
+            // shell (includes grep/cat/find natively on unix), apply_patch,
+            // load_skill (on demand), respond (return result + learnings).
+            // No memory — subagents report learnings in respond output,
+            // root synthesizes and saves them.
+            tool_registry.register(Arc::new(ShellTool::new()));
+            tool_registry.register(Arc::new(ApplyPatchTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(RespondTool::new()));
+        } else {
+            // Root agent gets the full tool set
+            tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
+            tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));
+            tool_registry.register(Arc::new(RespondTool::new()));
+            tool_registry.register(Arc::new(DelegateTool::new()));
+            tool_registry.register(Arc::new(ListAgentsTool::new()));
 
-        // Load optional tools based on settings
-        tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));
-
-        // Register action tools (respond, delegate, list_agents)
-        tool_registry.register(Arc::new(RespondTool::new()));
-        tool_registry.register(Arc::new(DelegateTool::new()));
-        tool_registry.register(Arc::new(ListAgentsTool::new()));
-
-        // Register connector resource query tool (if provider available)
-        if let Some(provider) = &self.connector_provider {
-            tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+            // Register connector resource query tool (if provider available)
+            if let Some(provider) = &self.connector_provider {
+                tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+            }
         }
 
         Arc::new(tool_registry)

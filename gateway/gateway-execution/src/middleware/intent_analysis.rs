@@ -1,6 +1,6 @@
 use agent_runtime::{ChatMessage, LlmClient};
 use gateway_services::{AgentService, SharedVaultPaths, SkillService};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use zero_core::MemoryFactStore;
 
@@ -8,7 +8,7 @@ use zero_core::MemoryFactStore;
 // Types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IntentAnalysis {
     pub primary_intent: String,
     pub hidden_intents: Vec<String>,
@@ -16,10 +16,12 @@ pub struct IntentAnalysis {
     pub recommended_agents: Vec<String>,
     pub ward_recommendation: WardRecommendation,
     pub execution_strategy: ExecutionStrategy,
+    /// Kept for backward compat with existing logs; no longer requested from LLM.
+    #[serde(default)]
     pub rewritten_prompt: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WardRecommendation {
     /// "use_existing" or "create_new"
     pub action: String,
@@ -35,22 +37,26 @@ pub struct WardRecommendation {
     pub reason: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionStrategy {
     pub approach: String,
     pub graph: Option<ExecutionGraph>,
     pub explanation: String,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecutionGraph {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
-    pub mermaid: String,
+    /// Kept for backward compat with existing logs; no longer requested from LLM.
+    /// Will be derived from nodes/edges in code when UI needs it.
+    #[serde(default)]
+    pub mermaid: Option<String>,
+    #[serde(default)]
     pub max_cycles: Option<u32>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: String,
     pub task: String,
@@ -58,7 +64,7 @@ pub struct GraphNode {
     pub skills: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum GraphEdge {
     Conditional {
@@ -71,7 +77,7 @@ pub enum GraphEdge {
     },
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeCondition {
     pub when: String,
     pub to: String,
@@ -81,73 +87,174 @@ pub struct EdgeCondition {
 // LLM prompt
 // ---------------------------------------------------------------------------
 
-const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer for an AI agent platform.
-
-Given a user request and the platform's available resources, your job is to:
-1. Identify the primary intent behind the request
-2. Discover hidden/implicit intents the user hasn't stated but would expect
-3. Recommend which skills and agents would help
-4. Recommend the right ward (project workspace) — reuse existing or create new
-5. Design an execution graph showing how to orchestrate the work
-
-## Ward Philosophy
-Wards are reusable project workspaces organized by DOMAIN, not by task. Think of them as permanent libraries:
-- "financial-analysis" for ALL stock/options/market work
-- "math-tutor" for ALL math work
-- "research-hub" for general research projects
-If an existing ward matches the domain, REUSE it. Only create new for genuinely new domains.
-
-Every ward MUST follow this directory convention:
-- core/         — Shared reusable Python modules (data fetching, indicators, formatters)
-- {task-subdir}/ — Task-specific scripts and intermediate data (e.g., stocks/spy/, trinomials/)
-- output/       — All final deliverables: reports, charts, HTML, PDF, CSV exports
-- AGENTS.md     — Living documentation of the ward's purpose, structure, and reusable components
-
-Include a "structure" map in your ward_recommendation showing directories and their purpose.
+const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. Given a user request and available resources, determine intent, ward, and execution approach.
 
 ## Rules
-- Hidden intents must be actionable instructions, not labels
-- Every non-trivial execution must end with a quality verification node
-- Use conditional edges when outcomes determine next steps
-- CRITICAL: Skills and agents are DIFFERENT things. Skills are loaded with load_skill(). Agents are delegated to with delegate_to_agent().
-- In "recommended_skills": use skill names from the "Relevant Skills" list. These are SKILLS, not agents.
-- In "recommended_agents" and graph node "agent" fields: use ONLY agent names from the "Relevant Agents" list or "root". NEVER put a skill name (like "coding" or "ml-pipeline-builder") as an agent. Any invalid agent name will crash.
-- If the request is simple (greeting, quick question), use approach "simple" with no graph
-- Ward names must be domain-level (not task-specific): "financial-analysis" not "lmnd-report"
-- Any graph node that creates or modifies files MUST include "coding" in its skills list. The coding skill teaches agents how to write clean, modular, reusable code in the ward directory structure.
+- Hidden intents: actionable instructions the user didn't state but expects. Not labels.
+- Skills and agents are DIFFERENT. Skills = load_skill(). Agents = delegate_to_agent(). Never mix them.
+- recommended_skills: from the "Relevant Skills" list only.
+- recommended_agents: from the "Relevant Agents" list or "root" only. Never put skill names as agents.
+- Wards are domain-level workspaces (e.g., "financial-analysis"), not task-specific. Reuse existing wards.
+- approach "simple" for greetings, quick questions, single-step tasks.
+- approach "graph" when the task needs multiple agents, code, or multi-step orchestration.
+- When approach is "graph", ALWAYS include "coding" in recommended_skills — it provides the ward structure and task runner.
 
 ## Output Format
-Respond with ONLY a JSON object (no markdown fences, no explanation) matching this schema:
+Respond with ONLY a JSON object (no markdown fences):
 {
-  "primary_intent": "string -- the core intent category",
-  "hidden_intents": ["string -- actionable instruction for each hidden intent"],
-  "recommended_skills": ["skill-name from the list"],
-  "recommended_agents": ["agent-name from the list"],
+  "primary_intent": "string",
+  "hidden_intents": ["actionable instruction for each hidden intent"],
+  "recommended_skills": ["skill-name"],
+  "recommended_agents": ["agent-name"],
   "ward_recommendation": {
     "action": "use_existing | create_new",
-    "ward_name": "domain-level name like financial-analysis, math-tutor, research-hub",
-    "subdirectory": "task-specific subdir like stocks/spy, trinomials -- null for simple tasks",
-    "structure": {"core/": "purpose", "stocks/spy/": "purpose", "output/": "purpose"},
-    "reason": "why this ward"
+    "ward_name": "domain-level name",
+    "subdirectory": "task-specific subdir or null",
+    "reason": "why"
   },
   "execution_strategy": {
-    "approach": "simple | tracked | graph",
-    "graph": {
-      "nodes": [{"id": "A", "task": "description", "agent": "agent-name or root", "skills": ["skill-name"]}],
-      "edges": [
-        {"from": "A", "to": "B"},
-        {"from": "B", "conditions": [{"when": "natural language condition", "to": "C or END"}]}
-      ],
-      "mermaid": "graph TD mermaid diagram string",
-      "max_cycles": 2
-    },
-    "explanation": "string -- why this orchestration shape, which nodes run in parallel"
-  },
-  "rewritten_prompt": "string -- the user's message with all implicit intent made explicit"
-}
+    "approach": "simple | graph",
+    "explanation": "one sentence — why this approach"
+  }
+}"#;
 
-Only include the "graph" field when approach is "graph".
-When approach is "simple", omit the graph entirely."#;
+// ---------------------------------------------------------------------------
+// format_intent_injection — appended to agent instructions so the agent
+// can follow the intent analysis recommendations.
+// ---------------------------------------------------------------------------
+
+/// Format an `IntentAnalysis` as a markdown section suitable for appending
+/// to the agent's system prompt / instructions.
+///
+/// `spec_guidance` is optional domain-specific guidance for writing specs
+/// (e.g., "Cover data sources and rate limits"). When provided, it is appended
+/// after the ward rules section.
+pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<&str>) -> String {
+    let mut out = String::from("\n\n## Intent Analysis\n\n");
+
+    out.push_str(&format!("**Primary Intent:** {}\n", analysis.primary_intent));
+
+    if !analysis.hidden_intents.is_empty() {
+        out.push_str("**Hidden Intents:**\n");
+        for h in &analysis.hidden_intents {
+            out.push_str(&format!("- {}\n", h));
+        }
+    }
+
+    // Ward recommendation — the agent MUST use this ward name
+    let wr = &analysis.ward_recommendation;
+    out.push_str(&format!(
+        "\n**Ward:** {} ({}) — {}\n",
+        wr.ward_name, wr.action, wr.reason
+    ));
+    if let Some(ref sub) = wr.subdirectory {
+        out.push_str(&format!("  Subdirectory: {}\n", sub));
+    }
+
+    if !analysis.recommended_skills.is_empty() {
+        out.push_str(&format!(
+            "\n**Recommended Skills:** {}\n",
+            analysis.recommended_skills.join(", ")
+        ));
+    }
+    if !analysis.recommended_agents.is_empty() {
+        out.push_str(&format!(
+            "**Recommended Agents:** {}\n",
+            analysis.recommended_agents.join(", ")
+        ));
+    }
+
+    // Execution approach
+    let es = &analysis.execution_strategy;
+    out.push_str(&format!("\n**Execution Approach:** {}\n", es.approach));
+    if !es.explanation.is_empty() {
+        out.push_str(&format!("{}\n", es.explanation));
+    }
+
+    // SDLC pattern for graph approach — root designs and executes the graph
+    if es.approach == "graph" {
+        out.push_str(r#"
+## Execution Plan — SDLC Pattern
+
+You are the orchestrator. Execute this pipeline:
+
+### Phase 1: Specs (YOU — do not delegate)
+Write one spec per module in specs/<subdirectory>/. One apply_patch per spec. Under 3KB each.
+
+### Phase 2: Tasks.json (YOU — do not delegate)
+After specs, create `specs/<subdirectory>/tasks.json` — an ordered task list for the code-agent.
+Each task has: id, action (create/run/verify), file or command, spec_ref, depends_on, status (pending).
+Core module creates come FIRST (no dependencies). Task scripts depend on core modules. Run/verify depend on creates.
+Every task MUST have: id, action, description, acceptance criteria, spec_ref, depends_on, status.
+Example:
+```json
+{"tasks":[
+  {"id":1,"action":"create","file":"core/options.py","description":"Options chain utilities — IV calc, chain parsing","spec_ref":"03-options.md#core-module-candidates","acceptance":"Exports: calculate_iv(chain,price)->float, parse_chain(raw)->dict. Importable.","depends_on":[],"status":"pending"},
+  {"id":2,"action":"create","file":"stocks/amd/collect.py","description":"AMD data collection — imports core.data_fetcher, core.options","spec_ref":"01-data.md","acceptance":"Creates: ohlcv.csv (200+ rows), fundamentals.json, options_chain.json","depends_on":[1],"status":"pending"},
+  {"id":3,"action":"run","command":"python3 stocks/amd/collect.py","description":"Execute data collection","acceptance":"Exit 0, all data files created","depends_on":[2],"status":"pending"},
+  {"id":4,"action":"verify","command":"ls -la stocks/amd/data/","description":"Verify outputs","acceptance":"ohlcv.csv, fundamentals.json, options_chain.json exist, non-zero","depends_on":[3],"status":"pending"}
+]}
+```
+
+### Phase 3: Coding (delegate to code-agent)
+Tell code-agent: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
+Do NOT set max_iterations. Do NOT write custom task descriptions. Do NOT tell it to call ward(use).
+
+### Phase 4-6: Review → Validation → Output
+Same delegation pattern. If DEFECTS returned, re-delegate to coding with the defect list.
+
+### After a crash
+Check TASK RUNNER STATUS in the crash report. Re-delegate: "Continue processing tasks.json"
+NEVER code the remaining tasks yourself.
+
+### Discipline
+- Do NOT call list_skills, list_agents, or set max_iterations.
+- Update plan only at phase transitions. Do not poll with shell.
+"#);
+    }
+
+    // Ward rules — always included regardless of approach
+    out.push_str(r#"
+**Ward Rule:** ALL code must be written inside a ward. If you need to write code:
+1. Enter the recommended ward (or create if new)
+2. Read AGENTS.md to understand what exists in core/
+3. Check if existing core/ modules already solve your need — reuse, don't recreate
+4. If new functionality: write a spec first, then implement
+5. After implementing: archive spec to specs/archive/
+
+**Spec Lifecycle:**
+- Active specs: `specs/<task-name>/<nn>-<module>.md`
+- Archived specs: `specs/archive/<task-name>/`
+- Path uses the task subdirectory name, NOT the ward name
+
+**Spec Structure:**
+One spec per functional unit. Never one giant file.
+Example for a task named "my-analysis" with data collection, processing, and output:
+- `specs/my-analysis/01-data-collection.md`
+- `specs/my-analysis/02-processing.md`
+- `specs/my-analysis/03-output.md`
+Each spec under 3KB. If it's growing large, split it.
+
+**Spec Quality — MANDATORY sections (all 8 required):**
+
+1. **Purpose**: One sentence — what and why.
+2. **Inputs**: Exact sources with schema, types, expected volume.
+3. **Outputs**: Exact file path, format, full schema with types.
+4. **Algorithm**: Step-by-step logic with formulas — not just library/function names.
+5. **Dependencies**: Which core/ modules to import (with signatures), external packages.
+6. **Error handling**: What happens on missing data, API failure, invalid values.
+7. **Validation**: How to verify correctness — expected ranges, spot-check methods.
+8. **Core module candidates**: What belongs in core/ (reusable) vs task-specific.
+
+Do NOT start implementation until all specs have all 8 sections.
+"#);
+
+    if let Some(guidance) = spec_guidance {
+        out.push_str(&format!("\n**Domain Spec Guidance:**\n{}\n", guidance));
+    }
+
+    out
+}
 
 // ---------------------------------------------------------------------------
 // format_user_template
@@ -200,81 +307,20 @@ pub fn format_user_template(
 }
 
 // ---------------------------------------------------------------------------
-// inject_intent_context
-// ---------------------------------------------------------------------------
-
-pub fn inject_intent_context(system_prompt: &mut String, analysis: &IntentAnalysis) {
-    let mut section = String::from("\n\n## Intent Analysis\n\n");
-    let is_graph = analysis.execution_strategy.graph.is_some();
-
-    section.push_str(&format!("**Primary Intent**: {}\n\n", analysis.primary_intent));
-
-    if !analysis.hidden_intents.is_empty() {
-        section.push_str("**Hidden Intents** (address ALL of these):\n");
-        for (i, intent) in analysis.hidden_intents.iter().enumerate() {
-            section.push_str(&format!("{}. {}\n", i + 1, intent));
-        }
-        section.push('\n');
-    }
-
-    // Ward
-    let ward = &analysis.ward_recommendation;
-    section.push_str(&format!("**Ward**: `{}` ({}) — {}\n\n", ward.ward_name, ward.action, ward.reason));
-
-    if is_graph {
-        // GRAPH TASKS: slim injection — specs are in the ward, not here
-        section.push_str(&format!(
-            "**Approach**: graph ({} nodes). Placeholder specs are in `specs/` in the ward.\n\
-             **Action**: Delegate to a planning subagent to fill the specs, then delegate execution.\n\
-             Do NOT load skills, create your own plan, or write code directly. Read the specs.\n\n",
-            analysis.execution_strategy.graph.as_ref().map(|g| g.nodes.len()).unwrap_or(0)
-        ));
-    } else {
-        // SIMPLE/TRACKED TASKS: full injection — skills, agents, everything
-        if !analysis.recommended_skills.is_empty() {
-            section.push_str("**Recommended Skills** (load when needed):\n");
-            for skill in &analysis.recommended_skills {
-                section.push_str(&format!("- {}\n", skill));
-            }
-            section.push('\n');
-        }
-
-        if !analysis.recommended_agents.is_empty() {
-            section.push_str("**Recommended Agents**:\n");
-            for agent in &analysis.recommended_agents {
-                section.push_str(&format!("- {}\n", agent));
-            }
-            section.push('\n');
-        }
-    }
-
-    section.push_str(&format!(
-        "**Rewritten request**: {}\n",
-        analysis.rewritten_prompt
-    ));
-
-    system_prompt.push_str(&section);
-}
-
-// ---------------------------------------------------------------------------
 // analyze_intent
 // ---------------------------------------------------------------------------
 
-/// Autonomous intent analysis: indexes resources, searches semantically, calls LLM.
+/// Analyze user intent: searches semantically for resources, calls LLM.
+///
+/// Resource indexing must happen before this call (see `index_resources`).
 pub async fn analyze_intent(
     llm_client: &dyn LlmClient,
     user_message: &str,
     fact_store: &dyn MemoryFactStore,
-    skill_service: &SkillService,
-    agent_service: &AgentService,
-    vault_paths: &SharedVaultPaths,
 ) -> Result<IntentAnalysis, String> {
     tracing::info!("Starting intent analysis for root session");
 
-    // Step 1: Index resources into memory (idempotent upsert)
-    index_resources(fact_store, skill_service, agent_service, vault_paths).await;
-
-    // Step 2: Semantic search for relevant resources
+    // Step 1: Semantic search for relevant resources
     let results = search_resources(fact_store, user_message).await;
 
     tracing::info!(
@@ -313,7 +359,7 @@ pub async fn analyze_intent(
     let content = strip_markdown_fences(&response.content);
 
     // Step 5: Parse response
-    let analysis = serde_json::from_str::<IntentAnalysis>(&content)
+    let analysis: IntentAnalysis = serde_json::from_str(&content)
         .map_err(|e| format!("Failed to parse intent analysis JSON: {}", e))?;
 
     tracing::info!(
@@ -329,7 +375,7 @@ pub async fn analyze_intent(
 
 /// Index skills, agents, and wards into memory_facts for semantic search.
 /// Uses upsert (save_fact) so this is idempotent — safe to call every session.
-async fn index_resources(
+pub async fn index_resources(
     fact_store: &dyn MemoryFactStore,
     skill_service: &SkillService,
     agent_service: &AgentService,
@@ -498,6 +544,7 @@ fn strip_markdown_fences(content: &str) -> String {
     trimmed.to_string()
 }
 
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -518,8 +565,7 @@ mod tests {
             "execution_strategy": {
                 "approach": "simple",
                 "explanation": "Simple greeting, no orchestration needed"
-            },
-            "rewritten_prompt": "Hello, how are you?"
+            }
         }"#;
 
         let analysis: IntentAnalysis = serde_json::from_str(json).unwrap();
@@ -529,7 +575,42 @@ mod tests {
         assert!(analysis.recommended_agents.is_empty());
         assert_eq!(analysis.execution_strategy.approach, "simple");
         assert!(analysis.execution_strategy.graph.is_none());
-        assert_eq!(analysis.rewritten_prompt, "Hello, how are you?");
+        // rewritten_prompt defaults to empty when not present
+        assert!(analysis.rewritten_prompt.is_empty());
+    }
+
+    /// Old logs with rewritten_prompt, structure, mermaid still deserialize (backward compat).
+    #[test]
+    fn test_backward_compat_old_format() {
+        let json = r#"{
+            "primary_intent": "code_generation",
+            "hidden_intents": [],
+            "recommended_skills": [],
+            "recommended_agents": [],
+            "ward_recommendation": {
+                "action": "create_new", "ward_name": "test",
+                "subdirectory": null, "reason": "test",
+                "structure": {"core/": "shared modules"}
+            },
+            "execution_strategy": {
+                "approach": "graph",
+                "graph": {
+                    "nodes": [{"id": "A", "task": "do it", "agent": "root", "skills": []}],
+                    "edges": [{"from": "A", "to": "END"}],
+                    "mermaid": "graph TD\nA-->END",
+                    "max_cycles": 2
+                },
+                "explanation": "test"
+            },
+            "rewritten_prompt": "old rewritten prompt"
+        }"#;
+
+        let analysis: IntentAnalysis = serde_json::from_str(json).unwrap();
+        assert_eq!(analysis.rewritten_prompt, "old rewritten prompt");
+        assert_eq!(analysis.ward_recommendation.structure.len(), 1);
+        let graph = analysis.execution_strategy.graph.unwrap();
+        assert_eq!(graph.mermaid, Some("graph TD\nA-->END".to_string()));
+        assert_eq!(graph.max_cycles, Some(2));
     }
 
     #[test]
@@ -555,13 +636,10 @@ mod tests {
                             {"when": "review fails", "to": "C"}
                         ]},
                         {"from": "C", "to": "B"}
-                    ],
-                    "mermaid": "graph TD\nA-->B\nB-->|pass|END\nB-->|fail|C\nC-->B",
-                    "max_cycles": 3
+                    ]
                 },
                 "explanation": "Generate, review, fix loop with max 3 cycles"
-            },
-            "rewritten_prompt": "Generate code with unit tests and error handling, then review"
+            }
         }"#;
 
         let analysis: IntentAnalysis = serde_json::from_str(json).unwrap();
@@ -575,7 +653,8 @@ mod tests {
         assert_eq!(graph.nodes.len(), 3);
         assert_eq!(graph.nodes[0].id, "A");
         assert_eq!(graph.nodes[0].agent, "coder");
-        assert_eq!(graph.max_cycles, Some(3));
+        assert!(graph.mermaid.is_none());
+        assert!(graph.max_cycles.is_none());
 
         // Check edges: first is Direct, second is Conditional, third is Direct
         assert_eq!(graph.edges.len(), 3);
@@ -631,93 +710,6 @@ mod tests {
         assert!(result.contains("### Available Skills\n(none available)"));
         assert!(result.contains("### Available Agents\n(none available)"));
         assert!(result.contains("### Existing Wards\n(none — all new)"));
-    }
-
-    #[test]
-    fn test_inject_simple_intent() {
-        let analysis = IntentAnalysis {
-            primary_intent: "greeting".to_string(),
-            hidden_intents: vec![],
-            recommended_skills: vec![],
-            recommended_agents: vec![],
-            ward_recommendation: WardRecommendation {
-                action: "use_existing".into(),
-                ward_name: "scratch".into(),
-                subdirectory: None,
-                structure: Default::default(),
-                reason: "test".into(),
-            },
-            execution_strategy: ExecutionStrategy {
-                approach: "simple".to_string(),
-                graph: None,
-                explanation: "Simple greeting".to_string(),
-            },
-            rewritten_prompt: "Hello!".to_string(),
-        };
-
-        let mut prompt = String::from("You are a helpful assistant.");
-        inject_intent_context(&mut prompt, &analysis);
-
-        assert!(prompt.contains("**Primary Intent**: greeting"));
-        assert!(prompt.contains("**Rewritten request**: Hello!"));
-        // No graph section
-        assert!(!prompt.contains("```mermaid"));
-        assert!(!prompt.contains("**Hidden Intents**"));
-        assert!(!prompt.contains("**Recommended Skills**"));
-        assert!(!prompt.contains("**Recommended Agents**"));
-    }
-
-    #[test]
-    fn test_inject_graph_intent() {
-        let analysis = IntentAnalysis {
-            primary_intent: "code_generation".to_string(),
-            hidden_intents: vec![
-                "Write unit tests".to_string(),
-                "Add error handling".to_string(),
-            ],
-            recommended_skills: vec!["code-gen".to_string(), "testing".to_string()],
-            recommended_agents: vec!["coder".to_string(), "reviewer".to_string()],
-            ward_recommendation: WardRecommendation {
-                action: "use_existing".into(),
-                ward_name: "scratch".into(),
-                subdirectory: None,
-                structure: Default::default(),
-                reason: "test".into(),
-            },
-            execution_strategy: ExecutionStrategy {
-                approach: "graph".to_string(),
-                graph: Some(ExecutionGraph {
-                    nodes: vec![GraphNode {
-                        id: "A".to_string(),
-                        task: "Generate code".to_string(),
-                        agent: "coder".to_string(),
-                        skills: vec!["code-gen".to_string()],
-                    }],
-                    edges: vec![GraphEdge::Direct {
-                        from: "A".to_string(),
-                        to: "END".to_string(),
-                    }],
-                    mermaid: "graph TD\nA-->END".to_string(),
-                    max_cycles: Some(5),
-                }),
-                explanation: "Generate then done".to_string(),
-            },
-            rewritten_prompt: "Generate code with tests and error handling".to_string(),
-        };
-
-        let mut prompt = String::from("You are a helpful assistant.");
-        inject_intent_context(&mut prompt, &analysis);
-
-        assert!(prompt.contains("**Primary Intent**: code_generation"));
-        assert!(prompt.contains("1. Write unit tests"));
-        assert!(prompt.contains("2. Add error handling"));
-        assert!(prompt.contains("**Ward**: `scratch`"));
-        // Graph tasks get slim injection — no skills, agents, or mermaid
-        assert!(prompt.contains("**Approach**: graph (1 nodes)"));
-        assert!(prompt.contains("Placeholder specs"));
-        assert!(!prompt.contains("```mermaid")); // No graph in slim injection
-        assert!(!prompt.contains("Node A")); // No skill-node mapping
-        assert!(prompt.contains("**Rewritten request**: Generate code with tests and error handling"));
     }
 
     // -----------------------------------------------------------------------
@@ -794,21 +786,6 @@ mod tests {
         }
     }
 
-    /// Create test fixtures: fact store, skill service, agent service, vault paths.
-    fn test_fixtures() -> (MockFactStore, SkillService, AgentService, SharedVaultPaths) {
-        let tmp = std::env::temp_dir().join("intent_analysis_test");
-        let _ = std::fs::create_dir_all(tmp.join("skills"));
-        let _ = std::fs::create_dir_all(tmp.join("agents"));
-        let _ = std::fs::create_dir_all(tmp.join("wards"));
-
-        let fact_store = MockFactStore;
-        let skill_service = SkillService::new(tmp.join("skills"));
-        let agent_service = AgentService::new(tmp.join("agents"));
-        let vault_paths: SharedVaultPaths = Arc::new(gateway_services::VaultPaths::new(tmp));
-
-        (fact_store, skill_service, agent_service, vault_paths)
-    }
-
     #[tokio::test]
     async fn test_analyze_intent_simple() {
         let mock = MockLlmClient {
@@ -821,19 +798,17 @@ mod tests {
                 "execution_strategy": {
                     "approach": "simple",
                     "explanation": "Simple greeting"
-                },
-                "rewritten_prompt": "Hello!"
+                }
             }"#
             .to_string(),
         };
 
-        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
-        let result = analyze_intent(&mock, "Hi", &fact_store, &skill_svc, &agent_svc, &paths).await;
+        let fact_store = MockFactStore;
+        let result = analyze_intent(&mock, "Hi", &fact_store).await;
         let analysis = result.expect("should parse simple intent");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.execution_strategy.approach, "simple");
         assert!(analysis.execution_strategy.graph.is_none());
-        assert_eq!(analysis.rewritten_prompt, "Hello!");
     }
 
     #[tokio::test]
@@ -853,19 +828,16 @@ mod tests {
                         ],
                         "edges": [
                             {"from": "A", "to": "END"}
-                        ],
-                        "mermaid": "graph TD\nA-->END",
-                        "max_cycles": 2
+                        ]
                     },
                     "explanation": "Generate then done"
-                },
-                "rewritten_prompt": "Generate code with tests"
+                }
             }"#
             .to_string(),
         };
 
-        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
-        let result = analyze_intent(&mock, "Write code", &fact_store, &skill_svc, &agent_svc, &paths).await;
+        let fact_store = MockFactStore;
+        let result = analyze_intent(&mock, "Write code", &fact_store).await;
         let analysis = result.expect("should parse graph intent");
         assert_eq!(analysis.primary_intent, "code_generation");
         assert_eq!(analysis.recommended_skills, vec!["code-gen"]);
@@ -876,7 +848,6 @@ mod tests {
             .expect("graph should be present");
         assert_eq!(graph.nodes.len(), 1);
         assert_eq!(graph.nodes[0].id, "A");
-        assert_eq!(graph.max_cycles, Some(2));
     }
 
     #[tokio::test]
@@ -885,8 +856,8 @@ mod tests {
             response: "This is not valid JSON at all.".to_string(),
         };
 
-        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
-        let result = analyze_intent(&mock, "Hello", &fact_store, &skill_svc, &agent_svc, &paths).await;
+        let fact_store = MockFactStore;
+        let result = analyze_intent(&mock, "Hello", &fact_store).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -909,17 +880,130 @@ mod tests {
     "execution_strategy": {
         "approach": "simple",
         "explanation": "Simple greeting"
-    },
-    "rewritten_prompt": "Hello!"
+    }
 }
 ```"#
             .to_string(),
         };
 
-        let (fact_store, skill_svc, agent_svc, paths) = test_fixtures();
-        let result = analyze_intent(&mock, "Hi", &fact_store, &skill_svc, &agent_svc, &paths).await;
+        let fact_store = MockFactStore;
+        let result = analyze_intent(&mock, "Hi", &fact_store).await;
         let analysis = result.expect("should strip fences and parse");
         assert_eq!(analysis.primary_intent, "greeting");
-        assert_eq!(analysis.rewritten_prompt, "Hello!");
+    }
+
+    #[test]
+    fn test_format_intent_injection() {
+        let analysis = IntentAnalysis {
+            primary_intent: "financial_analysis".to_string(),
+            hidden_intents: vec!["Save results to output/".to_string()],
+            recommended_skills: vec!["coding".to_string(), "web-search".to_string()],
+            recommended_agents: vec!["code-agent".to_string()],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "financial-analysis".to_string(),
+                subdirectory: Some("stocks/spy".to_string()),
+                structure: Default::default(),
+                reason: "Domain-level ward for all financial work".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "Research then analyze".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, None);
+        assert!(injection.contains("## Intent Analysis"));
+        assert!(injection.contains("**Ward:** financial-analysis (create_new)"));
+        assert!(injection.contains("Subdirectory: stocks/spy"));
+        assert!(injection.contains("coding, web-search"));
+        assert!(injection.contains("code-agent"));
+        assert!(injection.contains("Research then analyze"));
+        assert!(injection.contains("Ward Rule:"));
+        assert!(injection.contains("Spec Lifecycle:"));
+        assert!(injection.contains("Spec Quality"));
+    }
+
+    #[test]
+    fn test_format_intent_injection_includes_ward_rules() {
+        let analysis = IntentAnalysis {
+            primary_intent: "code_generation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "test-ward".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, None);
+        assert!(injection.contains("Ward Rule:"));
+        assert!(injection.contains("Spec Lifecycle:"));
+        assert!(injection.contains("Spec Quality"));
+    }
+
+    #[test]
+    fn test_format_intent_injection_includes_spec_guidance_when_provided() {
+        let analysis = IntentAnalysis {
+            primary_intent: "code_generation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "test-ward".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, Some("Cover data sources and rate limits"));
+        assert!(injection.contains("Domain Spec Guidance:"));
+        assert!(injection.contains("Cover data sources"));
+    }
+
+    #[test]
+    fn test_format_intent_injection_omits_spec_guidance_when_none() {
+        let analysis = IntentAnalysis {
+            primary_intent: "code_generation".to_string(),
+            hidden_intents: vec![],
+            recommended_skills: vec![],
+            recommended_agents: vec![],
+            ward_recommendation: WardRecommendation {
+                action: "create_new".to_string(),
+                ward_name: "test-ward".to_string(),
+                subdirectory: None,
+                structure: Default::default(),
+                reason: "test".to_string(),
+            },
+            execution_strategy: ExecutionStrategy {
+                approach: "graph".to_string(),
+                graph: None,
+                explanation: "test".to_string(),
+            },
+            rewritten_prompt: String::new(),
+        };
+
+        let injection = format_intent_injection(&analysis, None);
+        assert!(!injection.contains("Domain Spec Guidance:"));
     }
 }

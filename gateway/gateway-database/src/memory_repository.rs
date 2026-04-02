@@ -286,6 +286,26 @@ impl MemoryRepository {
         })
     }
 
+    /// Archive a fact by moving it from `memory_facts` to `memory_facts_archive`.
+    ///
+    /// Performs an atomic INSERT-then-DELETE within a single connection so the
+    /// fact is never lost. Used by the pruning subsystem to keep the active
+    /// store lean without discarding data.
+    pub fn archive_fact(&self, fact_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO memory_facts_archive
+                 SELECT id, agent_id, scope, category, key, content, confidence, ward_id,
+                        mention_count, source_summary, embedding, contradicted_by,
+                        created_at, updated_at, datetime('now')
+                 FROM memory_facts WHERE id = ?1",
+                params![fact_id],
+            )?;
+            conn.execute("DELETE FROM memory_facts WHERE id = ?1", params![fact_id])?;
+            Ok(())
+        })
+    }
+
     /// Search for facts similar to the given embedding, filtered by minimum similarity threshold.
     ///
     /// Returns facts with cosine similarity >= `min_similarity`. Used for contradiction detection.
@@ -609,6 +629,35 @@ impl MemoryRepository {
         })
     }
 
+    /// Get top facts for a specific category, ordered by confidence then recency.
+    ///
+    /// Used to always-inject corrections into recall (regardless of query
+    /// similarity) and for capability gap detection (skill/agent categories).
+    pub fn get_facts_by_category(
+        &self,
+        agent_id: &str,
+        category: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                 FROM memory_facts
+                 WHERE agent_id = ?1 AND category = ?2
+                   AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 ORDER BY confidence DESC, updated_at DESC
+                 LIMIT ?3"
+            )?;
+
+            let rows = stmt.query_map(
+                params![agent_id, category, limit as i64],
+                |row| row_to_memory_fact(row),
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Count total memory facts for an agent.
     pub fn count_memory_facts(&self, agent_id: &str) -> Result<usize, String> {
         self.db.with_connection(|conn| {
@@ -806,14 +855,14 @@ fn f32_vec_to_blob(vec: &[f32]) -> Vec<u8> {
 }
 
 /// Convert raw bytes (little-endian) back to f32 vector.
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
+pub fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
     blob.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
 
 /// Compute cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
