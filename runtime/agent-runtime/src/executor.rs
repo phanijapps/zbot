@@ -503,6 +503,10 @@ impl AgentExecutor {
         // Seeded from initial recall keys; extended by mid-session recall hook results.
         let mut recall_injected_keys = self.recall_initial_keys.clone();
 
+        // Track whether the loop stopped due to delegation (vs respond or natural end).
+        // Set inside the loop; read after the loop to decide whether to emit Done.
+        let mut stopped_for_delegation = false;
+
         // Create shared tool context that persists across all tool calls in this execution.
         // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
         // that other tools and middleware can access throughout the execution loop.
@@ -980,7 +984,7 @@ impl AgentExecutor {
                                 // Delegation claim is set atomically by the delegate tool via try_claim
                                 // Stop executor loop — continuation callback will resume root
                                 // when the subagent completes.
-                                should_stop_after_respond = true;
+                                stopped_for_delegation = true;
                                 tracing::debug!("Delegation detected, will stop after current tool batch");
                             }
 
@@ -1190,18 +1194,25 @@ impl AgentExecutor {
             }
 
             // If respond tool was called, stop the loop - agent has finished responding
-            if should_stop_after_respond {
-                tracing::debug!("Stopping execution loop after respond action");
+            if should_stop_after_respond || stopped_for_delegation {
+                tracing::debug!("Stopping execution loop — respond={} delegation={}",
+                    should_stop_after_respond, stopped_for_delegation);
                 break;
             }
         }
 
-        // Emit done event
-        on_event(StreamEvent::Done {
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-            final_message: full_response.clone(),
-            token_count: full_response.len(),
-        });
+        // Emit done event — but NOT if we stopped for delegation.
+        // When delegation is pending, the runner should NOT mark this execution
+        // as completed. The continuation callback will resume it later.
+        if !stopped_for_delegation {
+            on_event(StreamEvent::Done {
+                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                final_message: full_response.clone(),
+                token_count: full_response.len(),
+            });
+        } else {
+            tracing::info!("Executor paused for delegation — skipping Done event");
+        }
 
         // Emit context state for checkpoint persistence
         // This includes skill tracking (graph), loaded skills, and other tool context state

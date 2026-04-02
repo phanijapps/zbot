@@ -857,30 +857,47 @@ impl ExecutionRunner {
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Complete execution and emit events
-                    complete_execution(
-                        &state_service,
-                        &log_service,
-                        &event_bus,
-                        &execution_id,
-                        &session_id,
-                        &agent_id,
-                        &conversation_id,
-                        Some(accumulated_response),
-                        connector_registry.as_ref(),
-                        respond_to.as_ref(),
-                        thread_id.as_deref(),
-                        bridge_registry.as_ref(),
-                        bridge_outbox.as_ref(),
-                    )
-                    .await;
+                    // Check if this execution spawned delegations that are still active
+                    let has_active_delegations = !delegation_registry
+                        .get_by_session_id(&session_id)
+                        .is_empty();
 
-                    // Do NOT cancel delegations on successful completion.
-                    // complete_execution() already requests continuation when
-                    // pending delegations exist. Cancelling here would remove
-                    // delegations from the registry and decrement the counter,
-                    // preventing the continuation callback from firing when
-                    // the subagent completes.
+                    if has_active_delegations {
+                        // Root paused for delegation — do NOT complete execution.
+                        // The continuation callback will handle completion.
+                        tracing::info!(
+                            session_id = %session_id,
+                            "Root paused for delegation — skipping execution completion"
+                        );
+
+                        // Request continuation so the session resumes when delegations complete
+                        if let Err(e) = state_service.request_continuation(&session_id) {
+                            tracing::warn!("Failed to request continuation: {}", e);
+                        }
+
+                        // Aggregate tokens so UI shows progress
+                        if let Err(e) = state_service.aggregate_session_tokens(&session_id) {
+                            tracing::warn!("Failed to aggregate session tokens: {}", e);
+                        }
+                    } else {
+                        // Normal completion — no active delegations
+                        complete_execution(
+                            &state_service,
+                            &log_service,
+                            &event_bus,
+                            &execution_id,
+                            &session_id,
+                            &agent_id,
+                            &conversation_id,
+                            Some(accumulated_response),
+                            connector_registry.as_ref(),
+                            respond_to.as_ref(),
+                            thread_id.as_deref(),
+                            bridge_registry.as_ref(),
+                            bridge_outbox.as_ref(),
+                        )
+                        .await;
+                    }
 
                     // Auto-update ward AGENTS.md after root execution completes
                     // (scaffolding now happens at ward creation time in the WardChanged handler)
