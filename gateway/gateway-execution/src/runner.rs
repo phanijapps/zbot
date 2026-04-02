@@ -2105,18 +2105,30 @@ pub fn auto_update_agents_md_with_lang_configs(
     let purpose = extract_purpose_section(&agents_md_path, ward_id);
     sections.push(format!("\n## Purpose\n{}\n", purpose));
 
-    // ── Ward Documentation ──
+    // ── Read These First ──
     let memory_bank_exists = ward_dir.join("memory-bank").exists();
     if memory_bank_exists {
-        sections.push("## Ward Documentation\n".to_string());
-        sections.push("- [memory-bank/ward.md](memory-bank/ward.md) — Domain knowledge and session learnings\n".to_string());
+        sections.push("## Read These First\n".to_string());
+        sections.push("Before writing any code, read these files to understand the ward:\n".to_string());
+
+        sections.push("- [memory-bank/ward.md](memory-bank/ward.md) — Domain knowledge, patterns, and session learnings\n".to_string());
+
+        if ward_dir.join("memory-bank").join("structure.md").exists() {
+            sections.push("- [memory-bank/structure.md](memory-bank/structure.md) — Directory layout and tech stack\n".to_string());
+        }
+
+        if ward_dir.join("memory-bank").join("core_docs.md").exists() {
+            sections.push("- [memory-bank/core_docs.md](memory-bank/core_docs.md) — Core module functions and usage\n".to_string());
+        }
+
         // List any other docs in memory-bank/
         if let Ok(entries) = std::fs::read_dir(ward_dir.join("memory-bank")) {
             let mut docs: Vec<_> = entries
                 .filter_map(|e| e.ok())
                 .filter(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
-                    e.path().is_file() && name.ends_with(".md") && name != "ward.md"
+                    e.path().is_file() && name.ends_with(".md")
+                        && name != "ward.md" && name != "structure.md" && name != "core_docs.md"
                 })
                 .collect();
             docs.sort_by_key(|e| e.file_name());
