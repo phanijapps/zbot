@@ -129,129 +129,86 @@ Respond with ONLY a JSON object (no markdown fences):
 /// `spec_guidance` is optional domain-specific guidance for writing specs
 /// (e.g., "Cover data sources and rate limits"). When provided, it is appended
 /// after the ward rules section.
-pub fn format_intent_injection(analysis: &IntentAnalysis, spec_guidance: Option<&str>) -> String {
-    let mut out = String::from("\n\n## Intent Analysis\n\n");
+pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option<&str>) -> String {
+    let mut out = String::from("\n\n## Task Analysis\n\n");
 
-    out.push_str(&format!("**Primary Intent:** {}\n", analysis.primary_intent));
+    // Goal
+    out.push_str(&format!("**Goal:** {}\n", analysis.primary_intent));
 
+    // Hidden requirements — things the user expects but didn't say
     if !analysis.hidden_intents.is_empty() {
-        out.push_str("**Hidden Intents:**\n");
+        out.push_str("\n**Requirements (implicit):**\n");
         for h in &analysis.hidden_intents {
             out.push_str(&format!("- {}\n", h));
         }
     }
 
-    // Ward recommendation — the agent MUST use this ward name
+    // Ward
     let wr = &analysis.ward_recommendation;
     out.push_str(&format!(
-        "\n**Ward:** {} ({}) — {}\n",
+        "\n**Workspace:** ward `{}` ({}) — {}\n",
         wr.ward_name, wr.action, wr.reason
     ));
     if let Some(ref sub) = wr.subdirectory {
-        out.push_str(&format!("  Subdirectory: {}\n", sub));
+        out.push_str(&format!("  Subdirectory: `{}`\n", sub));
     }
 
-    if !analysis.recommended_skills.is_empty() {
-        out.push_str(&format!(
-            "\n**Recommended Skills:** {}\n",
-            analysis.recommended_skills.join(", ")
-        ));
-    }
-    if !analysis.recommended_agents.is_empty() {
-        out.push_str(&format!(
-            "**Recommended Agents:** {}\n",
-            analysis.recommended_agents.join(", ")
-        ));
+    // Available resources
+    if !analysis.recommended_skills.is_empty() || !analysis.recommended_agents.is_empty() {
+        out.push_str("\n**Available Resources:**\n");
+        for skill in &analysis.recommended_skills {
+            out.push_str(&format!("- skill: `{}` (load with load_skill)\n", skill));
+        }
+        for agent in &analysis.recommended_agents {
+            out.push_str(&format!("- agent: `{}` (delegate with delegate_to_agent)\n", agent));
+        }
     }
 
-    // Execution approach
+    // Execution graph — high-level plan for the agent to expand
     let es = &analysis.execution_strategy;
-    out.push_str(&format!("\n**Execution Approach:** {}\n", es.approach));
-    if !es.explanation.is_empty() {
-        out.push_str(&format!("{}\n", es.explanation));
-    }
-
-    // SDLC pattern for graph approach — root designs and executes the graph
     if es.approach == "graph" {
-        out.push_str(r#"
-## Execution Plan — SDLC Pattern
-
-You are the orchestrator. Execute this pipeline:
-
-### Phase 1: Specs (YOU — do not delegate)
-Write one spec per module in specs/<subdirectory>/. One apply_patch per spec. Under 3KB each.
-
-### Phase 2: Tasks.json (YOU — do not delegate)
-After specs, create `specs/<subdirectory>/tasks.json` — an ordered task list for the code-agent.
-Each task has: id, action (create/run/verify), file or command, spec_ref, depends_on, status (pending).
-Core module creates come FIRST (no dependencies). Task scripts depend on core modules. Run/verify depend on creates.
-Every task MUST have: id, action, description, acceptance criteria, spec_ref, depends_on, status.
-Example:
-```json
-{"tasks":[
-  {"id":1,"action":"create","file":"core/options.py","description":"Options chain utilities — IV calc, chain parsing","spec_ref":"03-options.md#core-module-candidates","acceptance":"Exports: calculate_iv(chain,price)->float, parse_chain(raw)->dict. Importable.","depends_on":[],"status":"pending"},
-  {"id":2,"action":"create","file":"stocks/amd/collect.py","description":"AMD data collection — imports core.data_fetcher, core.options","spec_ref":"01-data.md","acceptance":"Creates: ohlcv.csv (200+ rows), fundamentals.json, options_chain.json","depends_on":[1],"status":"pending"},
-  {"id":3,"action":"run","command":"python3 stocks/amd/collect.py","description":"Execute data collection","acceptance":"Exit 0, all data files created","depends_on":[2],"status":"pending"},
-  {"id":4,"action":"verify","command":"ls -la stocks/amd/data/","description":"Verify outputs","acceptance":"ohlcv.csv, fundamentals.json, options_chain.json exist, non-zero","depends_on":[3],"status":"pending"}
-]}
-```
-
-### Phase 3: Coding (delegate to code-agent)
-Tell code-agent: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
-Do NOT set max_iterations. Do NOT write custom task descriptions. Do NOT tell it to call ward(use).
-
-### Phase 4-6: Review → Validation → Output
-Same delegation pattern. If DEFECTS returned, re-delegate to coding with the defect list.
-
-### After a crash
-Check TASK RUNNER STATUS in the crash report. Re-delegate: "Continue processing tasks.json"
-NEVER code the remaining tasks yourself.
-
-### Discipline
-- Do NOT call list_skills, list_agents, or set max_iterations.
-- Update plan only at phase transitions. Do not poll with shell.
-"#);
+        if let Some(ref graph) = es.graph {
+            out.push_str("\n**Suggested Execution Graph:**\n");
+            for node in &graph.nodes {
+                let skills_hint = if node.skills.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [skills: {}]", node.skills.join(", "))
+                };
+                out.push_str(&format!(
+                    "- `{}` → {} (agent: {}){}\n",
+                    node.id, node.task, node.agent, skills_hint
+                ));
+            }
+            if !graph.edges.is_empty() {
+                out.push_str("  Flow: ");
+                let edge_strs: Vec<String> = graph.edges.iter().map(|e| match e {
+                    GraphEdge::Direct { from, to } => format!("{} → {}", from, to),
+                    GraphEdge::Conditional { from, conditions } => {
+                        let conds: Vec<String> = conditions.iter()
+                            .map(|c| format!("{}: {}", c.when, c.to))
+                            .collect();
+                        format!("{} → [{}]", from, conds.join(", "))
+                    }
+                }).collect();
+                out.push_str(&edge_strs.join(", "));
+                out.push('\n');
+            }
+            out.push_str("\nThis is a starting point. Expand, reorder, or parallelize as you see fit.\n");
+        } else {
+            out.push_str(&format!("\n**Approach:** {} — {}\n", es.approach, es.explanation));
+            out.push_str("Decompose this goal into subtasks and delegate to the right agents.\n");
+        }
+    } else {
+        if !es.explanation.is_empty() {
+            out.push_str(&format!("\n**Approach:** {}\n", es.explanation));
+        }
     }
 
-    // Ward rules — always included regardless of approach
+    // Lightweight ward reminder
     out.push_str(r#"
-**Ward Rule:** ALL code must be written inside a ward. If you need to write code:
-1. Enter the recommended ward (or create if new)
-2. Read AGENTS.md to understand what exists in core/
-3. Check if existing core/ modules already solve your need — reuse, don't recreate
-4. If new functionality: write a spec first, then implement
-5. After implementing: archive spec to specs/archive/
-
-**Spec Lifecycle:**
-- Active specs: `specs/<task-name>/<nn>-<module>.md`
-- Archived specs: `specs/archive/<task-name>/`
-- Path uses the task subdirectory name, NOT the ward name
-
-**Spec Structure:**
-One spec per functional unit. Never one giant file.
-Example for a task named "my-analysis" with data collection, processing, and output:
-- `specs/my-analysis/01-data-collection.md`
-- `specs/my-analysis/02-processing.md`
-- `specs/my-analysis/03-output.md`
-Each spec under 3KB. If it's growing large, split it.
-
-**Spec Quality — MANDATORY sections (all 8 required):**
-
-1. **Purpose**: One sentence — what and why.
-2. **Inputs**: Exact sources with schema, types, expected volume.
-3. **Outputs**: Exact file path, format, full schema with types.
-4. **Algorithm**: Step-by-step logic with formulas — not just library/function names.
-5. **Dependencies**: Which core/ modules to import (with signatures), external packages.
-6. **Error handling**: What happens on missing data, API failure, invalid values.
-7. **Validation**: How to verify correctness — expected ranges, spot-check methods.
-8. **Core module candidates**: What belongs in core/ (reusable) vs task-specific.
-
-Do NOT start implementation until all specs have all 8 sections.
+**Ward Rule:** All file-producing work happens inside the ward. Enter it before delegating. Read AGENTS.md to know what exists — reuse before creating.
 "#);
-
-    if let Some(guidance) = spec_guidance {
-        out.push_str(&format!("\n**Domain Spec Guidance:**\n{}\n", guidance));
-    }
 
     out
 }
@@ -1016,15 +973,12 @@ mod tests {
         };
 
         let injection = format_intent_injection(&analysis, None);
-        assert!(injection.contains("## Intent Analysis"));
-        assert!(injection.contains("**Ward:** financial-analysis (create_new)"));
-        assert!(injection.contains("Subdirectory: stocks/spy"));
-        assert!(injection.contains("coding, web-search"));
+        assert!(injection.contains("## Task Analysis"));
+        assert!(injection.contains("financial-analysis"));
+        assert!(injection.contains("stocks/spy"));
+        assert!(injection.contains("coding"));
         assert!(injection.contains("code-agent"));
-        assert!(injection.contains("Research then analyze"));
         assert!(injection.contains("Ward Rule:"));
-        assert!(injection.contains("Spec Lifecycle:"));
-        assert!(injection.contains("Spec Quality"));
     }
 
     #[test]
@@ -1051,12 +1005,12 @@ mod tests {
 
         let injection = format_intent_injection(&analysis, None);
         assert!(injection.contains("Ward Rule:"));
-        assert!(injection.contains("Spec Lifecycle:"));
-        assert!(injection.contains("Spec Quality"));
+        assert!(injection.contains("test-ward"));
     }
 
     #[test]
-    fn test_format_intent_injection_includes_spec_guidance_when_provided() {
+    fn test_format_intent_injection_spec_guidance_ignored() {
+        // spec_guidance is no longer injected — root decides its own approach
         let analysis = IntentAnalysis {
             primary_intent: "code_generation".to_string(),
             hidden_intents: vec![],
@@ -1078,8 +1032,9 @@ mod tests {
         };
 
         let injection = format_intent_injection(&analysis, Some("Cover data sources and rate limits"));
-        assert!(injection.contains("Domain Spec Guidance:"));
-        assert!(injection.contains("Cover data sources"));
+        // Should still produce valid injection without spec guidance section
+        assert!(injection.contains("## Task Analysis"));
+        assert!(injection.contains("test-ward"));
     }
 
     #[test]

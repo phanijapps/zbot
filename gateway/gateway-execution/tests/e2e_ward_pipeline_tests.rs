@@ -359,11 +359,11 @@ fn test_intent_injection_sdlc_for_graph() {
 
     let injection = format_intent_injection(&analysis, None);
 
-    // SDLC pattern should be present for graph approach
-    assert!(injection.contains("SDLC Pattern"), "Graph approach should include SDLC pattern");
-    assert!(injection.contains("tasks.json"), "SDLC should mention tasks.json");
-    assert!(injection.contains("ralph.py"), "SDLC should mention ralph.py");
-    assert!(injection.contains("Do NOT set max_iterations"), "Should warn against setting max_iterations");
+    // Graph approach should include goal-oriented task analysis (not SDLC prescription)
+    assert!(injection.contains("## Task Analysis"), "Graph approach should include task analysis");
+    assert!(injection.contains("Goal:"), "Should include the goal");
+    assert!(injection.contains("Decompose this goal"), "Should encourage decomposition for graph without explicit graph nodes");
+    assert!(injection.contains("Ward Rule:"), "Should include ward discipline");
 }
 
 /// Simple approach should NOT inject SDLC pattern.
