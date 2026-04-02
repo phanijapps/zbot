@@ -314,8 +314,14 @@ pub async fn spawn_delegated_agent(
     };
 
     // Create execution handle
-    // Default 1000 iterations — loop detection (score <= -12) is the kill mechanism, not count.
-    let max_iter = request.max_iterations.unwrap_or(1000);
+    // Complexity-based iteration budget (overrides default if complexity is set)
+    let max_iter = match request.complexity.as_deref() {
+        Some("S") => request.max_iterations.unwrap_or(15),
+        Some("M") => request.max_iterations.unwrap_or(30),
+        Some("L") => request.max_iterations.unwrap_or(50),
+        Some("XL") => request.max_iterations.unwrap_or(100),
+        _ => request.max_iterations.unwrap_or(1000),
+    };
     let handle = ExecutionHandle::new(max_iter);
     let handle_clone = handle.clone();
 

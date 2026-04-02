@@ -255,6 +255,7 @@ pub fn handle_delegation(
     max_iterations: Option<u32>,
     output_schema: &Option<serde_json::Value>,
     skills: &[String],
+    complexity: &Option<String>,
 ) {
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
@@ -305,6 +306,7 @@ pub fn handle_delegation(
         max_iterations,
         output_schema: output_schema.clone(),
         skills: skills.to_vec(),
+        complexity: complexity.clone(),
     });
 
     log_delegation(ctx, child_agent, task);
@@ -330,10 +332,11 @@ pub fn process_stream_event(
         max_iterations,
         output_schema,
         skills,
+        complexity,
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills);
+        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills, complexity);
     }
 
     // Log based on event type

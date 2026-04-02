@@ -48,6 +48,9 @@ pub struct DelegationRequest {
 
     /// Skills to pre-load for the subagent.
     pub skills: Vec<String>,
+
+    /// Task complexity level ("S", "M", "L", "XL") for budget enforcement.
+    pub complexity: Option<String>,
 }
 
 // ============================================================================

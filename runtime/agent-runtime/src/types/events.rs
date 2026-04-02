@@ -135,6 +135,7 @@ pub enum StreamEvent {
         max_iterations: Option<u32>,
         output_schema: Option<Value>,
         skills: Vec<String>,
+        complexity: Option<String>,
     },
 
     /// Plan update action from the update_plan tool.
