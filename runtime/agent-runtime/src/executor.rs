@@ -1925,18 +1925,97 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
         return result;
     }
 
+    let lines: Vec<&str> = result.lines().collect();
+    let total_lines = lines.len();
+
+    if total_lines <= 1 {
+        // Single line — fall back to char-based truncation
+        let notice = format!("\n\n--- TRUNCATED ({} chars total) ---\n\n", result.len());
+        let budget = max_chars.saturating_sub(notice.len());
+        let head_size = (budget * 4) / 5;
+        let tail_size = budget - head_size;
+        return format!("{}{}{}", &result[..head_size], notice, &result[result.len() - tail_size..]);
+    }
+
+    // Line-aware: keep first N + last M lines within budget
+    let head_budget = (max_chars * 4) / 5; // 80% for head
+    let mut head = String::new();
+    let mut head_count = 0;
+    for line in &lines {
+        let next = format!("{}\n", line);
+        if head.len() + next.len() > head_budget {
+            break;
+        }
+        head.push_str(&next);
+        head_count += 1;
+    }
+
+    // Tail: work backwards
+    let tail_budget = max_chars / 5; // 20% for tail
+    let mut tail_lines: Vec<&str> = Vec::new();
+    let mut tail_len = 0;
+    for line in lines.iter().rev() {
+        let next_len = line.len() + 1;
+        if tail_len + next_len > tail_budget {
+            break;
+        }
+        tail_lines.push(line);
+        tail_len += next_len;
+    }
+    tail_lines.reverse();
+    let tail_count = tail_lines.len();
+    let tail = tail_lines.join("\n");
+
+    let omitted = total_lines.saturating_sub(head_count + tail_count);
     let notice = format!(
-        "\n\n--- TRUNCATED ({} chars total, showing first and last portions) ---\n\n",
-        result.len()
+        "\n--- TRUNCATED: showing {}/{} lines ({} omitted, {} chars total) ---\n\n",
+        head_count + tail_count, total_lines, omitted, result.len()
     );
-    let budget = max_chars.saturating_sub(notice.len());
-    let head_size = (budget * 4) / 5; // 80%
-    let tail_size = budget - head_size; // 20%
 
-    let head = &result[..head_size];
-    let tail = &result[result.len() - tail_size..];
+    // Final budget check — if combined fits, return it; otherwise trim head/tail further
+    let combined = format!("{}{}{}", head, notice, tail);
+    if combined.len() <= max_chars {
+        return combined;
+    }
 
-    format!("{}{}{}", head, notice, tail)
+    // Re-compute with tighter budgets accounting for notice length
+    let notice_len = notice.len();
+    let content_budget = max_chars.saturating_sub(notice_len);
+    let tight_head_budget = (content_budget * 4) / 5;
+    let tight_tail_budget = content_budget - tight_head_budget;
+
+    let mut tight_head = String::new();
+    let mut tight_head_count = 0;
+    for line in &lines {
+        let next = format!("{}\n", line);
+        if tight_head.len() + next.len() > tight_head_budget {
+            break;
+        }
+        tight_head.push_str(&next);
+        tight_head_count += 1;
+    }
+
+    let mut tight_tail_lines: Vec<&str> = Vec::new();
+    let mut tight_tail_len = 0;
+    for line in lines.iter().rev() {
+        let next_len = line.len() + 1;
+        if tight_tail_len + next_len > tight_tail_budget {
+            break;
+        }
+        tight_tail_lines.push(line);
+        tight_tail_len += next_len;
+    }
+    tight_tail_lines.reverse();
+    let tight_tail_count = tight_tail_lines.len();
+    let tight_tail = tight_tail_lines.join("\n");
+
+    let tight_omitted = total_lines.saturating_sub(tight_head_count + tight_tail_count);
+    let tight_notice = format!(
+        "\n--- TRUNCATED: showing {}/{} lines ({} omitted, {} chars total) ---\n\n",
+        tight_head_count + tight_tail_count, total_lines, tight_omitted, result.len()
+    );
+
+    format!("{}{}{}", tight_head, tight_notice, tight_tail)
 }
 
 #[cfg(test)]
@@ -1973,6 +2052,21 @@ mod truncation_tests {
         let head_h = truncated.matches('H').count();
         let tail_t = truncated.matches('T').count();
         assert!(head_h > tail_t, "head ({}) should be larger than tail ({})", head_h, tail_t);
+    }
+
+    #[test]
+    fn test_truncation_preserves_line_boundaries() {
+        let lines: Vec<String> = (0..100).map(|i| format!("Line {}: some content here", i)).collect();
+        let input = lines.join("\n");
+        let result = truncate_tool_result(input, 500);
+
+        // Should not cut mid-line
+        for line in result.lines() {
+            assert!(
+                line.starts_with("Line") || line.contains("TRUNCATED") || line.contains("---") || line.is_empty(),
+                "Truncated mid-line: '{}'", line
+            );
+        }
     }
 
     #[test]
