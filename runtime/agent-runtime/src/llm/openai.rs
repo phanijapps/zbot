@@ -25,6 +25,17 @@ pub struct OpenAiClient {
     http_client: reqwest::Client,
 }
 
+/// Attempt to recover the first JSON object from a concatenated string like `{"a":"b"}{"c":"d"}`.
+/// Returns Some(Value) if recovery succeeds, None otherwise.
+fn recover_first_json(raw: &str) -> Option<serde_json::Value> {
+    if let Some(pos) = raw.find("}{") {
+        let first = &raw[..pos + 1];
+        serde_json::from_str(first).ok()
+    } else {
+        None
+    }
+}
+
 /// Check if a JSON string is complete (has balanced braces, brackets, and strings).
 ///
 /// Used to detect truncated tool call arguments when the LLM hits `max_tokens` mid-argument.
@@ -238,7 +249,12 @@ impl OpenAiClient {
                         let arguments_str = call.get("function")?.get("arguments")?.as_str()?.to_string();
 
                         // Parse arguments from string to Value for internal use
-                        let arguments = serde_json::from_str(&arguments_str).ok()?;
+                        let arguments = serde_json::from_str(&arguments_str)
+                            .or_else(|_| {
+                                recover_first_json(&arguments_str)
+                                    .ok_or_else(|| serde_json::from_str::<Value>("null").unwrap_err())
+                            })
+                            .ok()?;
 
                         Some(ToolCall::new(id, name, arguments))
                     })
@@ -504,15 +520,25 @@ impl LlmClient for OpenAiClient {
                     match serde_json::from_str::<serde_json::Value>(&acc.arguments) {
                         Ok(args) => args,
                         Err(e) => {
-                            tracing::warn!(
-                                "Failed to parse tool call arguments for '{}': {} — raw: {}",
-                                acc.name, e, acc.arguments
-                            );
-                            json!({
-                                "__error__": "PARSE_ERROR",
-                                "__message__": format!("JSON parse error: {}", e),
-                                "__truncated__": false
-                            })
+                            // Attempt recovery: model may have concatenated multiple JSON objects
+                            if let Some(recovered) = recover_first_json(&acc.arguments) {
+                                tracing::info!(
+                                    "Recovered first JSON from concatenated tool call '{}' — \
+                                     original had trailing data after first object",
+                                    acc.name
+                                );
+                                recovered
+                            } else {
+                                tracing::warn!(
+                                    "Failed to parse tool call arguments for '{}': {} — raw: {}",
+                                    acc.name, e, &acc.arguments[..acc.arguments.len().min(200)]
+                                );
+                                json!({
+                                    "__error__": "PARSE_ERROR",
+                                    "__message__": "Only one tool call per response. Send one tool call, wait for the result, then call the next.",
+                                    "__truncated__": false
+                                })
+                            }
                         }
                     }
                 };
@@ -578,5 +604,43 @@ mod tests {
 
         assert_eq!(tool_call.id, "call_123");
         assert_eq!(tool_call.name, "search");
+    }
+}
+
+#[cfg(test)]
+mod json_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn test_recover_concatenated_json() {
+        let raw = r#"{"action":"recall","query":"test"}{"title":"My Title"}{"action":"use"}"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["action"], "recall");
+        assert_eq!(val["query"], "test");
+    }
+
+    #[test]
+    fn test_recover_single_json_returns_none() {
+        let raw = r#"{"action":"recall","query":"test"}"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_recover_invalid_json_returns_none() {
+        let raw = r#"not json at all"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_recover_nested_braces() {
+        let raw = r#"{"args":{"nested":"value"}}{"second":"obj"}"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["args"]["nested"], "value");
     }
 }
