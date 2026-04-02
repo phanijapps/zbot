@@ -20,6 +20,7 @@
 #![warn(clippy::all)]
 
 use std::collections::{HashSet, VecDeque};
+use std::fmt;
 use std::pin::Pin;
 use std::future::Future;
 use std::sync::Arc;
@@ -77,7 +78,7 @@ struct ToolExecutionResult {
 // ============================================================================
 
 /// Configuration for agent executor
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecutorConfig {
     /// Agent identifier
     pub agent_id: String,
@@ -155,6 +156,17 @@ pub struct ExecutorConfig {
     /// Hard turn limit: forcibly stop execution after this many iterations.
     /// Set to 0 to disable.
     pub max_turns: u32,
+
+    /// Hook called before each tool execution. Can block the call.
+    /// Default: None (all tools allowed).
+    pub before_tool_call: Option<BeforeToolCallHook>,
+
+    /// Hook called after each tool execution. Can transform the result.
+    /// Default: None (results passed through unchanged).
+    pub after_tool_call: Option<AfterToolCallHook>,
+
+    /// Tool execution mode: parallel (default) or sequential.
+    pub tool_execution_mode: ToolExecutionMode,
 }
 
 impl ExecutorConfig {
@@ -184,6 +196,9 @@ impl ExecutorConfig {
             context_window_tokens: 128_000, // Default to 128K context
             turn_budget: 25,  // Soft nudge at 25 turns
             max_turns: 50,    // Hard stop at 50 turns
+            before_tool_call: None,
+            after_tool_call: None,
+            tool_execution_mode: ToolExecutionMode::default(),
         }
     }
 
@@ -194,6 +209,69 @@ impl ExecutorConfig {
         self
     }
 }
+
+impl fmt::Debug for ExecutorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecutorConfig")
+            .field("agent_id", &self.agent_id)
+            .field("provider_id", &self.provider_id)
+            .field("model", &self.model)
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("thinking_enabled", &self.thinking_enabled)
+            .field("system_instruction", &self.system_instruction)
+            .field("tools_enabled", &self.tools_enabled)
+            .field("mcps", &self.mcps)
+            .field("skills", &self.skills)
+            .field("conversation_id", &self.conversation_id)
+            .field("initial_state", &self.initial_state)
+            .field("max_tool_result_chars", &self.max_tool_result_chars)
+            .field("offload_large_results", &self.offload_large_results)
+            .field("offload_threshold_chars", &self.offload_threshold_chars)
+            .field("offload_dir", &self.offload_dir)
+            .field("max_iterations", &self.max_iterations)
+            .field("max_extensions", &self.max_extensions)
+            .field("extension_size", &self.extension_size)
+            .field("context_window_tokens", &self.context_window_tokens)
+            .field("turn_budget", &self.turn_budget)
+            .field("max_turns", &self.max_turns)
+            .field("before_tool_call", &self.before_tool_call.as_ref().map(|_| "<hook>"))
+            .field("after_tool_call", &self.after_tool_call.as_ref().map(|_| "<hook>"))
+            .field("tool_execution_mode", &self.tool_execution_mode)
+            .finish()
+    }
+}
+
+// ============================================================================
+// TOOL HOOK TYPES
+// ============================================================================
+
+/// Decision from beforeToolCall hook.
+#[derive(Debug, Clone)]
+pub enum ToolCallDecision {
+    /// Allow the tool call to proceed.
+    Allow,
+    /// Block the tool call. The reason is returned to the LLM as the tool result.
+    Block { reason: String },
+}
+
+/// Tool execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ToolExecutionMode {
+    /// Execute all tools concurrently (current behavior).
+    #[default]
+    Parallel,
+    /// Execute tools one at a time, in order.
+    Sequential,
+}
+
+/// Type alias for beforeToolCall hook.
+/// Receives (tool_name, args). Returns Allow or Block.
+pub type BeforeToolCallHook = Arc<dyn Fn(&str, &Value) -> ToolCallDecision + Send + Sync>;
+
+/// Type alias for afterToolCall hook.
+/// Receives (tool_name, args, result, succeeded). Returns optional replacement result.
+pub type AfterToolCallHook = Arc<dyn Fn(&str, &Value, &str, bool) -> Option<String> + Send + Sync>;
 
 // ============================================================================
 // AGENT EXECUTOR
@@ -2458,5 +2536,26 @@ mod progress_tracker_tests {
             "Agent with 80% success rate should NOT be stuck. Score: {}",
             tracker.score
         );
+    }
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn test_tool_call_decision_default_is_allow() {
+        let decision = ToolCallDecision::Allow;
+        assert!(matches!(decision, ToolCallDecision::Allow));
+    }
+
+    #[test]
+    fn test_tool_call_decision_block_has_reason() {
+        let decision = ToolCallDecision::Block { reason: "dangerous".to_string() };
+        match decision {
+            ToolCallDecision::Block { reason } => assert_eq!(reason, "dangerous"),
+            _ => panic!("Expected Block"),
+        }
     }
 }
