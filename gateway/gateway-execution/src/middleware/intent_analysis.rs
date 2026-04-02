@@ -438,21 +438,20 @@ pub async fn index_resources(
     agent_service: &AgentService,
     vault_paths: &SharedVaultPaths,
 ) {
-    // Quick staleness check: compare filesystem count vs DB count
+    // Quick staleness check: compare filesystem count vs last indexed count
     let fs_count = count_filesystem_resources(skill_service, agent_service, vault_paths).await;
 
-    // Use recall to estimate DB resource count — count skill/agent/ward facts
-    // by checking if a broad recall returns roughly the right number.
-    // We use the fact_store's recall with a broad query to count indexed resources.
-    let db_count = match fact_store.recall_facts("root", "skill agent ward", fs_count + 10).await {
-        Ok(result) => result.get("count").and_then(|c| c.as_u64()).unwrap_or(0) as usize,
-        Err(_) => 0,
-    };
+    let temp_dir = vault_paths.vault_dir().join("temp");
+    let index_marker = temp_dir.join(".resource_index_count");
+    let last_count: usize = std::fs::read_to_string(&index_marker)
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(0);
 
-    if db_count >= fs_count && fs_count > 0 {
+    if last_count == fs_count && fs_count > 0 {
         tracing::info!(
             fs_count = fs_count,
-            db_count = db_count,
+            last_indexed = last_count,
             "Resource index up-to-date, skipping re-index"
         );
         return;
@@ -460,7 +459,7 @@ pub async fn index_resources(
 
     tracing::info!(
         fs_count = fs_count,
-        db_count = db_count,
+        last_indexed = last_count,
         "Resource index stale, re-indexing"
     );
 
@@ -533,6 +532,10 @@ pub async fn index_resources(
         }
         Err(e) => tracing::warn!("Failed to read wards directory: {}", e),
     }
+
+    // Write index marker so next session can skip if unchanged
+    let _ = std::fs::create_dir_all(&temp_dir);
+    let _ = std::fs::write(&index_marker, fs_count.to_string());
 }
 
 /// Semantic search result grouped by resource type.
