@@ -593,7 +593,7 @@ impl ToolCallAccumulator {
 /// Read `ward_setup` from specific skills' SKILL.md files.
 ///
 /// Only reads skills in `skill_names` — prevents life-os dirs in coding wards, etc.
-fn collect_ward_setups_for_skills(skills_dir: &Path, skill_names: &[String]) -> Vec<WardSetup> {
+pub fn collect_ward_setups_for_skills(skills_dir: &Path, skill_names: &[String]) -> Vec<WardSetup> {
     let mut setups = Vec::new();
     for name in skill_names {
         setups.extend(collect_ward_setup_for_skill(skills_dir, name));
@@ -602,7 +602,7 @@ fn collect_ward_setups_for_skills(skills_dir: &Path, skill_names: &[String]) -> 
 }
 
 /// Read `ward_setup` from a single skill's SKILL.md.
-fn collect_ward_setup_for_skill(skills_dir: &Path, skill_name: &str) -> Vec<WardSetup> {
+pub fn collect_ward_setup_for_skill(skills_dir: &Path, skill_name: &str) -> Vec<WardSetup> {
     let skill_md = skills_dir.join(skill_name).join("SKILL.md");
     if !skill_md.exists() {
         return vec![];

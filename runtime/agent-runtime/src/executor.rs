@@ -2382,4 +2382,81 @@ mod progress_tracker_tests {
         let compacted = compact_messages(messages.clone());
         assert_eq!(compacted.len(), messages.len());
     }
+
+    // ========================================================================
+    // E2E-STYLE LOOP DETECTOR TESTS (moved from e2e_ward_pipeline_tests)
+    // ========================================================================
+
+    /// Successful tool calls should not tank the progress score.
+    #[test]
+    fn test_loop_detector_productive_agent_survives() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        let mut tracker = ProgressTracker::new(config.max_extensions);
+
+        // Simulate a productive ralph.py workflow:
+        // shell(ralph.py next) -> apply_patch(create file) -> shell(verify) -> shell(ralph.py complete)
+        // All successful — score should stay positive
+        for i in 0..5 {
+            tracker.record_tool_call("shell", &json!({"command": format!("ralph.py next {}", i)}), true);
+            tracker.record_tool_call("apply_patch", &json!({"file": format!("core/mod{}.py", i)}), true);
+            tracker.record_tool_call("shell", &json!({"command": format!("python3 -c 'import core.mod{}'", i)}), true);
+            tracker.record_tool_call("shell", &json!({"command": format!("ralph.py complete {}", i)}), true);
+        }
+
+        assert!(
+            !tracker.is_clearly_stuck(),
+            "Productive agent with 20 successful calls should NOT be stuck. Score: {}",
+            tracker.score
+        );
+        assert!(
+            tracker.score > 0,
+            "Score should be positive for productive work, got: {}",
+            tracker.score
+        );
+    }
+
+    /// Failed repeated tool calls should tank the score.
+    #[test]
+    fn test_loop_detector_stuck_agent_dies() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        let mut tracker = ProgressTracker::new(config.max_extensions);
+
+        // Simulate a stuck agent: same shell command failing repeatedly
+        for _ in 0..15 {
+            tracker.record_tool_call(
+                "shell",
+                &json!({"command": "cat nonexistent.py"}),
+                false,
+            );
+        }
+
+        assert!(
+            tracker.is_clearly_stuck(),
+            "Agent with 15 repeated failures should be stuck. Score: {}",
+            tracker.score
+        );
+    }
+
+    /// Mixed success/failure: productive work with occasional errors should survive.
+    #[test]
+    fn test_loop_detector_mixed_survives() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        let mut tracker = ProgressTracker::new(config.max_extensions);
+
+        // 8 successes, 2 failures — should be fine
+        for i in 0..10 {
+            let succeeded = i % 5 != 3; // fail on iteration 3 and 8
+            tracker.record_tool_call(
+                if i % 2 == 0 { "shell" } else { "apply_patch" },
+                &json!({"arg": format!("call_{}", i)}),
+                succeeded,
+            );
+        }
+
+        assert!(
+            !tracker.is_clearly_stuck(),
+            "Agent with 80% success rate should NOT be stuck. Score: {}",
+            tracker.score
+        );
+    }
 }
