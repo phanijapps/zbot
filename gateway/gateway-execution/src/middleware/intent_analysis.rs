@@ -310,14 +310,71 @@ pub fn format_user_template(
 // analyze_intent
 // ---------------------------------------------------------------------------
 
+/// Check if a message is trivially simple (greeting, short question, etc.)
+/// and doesn't need a full LLM intent analysis call.
+fn is_simple_message(message: &str) -> bool {
+    let trimmed = message.trim();
+    let word_count = trimmed.split_whitespace().count();
+
+    // Common greetings and simple phrases — must match exactly or start with
+    let simple_patterns = [
+        "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
+        "thanks", "thank you", "bye", "goodbye", "what's up", "how are you",
+        "help", "what can you do", "who are you",
+    ];
+    let lower = trimmed.to_lowercase();
+    for pattern in &simple_patterns {
+        if lower == *pattern || (lower.starts_with(pattern) && word_count <= 4) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Build a default "simple" intent analysis for trivial messages.
+fn simple_analysis(message: &str) -> IntentAnalysis {
+    IntentAnalysis {
+        primary_intent: message.chars().take(100).collect(),
+        hidden_intents: vec![],
+        recommended_skills: vec![],
+        recommended_agents: vec![],
+        ward_recommendation: WardRecommendation {
+            action: "use_existing".to_string(),
+            ward_name: "general".to_string(),
+            subdirectory: None,
+            structure: std::collections::HashMap::new(),
+            reason: "Simple request — no ward needed".to_string(),
+        },
+        execution_strategy: ExecutionStrategy {
+            approach: "simple".to_string(),
+            graph: None,
+            explanation: "Short/simple message — skipped LLM analysis".to_string(),
+        },
+        rewritten_prompt: String::new(),
+    }
+}
+
 /// Analyze user intent: searches semantically for resources, calls LLM.
 ///
 /// Resource indexing must happen before this call (see `index_resources`).
+///
+/// Short/trivial messages (greetings, 1-3 word phrases) skip the LLM call
+/// entirely and return a default "simple" analysis to avoid 5-30s latency.
 pub async fn analyze_intent(
     llm_client: &dyn LlmClient,
     user_message: &str,
     fact_store: &dyn MemoryFactStore,
 ) -> Result<IntentAnalysis, String> {
+    // Fast path: skip LLM for trivial messages
+    if is_simple_message(user_message) {
+        tracing::info!(
+            message = user_message,
+            "Skipping intent analysis — trivial message"
+        );
+        return Ok(simple_analysis(user_message));
+    }
+
     tracing::info!("Starting intent analysis for root session");
 
     // Step 1: Semantic search for relevant resources
@@ -373,14 +430,58 @@ pub async fn analyze_intent(
     Ok(analysis)
 }
 
+/// Count filesystem resources (skills + agents + wards) to check staleness.
+async fn count_filesystem_resources(
+    skill_service: &SkillService,
+    agent_service: &AgentService,
+    vault_paths: &SharedVaultPaths,
+) -> usize {
+    let skill_count = skill_service.list().await.map(|s| s.len()).unwrap_or(0);
+    let agent_count = agent_service.list().await.map(|a| a.len()).unwrap_or(0);
+    let ward_count = std::fs::read_dir(vault_paths.wards_dir())
+        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+        .unwrap_or(0);
+    skill_count + agent_count + ward_count
+}
+
 /// Index skills, agents, and wards into memory_facts for semantic search.
 /// Uses upsert (save_fact) so this is idempotent — safe to call every session.
+///
+/// Skips re-indexing if the DB fact count matches the filesystem resource count
+/// (skills + agents + wards). This avoids N embedding+upsert calls per session
+/// when nothing has changed.
 pub async fn index_resources(
     fact_store: &dyn MemoryFactStore,
     skill_service: &SkillService,
     agent_service: &AgentService,
     vault_paths: &SharedVaultPaths,
 ) {
+    // Quick staleness check: compare filesystem count vs DB count
+    let fs_count = count_filesystem_resources(skill_service, agent_service, vault_paths).await;
+
+    // Use recall to estimate DB resource count — count skill/agent/ward facts
+    // by checking if a broad recall returns roughly the right number.
+    // We use the fact_store's recall with a broad query to count indexed resources.
+    let db_count = match fact_store.recall_facts("root", "skill agent ward", fs_count + 10).await {
+        Ok(result) => result.get("count").and_then(|c| c.as_u64()).unwrap_or(0) as usize,
+        Err(_) => 0,
+    };
+
+    if db_count >= fs_count && fs_count > 0 {
+        tracing::info!(
+            fs_count = fs_count,
+            db_count = db_count,
+            "Resource index up-to-date, skipping re-index"
+        );
+        return;
+    }
+
+    tracing::info!(
+        fs_count = fs_count,
+        db_count = db_count,
+        "Resource index stale, re-indexing"
+    );
+
     // Index skills
     match skill_service.list().await {
         Ok(skills) => {
@@ -782,7 +883,7 @@ mod tests {
             _query: &str,
             _limit: usize,
         ) -> Result<Value, String> {
-            Ok(serde_json::json!({"results": []}))
+            Ok(serde_json::json!({"results": [], "count": 0}))
         }
     }
 
@@ -804,7 +905,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Hi", &fact_store).await;
+        let result = analyze_intent(&mock, "Tell me about the weather forecast for tomorrow", &fact_store).await;
         let analysis = result.expect("should parse simple intent");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.execution_strategy.approach, "simple");
@@ -857,7 +958,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Hello", &fact_store).await;
+        let result = analyze_intent(&mock, "Build me a web scraper for news articles", &fact_store).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -887,7 +988,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Hi", &fact_store).await;
+        let result = analyze_intent(&mock, "Analyze this dataset and create visualizations", &fact_store).await;
         let analysis = result.expect("should strip fences and parse");
         assert_eq!(analysis.primary_intent, "greeting");
     }

@@ -197,7 +197,7 @@ async fn test_graceful_degradation_on_llm_failure() {
     let client = FailingLlmClient;
     let fact_store = MockFactStore;
 
-    let result = analyze_intent(&client, "Hello", &fact_store).await;
+    let result = analyze_intent(&client, "Create a dashboard for monitoring server metrics", &fact_store).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -253,7 +253,7 @@ async fn test_simple_request_no_graph() {
     };
     let fact_store = MockFactStore;
 
-    let analysis = analyze_intent(&mock, "Hi there", &fact_store)
+    let analysis = analyze_intent(&mock, "What is the weather forecast for this weekend", &fact_store)
         .await
         .expect("should parse simple intent");
 
