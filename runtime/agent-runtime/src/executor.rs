@@ -167,6 +167,10 @@ pub struct ExecutorConfig {
 
     /// Tool execution mode: parallel (default) or sequential.
     pub tool_execution_mode: ToolExecutionMode,
+
+    /// Hook called before every LLM call to transform the message context.
+    /// Default: None (messages passed through unchanged).
+    pub transform_context: Option<TransformContextHook>,
 }
 
 impl ExecutorConfig {
@@ -199,6 +203,7 @@ impl ExecutorConfig {
             before_tool_call: None,
             after_tool_call: None,
             tool_execution_mode: ToolExecutionMode::default(),
+            transform_context: None,
         }
     }
 
@@ -238,6 +243,7 @@ impl fmt::Debug for ExecutorConfig {
             .field("before_tool_call", &self.before_tool_call.as_ref().map(|_| "<hook>"))
             .field("after_tool_call", &self.after_tool_call.as_ref().map(|_| "<hook>"))
             .field("tool_execution_mode", &self.tool_execution_mode)
+            .field("transform_context", &self.transform_context.as_ref().map(|_| "<hook>"))
             .finish()
     }
 }
@@ -272,6 +278,10 @@ pub type BeforeToolCallHook = Arc<dyn Fn(&str, &Value) -> ToolCallDecision + Sen
 /// Type alias for afterToolCall hook.
 /// Receives (tool_name, args, result, succeeded). Returns optional replacement result.
 pub type AfterToolCallHook = Arc<dyn Fn(&str, &Value, &str, bool) -> Option<String> + Send + Sync>;
+
+/// Type alias for transformContext hook.
+/// Called before every LLM call. Can modify the message list in place.
+pub type TransformContextHook = Arc<dyn Fn(&mut Vec<ChatMessage>) + Send + Sync>;
 
 // ============================================================================
 // AGENT EXECUTOR
@@ -683,6 +693,11 @@ impl AgentExecutor {
             // assistant+tool pairs.
             sanitize_messages(&mut current_messages);
 
+            // transformContext hook: allow caller to modify messages before LLM call
+            if let Some(ref hook) = self.config.transform_context {
+                hook(&mut current_messages);
+            }
+
             // Real streaming via chat_stream() with mpsc channel bridge.
             // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
             // including intermediate text that accompanies tool calls.
@@ -905,6 +920,7 @@ impl AgentExecutor {
                                     max_iterations: delegate.max_iterations,
                                     output_schema: delegate.output_schema.clone(),
                                     skills: delegate.skills.clone(),
+                                    complexity: delegate.complexity.clone(),
                                 });
                                 // Delegation claim is set atomically by the delegate tool via try_claim
                             }
@@ -2775,5 +2791,17 @@ mod hook_tests {
         };
         let formatted = format!("[STEER: {}] {}", msg.source, msg.content);
         assert_eq!(formatted, "[STEER: System] Wrap up now");
+    }
+
+    #[test]
+    fn test_transform_context_hook_type() {
+        // Verify the type compiles and can be called
+        let hook: TransformContextHook = Arc::new(|messages: &mut Vec<ChatMessage>| {
+            messages.push(ChatMessage::system("injected".to_string()));
+        });
+        let mut messages = vec![ChatMessage::user("hello".to_string())];
+        hook(&mut messages);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].content, "injected");
     }
 }
