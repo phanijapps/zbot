@@ -117,40 +117,39 @@ impl OpenAiClient {
             }
         }
 
-        // Debug: log request size estimation
-        let request_json = serde_json::to_string(&body_obj).unwrap_or_default();
-        let estimated_chars = request_json.len();
-        let estimated_tokens = estimated_chars / 4; // rough estimate: ~4 chars per token
+        // Only serialize for logging at debug level (avoids 100KB serialization on every call)
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let request_json = serde_json::to_string(&body_obj).unwrap_or_default();
+            let estimated_chars = request_json.len();
+            let estimated_tokens = estimated_chars / 4;
+            tracing::debug!(
+                "Request size: ~{} chars (~{} tokens estimated)",
+                estimated_chars,
+                estimated_tokens
+            );
 
-        tracing::info!(
-            "Request size: ~{} chars (~{} tokens estimated)",
-            estimated_chars,
-            estimated_tokens
-        );
+            if let Some(tools_val) = &tools {
+                if let Some(tools_array) = tools_val.as_array() {
+                    let tools_json = serde_json::to_string(tools_val).unwrap_or_default();
+                    let tools_tokens = tools_json.len() / 4;
+                    tracing::debug!(
+                        "Tools: {} tools, ~{} chars (~{} tokens)",
+                        tools_array.len(),
+                        tools_json.len(),
+                        tools_tokens
+                    );
+                }
+            }
 
-        // Log tools count and size
-        if let Some(tools_val) = &tools {
-            if let Some(tools_array) = tools_val.as_array() {
-                let tools_json = serde_json::to_string(tools_val).unwrap_or_default();
-                let tools_tokens = tools_json.len() / 4;
-                tracing::info!(
-                    "Tools: {} tools, ~{} chars (~{} tokens)",
-                    tools_array.len(),
-                    tools_json.len(),
-                    tools_tokens
+            if let Some(messages_val) = body_obj.get("messages") {
+                let messages_json = serde_json::to_string(messages_val).unwrap_or_default();
+                let messages_tokens = messages_json.len() / 4;
+                tracing::debug!(
+                    "Messages: ~{} chars (~{} tokens)",
+                    messages_json.len(),
+                    messages_tokens
                 );
             }
-        }
-
-        // Log messages size
-        if let Some(messages_val) = body_obj.get("messages") {
-            let messages_json = serde_json::to_string(messages_val).unwrap_or_default();
-            let messages_tokens = messages_json.len() / 4;
-            tracing::info!(
-                "Messages: ~{} chars (~{} tokens)",
-                messages_json.len(),
-                messages_tokens
-            );
         }
 
         if self.config.thinking_enabled {

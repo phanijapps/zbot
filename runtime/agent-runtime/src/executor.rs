@@ -1469,12 +1469,12 @@ impl ProgressTracker {
     }
 
     fn hash_args(args: &Value) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let s = serde_json::to_string(args).unwrap_or_default();
-        let mut hash: u64 = 0;
-        for b in s.bytes() {
-            hash = hash.wrapping_mul(31).wrapping_add(b as u64);
-        }
-        hash
+        let mut hasher = DefaultHasher::new();
+        s.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Record a tool call and update the progress score.
