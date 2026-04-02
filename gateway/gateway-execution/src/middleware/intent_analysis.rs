@@ -94,7 +94,11 @@ const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. Given a user
 - Skills and agents are DIFFERENT. Skills = load_skill(). Agents = delegate_to_agent(). Never mix them.
 - recommended_skills: from the "Relevant Skills" list only.
 - recommended_agents: from the "Relevant Agents" list or "root" only. Never put skill names as agents.
-- Wards are domain-level workspaces (e.g., "financial-analysis"), not task-specific. Reuse existing wards.
+- ward_name MUST be a reusable domain category, NEVER task-specific or ticker-specific.
+  GOOD: "financial-analysis", "stock-analysis", "market-research", "personal-life", "homework"
+  BAD: "amd-stock-analysis", "spy-options-trade", "math-homework-ch5"
+  The ward is reused across many tasks in the same domain. Use subdirectory for task-specific paths.
+- If an existing ward matches the domain, use action "use_existing" with that ward name.
 - approach "simple" for greetings, quick questions, single-step tasks.
 - approach "graph" when the task needs multiple agents, code, or multi-step orchestration.
 - When approach is "graph", ALWAYS include "coding" in recommended_skills — it provides the ward structure and task runner.
@@ -108,7 +112,7 @@ Respond with ONLY a JSON object (no markdown fences):
   "recommended_agents": ["agent-name"],
   "ward_recommendation": {
     "action": "use_existing | create_new",
-    "ward_name": "domain-level name",
+    "ward_name": "domain-level reusable name (e.g. financial-analysis, NOT amd-analysis)",
     "subdirectory": "task-specific subdir or null",
     "reason": "why"
   },
@@ -203,6 +207,27 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option
         if !es.explanation.is_empty() {
             out.push_str(&format!("\n**Approach:** {}\n", es.explanation));
         }
+    }
+
+    // SDLC guidance — only when coding is involved
+    let has_coding = analysis.recommended_skills.iter().any(|s| s == "coding");
+    if has_coding && es.approach == "graph" {
+        out.push_str(r#"
+**Coding Discipline (for code-agent delegations):**
+When delegating coding work, provide the code-agent with:
+- A clear goal and acceptance criteria
+- The ward name and relevant specs directory
+- Reference to AGENTS.md for existing core/ modules
+- "Process tasks.json at specs/<path>/tasks.json using ralph.py" for multi-file tasks
+
+For multi-file coding tasks, the code-agent should:
+1. Read existing specs or write specs if none exist (one per module, under 3KB)
+2. Create tasks.json with ordered tasks (create → run → verify)
+3. Execute tasks sequentially using ralph.py
+4. Respond with results summary
+
+You do NOT need to write specs yourself — delegate that to code-agent as part of its task.
+"#);
     }
 
     // Lightweight ward reminder
