@@ -213,6 +213,22 @@ pub async fn spawn_delegated_agent(
             ));
         }
 
+        // Inject core module docs so subagent knows available functions
+        let core_docs_path = ward_dir.join("memory-bank").join("core_docs.md");
+        if let Ok(core_docs) = std::fs::read_to_string(&core_docs_path) {
+            // Only inject if reasonably sized (< 4KB to avoid context bloat)
+            if core_docs.len() < 4096 {
+                agent.instructions.push_str(&format!(
+                    "\n# Available Core Modules\n{}\n",
+                    core_docs
+                ));
+            } else {
+                agent.instructions.push_str(
+                    "\n# Core Modules\nSee memory-bank/core_docs.md for available functions. Read it before writing new code.\n"
+                );
+            }
+        }
+
         // List active spec PATHS (not content) — agent can cat if needed.
         // Content injection was 8-12KB per delegation — too much context bloat.
         let specs_dir = ward_dir.join("specs");
