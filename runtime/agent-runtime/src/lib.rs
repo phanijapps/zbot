@@ -55,6 +55,9 @@ pub mod middleware;
 /// Executor core
 pub mod executor;
 
+/// Steering queue for mid-execution message injection
+pub mod steering;
+
 /// Logging utilities
 pub mod logging;
 
@@ -103,6 +106,10 @@ pub use middleware::{
 pub use executor::{
     AgentExecutor, ExecutorConfig, ExecutorError, RecallHook, RecallHookResult, create_executor,
     ToolCallDecision, ToolExecutionMode, BeforeToolCallHook, AfterToolCallHook,
+};
+
+pub use steering::{
+    SteeringQueue, SteeringHandle, SteeringMessage, SteeringSource, SteeringPriority,
 };
 
 pub use logging::{
