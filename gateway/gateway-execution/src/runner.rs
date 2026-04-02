@@ -875,14 +875,12 @@ impl ExecutionRunner {
                     )
                     .await;
 
-                    // Cancel any orphaned delegations for this session
-                    cancel_session_delegations(
-                        &session_id,
-                        &delegation_registry,
-                        &handles,
-                        &state_service,
-                    )
-                    .await;
+                    // Do NOT cancel delegations on successful completion.
+                    // complete_execution() already requests continuation when
+                    // pending delegations exist. Cancelling here would remove
+                    // delegations from the registry and decrement the counter,
+                    // preventing the continuation callback from firing when
+                    // the subagent completes.
 
                     // Auto-update ward AGENTS.md after root execution completes
                     // (scaffolding now happens at ward creation time in the WardChanged handler)
