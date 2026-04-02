@@ -786,10 +786,23 @@ impl AgentExecutor {
                 }
             }
 
-            // Execute all tools concurrently (skip blocked tools)
-            let tool_futures: Vec<_> = tool_calls.iter()
+            let non_blocked: Vec<&ToolCall> = tool_calls.iter()
                 .filter(|tc| !blocked_results.contains_key(&tc.id))
-                .map(|tc| {
+                .collect();
+
+            let results: Vec<Result<ToolExecutionResult, String>> = if self.config.tool_execution_mode == ToolExecutionMode::Sequential {
+                // Sequential: execute one at a time, in order
+                let mut seq_results = Vec::new();
+                for tc in &non_blocked {
+                    let result = self.execute_tool(
+                        &shared_tool_context, &tc.id, &tc.name, &tc.arguments
+                    ).await;
+                    seq_results.push(result);
+                }
+                seq_results
+            } else {
+                // Parallel: all at once (current behavior)
+                let tool_futures: Vec<_> = non_blocked.iter().map(|tc| {
                     let ctx = shared_tool_context.clone();
                     let tool_id = tc.id.clone();
                     let tool_name = tc.name.clone();
@@ -799,15 +812,12 @@ impl AgentExecutor {
                         self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
                     }
                 }).collect();
-
-            let results = futures::future::join_all(tool_futures).await;
+                futures::future::join_all(tool_futures).await
+            };
 
             // Build a map of executed results (keyed by tool_call id)
-            let executed_tools: Vec<&ToolCall> = tool_calls.iter()
-                .filter(|tc| !blocked_results.contains_key(&tc.id))
-                .collect();
             let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> = HashMap::new();
-            for (tc, result) in executed_tools.into_iter().zip(results) {
+            for (tc, result) in non_blocked.into_iter().zip(results) {
                 executed_results.insert(tc.id.clone(), result);
             }
 
@@ -1003,10 +1013,20 @@ impl AgentExecutor {
                                 self.config.max_tool_result_chars,
                             );
 
+                            // afterToolCall hook — can transform the result
+                            let final_output = if let Some(ref hook) = self.config.after_tool_call {
+                                match hook(tool_name, &tool_call.arguments, &processed_output, true) {
+                                    Some(replacement) => replacement,
+                                    None => processed_output,
+                                }
+                            } else {
+                                processed_output
+                            };
+
                             // Add tool result message
                             current_messages.push(ChatMessage {
                                 role: "tool".to_string(),
-                                content: processed_output,
+                                content: final_output,
                                 tool_calls: None,
                                 tool_call_id: Some(tool_call.id.clone()),
                             });
@@ -1025,10 +1045,21 @@ impl AgentExecutor {
                                 error: Some(e.clone()),
                             });
 
+                            // afterToolCall hook — can transform error results too
+                            let error_message = json!({"error": e}).to_string();
+                            let final_error = if let Some(ref hook) = self.config.after_tool_call {
+                                match hook(tool_name, &tool_call.arguments, &error_message, false) {
+                                    Some(replacement) => replacement,
+                                    None => error_message,
+                                }
+                            } else {
+                                error_message
+                            };
+
                             // Add error result message
                             current_messages.push(ChatMessage {
                                 role: "tool".to_string(),
-                                content: json!({"error": e}).to_string(),
+                                content: final_error,
                                 tool_calls: None,
                                 tool_call_id: Some(tool_call.id.clone()),
                             });
