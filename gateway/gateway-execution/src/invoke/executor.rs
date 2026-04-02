@@ -7,13 +7,18 @@ use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
 use gateway_services::{McpService, SkillService};
 use agent_runtime::{
-    AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
-    OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
+    AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
+    LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, RespondTool, RetryPolicy,
+    RetryingLlmClient, ToolRegistry,
 };
 use agent_tools::{
-    core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings,
-    // Individual tools for lean subagent registry
+    ListAgentsTool, QueryResourceTool, ToolSettings,
+    // Subagent tools
     ShellTool, ApplyPatchTool, LoadSkillTool,
+    // Root orchestrator tools
+    MemoryTool, WardTool, UpdatePlanTool, SetSessionTitleTool, GrepTool,
+    // Optional file reading tools
+    ReadTool, GlobTool,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -249,9 +254,6 @@ impl ExecutorBuilder {
         // Build MCP manager
         let mcp_manager = self.build_mcp_manager(agent, mcp_service).await;
 
-        // Create empty middleware pipeline
-        let middleware_pipeline = Arc::new(MiddlewarePipeline::new());
-
         // Build final executor config with system instruction
         executor_config.system_instruction = Some(agent.instructions.clone());
         executor_config.conversation_id = Some(conversation_id.to_string());
@@ -264,6 +266,36 @@ impl ExecutorBuilder {
                 .unwrap_or(8192)
         });
         executor_config.mcps = agent.mcps.clone();
+
+        // Create middleware pipeline with context editing
+        // Must be after context_window_tokens is resolved (above)
+        let middleware_pipeline = {
+            let pipeline = MiddlewarePipeline::new();
+            let pipeline = if executor_config.context_window_tokens > 0 {
+                pipeline.add_pre_processor(Box::new(
+                    ContextEditingMiddleware::new(
+                        ContextEditingConfig {
+                            enabled: true,
+                            trigger_tokens: (executor_config.context_window_tokens as usize * 70) / 100,
+                            keep_tool_results: 8,
+                            min_reclaim: 500,
+                            clear_tool_inputs: true,
+                            cascade_unload: true,
+                            skill_aware_placeholders: true,
+                            ..Default::default()
+                        }
+                    )
+                ))
+            } else {
+                pipeline
+            };
+            Arc::new(pipeline)
+        };
+
+        // Root is an orchestrator — enforce single action per turn
+        if !self.is_delegated {
+            executor_config.single_action_mode = true;
+        }
 
         // Configure tool result offload settings
         executor_config.offload_large_results = self.tool_settings.offload_large_results;
@@ -295,14 +327,29 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(RespondTool::new()));
         } else {
-            // Root agent gets the full tool set
-            tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
-            tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));
+            // Root agent: orchestrator tools only.
+            // Root delegates — it doesn't do specialist work.
+            // Excluded: load_skill, list_skills, apply_patch, list_agents, execution_graph
+
+            // Orchestrator essentials
+            tool_registry.register(Arc::new(ShellTool::new()));
+            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(UpdatePlanTool::new()));
+            tool_registry.register(Arc::new(SetSessionTitleTool::new()));
+            tool_registry.register(Arc::new(GrepTool));
+
+            // Delegation + response
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(DelegateTool::new()));
-            tool_registry.register(Arc::new(ListAgentsTool::new()));
 
-            // Register connector resource query tool (if provider available)
+            // Optional file reading (root may need to review delegation results)
+            if self.tool_settings.file_tools {
+                tool_registry.register(Arc::new(ReadTool));
+                tool_registry.register(Arc::new(GlobTool));
+            }
+
+            // Connector query (if provider available)
             if let Some(provider) = &self.connector_provider {
                 tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
             }
