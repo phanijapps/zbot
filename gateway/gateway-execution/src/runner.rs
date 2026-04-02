@@ -1757,23 +1757,45 @@ async fn invoke_continuation(
 
         match result {
             Ok(()) => {
-                // Continuation turns don't dispatch to connectors (they're internal)
-                complete_execution(
-                    &state_service,
-                    &log_service,
-                    &event_bus,
-                    &execution_id,
-                    &session_id_clone,
-                    &agent_id_clone,
-                    &conversation_id,
-                    Some(accumulated_response),
-                    None,
-                    None,
-                    None, // No thread_id for continuation turns
-                    None, // No bridge dispatch for continuation turns
-                    None,
-                )
-                .await;
+                // Check if this continuation spawned new delegations
+                let has_active_delegations = state_service
+                    .get_session(&session_id_clone)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.has_pending_delegations())
+                    .unwrap_or(false);
+
+                if has_active_delegations {
+                    // Root delegated again — wait for subagent, don't complete
+                    tracing::info!(
+                        session_id = %session_id_clone,
+                        "Continuation paused for delegation — skipping execution completion"
+                    );
+                    if let Err(e) = state_service.request_continuation(&session_id_clone) {
+                        tracing::warn!("Failed to request continuation: {}", e);
+                    }
+                    if let Err(e) = state_service.aggregate_session_tokens(&session_id_clone) {
+                        tracing::warn!("Failed to aggregate session tokens: {}", e);
+                    }
+                } else {
+                    // No more delegations — complete normally
+                    complete_execution(
+                        &state_service,
+                        &log_service,
+                        &event_bus,
+                        &execution_id,
+                        &session_id_clone,
+                        &agent_id_clone,
+                        &conversation_id,
+                        Some(accumulated_response),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
 
                 // Fire-and-forget session distillation
                 if let Some(distiller) = distiller {
