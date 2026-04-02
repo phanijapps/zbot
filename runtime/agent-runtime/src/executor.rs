@@ -176,6 +176,11 @@ pub struct ExecutorConfig {
     /// When set, applies complexity-based iteration budgets:
     /// S=15, M=30, L=50, XL=100.
     pub complexity: Option<String>,
+
+    /// When true, only the first tool call per LLM response is executed.
+    /// Extra tool calls are dropped with a log message.
+    /// Default: false. Set true for orchestrator agents (root).
+    pub single_action_mode: bool,
 }
 
 impl ExecutorConfig {
@@ -210,6 +215,7 @@ impl ExecutorConfig {
             tool_execution_mode: ToolExecutionMode::default(),
             transform_context: None,
             complexity: None,
+            single_action_mode: false,
         }
     }
 
@@ -251,6 +257,7 @@ impl fmt::Debug for ExecutorConfig {
             .field("tool_execution_mode", &self.tool_execution_mode)
             .field("transform_context", &self.transform_context.as_ref().map(|_| "<hook>"))
             .field("complexity", &self.complexity)
+            .field("single_action_mode", &self.single_action_mode)
             .finish()
     }
 }
@@ -841,7 +848,17 @@ impl AgentExecutor {
                 response.content, response.tool_calls.as_ref().map_or(0, |v| v.len()));
 
             // Check for tool calls
-            let tool_calls = response.tool_calls.clone().unwrap_or_default();
+            let mut tool_calls = response.tool_calls.clone().unwrap_or_default();
+
+            // Single-action mode: execute only the first tool call, drop extras.
+            // This prevents the model from batching multiple actions into one response.
+            if self.config.single_action_mode && tool_calls.len() > 1 {
+                tracing::info!(
+                    "Single-action mode: executing '{}', dropping {} extra tool calls",
+                    tool_calls[0].name, tool_calls.len() - 1
+                );
+                tool_calls.truncate(1);
+            }
             if tool_calls.is_empty() {
                 // No tool calls, this is the final response
                 // Text was already streamed in real-time above
@@ -2891,6 +2908,12 @@ mod hook_tests {
         assert_eq!(budget_for(Some("L")), (50, 40));
         assert_eq!(budget_for(Some("XL")), (100, 80));
         assert_eq!(budget_for(None), (0, 0));
+    }
+
+    #[test]
+    fn test_single_action_mode_default_false() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        assert!(!config.single_action_mode);
     }
 }
 
