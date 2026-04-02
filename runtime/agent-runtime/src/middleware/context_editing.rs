@@ -16,6 +16,22 @@ use crate::middleware::config::ContextEditingConfig;
 use crate::middleware::token_counter::estimate_total_tokens;
 use serde_json::json;
 
+/// Build an index mapping tool_call_id → tool_name from all assistant messages.
+/// This is O(n) over messages, enabling O(1) lookups instead of O(n) backwards search.
+fn build_tool_call_index(messages: &[ChatMessage]) -> std::collections::HashMap<String, String> {
+    let mut index = std::collections::HashMap::new();
+    for msg in messages {
+        if msg.role == "assistant" {
+            if let Some(ref tool_calls) = msg.tool_calls {
+                for tc in tool_calls {
+                    index.insert(tc.id.clone(), tc.name.clone());
+                }
+            }
+        }
+    }
+    index
+}
+
 /// Context editing middleware
 ///
 /// Clears older tool call outputs when token limits are reached,
@@ -48,6 +64,7 @@ impl ContextEditingMiddleware {
         messages: &[ChatMessage],
         execution_state: &ExecutionState,
     ) -> Vec<usize> {
+        let tool_call_index = build_tool_call_index(messages);
         let mut tool_result_indices = Vec::new();
         let mut tool_call_id_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
 
@@ -57,7 +74,7 @@ impl ContextEditingMiddleware {
                 // Check if this tool is in the exclude list
                 if let Some(tool_call_id) = &message.tool_call_id {
                     // Find the corresponding tool call to get the tool name
-                    let tool_name = self.find_tool_name_for_call(messages, idx, tool_call_id);
+                    let tool_name = tool_call_index.get(tool_call_id).cloned();
 
                     if let Some(name) = tool_name {
                         if self.config.exclude_tools.contains(&name) {
@@ -125,27 +142,6 @@ impl ContextEditingMiddleware {
         }
 
         indices_to_clear
-    }
-
-    /// Find the tool name for a given tool call ID
-    fn find_tool_name_for_call(
-        &self,
-        messages: &[ChatMessage],
-        tool_result_idx: usize,
-        tool_call_id: &str,
-    ) -> Option<String> {
-        // Search backwards from the tool result to find the assistant message
-        // with the matching tool call
-        for message in messages[..tool_result_idx].iter().rev() {
-            if let Some(tool_calls) = &message.tool_calls {
-                for tool_call in tool_calls {
-                    if tool_call.id == *tool_call_id {
-                        return Some(tool_call.name.clone());
-                    }
-                }
-            }
-        }
-        None
     }
 
     /// Clear tool results by replacing content with placeholder.
@@ -433,6 +429,15 @@ mod tests {
                 tool_call_id: Some("call_2".to_string()),
             },
         ]
+    }
+
+    #[test]
+    fn test_tool_call_id_index_lookup() {
+        let messages = create_test_messages_with_tool_calls();
+        let index = build_tool_call_index(&messages);
+        assert_eq!(index.get("call_1"), Some(&"search".to_string()));
+        assert_eq!(index.get("call_2"), Some(&"calculator".to_string()));
+        assert_eq!(index.get("nonexistent"), None);
     }
 
     #[test]
