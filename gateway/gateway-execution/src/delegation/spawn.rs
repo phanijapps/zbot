@@ -213,21 +213,16 @@ pub async fn spawn_delegated_agent(
             ));
         }
 
-        // Inject active spec CONTENT so subagent can code immediately — no cat calls needed
+        // List active spec PATHS (not content) — agent can cat if needed.
+        // Content injection was 8-12KB per delegation — too much context bloat.
         let specs_dir = ward_dir.join("specs");
         if specs_dir.exists() {
             let mut spec_files = Vec::new();
             collect_spec_files(&specs_dir, &specs_dir, &mut spec_files);
             if !spec_files.is_empty() {
-                agent.instructions.push_str("\n# Specs (implement these)\n");
+                agent.instructions.push_str("\n# Specs\n");
                 for rel_path in &spec_files {
-                    let full_path = ward_dir.join(rel_path);
-                    if let Ok(content) = std::fs::read_to_string(&full_path) {
-                        agent.instructions.push_str(&format!(
-                            "\n## {}\n{}\n",
-                            rel_path, content
-                        ));
-                    }
+                    agent.instructions.push_str(&format!("- {}\n", rel_path));
                 }
             }
         }

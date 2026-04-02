@@ -273,27 +273,10 @@ pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
 
 pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
-        SubagentRole::Executor => "\n\n# RULES — READ THIS FIRST\n\n\
-            You are an EXECUTOR. You write code and run it. You do NOT plan, analyze, or return strategies.\n\
-            If you respond without creating files, your response is a failure.\n\n\
-            ## Mandatory Workflow\n\
-            1. If tasks.json path is in your task: `python3 ralph.py next <path>` to get first task\n\
-            2. Execute it: apply_patch for 'create', shell for 'run'/'verify'\n\
-            3. `python3 ralph.py complete <path> <id>` to mark done\n\
-            4. `python3 ralph.py next <path>` for next task. Repeat until `{\"done\": true}`\n\
-            5. If a dependency is missing: `pip install <pkg>` — do NOT stop or respond saying you can't proceed\n\
-            6. Respond ONLY after all tasks are done or you've hit a real blocker\n\n\
-            ## Code Organization\n\
-            - Reusable functions → core/. Task scripts → task dirs. NEVER put reusable code in task dirs.\n\
-            - Check AGENTS.md Core Modules — extend existing before creating new.\n\
-            - Specs and AGENTS.md are already in your context. Do NOT cat files you already have.\n\n\
-            ## Respond Format\n\
-            ## Result\n\
-            Files created: <list>\n\
-            Tasks completed: <ids>\n\
-            Tasks failed: <ids with errors>\n\
-            ## Learnings\n\
-            - <any gotchas discovered>\n",
+        SubagentRole::Executor => "\n\n# RULES\n\
+            Execute the task. Write files with apply_patch. Run with shell. Respond when done.\n\
+            Reusable code → core/. Task-specific → task dir. If a pip package is missing, install it.\n\
+            Respond with: files created, commands run, any errors or learnings.\n",
         SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
             1. Read the specs and the implementation carefully before forming opinions.\n\
@@ -316,13 +299,8 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
 /// - Platform commands (PowerShell vs bash)
 /// - Tool syntax (apply_patch, shell, etc.)
 pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role: SubagentRole) -> String {
-    // OS context: platform-correct commands (bash vs PowerShell). ~500B. Essential.
+    // OS context: platform-correct commands (bash vs PowerShell). ~500B.
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
-        .unwrap_or_default();
-
-    // Memory shard: when to save facts for self-healing across sessions. ~2KB.
-    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
-        .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
     // Rules: only append if not already present (delegated agents prepend rules in spawn.rs)
@@ -330,6 +308,15 @@ pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role:
         "" // Already prepended by spawn.rs
     } else {
         subagent_rules(role)
+    };
+
+    // Memory shard only for root agents (subagents don't have memory tool)
+    let memory_shard = if instructions.contains("# RULES") {
+        String::new() // Delegated subagent — no memory tool, no shard needed
+    } else {
+        gateway_templates::Templates::get("shards/memory_learning.md")
+            .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            .unwrap_or_default()
     };
 
     format!(

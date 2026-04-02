@@ -197,36 +197,19 @@ Example:
 ```
 
 ### Phase 3: Coding (delegate to code-agent)
-Delegate with: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
-The code-agent uses `ralph.py` (at ward root) to get next task, execute it, mark complete/fail.
+Tell code-agent: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
+Do NOT set max_iterations. Do NOT write custom task descriptions. Do NOT tell it to call ward(use).
 
-### Phase 4: Review (delegate to code-agent, skills: [code-review])
-Review code against specs. Expects RESULT: APPROVED or DEFECTS.
+### Phase 4-6: Review → Validation → Output
+Same delegation pattern. If DEFECTS returned, re-delegate to coding with the defect list.
 
-### Phase 5: Validation (delegate to data-analyst/research-agent, skills: [domain-validation])
-Run code, validate output. Expects RESULT: APPROVED or DEFECTS.
-
-### Phase 6: Output (delegate or do yourself)
-Produce final deliverable.
-
-If review/validation returns DEFECTS, re-delegate to coding with the defect list.
-
-### Delegation
-- Phase 3 delegation MUST say: "Process tasks.json at specs/<subdirectory>/tasks.json using ralph.py"
-- Do NOT write custom task descriptions — ralph.py + tasks.json IS the task.
-- Do NOT set max_iterations — default 1000 is correct. System auto-kills stuck agents.
-- Pass skills in the `skills` parameter.
-- Subagent has ward CWD, AGENTS.md, and spec content pre-loaded. Do NOT tell it to call ward(use).
-
-### After a crash callback
-- Read the TASK RUNNER STATUS in the crash report
-- Re-delegate with: "Continue processing specs/<subdirectory>/tasks.json using ralph.py"
-- Do NOT code the remaining tasks yourself. Always re-delegate.
+### After a crash
+Check TASK RUNNER STATUS in the crash report. Re-delegate: "Continue processing tasks.json"
+NEVER code the remaining tasks yourself.
 
 ### Discipline
-- Do NOT call list_skills or list_agents.
-- Update plan ONLY at phase transitions.
-- Do NOT poll with shell. System sends callback automatically. Stop and wait.
+- Do NOT call list_skills, list_agents, or set max_iterations.
+- Update plan only at phase transitions. Do not poll with shell.
 "#);
     }
 
