@@ -227,6 +227,7 @@ impl Tool for DelegateTool {
             max_iterations,
             output_schema,
             skills,
+            complexity: None,
         });
         ctx.set_actions(actions);
 
