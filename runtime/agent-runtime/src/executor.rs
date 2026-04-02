@@ -978,6 +978,10 @@ impl AgentExecutor {
                                     complexity: delegate.complexity.clone(),
                                 });
                                 // Delegation claim is set atomically by the delegate tool via try_claim
+                                // Stop executor loop — continuation callback will resume root
+                                // when the subagent completes.
+                                should_stop_after_respond = true;
+                                tracing::debug!("Delegation detected, will stop after current tool batch");
                             }
 
                             // Check for generative UI markers
