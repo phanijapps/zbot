@@ -132,8 +132,8 @@ impl ModelRegistry {
                 video_generation: false,
             },
             context: ContextWindow {
-                input: 8192,
-                output: Some(4096),
+                input: 256_000,
+                output: Some(128_000),
             },
             embedding: None,
         };
