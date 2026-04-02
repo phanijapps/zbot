@@ -17,6 +17,8 @@ pub use tools::{
     ListAgentsTool, MemoryEntry, MemoryStore, QueryResourceTool, ToolSettings,
     // Individual tools for lean subagent registries
     ShellTool, ApplyPatchTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
+    // Orchestrator tools
+    WardTool, UpdatePlanTool, SetSessionTitleTool,
 };
 
 // Re-export from zero-core
