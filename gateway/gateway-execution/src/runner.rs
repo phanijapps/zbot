@@ -857,10 +857,15 @@ impl ExecutionRunner {
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Check if this execution spawned delegations that are still active
-                    let has_active_delegations = !delegation_registry
-                        .get_by_session_id(&session_id)
-                        .is_empty();
+                    // Check if this execution spawned delegations that are still active.
+                    // Use session.pending_delegations (set synchronously in handle_delegation)
+                    // rather than delegation_registry (populated asynchronously by spawn).
+                    let has_active_delegations = state_service
+                        .get_session(&session_id)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.has_pending_delegations())
+                        .unwrap_or(false);
 
                     if has_active_delegations {
                         // Root paused for delegation — do NOT complete execution.
