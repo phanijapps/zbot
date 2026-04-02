@@ -908,6 +908,7 @@ impl ExecutionRunner {
                         .and_then(|s| s.ward_id);
                     if let Some(ref ward_id) = session_ward {
                         auto_update_agents_md(paths.vault_dir(), ward_id);
+                        auto_update_memory_bank(paths.vault_dir(), ward_id);
                     }
 
                     // Fire-and-forget session distillation
@@ -1578,6 +1579,7 @@ async fn invoke_continuation(
     // Auto-update ward AGENTS.md before continuation
     if let Some(ref ward_id) = session_ward_id {
         auto_update_agents_md(paths.vault_dir(), ward_id);
+        auto_update_memory_bank(paths.vault_dir(), ward_id);
     }
 
     // Build executor
@@ -2416,5 +2418,163 @@ pub fn auto_update_agents_md_with_lang_configs(
 fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     let lang_configs_dir = vault_dir.join("config").join("wards");
     auto_update_agents_md_with_lang_configs(vault_dir, ward_id, &lang_configs_dir);
+}
+
+/// Auto-generate memory-bank/structure.md and core_docs.md for a ward.
+pub fn auto_update_memory_bank(vault_dir: &std::path::Path, ward_id: &str) {
+    let ward_dir = vault_dir.join("wards").join(ward_id);
+    let memory_bank_dir = ward_dir.join("memory-bank");
+
+    if !ward_dir.exists() || ward_id == "scratch" {
+        return;
+    }
+
+    let _ = std::fs::create_dir_all(&memory_bank_dir);
+    generate_structure_md(&ward_dir, &memory_bank_dir.join("structure.md"));
+
+    let lang_configs_dir = vault_dir.join("config").join("wards");
+    generate_core_docs_md(&ward_dir, &memory_bank_dir.join("core_docs.md"), &lang_configs_dir);
+}
+
+fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Path) {
+    let mut content = String::from("# Ward Structure\n\n## Directory Layout\n\n```\n");
+    generate_tree(ward_dir, ward_dir, 0, 3, &mut content);
+    content.push_str("```\n");
+
+    // Tech stack detection
+    let mut tech = Vec::new();
+    if ward_dir.join("requirements.txt").exists() { tech.push("Python (requirements.txt)"); }
+    if ward_dir.join("package.json").exists() { tech.push("Node.js (package.json)"); }
+    if ward_dir.join("Cargo.toml").exists() { tech.push("Rust (Cargo.toml)"); }
+
+    let core_dir = ward_dir.join("core");
+    if core_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&core_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("py") {
+                    if let Ok(src) = std::fs::read_to_string(entry.path()) {
+                        if src.contains("import yfinance") && !tech.iter().any(|t| *t == "yfinance") {
+                            tech.push("yfinance");
+                        }
+                        if src.contains("import pandas") && !tech.iter().any(|t| *t == "pandas") {
+                            tech.push("pandas");
+                        }
+                        if src.contains("import numpy") && !tech.iter().any(|t| *t == "numpy") {
+                            tech.push("numpy");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if !tech.is_empty() {
+        content.push_str(&format!("\n## Tech Stack\n\n{}\n", tech.join(", ")));
+    }
+
+    if let Err(e) = std::fs::write(output_path, &content) {
+        tracing::warn!("Failed to write structure.md: {}", e);
+    }
+}
+
+fn generate_tree(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+    output: &mut String,
+) {
+    if depth > max_depth { return; }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    items.sort_by_key(|e| e.file_name());
+
+    for entry in &items {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "__pycache__" || name == "node_modules"
+            || name == ".venv" || name == "data"
+        {
+            continue;
+        }
+        let indent = "  ".repeat(depth);
+        let path = entry.path();
+        if path.is_dir() {
+            output.push_str(&format!("{}{}/ \n", indent, name));
+            generate_tree(&path, base, depth + 1, max_depth, output);
+        } else if depth < 2 || name.ends_with(".py") || name.ends_with(".md")
+            || name.ends_with(".json") || name.ends_with(".yaml")
+        {
+            output.push_str(&format!("{}{}\n", indent, name));
+        }
+    }
+}
+
+fn generate_core_docs_md(
+    ward_dir: &std::path::Path,
+    output_path: &std::path::Path,
+    lang_configs_dir: &std::path::Path,
+) {
+    let core_dir = ward_dir.join("core");
+    if !core_dir.exists() { return; }
+
+    let lang_configs = {
+        let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
+            .unwrap_or_default();
+        gateway_services::lang_config::compile_all(&raw)
+    };
+
+    let mut entries: Vec<_> = std::fs::read_dir(&core_dir)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    e.path().is_file() && !name.starts_with('.') && name != "__init__.py"
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort_by_key(|e| e.file_name());
+
+    if entries.is_empty() { return; }
+
+    let mut content = String::from("# Core Module Documentation\n\nImport pattern: `from core.{module} import {function}`\n\n");
+
+    for entry in &entries {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().to_string();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let module_name = name.trim_end_matches(&format!(".{}", ext));
+
+        content.push_str(&format!("## core/{}\n\n", name));
+
+        if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
+            let desc = config.extract_first_docstring(&path).unwrap_or_default();
+            if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
+            let sigs = config.extract_signatures(&path);
+            if !sigs.is_empty() {
+                content.push_str("**Functions:**\n");
+                for sig in &sigs { content.push_str(&format!("- `{}`\n", sig)); }
+                content.push_str(&format!("\n**Usage:** `from core.{} import ...`\n\n", module_name));
+            }
+        } else {
+            let desc = extract_first_docstring(&path);
+            if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
+            let sigs = extract_function_signatures(&path);
+            if !sigs.is_empty() {
+                content.push_str("**Functions:**\n");
+                for sig in &sigs {
+                    let display = sig.strip_prefix("def ").unwrap_or(&sig);
+                    content.push_str(&format!("- `{}`\n", display));
+                }
+                content.push_str(&format!("\n**Usage:** `from core.{} import ...`\n\n", module_name));
+            }
+        }
+    }
+
+    if let Err(e) = std::fs::write(output_path, &content) {
+        tracing::warn!("Failed to write core_docs.md: {}", e);
+    }
 }
 
