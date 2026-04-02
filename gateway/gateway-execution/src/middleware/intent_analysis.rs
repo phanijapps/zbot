@@ -168,66 +168,23 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option
         }
     }
 
-    // Execution graph — high-level plan for the agent to expand
+    // Execution approach
     let es = &analysis.execution_strategy;
     if es.approach == "graph" {
-        if let Some(ref graph) = es.graph {
-            out.push_str("\n**Suggested Execution Graph:**\n");
-            for node in &graph.nodes {
-                let skills_hint = if node.skills.is_empty() {
-                    String::new()
-                } else {
-                    format!(" [skills: {}]", node.skills.join(", "))
-                };
-                out.push_str(&format!(
-                    "- `{}` → {} (agent: {}){}\n",
-                    node.id, node.task, node.agent, skills_hint
-                ));
-            }
-            if !graph.edges.is_empty() {
-                out.push_str("  Flow: ");
-                let edge_strs: Vec<String> = graph.edges.iter().map(|e| match e {
-                    GraphEdge::Direct { from, to } => format!("{} → {}", from, to),
-                    GraphEdge::Conditional { from, conditions } => {
-                        let conds: Vec<String> = conditions.iter()
-                            .map(|c| format!("{}: {}", c.when, c.to))
-                            .collect();
-                        format!("{} → [{}]", from, conds.join(", "))
-                    }
-                }).collect();
-                out.push_str(&edge_strs.join(", "));
-                out.push('\n');
-            }
-            out.push_str("\nThis is a starting point. Expand, reorder, or parallelize as you see fit.\n");
-        } else {
-            out.push_str(&format!("\n**Approach:** {} — {}\n", es.approach, es.explanation));
-            out.push_str("Decompose this goal into subtasks and delegate to the right agents.\n");
-        }
+        out.push_str(&format!(
+            "\n**Approach:** Complex task requiring multi-step execution.\n\
+             \n**First step:** Delegate to `planner-agent`:\n\
+             ```\n\
+             delegate_to_agent(agent_id=\"planner-agent\", task=\"Plan this goal: {}. Ward: {}.\")\n\
+             ```\n\
+             The planner will read the ward, check existing code, and return a structured execution plan.\n\
+             Then execute each step from the plan by delegating to the assigned agent.\n",
+            analysis.primary_intent, wr.ward_name
+        ));
     } else {
         if !es.explanation.is_empty() {
             out.push_str(&format!("\n**Approach:** {}\n", es.explanation));
         }
-    }
-
-    // SDLC guidance — only when coding is involved
-    let has_coding = analysis.recommended_skills.iter().any(|s| s == "coding");
-    if has_coding && es.approach == "graph" {
-        out.push_str(r#"
-**Coding Discipline (for code-agent delegations):**
-When delegating coding work, provide the code-agent with:
-- A clear goal and acceptance criteria
-- The ward name and relevant specs directory
-- Reference to AGENTS.md for existing core/ modules
-- "Process tasks.json at specs/<path>/tasks.json using ralph.py" for multi-file tasks
-
-For multi-file coding tasks, the code-agent should:
-1. Read existing specs or write specs if none exist (one per module, under 3KB)
-2. Create tasks.json with ordered tasks (create → run → verify)
-3. Execute tasks sequentially using ralph.py
-4. Respond with results summary
-
-You do NOT need to write specs yourself — delegate that to code-agent as part of its task.
-"#);
     }
 
     // Lightweight ward reminder

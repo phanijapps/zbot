@@ -187,7 +187,7 @@ async fn test_full_enrichment_flow() {
     let injection = format_intent_injection(&analysis, None);
     assert!(injection.contains("## Task Analysis"));
     assert!(injection.contains("financial-analysis"));
-    assert!(injection.contains("Suggested Execution Graph"));
+    assert!(injection.contains("planner-agent"));
 }
 
 /// LLM call failure should propagate as Err.

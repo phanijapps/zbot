@@ -359,10 +359,10 @@ fn test_intent_injection_sdlc_for_graph() {
 
     let injection = format_intent_injection(&analysis, None);
 
-    // Graph approach should include goal-oriented task analysis (not SDLC prescription)
+    // Graph approach should route to planner-agent
     assert!(injection.contains("## Task Analysis"), "Graph approach should include task analysis");
     assert!(injection.contains("Goal:"), "Should include the goal");
-    assert!(injection.contains("Decompose this goal"), "Should encourage decomposition for graph without explicit graph nodes");
+    assert!(injection.contains("planner-agent"), "Should route to planner for graph tasks");
     assert!(injection.contains("Ward Rule:"), "Should include ward discipline");
 }
 
