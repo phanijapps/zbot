@@ -59,6 +59,37 @@ fn extract_file_path(args: &serde_json::Value) -> Option<String> {
     None
 }
 
+/// Compress old assistant messages in-place.
+///
+/// Messages in the "old" portion (before `keep_recent`) are compressed to
+/// one-line summaries. Recent messages are left intact.
+///
+/// `keep_recent` is the number of messages from the end to preserve unchanged.
+fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep_recent: usize) {
+    let total = messages.len();
+    if total <= keep_recent {
+        return;
+    }
+
+    let compress_boundary = total.saturating_sub(keep_recent);
+    let mut turn_counter = 0;
+
+    for i in 0..compress_boundary {
+        if messages[i].role == "assistant" {
+            turn_counter += 1;
+
+            // Skip already-compressed messages
+            if messages[i].content.starts_with("[Turn") {
+                continue;
+            }
+
+            let compressed = compress_assistant_message(&messages[i], turn_counter);
+            messages[i].content = compressed;
+            // Keep tool_calls intact — the LLM API requires them for tool result pairing
+        }
+    }
+}
+
 /// Build an index mapping tool_call_id → tool_name from all assistant messages.
 /// This is O(n) over messages, enabling O(1) lookups instead of O(n) backwards search.
 fn build_tool_call_index(messages: &[ChatMessage]) -> std::collections::HashMap<String, String> {
@@ -381,6 +412,10 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
             &indices_to_clear,
             &context.execution_state,
         );
+
+        // Compress old assistant messages to one-line summaries
+        let keep_recent = (self.config.keep_tool_results as usize + 1) * 3;
+        compress_old_assistant_messages(&mut modified_messages, keep_recent);
 
         // Log the context editing action
         if unloaded_skills.is_empty() {
@@ -904,6 +939,70 @@ mod tests {
         let compressed = compress_assistant_message(&msg, 5);
         assert!(compressed.starts_with("[Turn 5:"));
         assert!(compressed.len() < 100);
+    }
+
+    #[test]
+    fn test_compress_old_assistant_messages() {
+        let tool1 = ToolCall::new(
+            "call_1".to_string(),
+            "write_file".to_string(),
+            json!({"path": "src/main.rs", "content": "lots of code"}),
+        );
+        let tool2 = ToolCall::new(
+            "call_2".to_string(),
+            "read_file".to_string(),
+            json!({"path": "src/lib.rs"}),
+        );
+
+        let mut messages = vec![
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Create the files".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "I'll create main.rs and read lib.rs for you. Let me start with the main file.".to_string(),
+                tool_calls: Some(vec![tool1, tool2]),
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: "[cleared]".to_string(),
+                tool_calls: None,
+                tool_call_id: Some("call_1".to_string()),
+            },
+            ChatMessage {
+                role: "tool".to_string(),
+                content: "[cleared]".to_string(),
+                tool_calls: None,
+                tool_call_id: Some("call_2".to_string()),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: "Now add tests".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: "I'll add tests now.".to_string(),
+                tool_calls: None,
+                tool_call_id: None,
+            },
+        ];
+
+        let original_assistant_content = messages[1].content.clone();
+        compress_old_assistant_messages(&mut messages, 4);
+
+        // Old assistant message (index 1) should be compressed
+        assert!(messages[1].content.starts_with("[Turn"));
+        assert!(messages[1].content.contains("write_file"));
+        assert!(messages[1].content != original_assistant_content);
+
+        // Recent assistant message (index 5) should NOT be compressed
+        assert_eq!(messages[5].content, "I'll add tests now.");
     }
 
     #[test]
