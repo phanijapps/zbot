@@ -74,9 +74,15 @@ impl OpenAiClient {
     /// Create a new OpenAI-compatible client
     pub fn new(config: LlmConfig) -> Result<Self, LlmError> {
         tracing::debug!("Creating OpenAI client for model: {}", config.model);
+        let http_client = reqwest::Client::builder()
+            .tcp_nodelay(true)
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .timeout(std::time::Duration::from_secs(300))
+            .build()?;
         Ok(Self {
             config: Arc::new(config),
-            http_client: reqwest::Client::new(),
+            http_client,
         })
     }
 
