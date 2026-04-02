@@ -183,6 +183,13 @@ pub struct DelegateAction {
     /// Skills to pre-load for the subagent.
     #[serde(default)]
     pub skills: Vec<String>,
+
+    /// Task complexity level: "S", "M", "L", "XL".
+    ///
+    /// Used for iteration budget enforcement. When set, the executor
+    /// applies complexity-based turn budgets instead of the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub complexity: Option<String>,
 }
 
 impl EventActions {
@@ -261,5 +268,27 @@ mod tests {
 
         assert_eq!(actions.state_delta.get("key"), Some(&json!("value")));
         assert!(actions.skip_summarization);
+    }
+
+    #[test]
+    fn test_delegate_action_complexity_field() {
+        let action = DelegateAction {
+            agent_id: "child".to_string(),
+            task: "do work".to_string(),
+            context: None,
+            wait_for_result: false,
+            max_iterations: None,
+            output_schema: None,
+            skills: vec![],
+            complexity: Some("M".to_string()),
+        };
+        assert_eq!(action.complexity, Some("M".to_string()));
+    }
+
+    #[test]
+    fn test_delegate_action_complexity_default_none() {
+        let json = r#"{"agent_id":"a","task":"t","wait_for_result":false,"skills":[]}"#;
+        let action: DelegateAction = serde_json::from_str(json).unwrap();
+        assert_eq!(action.complexity, None);
     }
 }
