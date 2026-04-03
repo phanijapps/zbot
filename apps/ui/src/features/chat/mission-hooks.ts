@@ -145,8 +145,6 @@ export function useMissionControl() {
       // Stale session from a previous run — clear it for a fresh start
       localStorage.removeItem(WEB_SESSION_ID_KEY);
     }
-    // Clear the resume flag so next page load starts fresh
-    localStorage.removeItem("agentzero_log_session_id");
     return getOrCreateConversationId();
   });
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
@@ -1182,6 +1180,9 @@ export function useMissionControl() {
         }
       } catch (err) {
         console.error("[MissionControl] Failed to load session:", err);
+      } finally {
+        // Clear the resume flag after loading — next fresh page load starts a new session
+        localStorage.removeItem("agentzero_log_session_id");
       }
     };
 
