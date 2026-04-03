@@ -66,7 +66,17 @@ impl Tool for WriteFileTool {
             return Err(ZeroError::Tool("Path cannot be empty".to_string()));
         }
 
-        // Resolve CWD from ward context (same as apply_patch)
+        // Sanitize path — reject absolute paths and home-relative paths
+        let path = path.trim_start_matches("~/")
+            .trim_start_matches("/")
+            .trim_start_matches("./");
+
+        // Reject paths that try to escape the ward
+        if path.contains("..") {
+            return Err(ZeroError::Tool("Path cannot contain '..' — all paths must be relative to the ward".to_string()));
+        }
+
+        // Resolve CWD from ward context
         let cwd = resolve_ward_cwd(&self.fs, &ctx);
         let full_path = cwd.join(path);
 

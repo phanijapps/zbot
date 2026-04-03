@@ -79,6 +79,14 @@ impl Tool for EditFileTool {
             return Err(ZeroError::Tool("old_text cannot be empty".to_string()));
         }
 
+        // Sanitize path
+        let path = path.trim_start_matches("~/")
+            .trim_start_matches("/")
+            .trim_start_matches("./");
+        if path.contains("..") {
+            return Err(ZeroError::Tool("Path cannot contain '..' — all paths must be relative to the ward".to_string()));
+        }
+
         // Resolve CWD from ward context
         let cwd = resolve_ward_cwd(&self.fs, &ctx);
         let full_path = cwd.join(path);
