@@ -45,3 +45,4 @@ pub use traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext, Middl
 pub use config::{MiddlewareConfig, TriggerCondition, KeepPolicy, SummarizationConfig, ContextEditingConfig};
 pub use summarization::SummarizationMiddleware;
 pub use context_editing::ContextEditingMiddleware;
+pub(crate) use context_editing::{compress_old_assistant_messages, compress_assistant_message};

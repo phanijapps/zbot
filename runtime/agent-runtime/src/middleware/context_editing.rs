@@ -22,7 +22,7 @@ use serde_json::json;
 /// Pure pattern matching — no LLM call.
 ///
 /// Format: `[Turn N: tool1(file1), tool2(file2)]` or `[Turn N: <truncated reasoning>]`
-fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) -> String {
+pub(crate) fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) -> String {
     if let Some(ref tool_calls) = msg.tool_calls {
         let summaries: Vec<String> = tool_calls.iter().map(|tc| {
             let path = extract_file_path(&tc.arguments);
@@ -45,7 +45,7 @@ fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) -> String {
 /// Extract a file path from tool call arguments.
 ///
 /// Looks for common keys: "path", "file_path", "file", "filename".
-fn extract_file_path(args: &serde_json::Value) -> Option<String> {
+pub(crate) fn extract_file_path(args: &serde_json::Value) -> Option<String> {
     let path_keys = ["path", "file_path", "file", "filename"];
     if let Some(obj) = args.as_object() {
         for key in &path_keys {
@@ -65,7 +65,7 @@ fn extract_file_path(args: &serde_json::Value) -> Option<String> {
 /// one-line summaries. Recent messages are left intact.
 ///
 /// `keep_recent` is the number of messages from the end to preserve unchanged.
-fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep_recent: usize) {
+pub(crate) fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep_recent: usize) {
     let total = messages.len();
     if total <= keep_recent {
         return;
