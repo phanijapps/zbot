@@ -14,7 +14,7 @@ use agent_runtime::{
 use agent_tools::{
     ListAgentsTool, QueryResourceTool, ToolSettings,
     // Subagent tools
-    ShellTool, ApplyPatchTool, LoadSkillTool,
+    ShellTool, ApplyPatchTool, LoadSkillTool, WriteFileTool, EditFileTool,
     // Root orchestrator tools
     MemoryTool, WardTool, UpdatePlanTool, SetSessionTitleTool, GrepTool,
     // Optional file reading tools
@@ -317,12 +317,10 @@ impl ExecutorBuilder {
         let mut tool_registry = ToolRegistry::new();
 
         if self.is_delegated {
-            // Subagents get 4 tools: execute, don't orchestrate.
-            // shell (includes grep/cat/find natively on unix), apply_patch,
-            // load_skill (on demand), respond (return result + learnings).
-            // No memory — subagents report learnings in respond output,
-            // root synthesizes and saves them.
+            // Subagents: execute tools + respond.
             tool_registry.register(Arc::new(ShellTool::new()));
+            tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(ApplyPatchTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(RespondTool::new()));

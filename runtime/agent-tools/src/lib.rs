@@ -16,7 +16,7 @@ pub use tools::{
     // Composite re-exports
     ListAgentsTool, MemoryEntry, MemoryStore, QueryResourceTool, ToolSettings,
     // Individual tools for lean subagent registries
-    ShellTool, ApplyPatchTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
+    ShellTool, ApplyPatchTool, WriteFileTool, EditFileTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
     // Orchestrator tools
     WardTool, UpdatePlanTool, SetSessionTitleTool,
 };

@@ -994,7 +994,7 @@ impl Tool for ApplyPatchTool {
 
 /// Resolve the working directory for patch operations.
 /// Uses the active ward directory if available, otherwise falls back to home/Documents/zbot/wards/scratch.
-fn resolve_ward_cwd(fs: &Arc<dyn FileSystemContext>, ctx: &Arc<dyn ToolContext>) -> PathBuf {
+pub fn resolve_ward_cwd(fs: &Arc<dyn FileSystemContext>, ctx: &Arc<dyn ToolContext>) -> PathBuf {
     // Try to get ward_id from context
     let ward_id = ctx
         .get_state("ward_id")

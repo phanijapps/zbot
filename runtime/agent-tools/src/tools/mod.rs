@@ -24,6 +24,7 @@ use zero_core::MemoryFactStore;
 pub use file::{ReadTool, WriteTool, EditTool};
 pub use search::{GrepTool, GlobTool};
 pub use execution::ApplyPatchTool;
+pub use execution::EditFileTool;
 pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
 pub use execution::SetSessionTitleTool;
@@ -31,6 +32,7 @@ pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
 pub use execution::TodoTool;
 pub use execution::UpdatePlanTool;
+pub use execution::WriteFileTool;
 pub use ui::{RequestInputTool, ShowContentTool};
 pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use web::WebFetchTool;
@@ -138,7 +140,10 @@ pub fn core_tools(
     vec![
         // Primary execution tool
         Arc::new(ShellTool::new()),
-        // First-class file creation/editing/deletion via patch format
+        // Simple file operations (preferred over apply_patch for most use cases)
+        Arc::new(WriteFileTool::new(fs.clone())),
+        Arc::new(EditFileTool::new(fs.clone())),
+        // Legacy patch format (still available for complex multi-file edits)
         Arc::new(ApplyPatchTool::new(fs.clone())),
         // Persistent memory (with optional DB-backed fact store)
         Arc::new(MemoryTool::new(fs.clone(), fact_store.clone())),
