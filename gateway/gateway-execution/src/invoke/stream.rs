@@ -294,6 +294,13 @@ pub fn handle_delegation(
         }
     };
 
+    // Increment pending_delegations SYNCHRONOUSLY so the executor's Ok() path
+    // sees it before checking has_pending_delegations(). The spawn handler will
+    // NOT double-increment — register_delegation is idempotent (checks current count).
+    if let Err(e) = ctx.state_service.register_delegation(&ctx.session_id) {
+        tracing::warn!("Failed to register delegation synchronously: {}", e);
+    }
+
     // Send request with pre-created execution_id
     let _ = ctx.delegation_tx.send(DelegationRequest {
         parent_agent_id: ctx.agent_id.clone(),

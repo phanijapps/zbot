@@ -121,10 +121,8 @@ pub async fn spawn_delegated_agent(
     };
     delegation_registry.register(&execution_id, delegation_context);
 
-    // Track delegation for continuation
-    if let Err(e) = state_service.register_delegation(&session_id) {
-        tracing::warn!("Failed to register delegation: {}", e);
-    }
+    // Note: pending_delegations is incremented synchronously in handle_delegation (stream.rs).
+    // Do NOT increment again here — would double-count and break continuation.
 
     // Emit delegation started event
     emit_delegation_started(
