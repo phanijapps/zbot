@@ -95,14 +95,15 @@ impl Tool for EditFileTool {
             ZeroError::Tool(format!("Failed to read {}: {}", path, e))
         })?;
 
-        // Count occurrences
+        // Count occurrences — old_text MUST be unique in the file
         let count = content.matches(old_text).count();
 
         if count == 0 {
             // Try trimmed match as fallback
             let trimmed_old = old_text.trim();
             let trimmed_count = content.matches(trimmed_old).count();
-            if trimmed_count > 0 {
+
+            if trimmed_count == 1 {
                 let new_content = content.replacen(trimmed_old, new_text, 1);
                 std::fs::write(&full_path, &new_content).map_err(|e| {
                     ZeroError::Tool(format!("Failed to write {}: {}", path, e))
@@ -111,38 +112,51 @@ impl Tool for EditFileTool {
                 return Ok(json!({
                     "success": true,
                     "path": path,
-                    "replacements": 1,
                     "match_type": "trimmed",
                     "message": format!("Replaced 1 occurrence (trimmed match) in {}", path)
+                }));
+            } else if trimmed_count > 1 {
+                return Ok(json!({
+                    "success": false,
+                    "error": format!("Found {} occurrences of old_text in {}. The text must be unique — include more surrounding context to disambiguate.", trimmed_count, path)
                 }));
             }
 
             return Ok(json!({
                 "success": false,
-                "error": format!("old_text not found in {}. The text must match exactly.", path),
+                "error": format!("old_text not found in {}. The text must match exactly (including whitespace).", path),
                 "hint": "Use grep to find the exact text first, then copy it precisely."
             }));
         }
 
-        // Replace first occurrence only (safer — avoids unintended bulk replacements)
+        if count > 1 {
+            return Ok(json!({
+                "success": false,
+                "error": format!("Found {} occurrences of old_text in {}. The text must be unique — include more surrounding context to disambiguate.", count, path)
+            }));
+        }
+
+        // Exactly one match — safe to replace
         let new_content = content.replacen(old_text, new_text, 1);
+
+        // Verify the edit actually changed something
+        if new_content == content {
+            return Ok(json!({
+                "success": false,
+                "error": "old_text and new_text are identical — no change made."
+            }));
+        }
 
         std::fs::write(&full_path, &new_content).map_err(|e| {
             ZeroError::Tool(format!("Failed to write {}: {}", path, e))
         })?;
 
-        tracing::debug!("edit_file: replaced in {} ({} total occurrences, replaced 1)", path, count);
+        tracing::debug!("edit_file: replaced unique match in {}", path);
 
         Ok(json!({
             "success": true,
             "path": path,
-            "replacements": 1,
-            "total_occurrences": count,
-            "message": if count > 1 {
-                format!("Replaced 1 of {} occurrences in {}", count, path)
-            } else {
-                format!("Replaced 1 occurrence in {}", path)
-            }
+            "message": format!("Edit applied to {}", path)
         }))
     }
 }
