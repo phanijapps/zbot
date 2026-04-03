@@ -1270,7 +1270,7 @@ impl ExecutionRunner {
                         agent.model.clone(),
                         provider.id.clone().unwrap_or_else(|| provider.name.clone()),
                     )
-                    .with_max_tokens(8192); // Intent analysis JSON can be 3-5KB for graph tasks with full execution graphs
+                    .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
                     match agent_runtime::OpenAiClient::new(llm_config) {
                         Ok(raw_client) => {
                             let retrying = agent_runtime::RetryingLlmClient::new(
