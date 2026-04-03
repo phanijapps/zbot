@@ -1900,15 +1900,43 @@ pub async fn create_executor(
     )
 }
 
+/// Extract key info (file paths, URLs) from a tool result for restorable compression.
+fn extract_key_info(content: &str) -> String {
+    let mut info = Vec::new();
+
+    for word in content.split_whitespace() {
+        let trimmed = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ':' || c == '(' || c == ')');
+        if (trimmed.contains('/') || trimmed.contains('.'))
+            && (trimmed.ends_with(".py")
+                || trimmed.ends_with(".json")
+                || trimmed.ends_with(".csv")
+                || trimmed.ends_with(".html")
+                || trimmed.ends_with(".md")
+                || trimmed.ends_with(".js")
+                || trimmed.ends_with(".ts")
+                || trimmed.ends_with(".yaml")
+                || trimmed.ends_with(".toml"))
+        {
+            if !info.contains(&trimmed.to_string()) {
+                info.push(trimmed.to_string());
+            }
+        }
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if !info.contains(&trimmed.to_string()) {
+                info.push(trimmed.to_string());
+            }
+        }
+    }
+
+    info.join(", ")
+}
+
 /// Compact messages to reduce context size when approaching token limits.
 ///
-/// Strategy: keep system messages, keep last N messages (with pair integrity),
-/// insert a summarization placeholder for trimmed history.
-///
-/// IMPORTANT: assistant+tool_call / tool_response pairs are treated as atomic
-/// units. If an assistant message with tool_calls is kept, all its tool
-/// responses are kept too. If a tool response would be trimmed, its parent
-/// assistant message is also trimmed.
+/// Strategy:
+/// 1. Compress old assistant messages to one-liners (preserving tool names and file paths)
+/// 2. Clear old tool result content (replace with placeholder, preserve file paths)
+/// 3. Only drop messages if still over budget after compression
 fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     const KEEP_RECENT: usize = 20;
 
@@ -1916,56 +1944,70 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         return messages;
     }
 
-    let mut compacted = Vec::new();
+    let mut messages = messages;
 
-    // Keep system messages at the start
-    let mut non_system_start = 0;
-    for (i, msg) in messages.iter().enumerate() {
-        if msg.role == "system" {
-            compacted.push(msg.clone());
-            non_system_start = i + 1;
-        } else {
-            break;
+    // Phase 1: Compress old assistant messages to one-liners
+    crate::middleware::compress_old_assistant_messages(&mut messages, KEEP_RECENT);
+
+    // Phase 2: Clear old tool result content (keep tool_call_id for pairing)
+    let compress_boundary = messages.len().saturating_sub(KEEP_RECENT);
+    for i in 0..compress_boundary {
+        if messages[i].role == "tool" {
+            let preserved = extract_key_info(&messages[i].content);
+            messages[i].content = if preserved.is_empty() {
+                "[result cleared]".to_string()
+            } else {
+                format!("[result cleared — {}]", preserved)
+            };
         }
     }
 
-    // Preserve the first non-system message (original user request)
-    let first_user_msg = messages[non_system_start..].iter().find(|m| m.role == "user");
-    if let Some(user_msg) = first_user_msg {
-        compacted.push(user_msg.clone());
-    }
+    // Phase 3: If still too many messages, drop old ones
+    if messages.len() > KEEP_RECENT + 10 {
+        let mut compacted = Vec::new();
 
-    // Find a clean split point that doesn't break assistant+tool pairs.
-    // Start from the target split point and walk forward until we find
-    // a boundary that's NOT inside a tool_call/tool_response group.
-    let target_start = messages.len().saturating_sub(KEEP_RECENT);
-    let mut split_at = target_start;
-
-    // Walk forward to find a clean boundary
-    for i in target_start..messages.len() {
-        let msg = &messages[i];
-        // A clean boundary is: a user message, or an assistant message WITHOUT tool_call_id
-        // (i.e., not a tool response, and not mid-pair)
-        if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
-            split_at = i;
-            break;
+        // Keep system messages
+        let mut non_system_start = 0;
+        for (i, msg) in messages.iter().enumerate() {
+            if msg.role == "system" {
+                compacted.push(msg.clone());
+                non_system_start = i + 1;
+            } else {
+                break;
+            }
         }
-        // If it's a tool message, we're inside a pair — keep walking
+
+        // Preserve first user message
+        if let Some(user_msg) = messages[non_system_start..].iter().find(|m| m.role == "user") {
+            compacted.push(user_msg.clone());
+        }
+
+        // Find clean split point
+        let target_start = messages.len().saturating_sub(KEEP_RECENT);
+        let mut split_at = target_start;
+        for i in target_start..messages.len() {
+            let msg = &messages[i];
+            if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
+                split_at = i;
+                break;
+            }
+        }
+
+        let trimmed_count = split_at.saturating_sub(non_system_start);
+        if trimmed_count > 0 {
+            compacted.push(ChatMessage::user(format!(
+                "[SYSTEM: Context compacted. {} earlier messages were compressed and trimmed. \
+                 The original request and recent messages are preserved. Continue with the task.]",
+                trimmed_count
+            )));
+        }
+
+        compacted.extend(messages[split_at..].iter().cloned());
+        compacted
+    } else {
+        // Compression was enough — no need to drop
+        messages
     }
-
-    let trimmed_count = split_at.saturating_sub(non_system_start);
-    if trimmed_count > 0 {
-        compacted.push(ChatMessage::user(format!(
-            "[SYSTEM: Context compacted. {} earlier messages were trimmed to stay within \
-             context limits. The original request above is preserved. Continue with the task.]",
-            trimmed_count
-        )));
-    }
-
-    // Keep messages from split point onward
-    compacted.extend(messages[split_at..].iter().cloned());
-
-    compacted
 }
 
 /// Sanitize messages to ensure tool call/result pairs are valid.
@@ -2737,7 +2779,7 @@ mod progress_tracker_tests {
             "Compacted messages should include compaction notice"
         );
         assert!(
-            compacted.iter().any(|m| m.content.contains("original request above is preserved")),
+            compacted.iter().any(|m| m.content.contains("original request")),
             "Compaction notice should reference the preserved original request"
         );
     }
@@ -2942,5 +2984,77 @@ mod token_cache_tests {
 
         // Cache hit
         assert_eq!(cache.get(&hash), Some(&estimate));
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_compresses_before_dropping() {
+        let mut messages = vec![
+            ChatMessage::system("system prompt".to_string()),
+            ChatMessage::user("original request".to_string()),
+        ];
+
+        for i in 0..14 {
+            let tool = ToolCall::new(
+                format!("call_{}", i),
+                "write_file".to_string(),
+                json!({"path": format!("src/file_{}.py", i)}),
+            );
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: format!("Creating file_{}.py with detailed explanation", i),
+                tool_calls: Some(vec![tool]),
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                role: "tool".to_string(),
+                content: format!("File created: src/file_{}.py", i),
+                tool_calls: None,
+                tool_call_id: Some(format!("call_{}", i)),
+            });
+        }
+
+        let compacted = compact_messages(messages);
+
+        // Old assistant messages should be compressed
+        let has_compressed = compacted.iter().any(|m| m.content.starts_with("[Turn"));
+        assert!(has_compressed, "Old assistant messages should be compressed");
+
+        // Old tool results should preserve file paths
+        let has_preserved = compacted.iter().any(|m|
+            m.content.contains("[result cleared") && m.content.contains(".py")
+        );
+        assert!(has_preserved, "Cleared tool results should preserve file paths");
+    }
+
+    #[test]
+    fn test_compact_preserves_recent() {
+        let mut messages = vec![
+            ChatMessage::system("system".to_string()),
+            ChatMessage::user("request".to_string()),
+        ];
+        for i in 0..25 {
+            messages.push(ChatMessage::user(format!("msg {}", i)));
+        }
+        let compacted = compact_messages(messages);
+        assert!(compacted.last().unwrap().content.contains("msg 24"));
+    }
+
+    #[test]
+    fn test_extract_key_info() {
+        let content = "File created: src/main.py with 100 lines. See https://example.com for docs.";
+        let info = extract_key_info(content);
+        assert!(info.contains("src/main.py"));
+        assert!(info.contains("https://example.com"));
+    }
+
+    #[test]
+    fn test_extract_key_info_empty() {
+        let info = extract_key_info("Success! Operation completed.");
+        assert!(info.is_empty());
     }
 }
