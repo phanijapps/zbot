@@ -284,9 +284,12 @@ impl Tool for WardTool {
                     })?;
                 }
 
-                // Create AGENTS.md with intent context for new wards
+                // Create ward scaffold for new wards
                 if created {
                     self.create_agents_md(&ward_dir, name, ctx.as_ref());
+                    // Create mandatory directories
+                    let _ = std::fs::create_dir_all(ward_dir.join("memory-bank"));
+                    let _ = std::fs::create_dir_all(ward_dir.join("specs"));
                 }
 
                 // Set ward_id in context state
