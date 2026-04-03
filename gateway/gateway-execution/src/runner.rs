@@ -1617,11 +1617,23 @@ async fn invoke_continuation(
         )
         .await?;
 
-    // The continuation message prompts the agent to process subagent results
-    let continuation_message =
-        "[All delegated tasks have completed. Review the results above and continue your orchestration. \
-         You may respond to the user, delegate to more agents, or take other actions as needed.]\n\n\
-         [Recall] Delegation completed. Consider recalling to absorb any new learnings.";
+    // Build a focused continuation message that tells root exactly what to do next.
+    // If specs/plan.md exists in the ward, read it and tell root which step is next.
+    let continuation_message = {
+        let plan_hint = session_ward_id.as_ref().and_then(|ward_id| {
+            let plan_path = paths.vault_dir().join("wards").join(ward_id).join("specs").join("plan.md");
+            std::fs::read_to_string(&plan_path).ok()
+        });
+
+        if let Some(plan) = plan_hint {
+            format!(
+                "[Delegation completed. Here is the current plan — find the next pending step and delegate it immediately. \
+                 Do ONE action: delegate the next step.]\n\n{}", plan
+            )
+        } else {
+            "[Delegation completed. Continue executing your plan — delegate the next step immediately.]".to_string()
+        }
+    };
 
     // Spawn execution task
     let session_id_clone = session_id.to_string();
@@ -1656,7 +1668,7 @@ async fn invoke_continuation(
             &session_id_clone,
             &execution_id,
             "system",
-            continuation_message,
+            &continuation_message,
             None,
             None,
         );
@@ -1668,7 +1680,7 @@ async fn invoke_continuation(
         let mut turn_text = String::new();
 
         let result = executor
-            .execute_stream(continuation_message, &history, |event| {
+            .execute_stream(&continuation_message, &history, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }
