@@ -137,7 +137,18 @@ export function useMissionControl() {
   const [intentAnalysis, setIntentAnalysis] = useState<IntentAnalysis | null>(null);
 
   // -- Session/conversation IDs --
-  const [conversationId, setConversationId] = useState<string>(() => getOrCreateConversationId());
+  // On fresh mount: if there's a stale session ID but no explicit resume flag,
+  // clear it so the next invoke creates a new session.
+  const [conversationId, setConversationId] = useState<string>(() => {
+    const logSessionId = localStorage.getItem("agentzero_log_session_id");
+    if (!logSessionId && localStorage.getItem(WEB_SESSION_ID_KEY)) {
+      // Stale session from a previous run — clear it for a fresh start
+      localStorage.removeItem(WEB_SESSION_ID_KEY);
+    }
+    // Clear the resume flag so next page load starts fresh
+    localStorage.removeItem("agentzero_log_session_id");
+    return getOrCreateConversationId();
+  });
   const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
 
   // -- Load flag to prevent double-load --
