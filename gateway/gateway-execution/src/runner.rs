@@ -2449,8 +2449,8 @@ pub fn auto_update_agents_md_with_lang_configs(
     sections.push("## How to Code\n".to_string());
     sections.push("1. Reusable functions → core/. Task scripts → task subdirectories.\n".to_string());
     sections.push("2. Import from core/ — never duplicate existing modules.\n".to_string());
-    sections.push("3. Use apply_patch for all file operations. Max 100 lines per file.\n".to_string());
-    sections.push("4. If tasks.json exists, use ralph.py to process tasks in order.\n".to_string());
+    sections.push("3. Use write_file to create files, edit_file for changes. Keep files under 3KB.\n".to_string());
+    sections.push("4. Update memory-bank/core_docs.md with full function signatures after creating core modules.\n".to_string());
 
     // ── Timestamp ──
     sections.push(format!(
