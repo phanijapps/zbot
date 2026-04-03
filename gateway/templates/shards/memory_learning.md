@@ -30,7 +30,7 @@ Don't batch — save as you learn:
 - `memory(action="save_fact", category="pattern", key="pattern.yfinance.multiindex", content="...", confidence=0.9)`
 
 ## Error Patterns
-- `pattern.error.powershell_heredoc` = "Use apply_patch, not heredocs"
+- `pattern.error.powershell_heredoc` = "Use write_file, not heredocs"
 - `pattern.error.delegation_overflow` = "Keep subagent tasks focused"
 
 ## Success Patterns

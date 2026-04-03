@@ -14,7 +14,7 @@ use agent_runtime::{
 use agent_tools::{
     ListAgentsTool, QueryResourceTool, ToolSettings,
     // Subagent tools
-    ShellTool, ApplyPatchTool, LoadSkillTool, WriteFileTool, EditFileTool,
+    ShellTool, LoadSkillTool, WriteFileTool, EditFileTool,
     // Root orchestrator tools
     MemoryTool, WardTool, UpdatePlanTool, SetSessionTitleTool, GrepTool,
     // Optional file reading tools
@@ -321,7 +321,6 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(ShellTool::new()));
             tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
-            tool_registry.register(Arc::new(ApplyPatchTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(RespondTool::new()));
         } else {

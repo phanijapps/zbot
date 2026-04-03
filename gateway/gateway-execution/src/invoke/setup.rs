@@ -275,7 +275,7 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
     match role {
         SubagentRole::Executor => "\n\n# RULES\n\
             First: enter ward, read AGENTS.md + memory-bank/core_docs.md. Reuse core/ — never recreate.\n\
-            Execute with apply_patch + shell. Extract reusable functions to core/ when done.\n\
+            Execute with write_file + edit_file + shell. Extract reusable functions to core/ when done.\n\
             Respond with: files created, commands run, errors.\n",
         SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
             You are reviewing work produced by another agent. Think critically and independently.\n\
@@ -297,7 +297,7 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
 /// Append OS context and tooling shard to agent instructions.
 /// This ensures ALL agents (pre-configured and auto-created) know:
 /// - Platform commands (PowerShell vs bash)
-/// - Tool syntax (apply_patch, shell, etc.)
+/// - Tool syntax (write_file/edit_file, shell, etc.)
 pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role: SubagentRole) -> String {
     // OS context: platform-correct commands (bash vs PowerShell). ~500B.
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
@@ -332,7 +332,7 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
         .unwrap_or_default();
 
-    // Load tooling shard for apply_patch syntax and tool docs
+    // Load tooling shard for write_file/edit_file syntax and tool docs
     let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
@@ -349,7 +349,7 @@ fn generate_role_preamble(agent_id: &str) -> String {
 
     let role_description = if name_lower.contains("coder") || name_lower.contains("code") || name_lower.contains("developer") || name_lower.contains("programmer") {
         "You are a coding specialist. Write clean, modular, reusable code.\n\
-         Use apply_patch for all file creation and editing.\n\
+         Use write_file/edit_file for all file creation and editing.\n\
          Follow the coding skill protocol: explore ward, plan, build core/ first, then task scripts.\n\
          Fix broken code — never create _v2 or _improved copies.\n\
          Load the 'coding' skill for detailed instructions."
@@ -360,7 +360,7 @@ fn generate_role_preamble(agent_id: &str) -> String {
          Cite sources and cross-reference facts."
     } else if name_lower.contains("writ") || name_lower.contains("report") {
         "You are a writing specialist. Create clear, professional documents and reports.\n\
-         Use apply_patch to create well-formatted HTML, markdown, or text files.\n\
+         Use write_file/edit_file to create well-formatted HTML, markdown, or text files.\n\
          Put all output in the output/ directory of the ward.\n\
          Focus on clarity, structure, and visual presentation."
     } else if name_lower.contains("analy") || name_lower.contains("data") {
@@ -370,7 +370,7 @@ fn generate_role_preamble(agent_id: &str) -> String {
          Load the 'coding' skill for file organization guidelines."
     } else {
         "You are a specialist agent. Execute the task you are given precisely.\n\
-         Use apply_patch for file operations. Work in the ward specified in your task.\n\
+         Use write_file/edit_file for file operations. Work in the ward specified in your task.\n\
          Read AGENTS.md before writing code. Follow existing patterns."
     };
 

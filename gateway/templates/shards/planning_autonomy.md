@@ -21,7 +21,7 @@ You MUST NOT call these tools — they are not available to you:
 - load_skill — subagents load their own skills
 - list_skills — intent analysis provides recommendations
 - list_agents — intent analysis provides recommendations
-- apply_patch — you do not write files, delegate to code-agent
+- write_file / edit_file — you do not write files, delegate to code-agent
 </prohibited_actions>
 
 <failure_handling>

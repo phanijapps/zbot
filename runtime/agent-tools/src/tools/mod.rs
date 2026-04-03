@@ -140,11 +140,9 @@ pub fn core_tools(
     vec![
         // Primary execution tool
         Arc::new(ShellTool::new()),
-        // Simple file operations (preferred over apply_patch for most use cases)
+        // File operations
         Arc::new(WriteFileTool::new(fs.clone())),
         Arc::new(EditFileTool::new(fs.clone())),
-        // Legacy patch format (still available for complex multi-file edits)
-        Arc::new(ApplyPatchTool::new(fs.clone())),
         // Persistent memory (with optional DB-backed fact store)
         Arc::new(MemoryTool::new(fs.clone(), fact_store.clone())),
         // Ward management (named project directories, with recall on entry)
