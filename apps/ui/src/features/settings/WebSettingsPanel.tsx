@@ -623,6 +623,19 @@ export function WebSettingsPanel() {
                       {execSaveMessage}
                     </div>
                   )}
+
+                  <div style={{ marginTop: "var(--spacing-5)", paddingTop: "var(--spacing-4)", borderTop: "1px solid var(--border)" }}>
+                    <h3 className="settings-field-label" style={{ marginBottom: "var(--spacing-2)" }}>Setup Wizard</h3>
+                    <p className="settings-hint" style={{ marginBottom: "var(--spacing-3)" }}>
+                      Re-run the first-time setup wizard to reconfigure providers, agents, and defaults.
+                    </p>
+                    <button
+                      className="btn btn--outline btn--sm"
+                      onClick={() => { window.location.href = "/setup"; }}
+                    >
+                      Re-run Setup Wizard
+                    </button>
+                  </div>
                 </div>
               </div>
             ) : null}

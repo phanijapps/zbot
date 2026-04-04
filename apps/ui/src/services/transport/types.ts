@@ -396,6 +396,8 @@ export interface UpdateLogSettingsRequest {
 export interface ExecutionSettings {
   /** Maximum parallel subagents across all sessions (default: 2) */
   maxParallelAgents: number;
+  /** Whether the first-time setup wizard has been completed (default: false) */
+  setupComplete: boolean;
 }
 
 export interface ExecutionSettingsResponse {

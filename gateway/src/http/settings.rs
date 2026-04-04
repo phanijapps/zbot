@@ -282,6 +282,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Maximum parallel subagents (default: 2)
     #[serde(default = "default_max_parallel")]
     pub max_parallel_agents: u32,
+    /// Whether the first-time setup wizard has been completed (default: false)
+    #[serde(default)]
+    pub setup_complete: bool,
 }
 
 fn default_max_parallel() -> u32 { 2 }
@@ -290,6 +293,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
     fn from(req: UpdateExecutionSettingsRequest) -> Self {
         ExecutionSettings {
             max_parallel_agents: req.max_parallel_agents,
+            setup_complete: req.setup_complete,
         }
     }
 }

@@ -37,6 +37,10 @@ pub struct ExecutionSettings {
     /// Default: 2. Set lower for resource-constrained environments.
     #[serde(default = "default_max_parallel_agents")]
     pub max_parallel_agents: u32,
+    /// Whether the first-time setup wizard has been completed.
+    /// Default: false. Set to true after the wizard finishes.
+    #[serde(default)]
+    pub setup_complete: bool,
 }
 
 fn default_max_parallel_agents() -> u32 { 2 }
@@ -45,6 +49,7 @@ impl Default for ExecutionSettings {
     fn default() -> Self {
         Self {
             max_parallel_agents: default_max_parallel_agents(),
+            setup_complete: false,
         }
     }
 }
