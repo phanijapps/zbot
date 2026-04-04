@@ -140,8 +140,23 @@ async fn test_provider(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.provider_service.get(&id) {
-        Ok(provider) => {
+        Ok(mut provider) => {
             let result = state.provider_service.test(&provider).await;
+
+            // Persist verified status + discovered models back to providers.json
+            if result.success {
+                provider.verified = Some(true);
+                // Update model list if test discovered models
+                if let Some(ref models) = result.models {
+                    if !models.is_empty() {
+                        provider.models = models.clone();
+                    }
+                }
+                // Enrich with registry capabilities
+                enrich_provider(&mut provider, &state.model_registry);
+                let _ = state.provider_service.update(&id, provider);
+            }
+
             Json(result).into_response()
         }
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
