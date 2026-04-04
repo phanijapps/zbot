@@ -344,15 +344,29 @@ impl AgentService {
 
     /// Seed default subagents if they don't exist.
     ///
-    /// Creates sample agents that can be delegated to by the root agent.
-    pub async fn seed_default_agents(&self, default_provider_id: &str) -> Result<(), String> {
-        let default_agents = vec![
-            ("research-agent", "Research Agent", "Specialized in gathering, analyzing, and synthesizing information from various sources.", RESEARCH_AGENT_INSTRUCTIONS),
-            ("code-agent", "Code Agent", "Specialized in code generation, review, debugging, and software engineering tasks.", CODE_AGENT_INSTRUCTIONS),
-            ("writing-agent", "Writing Agent", "Specialized in content creation, editing, and written communication.", WRITING_AGENT_INSTRUCTIONS),
-        ];
+    /// Accepts agent definitions as JSON (loaded from `default_agents.json` by caller).
+    /// Falls back to hardcoded defaults if `template_json` is None.
+    pub async fn seed_default_agents(&self, default_provider_id: &str, template_json: Option<&[u8]>) -> Result<(), String> {
+        let template_agents: Vec<serde_json::Value> = template_json
+            .and_then(|data| serde_json::from_slice(data).ok())
+            .unwrap_or_else(|| {
+                serde_json::json!([
+                    {"name": "research-agent", "displayName": "Research Agent", "description": "Specialized in gathering, analyzing, and synthesizing information from various sources.", "temperature": 0.7, "maxTokens": 8192, "skills": [], "mcps": []},
+                    {"name": "code-agent", "displayName": "Code Agent", "description": "Specialized in code generation, review, debugging, and software engineering tasks.", "temperature": 0.7, "maxTokens": 8192, "skills": [], "mcps": []},
+                    {"name": "writing-agent", "displayName": "Writing Agent", "description": "Specialized in content creation, editing, and written communication.", "temperature": 0.7, "maxTokens": 8192, "skills": [], "mcps": []}
+                ]).as_array().cloned().unwrap_or_default()
+            });
 
-        for (name, display_name, description, instructions) in default_agents {
+        let instructions_map: std::collections::HashMap<&str, &str> = [
+            ("research-agent", RESEARCH_AGENT_INSTRUCTIONS),
+            ("code-agent", CODE_AGENT_INSTRUCTIONS),
+            ("writing-agent", WRITING_AGENT_INSTRUCTIONS),
+        ].into_iter().collect();
+
+        for entry in &template_agents {
+            let name = entry["name"].as_str().unwrap_or_default();
+            if name.is_empty() { continue; }
+
             // Check if agent already exists
             if self.get(name).await.is_ok() {
                 tracing::debug!("Agent {} already exists, skipping seed", name);
@@ -361,22 +375,39 @@ impl AgentService {
 
             tracing::info!("Seeding default agent: {}", name);
 
+            let display_name = entry["displayName"].as_str().unwrap_or(name);
+            let description = entry["description"].as_str().unwrap_or("");
+            let agent_type = entry["agentType"].as_str().unwrap_or("specialist");
+            let temperature = entry["temperature"].as_f64().unwrap_or(0.7);
+            let max_tokens = entry["maxTokens"].as_u64().unwrap_or(8192) as u32;
+            let skills: Vec<String> = entry["skills"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let mcps: Vec<String> = entry["mcps"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            // Use embedded instructions if available, otherwise generic
+            let instructions = instructions_map.get(name)
+                .copied()
+                .unwrap_or("You are a helpful AI assistant.");
+
             let agent = Agent {
                 id: name.to_string(),
                 name: name.to_string(),
                 display_name: display_name.to_string(),
                 description: description.to_string(),
-                agent_type: Some("specialist".to_string()),
+                agent_type: Some(agent_type.to_string()),
                 provider_id: default_provider_id.to_string(),
-                model: "gpt-4o".to_string(),
-                temperature: 0.7,
-                max_tokens: 8192,
+                model: "gpt-4o".to_string(), // placeholder — wizard sets the real model
+                temperature,
+                max_tokens,
                 thinking_enabled: false,
                 voice_recording_enabled: false,
                 system_instruction: None,
                 instructions: instructions.to_string(),
-                mcps: vec![],
-                skills: vec![],
+                mcps,
+                skills,
                 middleware: None,
                 created_at: None,
             };

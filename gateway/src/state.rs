@@ -501,8 +501,13 @@ impl AppState {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        // Seed default agents
-        if let Err(e) = self.agents.seed_default_agents(&default_provider_id).await {
+        // Seed default agents from bundled template
+        let agent_template = gateway_templates::Templates::get("default_agents.json")
+            .map(|f| f.data.to_vec());
+        if let Err(e) = self.agents.seed_default_agents(
+            &default_provider_id,
+            agent_template.as_deref(),
+        ).await {
             tracing::warn!("Failed to seed default agents: {}", e);
         }
 

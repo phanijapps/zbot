@@ -1,0 +1,72 @@
+[
+  {
+    "name": "code-agent",
+    "displayName": "Code Agent",
+    "description": "Specialized in code generation, review, debugging, and software engineering tasks.",
+    "agentType": "specialist",
+    "temperature": 0.1,
+    "maxTokens": 16384,
+    "skills": [],
+    "mcps": []
+  },
+  {
+    "name": "data-analyst",
+    "displayName": "Data Analyst",
+    "description": "Specialized in data analysis, visualization, statistical analysis, and creating insights from datasets.",
+    "agentType": "specialist",
+    "temperature": 0.3,
+    "maxTokens": 100000,
+    "skills": ["duckduckgo-search", "playwright", "spreadsheet"],
+    "mcps": ["sequential-thinking"]
+  },
+  {
+    "name": "planner-agent",
+    "displayName": "Planner",
+    "description": "Reads ward context and decomposes goals into structured execution plans with agent assignments, dependencies, and acceptance criteria.",
+    "agentType": "specialist",
+    "temperature": 0.3,
+    "maxTokens": 16384,
+    "skills": [],
+    "mcps": ["sequential-thinking"]
+  },
+  {
+    "name": "research-agent",
+    "displayName": "Research Agent",
+    "description": "Specialized in gathering, analyzing, and synthesizing information from various sources.",
+    "agentType": "specialist",
+    "temperature": 0.7,
+    "maxTokens": 16000,
+    "skills": ["duckduckgo-search", "playwright", "light-panda-browser"],
+    "mcps": ["Brave Search"]
+  },
+  {
+    "name": "summarizer",
+    "displayName": "Summarizer",
+    "description": "Specialized in condensing long outputs, extracting key points, and creating concise summaries from detailed content.",
+    "agentType": "specialist",
+    "temperature": 0.3,
+    "maxTokens": 100000,
+    "skills": ["duckduckgo-search"],
+    "mcps": []
+  },
+  {
+    "name": "tutor-agent",
+    "displayName": "Tutor Agent",
+    "description": "Specialized in educational explanations, step-by-step guidance, and breaking down complex concepts into understandable pieces.",
+    "agentType": "specialist",
+    "temperature": 0.5,
+    "maxTokens": 50000,
+    "skills": ["duckduckgo-search", "playwright"],
+    "mcps": []
+  },
+  {
+    "name": "writing-agent",
+    "displayName": "Writing Agent",
+    "description": "Specialized in content creation, editing, and written communication.",
+    "agentType": "specialist",
+    "temperature": 0.7,
+    "maxTokens": 36000,
+    "skills": [],
+    "mcps": []
+  }
+]
