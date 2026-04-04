@@ -730,5 +730,89 @@
     },
     "context": { "input": 512, "output": null },
     "embedding": { "dimensions": 1024, "maxDimensions": 1024 }
+  },
+  "minimax-m2.7:cloud": {
+    "name": "MiniMax M2.7 Cloud",
+    "provider": "minimax",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 256000, "output": 128000 }
+  },
+  "nemotron-3-super:cloud": {
+    "name": "Nemotron 3 Super Cloud",
+    "provider": "nvidia",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 65536 }
+  },
+  "qwen3.5:397b-cloud": {
+    "name": "Qwen 3.5 397B Cloud",
+    "provider": "alibaba",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 128000, "output": 8192 }
+  },
+  "claude-sonnet-4-6": {
+    "name": "Claude Sonnet 4.6",
+    "provider": "anthropic",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 1000000, "output": 64000 }
+  },
+  "claude-opus-4-6": {
+    "name": "Claude Opus 4.6",
+    "provider": "anthropic",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 1000000, "output": 64000 }
+  },
+  "claude-haiku-4-5": {
+    "name": "Claude Haiku 4.5",
+    "provider": "anthropic",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": { "input": 200000, "output": 8192 }
   }
 }
