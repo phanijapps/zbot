@@ -285,6 +285,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Whether the first-time setup wizard has been completed (default: false)
     #[serde(default)]
     pub setup_complete: bool,
+    /// The user-chosen name for the root agent
+    #[serde(default)]
+    pub agent_name: Option<String>,
 }
 
 fn default_max_parallel() -> u32 { 2 }
@@ -294,19 +297,39 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
         ExecutionSettings {
             max_parallel_agents: req.max_parallel_agents,
             setup_complete: req.setup_complete,
+            agent_name: req.agent_name,
         }
     }
 }
 
 /// PUT /api/settings/execution - Update execution settings.
 ///
-/// Changes require a daemon restart to take effect (semaphore is
-/// initialized once at startup).
+/// Changes to max_parallel_agents require a daemon restart.
+/// When agent_name is set, also updates SOUL.md with the new identity.
 pub async fn update_execution_settings(
     State(state): State<AppState>,
     Json(request): Json<UpdateExecutionSettingsRequest>,
 ) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
     let settings: ExecutionSettings = request.into();
+
+    // Update SOUL.md if agent_name is provided
+    if let Some(ref name) = settings.agent_name {
+        let soul_path = state.paths.vault_dir().join("config").join("SOUL.md");
+        let current = std::fs::read_to_string(&soul_path).unwrap_or_default();
+        // Replace the first line "You are **OldName**" with the new name
+        let updated = if let Some(rest) = current.strip_prefix("You are **") {
+            if let Some(after_name) = rest.find("**") {
+                format!("You are **{}**{}", name, &rest[after_name + 2..])
+            } else {
+                format!("You are **{}**, an autonomous agent.\n\n{}", name, current)
+            }
+        } else {
+            format!("You are **{}**, an autonomous agent.\n\n{}", name, current)
+        };
+        if let Err(e) = std::fs::write(&soul_path, &updated) {
+            tracing::warn!("Failed to update SOUL.md: {}", e);
+        }
+    }
 
     match state.settings.update_execution_settings(settings.clone()) {
         Ok(()) => Ok(Json(SettingsResponse {

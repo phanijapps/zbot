@@ -94,13 +94,23 @@ export function SetupWizard() {
     const hydrate = async () => {
       try {
         const transport = await getTransport();
-        const [providersRes, agentsRes, mcpsRes] = await Promise.all([
+        const [providersRes, agentsRes, mcpsRes, execRes] = await Promise.all([
           transport.listProviders(),
           transport.listAgents(),
           transport.listMcps(),
+          transport.getExecutionSettings(),
         ]);
 
         const hydrated: Partial<WizardState> = {};
+
+        // Pre-fill agent name from settings (source of truth)
+        if (execRes.success && execRes.data?.agentName) {
+          const name = execRes.data.agentName;
+          hydrated.agentName = name;
+          hydrated.originalAgentName = name;
+          const matchingPreset = NAME_PRESETS.find((p) => p.name === name && p.id !== "custom");
+          hydrated.namePreset = matchingPreset?.id || "custom";
+        }
 
         // Pre-fill providers
         if (providersRes.success && providersRes.data && providersRes.data.length > 0) {
@@ -115,8 +125,8 @@ export function SetupWizard() {
           const agents = agentsRes.data;
           const rootAgent = agents.find((a) => a.name === "root");
 
-          // Agent name from root
-          if (rootAgent && rootAgent.displayName && rootAgent.displayName !== "root") {
+          // Fallback: agent name from root displayName (if not already set from settings)
+          if (!hydrated.agentName && rootAgent && rootAgent.displayName && rootAgent.displayName !== "root") {
             const name = rootAgent.displayName;
             hydrated.agentName = name;
             hydrated.originalAgentName = name;

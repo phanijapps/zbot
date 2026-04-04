@@ -133,12 +133,13 @@ export function ReviewStep({
         }
       }
 
-      // 6. Mark setup complete
+      // 6. Mark setup complete + persist agent name (also updates SOUL.md via gateway)
       const execResult = await transport.getExecutionSettings();
       const currentExec = execResult.data || { maxParallelAgents: 2, setupComplete: false };
       await transport.updateExecutionSettings({
         ...currentExec,
         setupComplete: true,
+        agentName: agentName,
       });
 
       onLaunchComplete();

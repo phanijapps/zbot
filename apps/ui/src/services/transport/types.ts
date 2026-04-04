@@ -398,6 +398,8 @@ export interface ExecutionSettings {
   maxParallelAgents: number;
   /** Whether the first-time setup wizard has been completed (default: false) */
   setupComplete: boolean;
+  /** The user-chosen name for the root agent */
+  agentName?: string;
 }
 
 export interface ExecutionSettingsResponse {

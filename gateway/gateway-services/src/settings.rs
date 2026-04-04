@@ -41,6 +41,10 @@ pub struct ExecutionSettings {
     /// Default: false. Set to true after the wizard finishes.
     #[serde(default)]
     pub setup_complete: bool,
+    /// The user-chosen name for the root agent (e.g., "Brahmi", "Jarvis").
+    /// Used in SOUL.md and displayed in the UI.
+    #[serde(default)]
+    pub agent_name: Option<String>,
 }
 
 fn default_max_parallel_agents() -> u32 { 2 }
@@ -50,6 +54,7 @@ impl Default for ExecutionSettings {
         Self {
             max_parallel_agents: default_max_parallel_agents(),
             setup_complete: false,
+            agent_name: None,
         }
     }
 }
