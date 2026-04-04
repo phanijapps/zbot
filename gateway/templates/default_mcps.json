@@ -1,0 +1,58 @@
+[
+  {
+    "type": "stdio",
+    "id": "time",
+    "name": "Time",
+    "description": "Get current time and timezone information",
+    "command": "uvx",
+    "args": ["mcp-server-time"],
+    "env": {},
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "github",
+    "name": "GitHub",
+    "description": "Access GitHub repositories, issues, and pull requests",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+    },
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "brave-search",
+    "name": "Brave Search",
+    "description": "Search the web using Brave Search API",
+    "command": "npx",
+    "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+    "env": {
+      "BRAVE_API_KEY": ""
+    },
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "google-maps",
+    "name": "Google Maps",
+    "description": "Location search, directions, and place details",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-google-maps"],
+    "env": {
+      "GOOGLE_MAPS_API_KEY": ""
+    },
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "sequential-thinking",
+    "name": "Sequential Thinking",
+    "description": "Step-by-step reasoning and problem decomposition",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    "env": {},
+    "enabled": false
+  }
+]

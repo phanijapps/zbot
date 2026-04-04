@@ -19,6 +19,7 @@ mod plugins;
 mod providers;
 mod sessions;
 mod settings;
+mod setup;
 mod skills;
 mod tools;
 mod upload;
@@ -142,6 +143,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/logs", put(settings::update_log_settings))
         .route("/api/settings/execution", get(settings::get_execution_settings))
         .route("/api/settings/execution", put(settings::update_execution_settings))
+        // Setup wizard endpoints
+        .route("/api/setup/status", get(setup::get_setup_status))
+        .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route("/api/memory/:agent_id", get(memory::list_memory_facts))
