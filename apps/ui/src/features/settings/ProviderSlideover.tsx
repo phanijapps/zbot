@@ -402,50 +402,41 @@ export function ProviderSlideover({
             )}
           </div>
 
-          {/* Rate Limits - Edit mode */}
-          {isEditing && (
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
-              <div>
-                <label className="slideover__label" style={{ fontSize: 11, color: "var(--text-muted)" }}>Requests/min</label>
-                <input
-                  className="slideover__input"
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={form.rateLimitsRpm}
-                  onChange={(e) => handleFormChange({ rateLimitsRpm: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="slideover__label" style={{ fontSize: 11, color: "var(--text-muted)" }}>Max concurrent</label>
-                <input
-                  className="slideover__input"
-                  type="number"
-                  min="1"
-                  max="20"
-                  value={form.rateLimitsConcurrent}
-                  onChange={(e) => handleFormChange({ rateLimitsConcurrent: e.target.value })}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Rate Limits - View mode */}
-          {!isEditing && (
-            <div style={{ background: "var(--surface-1, #0d1b2a)", border: "1px solid var(--border, #334)", borderRadius: 6, padding: 12, marginBottom: 16 }}>
-              <div style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 600, marginBottom: 8 }}>⚡ Rate Limits</div>
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+          {/* Rate Limits */}
+          <div>
+            <div className="field-label">Rate Limits</div>
+            {isEditing ? (
+              <div className="provider-slideover__rate-grid">
                 <div>
-                  <div style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase" as const }}>Requests/min</div>
-                  <div style={{ color: "var(--success, #4a9)", fontSize: 16, fontWeight: 600 }}>{provider?.rateLimits?.requestsPerMinute ?? 60}</div>
+                  <div className="field-label">Requests/min</div>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={form.rateLimitsRpm}
+                    onChange={(e) => handleFormChange({ rateLimitsRpm: e.target.value })}
+                  />
                 </div>
                 <div>
-                  <div style={{ color: "var(--text-muted)", fontSize: 10, textTransform: "uppercase" as const }}>Concurrent</div>
-                  <div style={{ color: "var(--success, #4a9)", fontSize: 16, fontWeight: 600 }}>{provider?.rateLimits?.concurrentRequests ?? 3}</div>
+                  <div className="field-label">Max concurrent</div>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={form.rateLimitsConcurrent}
+                    onChange={(e) => handleFormChange({ rateLimitsConcurrent: e.target.value })}
+                  />
                 </div>
               </div>
-            </div>
-          )}
+            ) : (
+              <div className="provider-slideover__rate-grid">
+                <div className="field-value">{provider?.rateLimits?.requestsPerMinute ?? 60} req/min</div>
+                <div className="field-value">{provider?.rateLimits?.concurrentRequests ?? 3} concurrent</div>
+              </div>
+            )}
+          </div>
 
           {/* Default Model */}
           <div>
@@ -467,10 +458,8 @@ export function ProviderSlideover({
 
           {/* Models - View mode: enriched rows */}
           {!isEditing && (
-            <div style={{ marginBottom: 12 }}>
-              <div style={{ color: "var(--text-primary)", fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
-                Models ({provider?.models?.length ?? 0})
-              </div>
+            <div>
+              <div className="field-label">Models ({provider?.models?.length ?? 0})</div>
               {provider?.models?.map((modelId) => {
                 const config = provider.modelConfigs?.[modelId];
                 const registryProfile = modelRegistry[modelId];
@@ -480,18 +469,18 @@ export function ProviderSlideover({
                 const isDefault = modelId === (provider.defaultModel || provider.models[0]);
 
                 return (
-                  <div key={modelId} style={{ background: "var(--surface-1, #0d1b2a)", border: "1px solid var(--border, #334)", borderRadius: 6, padding: "10px 12px", marginBottom: 6 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                      <span style={{ fontSize: 13, fontWeight: 500, color: "var(--text-primary)" }}>{modelId}</span>
-                      {isDefault && <span className="badge badge--success" style={{ fontSize: 9, padding: "1px 5px" }}>default</span>}
+                  <div key={modelId} className="provider-slideover__model-row">
+                    <div className="provider-slideover__model-header">
+                      <span className="provider-slideover__model-name">{modelId}</span>
+                      {isDefault && <span className="badge badge--success badge--xs">default</span>}
                     </div>
-                    <div style={{ display: "flex", gap: 4, alignItems: "center", marginTop: 4, flexWrap: "wrap" as const }}>
-                      {caps?.tools && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(74,153,99,0.15)", color: "#4a9963" }}>tools</span>}
-                      {caps?.vision && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(74,99,153,0.15)", color: "#4a63a9" }}>vision</span>}
-                      {caps?.thinking && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(153,74,153,0.15)", color: "#994a99" }}>thinking</span>}
-                      {caps?.embeddings && <span style={{ fontSize: 10, padding: "1px 5px", borderRadius: 3, background: "rgba(153,130,74,0.15)", color: "#99824a" }}>embeddings</span>}
+                    <div className="provider-slideover__model-meta">
+                      {caps?.tools && <span className="cap-badge cap-badge--tools">tools</span>}
+                      {caps?.vision && <span className="cap-badge cap-badge--vision">vision</span>}
+                      {caps?.thinking && <span className="cap-badge cap-badge--thinking">thinking</span>}
+                      {caps?.embeddings && <span className="cap-badge cap-badge--embed">embeddings</span>}
                       {maxIn && (
-                        <span style={{ fontSize: 10, color: "var(--text-muted, #555)" }}>
+                        <span className="provider-slideover__model-context">
                           {Math.round(maxIn / 1000)}K in{maxOut ? ` / ${Math.round(maxOut / 1000)}K out` : ""}
                         </span>
                       )}
