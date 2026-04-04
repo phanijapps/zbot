@@ -20,6 +20,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
+import { SetupWizard, SetupGuard } from "./features/setup";
 import { WebChatPanel } from "./features/agent/WebChatPanel";
 import { WebAgentsPanel } from "./features/agent/WebAgentsPanel";
 import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
@@ -168,27 +169,34 @@ function App() {
           },
         }}
       />
-      <WebAppShell connectionStatus={connectionStatus}>
-        <Routes>
-          {/* Active pages */}
-          <Route path="/" element={<WebChatPanel />} />
-          <Route path="/dashboard" element={<WebOpsDashboard />} />
-          <Route path="/logs" element={<WebLogsPanel />} />
-          <Route path="/memory" element={<WebMemoryPanel />} />
-          <Route path="/observatory" element={<ObservatoryPage />} />
-          <Route path="/agents" element={<WebAgentsPanel />} />
-          <Route path="/integrations" element={<WebIntegrationsPanel />} />
-          <Route path="/settings" element={<WebSettingsPanel />} />
+      <Routes>
+          {/* Setup wizard — renders without app shell */}
+          <Route path="/setup" element={<SetupWizard />} />
 
-          {/* Redirects from old routes */}
-          <Route path="/chat" element={<Navigate to="/" replace />} />
-          <Route path="/providers" element={<Navigate to="/settings" replace />} />
-          <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
-          <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
-          <Route path="/connectors" element={<Navigate to="/integrations?tab=plugins" replace />} />
-          <Route path="/mcps" element={<Navigate to="/integrations" replace />} />
+          {/* Main app with sidebar */}
+          <Route path="/*" element={
+            <SetupGuard>
+              <WebAppShell connectionStatus={connectionStatus}>
+                <Routes>
+                  <Route path="/" element={<WebChatPanel />} />
+                  <Route path="/dashboard" element={<WebOpsDashboard />} />
+                  <Route path="/logs" element={<WebLogsPanel />} />
+                  <Route path="/memory" element={<WebMemoryPanel />} />
+                  <Route path="/observatory" element={<ObservatoryPage />} />
+                  <Route path="/agents" element={<WebAgentsPanel />} />
+                  <Route path="/integrations" element={<WebIntegrationsPanel />} />
+                  <Route path="/settings" element={<WebSettingsPanel />} />
+                  <Route path="/chat" element={<Navigate to="/" replace />} />
+                  <Route path="/providers" element={<Navigate to="/settings" replace />} />
+                  <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
+                  <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
+                  <Route path="/connectors" element={<Navigate to="/integrations?tab=plugins" replace />} />
+                  <Route path="/mcps" element={<Navigate to="/integrations" replace />} />
+                </Routes>
+              </WebAppShell>
+            </SetupGuard>
+          } />
         </Routes>
-      </WebAppShell>
     </BrowserRouter>
   );
 }
