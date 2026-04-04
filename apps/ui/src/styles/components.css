@@ -3781,13 +3781,20 @@
 }
 
 .setup-wizard__logo {
-  padding: var(--spacing-4) 0;
+  padding: var(--spacing-6) 0 var(--spacing-4);
   flex-shrink: 0;
 }
 
 .setup-wizard__logo img {
-  height: 28px;
+  height: 36px;
 }
+
+/* Theme-aware logo: light theme shows logo.svg, dark theme shows logo-dark.svg */
+.setup-wizard__logo-dark { display: none; }
+.setup-wizard__logo-light { display: block; }
+
+[data-theme="dark"] .setup-wizard__logo-dark { display: block; }
+[data-theme="dark"] .setup-wizard__logo-light { display: none; }
 
 .setup-wizard__container {
   width: 100%;
@@ -3836,7 +3843,9 @@
 }
 
 .setup-wizard__help {
-  margin-top: var(--spacing-5);
+  margin-top: var(--spacing-6);
+  padding-top: var(--spacing-4);
+  border-top: 1px solid var(--border);
 }
 
 /* Keep __footer as alias for backward compat with WizardNav */

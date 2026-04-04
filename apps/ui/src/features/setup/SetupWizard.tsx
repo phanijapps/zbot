@@ -265,7 +265,8 @@ export function SetupWizard() {
   return (
     <div className="setup-wizard">
       <div className="setup-wizard__logo">
-        <img src="/logo-dark.svg" alt="z-Bot" />
+        <img src="/logo.svg" alt="z-Bot" className="setup-wizard__logo-light" />
+        <img src="/logo-dark.svg" alt="z-Bot" className="setup-wizard__logo-dark" />
       </div>
 
       <div className="setup-wizard__container">

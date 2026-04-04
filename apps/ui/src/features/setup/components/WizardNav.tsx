@@ -19,33 +19,25 @@ export function WizardNav({
 }: WizardNavProps) {
   return (
     <div className="setup-wizard__footer">
-      <div>
-        {currentStep > 1 ? (
+      <div className="flex items-center gap-3">
+        {currentStep > 1 && (
           <button className="btn btn--ghost btn--sm" onClick={onBack} disabled={isLoading}>
             &larr; Back
           </button>
-        ) : onSkip ? (
-          <button className="setup-wizard__skip" onClick={onSkip}>
-            Skip setup
-          </button>
-        ) : (
-          <div />
         )}
-      </div>
-      <div className="flex items-center gap-3">
-        {onSkip && currentStep > 1 && (
+        {onSkip && (
           <button className="setup-wizard__skip" onClick={onSkip}>
-            Skip
+            {currentStep === 1 ? "Skip setup" : "Skip"}
           </button>
         )}
-        <button
-          className="btn btn--primary btn--sm"
-          onClick={onNext}
-          disabled={!canNext || isLoading}
-        >
-          {isLoading ? "..." : nextLabel || "Next \u2192"}
-        </button>
       </div>
+      <button
+        className="btn btn--primary btn--sm"
+        onClick={onNext}
+        disabled={!canNext || isLoading}
+      >
+        {isLoading ? "..." : nextLabel || "Next \u2192"}
+      </button>
     </div>
   );
 }
