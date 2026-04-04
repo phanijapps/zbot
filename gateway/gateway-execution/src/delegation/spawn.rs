@@ -61,6 +61,7 @@ pub async fn spawn_delegated_agent(
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     memory_recall: Option<Arc<MemoryRecall>>,
+    rate_limiters: Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session = execution_state::Session::new_child(
@@ -257,11 +258,22 @@ pub async fn spawn_delegated_agent(
         &paths.vault_dir(),
     ));
 
+    // Get shared rate limiter for the child's provider
+    let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());
+    let rate_limiter = {
+        let guard = rate_limiters.read().unwrap_or_else(|e| e.into_inner());
+        guard.get(&provider_id).cloned()
+    };
+
     // Build executor using ExecutorBuilder
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache)
         .with_model_registry(model_registry)
         .with_delegated(true);
+
+    if let Some(limiter) = rate_limiter {
+        builder = builder.with_rate_limiter(limiter);
+    }
 
     // Build fact store for subagent (so save_fact uses DB, not file fallback)
     let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {

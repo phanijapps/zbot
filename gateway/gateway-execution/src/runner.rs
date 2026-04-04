@@ -100,6 +100,8 @@ pub struct ExecutionRunner {
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     /// Model capabilities registry for context window and capability lookups
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    /// Per-provider rate limiters — shared across all executors using the same provider.
+    rate_limiters: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>>>,
 }
 
 impl ExecutionRunner {
@@ -185,6 +187,7 @@ impl ExecutionRunner {
             delegation_semaphore: Arc::new(Semaphore::new(2)),
             embedding_client,
             model_registry: None,
+            rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         };
 
         // Spawn delegation handler task
@@ -199,6 +202,35 @@ impl ExecutionRunner {
     /// Set the model capabilities registry.
     pub fn set_model_registry(&mut self, registry: Arc<gateway_services::models::ModelRegistry>) {
         self.model_registry = Some(registry);
+    }
+
+    /// Get or create a shared rate limiter for a provider.
+    ///
+    /// Rate limiters are created once per provider and shared across all executors
+    /// (root and subagents) so they share the same concurrent-request and RPM buckets.
+    fn get_rate_limiter(&self, provider: &gateway_services::providers::Provider) -> std::sync::Arc<agent_runtime::ProviderRateLimiter> {
+        let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());
+        let rate_limits = provider.effective_rate_limits();
+
+        // Check if exists (fast path — read lock)
+        if let Ok(guard) = self.rate_limiters.read() {
+            if let Some(limiter) = guard.get(&provider_id) {
+                return limiter.clone();
+            }
+        }
+
+        // Create new limiter and insert (write lock)
+        let limiter = std::sync::Arc::new(agent_runtime::ProviderRateLimiter::new(
+            rate_limits.concurrent_requests,
+            rate_limits.requests_per_minute,
+        ));
+
+        if let Ok(mut guard) = self.rate_limiters.write() {
+            // Use entry API to avoid overwriting if another thread raced us
+            guard.entry(provider_id).or_insert_with(|| limiter.clone());
+        }
+
+        limiter
     }
 
     /// Spawn a background task that processes delegation requests.
@@ -224,6 +256,7 @@ impl ExecutionRunner {
         let memory_repo = self.memory_repo.clone();
         let embedding_client = self.embedding_client.clone();
         let memory_recall = self.memory_recall.clone();
+        let rate_limiters = self.rate_limiters.clone();
 
         tokio::spawn(async move {
             // Per-session tracking: only one delegation active per session at a time
@@ -265,6 +298,7 @@ impl ExecutionRunner {
                     Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>,
                 >,
                 memory_recall: &Option<Arc<super::recall::MemoryRecall>>,
+                rate_limiters: &Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>>>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -287,6 +321,7 @@ impl ExecutionRunner {
                 let memory_repo = memory_repo.clone();
                 let embedding_client = embedding_client.clone();
                 let memory_recall = memory_recall.clone();
+                let rate_limiters = rate_limiters.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -311,6 +346,7 @@ impl ExecutionRunner {
                         memory_repo,
                         embedding_client,
                         memory_recall,
+                        rate_limiters,
                     )
                     .await;
 
@@ -358,7 +394,7 @@ impl ExecutionRunner {
                                 &delegation_tx, &log_service, &state_service,
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
-                                &memory_recall,
+                                &memory_recall, &rate_limiters,
                                 done_tx.clone(),
                             );
                         }
@@ -385,7 +421,7 @@ impl ExecutionRunner {
                                     &delegation_tx, &log_service, &state_service,
                                     &workspace_cache, &delegation_semaphore,
                                     &memory_repo, &embedding_client,
-                                    &memory_recall,
+                                    &memory_recall, &rate_limiters,
                                     done_tx.clone(),
                                 );
                             }
@@ -1212,15 +1248,14 @@ impl ExecutionRunner {
                 None
             };
 
-        // Create LLM throttle semaphore from provider config
-        let max_concurrent = provider.max_concurrent_requests.unwrap_or(3);
-        let llm_throttle = Arc::new(tokio::sync::Semaphore::new(max_concurrent as usize));
-        tracing::debug!(max_concurrent = max_concurrent, provider = %provider.name, "LLM throttle configured");
+        // Get or create shared rate limiter for this provider
+        let rate_limiter = self.get_rate_limiter(provider);
+        tracing::debug!(provider = %provider.name, "Using shared rate limiter for provider");
 
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone())
-            .with_llm_throttle(llm_throttle);
+            .with_rate_limiter(rate_limiter);
         if let Some(ref registry) = self.model_registry {
             builder = builder.with_model_registry(registry.clone());
         }

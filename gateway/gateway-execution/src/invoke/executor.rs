@@ -49,7 +49,7 @@ pub struct ExecutorBuilder {
     workspace_cache: Option<WorkspaceCache>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
-    llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
+    rate_limiter: Option<Arc<agent_runtime::ProviderRateLimiter>>,
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
@@ -64,7 +64,7 @@ impl ExecutorBuilder {
             workspace_cache: None,
             fact_store: None,
             connector_provider: None,
-            llm_throttle: None,
+            rate_limiter: None,
             model_registry: None,
             is_delegated: false,
             extra_initial_state: None,
@@ -89,9 +89,12 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the LLM throttle semaphore (shared per provider across all executors).
-    pub fn with_llm_throttle(mut self, semaphore: Arc<tokio::sync::Semaphore>) -> Self {
-        self.llm_throttle = Some(semaphore);
+    /// Set the shared rate limiter for this executor's provider.
+    ///
+    /// The limiter is shared across all executors using the same provider,
+    /// so root and subagents respect the same concurrent-request and RPM limits.
+    pub fn with_rate_limiter(mut self, limiter: Arc<agent_runtime::ProviderRateLimiter>) -> Self {
+        self.rate_limiter = Some(limiter);
         self
     }
 
@@ -237,9 +240,9 @@ impl ExecutorBuilder {
         let retrying_client: Arc<dyn agent_runtime::LlmClient> =
             Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
 
-        // Wrap with throttle if configured (limits concurrent calls per provider)
-        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref sem) = self.llm_throttle {
-            Arc::new(agent_runtime::ThrottledLlmClient::new(retrying_client, sem.clone()))
+        // Wrap with shared rate limiter if configured (limits concurrent calls and RPM per provider)
+        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
+            Arc::new(agent_runtime::RateLimitedLlmClient::new(retrying_client, limiter.clone()))
         } else {
             retrying_client
         };
