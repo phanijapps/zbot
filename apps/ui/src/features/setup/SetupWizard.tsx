@@ -108,22 +108,14 @@ export function SetupWizard() {
           hydrated.providers = providers;
           const defaultProvider = providers.find((p) => p.isDefault) || providers[0];
           hydrated.defaultProviderId = defaultProvider?.id || "";
-
-          // Pre-fill global default from the default provider's first model
-          if (defaultProvider) {
-            hydrated.globalDefault = {
-              providerId: defaultProvider.id!,
-              model: defaultProvider.defaultModel || defaultProvider.models[0] || "",
-              temperature: 0.7,
-              maxTokens: 4096,
-            };
-          }
         }
 
-        // Pre-fill agent name and configs from existing agents
-        if (agentsRes.success && agentsRes.data) {
+        // Pre-fill agent name, configs, and global default from existing agents
+        if (agentsRes.success && agentsRes.data && agentsRes.data.length > 0) {
           const agents = agentsRes.data;
           const rootAgent = agents.find((a) => a.name === "root");
+
+          // Agent name from root
           if (rootAgent && rootAgent.displayName && rootAgent.displayName !== "root") {
             const name = rootAgent.displayName;
             hydrated.agentName = name;
@@ -143,6 +135,50 @@ export function SetupWizard() {
             };
           }
           hydrated.originalAgentConfigs = originalConfigs;
+
+          // Derive global default from root agent's actual config (or first agent)
+          const baseAgent = rootAgent || agents[0];
+          const globalDefault: AgentConfig = {
+            providerId: baseAgent.providerId || hydrated.defaultProviderId || "",
+            model: baseAgent.model || "",
+            temperature: baseAgent.temperature ?? 0.7,
+            maxTokens: baseAgent.maxTokens ?? 4096,
+          };
+          hydrated.globalDefault = globalDefault;
+
+          // Any specialist whose config differs from global gets an override
+          const overrides: Record<string, Partial<AgentConfig>> = {};
+          for (const agent of agents) {
+            if (agent === baseAgent) continue;
+            const config = originalConfigs[agent.id];
+            if (
+              config.providerId !== globalDefault.providerId ||
+              config.model !== globalDefault.model ||
+              config.temperature !== globalDefault.temperature ||
+              config.maxTokens !== globalDefault.maxTokens
+            ) {
+              overrides[agent.id] = {
+                ...(config.providerId !== globalDefault.providerId && { providerId: config.providerId }),
+                ...(config.model !== globalDefault.model && { model: config.model }),
+                ...(config.temperature !== globalDefault.temperature && { temperature: config.temperature }),
+                ...(config.maxTokens !== globalDefault.maxTokens && { maxTokens: config.maxTokens }),
+              };
+            }
+          }
+          if (Object.keys(overrides).length > 0) {
+            hydrated.agentOverrides = overrides;
+          }
+        } else if (hydrated.defaultProviderId) {
+          // No agents yet (first run) — set global default from provider
+          const defaultProvider = hydrated.providers?.find((p) => p.id === hydrated.defaultProviderId);
+          if (defaultProvider) {
+            hydrated.globalDefault = {
+              providerId: defaultProvider.id!,
+              model: defaultProvider.defaultModel || defaultProvider.models[0] || "",
+              temperature: 0.7,
+              maxTokens: 4096,
+            };
+          }
         }
 
         // Pre-fill MCP configs from existing servers + track originals
