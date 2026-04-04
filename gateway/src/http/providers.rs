@@ -11,8 +11,9 @@ use axum::{
     Json, Router,
 };
 
-use crate::services::providers::Provider;
+use crate::services::providers::{ModelConfig, Provider};
 use crate::state::AppState;
+use gateway_services::models::ModelRegistry;
 
 // ============================================================================
 // Routes
@@ -31,13 +32,45 @@ pub fn routes() -> Router<AppState> {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/// Enrich a provider's model list with capabilities from the model registry.
+/// Only populates model_configs if it's None (doesn't overwrite user data).
+fn enrich_provider(provider: &mut Provider, registry: &ModelRegistry) {
+    if provider.model_configs.is_some() {
+        return; // Already enriched or user-configured
+    }
+
+    let mut configs = std::collections::HashMap::new();
+    for model_id in &provider.models {
+        let profile = registry.get(model_id);
+        configs.insert(model_id.clone(), ModelConfig {
+            capabilities: profile.capabilities.clone(),
+            max_input: Some(profile.context.input),
+            max_output: profile.context.output,
+            source: "registry".to_string(),
+        });
+    }
+
+    if !configs.is_empty() {
+        provider.model_configs = Some(configs);
+    }
+}
+
+// ============================================================================
 // Handlers
 // ============================================================================
 
 /// List all providers
 async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
     match state.provider_service.list() {
-        Ok(providers) => Json(providers).into_response(),
+        Ok(mut providers) => {
+            for p in &mut providers {
+                enrich_provider(p, &state.model_registry);
+            }
+            Json(providers).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
 }
@@ -48,7 +81,10 @@ async fn get_provider(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.provider_service.get(&id) {
-        Ok(provider) => Json(provider).into_response(),
+        Ok(mut provider) => {
+            enrich_provider(&mut provider, &state.model_registry);
+            Json(provider).into_response()
+        }
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
 }
