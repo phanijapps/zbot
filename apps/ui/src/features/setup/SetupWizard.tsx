@@ -1,6 +1,9 @@
-import { useReducer, useCallback } from "react";
+import { useReducer, useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { Loader2 } from "lucide-react";
+import { getTransport } from "@/services/transport";
 import type { ProviderResponse, McpServerConfig } from "@/services/transport";
+import { NAME_PRESETS } from "./presets";
 import { StepIndicator } from "./components/StepIndicator";
 import { WizardNav } from "./components/WizardNav";
 import { NameStep } from "./steps/NameStep";
@@ -39,7 +42,8 @@ type WizardAction =
   | { type: "SET_SKILLS"; ids: string[] }
   | { type: "SET_MCPS"; configs: McpServerConfig[] }
   | { type: "SET_GLOBAL_DEFAULT"; defaults: WizardState["globalDefault"] }
-  | { type: "SET_OVERRIDES"; overrides: WizardState["agentOverrides"] };
+  | { type: "SET_OVERRIDES"; overrides: WizardState["agentOverrides"] }
+  | { type: "HYDRATE"; state: Partial<WizardState> };
 
 function reducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
@@ -50,6 +54,7 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
     case "SET_MCPS": return { ...state, mcpConfigs: action.configs };
     case "SET_GLOBAL_DEFAULT": return { ...state, globalDefault: action.defaults };
     case "SET_OVERRIDES": return { ...state, agentOverrides: action.overrides };
+    case "HYDRATE": return { ...state, ...action.state };
     default: return state;
   }
 }
@@ -77,7 +82,75 @@ const STEP_TITLES: Record<number, { title: string; subtitle: string }> = {
 
 export function SetupWizard() {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [isHydrating, setIsHydrating] = useState(true);
   const navigate = useNavigate();
+
+  // On mount, load existing config for re-run mode
+  useEffect(() => {
+    const hydrate = async () => {
+      try {
+        const transport = await getTransport();
+        const [providersRes, agentsRes, mcpsRes] = await Promise.all([
+          transport.listProviders(),
+          transport.listAgents(),
+          transport.listMcps(),
+        ]);
+
+        const hydrated: Partial<WizardState> = {};
+
+        // Pre-fill providers
+        if (providersRes.success && providersRes.data && providersRes.data.length > 0) {
+          const providers = providersRes.data;
+          hydrated.providers = providers;
+          const defaultProvider = providers.find((p) => p.isDefault) || providers[0];
+          hydrated.defaultProviderId = defaultProvider?.id || "";
+
+          // Pre-fill global default from the default provider's first model
+          if (defaultProvider) {
+            hydrated.globalDefault = {
+              providerId: defaultProvider.id!,
+              model: defaultProvider.defaultModel || defaultProvider.models[0] || "",
+              temperature: 0.7,
+              maxTokens: 4096,
+            };
+          }
+        }
+
+        // Pre-fill agent name from root agent
+        if (agentsRes.success && agentsRes.data) {
+          const rootAgent = agentsRes.data.find((a) => a.name === "root");
+          if (rootAgent && rootAgent.displayName && rootAgent.displayName !== "root") {
+            const name = rootAgent.displayName;
+            hydrated.agentName = name;
+            const matchingPreset = NAME_PRESETS.find((p) => p.name === name && p.id !== "custom");
+            hydrated.namePreset = matchingPreset?.id || "custom";
+          }
+        }
+
+        // Pre-fill MCP configs from existing servers
+        if (mcpsRes.success && mcpsRes.data && mcpsRes.data.servers && mcpsRes.data.servers.length > 0) {
+          // Existing MCPs are already configured — map summaries to configs
+          // The McpStep will still load defaults for new servers, but we mark existing as done
+          hydrated.mcpConfigs = mcpsRes.data.servers.map((s) => ({
+            type: s.type as McpServerConfig["type"],
+            id: s.id,
+            name: s.name,
+            description: s.description,
+            enabled: s.enabled,
+          }));
+        }
+
+        if (Object.keys(hydrated).length > 0) {
+          dispatch({ type: "HYDRATE", state: hydrated });
+        }
+      } catch {
+        // First run — no existing config, use defaults
+      } finally {
+        setIsHydrating(false);
+      }
+    };
+    hydrate();
+  }, []);
 
   const canNext = (): boolean => {
     switch (state.currentStep) {
@@ -114,6 +187,16 @@ export function SetupWizard() {
 
   const isSkippable = state.currentStep === 3 || state.currentStep === 4;
   const stepInfo = STEP_TITLES[state.currentStep];
+
+  if (isHydrating) {
+    return (
+      <div className="setup-wizard">
+        <div className="settings-loading">
+          <Loader2 className="loading-spinner__icon" />
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="setup-wizard">
