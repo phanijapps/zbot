@@ -9,7 +9,7 @@ use gateway_services::{McpService, SkillService};
 use agent_runtime::{
     AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
     LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, RespondTool, RetryPolicy,
-    RetryingLlmClient, ToolRegistry,
+    RetryingLlmClient, ToolCallDecision, ToolRegistry,
 };
 use agent_tools::{
     ListAgentsTool, QueryResourceTool, ToolSettings,
@@ -295,6 +295,46 @@ impl ExecutorBuilder {
         // Root is an orchestrator — enforce single action per turn
         if !self.is_delegated {
             executor_config.single_action_mode = true;
+        }
+
+        // Wire execution hooks for subagents (code-agent, research-agent, etc.)
+        if self.is_delegated {
+            // beforeToolCall: block shell-as-file-writer bypass
+            executor_config.before_tool_call = Some(Arc::new(|tool_name, args| {
+                if tool_name == "shell" {
+                    let cmd = args.get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // Block shell commands that create/write files — use write_file instead
+                    if cmd.contains("> ") || cmd.contains("cat <<") || cmd.contains("heredoc")
+                        || cmd.contains("echo \"") && cmd.contains("> ")
+                        || cmd.contains("printf") && cmd.contains("> ")
+                        || cmd.contains("tee ") {
+                        return ToolCallDecision::Block {
+                            reason: "Use write_file to create files, not shell redirects. Shell is for running commands and reading output.".to_string()
+                        };
+                    }
+                }
+                ToolCallDecision::Allow
+            }));
+
+            // afterToolCall: inject guidance after errors to reduce fix-retry loops
+            executor_config.after_tool_call = Some(Arc::new(|tool_name, _args, result, succeeded| {
+                if !succeeded && tool_name == "shell" {
+                    Some(format!(
+                        "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
+                         not the symptom. Do not retry the same command — fix the file first with edit_file.]",
+                        result
+                    ))
+                } else if !succeeded {
+                    Some(format!(
+                        "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
+                        result
+                    ))
+                } else {
+                    None // Pass through unchanged
+                }
+            }));
         }
 
         // Configure tool result offload settings
