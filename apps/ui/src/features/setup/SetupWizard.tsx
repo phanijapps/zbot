@@ -4,6 +4,7 @@ import { Loader2 } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { ProviderResponse, McpServerConfig } from "@/services/transport";
 import { NAME_PRESETS } from "./presets";
+import { HelpBox } from "@/components/HelpBox";
 import { StepIndicator } from "./components/StepIndicator";
 import { WizardNav } from "./components/WizardNav";
 import { NameStep } from "./steps/NameStep";
@@ -75,13 +76,13 @@ const initialState: WizardState = {
   originalMcpIds: [],
 };
 
-const STEP_TITLES: Record<number, { title: string; subtitle: string }> = {
-  1: { title: "What should we call your agent?", subtitle: "Pick a personality or choose your own name." },
-  2: { title: "Connect your AI providers", subtitle: "Add at least one provider to power your agents." },
-  3: { title: "Enable skills", subtitle: "Choose which skills your agents can use." },
-  4: { title: "Configure tool servers", subtitle: "Connect external tools and services via MCP." },
-  5: { title: "Configure your agents", subtitle: "Set a default model, then customize individual agents." },
-  6: { title: "Review & Launch", subtitle: "Everything looks good? Hit launch to get started." },
+const STEP_TITLES: Record<number, { title: string; subtitle: string; help: string }> = {
+  1: { title: "What should we call your agent?", subtitle: "Pick a personality or choose your own name.", help: "This name becomes your main AI assistant's identity. It appears in conversations and in the system prompt." },
+  2: { title: "Connect your AI providers", subtitle: "Add at least one provider to power your agents.", help: "Providers are the AI services (OpenAI, Anthropic, etc.) that run your agents. You need at least one to get started." },
+  3: { title: "Enable skills", subtitle: "Choose which skills your agents can use.", help: "Skills give your agents specialized abilities — coding, search, document processing, and more." },
+  4: { title: "Configure tool servers", subtitle: "Connect external tools and services via MCP.", help: "MCP servers extend your agent with external tools like web search, GitHub access, and more. Some need API keys." },
+  5: { title: "Configure your agents", subtitle: "Set a default model, then customize individual agents.", help: "Choose which AI model powers each agent. The global default applies to all agents unless you customize individually." },
+  6: { title: "Review & Launch", subtitle: "Everything looks good? Hit launch to get started.", help: "Review your choices. Only changes from the current configuration will be applied." },
 };
 
 export function SetupWizard() {
@@ -263,8 +264,24 @@ export function SetupWizard() {
 
   return (
     <div className="setup-wizard">
+      <div className="setup-wizard__logo">
+        <img src="/logo-dark.svg" alt="z-Bot" />
+      </div>
+
       <div className="setup-wizard__container">
         <StepIndicator currentStep={state.currentStep} />
+
+        {state.currentStep < 6 && (
+          <div className="setup-wizard__nav">
+            <WizardNav
+              currentStep={state.currentStep}
+              canNext={canNext()}
+              onBack={handleBack}
+              onNext={handleNext}
+              onSkip={isSkippable || state.currentStep === 1 ? handleSkip : undefined}
+            />
+          </div>
+        )}
 
         <div className="setup-wizard__header">
           <h2 className="setup-wizard__title">{stepInfo.title}</h2>
@@ -326,17 +343,11 @@ export function SetupWizard() {
               onLaunchComplete={handleLaunchComplete}
             />
           )}
-        </div>
 
-        {state.currentStep < 6 && (
-          <WizardNav
-            currentStep={state.currentStep}
-            canNext={canNext()}
-            onBack={handleBack}
-            onNext={handleNext}
-            onSkip={isSkippable || state.currentStep === 1 ? handleSkip : undefined}
-          />
-        )}
+          <div className="setup-wizard__help">
+            <HelpBox>{stepInfo.help}</HelpBox>
+          </div>
+        </div>
       </div>
     </div>
   );
