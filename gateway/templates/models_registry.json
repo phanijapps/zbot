@@ -326,7 +326,7 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 64000,
+      "input": 128000,
       "output": 8192
     }
   },
@@ -343,8 +343,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 64000,
-      "output": 8192
+      "input": 128000,
+      "output": 64000
     }
   },
   "gemini-2.0-flash": {
@@ -445,8 +445,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 128000,
-      "output": 16384
+      "input": 200000,
+      "output": 128000
     }
   },
   "glm-5": {
@@ -462,8 +462,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 128000,
-      "output": 8192
+      "input": 200000,
+      "output": 128000
     }
   },
   "glm-5-turbo": {
@@ -479,8 +479,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 128000,
-      "output": 8192
+      "input": 200000,
+      "output": 128000
     }
   },
   "glm-4.7": {
@@ -496,8 +496,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 128000,
-      "output": 8192
+      "input": 200000,
+      "output": 128000
     }
   },
   "glm-4.6": {
@@ -514,7 +514,7 @@
     },
     "context": {
       "input": 128000,
-      "output": 4096
+      "output": 128000
     }
   },
   "glm-4.5": {
@@ -531,7 +531,7 @@
     },
     "context": {
       "input": 128000,
-      "output": 4096
+      "output": 128000
     }
   },
   "openai/gpt-4-turbo": {
@@ -912,8 +912,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 256000,
-      "output": 128000
+      "input": 204800,
+      "output": 131072
     }
   },
   "nemotron-3-super:cloud": {
@@ -946,8 +946,8 @@
       "videoGeneration": false
     },
     "context": {
-      "input": 128000,
-      "output": 8192
+      "input": 262144,
+      "output": 65536
     }
   },
   "claude-sonnet-4-6": {
