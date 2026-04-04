@@ -90,8 +90,8 @@ pub struct RateLimits {
     pub concurrent_requests: u32,
 }
 
-fn default_rpm() -> u32 { 60 }
-fn default_concurrent() -> u32 { 3 }
+fn default_rpm() -> u32 { 30 }
+fn default_concurrent() -> u32 { 2 }
 
 impl Default for RateLimits {
     fn default() -> Self {

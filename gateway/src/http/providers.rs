@@ -38,6 +38,11 @@ pub fn routes() -> Router<AppState> {
 /// Enrich a provider's model list with capabilities from the model registry.
 /// Only populates model_configs if it's None (doesn't overwrite user data).
 fn enrich_provider(provider: &mut Provider, registry: &ModelRegistry) {
+    // Inject default rate limits so UI always sees them
+    if provider.rate_limits.is_none() {
+        provider.rate_limits = Some(provider.effective_rate_limits());
+    }
+
     if provider.model_configs.is_some() {
         return; // Already enriched or user-configured
     }

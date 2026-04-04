@@ -57,7 +57,7 @@ export function ProviderSlideover({
   onSetActive,
 }: ProviderSlideoverProps) {
   const [isEditing, setIsEditing] = useState(mode === "create");
-  const [form, setForm] = useState<EditForm>({ name: "", description: "", apiKey: "", baseUrl: "", models: [], defaultModel: "", rateLimitsRpm: "60", rateLimitsConcurrent: "3" });
+  const [form, setForm] = useState<EditForm>({ name: "", description: "", apiKey: "", baseUrl: "", models: [], defaultModel: "", rateLimitsRpm: "30", rateLimitsConcurrent: "2" });
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -80,8 +80,8 @@ export function ProviderSlideover({
         baseUrl: preset.baseUrl,
         models,
         defaultModel: models[0] || "",
-        rateLimitsRpm: "60",
-        rateLimitsConcurrent: "3",
+        rateLimitsRpm: "30",
+        rateLimitsConcurrent: "2",
       });
       setIsEditing(true);
       setIsDirty(false);
@@ -93,8 +93,8 @@ export function ProviderSlideover({
         baseUrl: provider.baseUrl,
         models: [...provider.models],
         defaultModel: provider.defaultModel || provider.models[0] || "",
-        rateLimitsRpm: String(provider?.rateLimits?.requestsPerMinute ?? 60),
-        rateLimitsConcurrent: String(provider?.rateLimits?.concurrentRequests ?? 3),
+        rateLimitsRpm: String(provider?.rateLimits?.requestsPerMinute ?? 30),
+        rateLimitsConcurrent: String(provider?.rateLimits?.concurrentRequests ?? 2),
       });
       setIsEditing(false);
       setIsDirty(false);
@@ -224,8 +224,8 @@ export function ProviderSlideover({
           models: form.models,
           defaultModel: form.defaultModel || undefined,
           rateLimits: {
-            requestsPerMinute: parseInt(form.rateLimitsRpm) || 60,
-            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 3,
+            requestsPerMinute: parseInt(form.rateLimitsRpm) || 30,
+            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 2,
           },
         });
         if (!result.success) {
@@ -242,8 +242,8 @@ export function ProviderSlideover({
           models: form.models,
           defaultModel: form.defaultModel || undefined,
           rateLimits: {
-            requestsPerMinute: parseInt(form.rateLimitsRpm) || 60,
-            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 3,
+            requestsPerMinute: parseInt(form.rateLimitsRpm) || 30,
+            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 2,
           },
         });
         if (!result.success) {
@@ -443,8 +443,8 @@ export function ProviderSlideover({
               </div>
             ) : (
               <div className="provider-slideover__rate-grid">
-                <div className="field-value">{provider?.rateLimits?.requestsPerMinute ?? 60} req/min</div>
-                <div className="field-value">{provider?.rateLimits?.concurrentRequests ?? 3} concurrent</div>
+                <div className="field-value">{provider?.rateLimits?.requestsPerMinute ?? 30} req/min</div>
+                <div className="field-value">{provider?.rateLimits?.concurrentRequests ?? 2} concurrent</div>
               </div>
             )}
           </div>
