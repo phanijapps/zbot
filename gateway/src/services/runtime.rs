@@ -79,6 +79,7 @@ impl RuntimeService {
             None,
             None,
             None,
+            2, // default max_parallel_agents
         )
     }
 
@@ -101,6 +102,7 @@ impl RuntimeService {
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+        max_parallel_agents: u32,
     ) -> Self {
         let mut runner = ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -120,6 +122,7 @@ impl RuntimeService {
             bridge_registry,
             bridge_outbox,
             embedding_client,
+            max_parallel_agents,
         );
 
         // Initialize model registry from bundled + local overrides

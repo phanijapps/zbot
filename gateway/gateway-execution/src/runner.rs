@@ -138,6 +138,7 @@ impl ExecutionRunner {
             None,
             None,
             None,
+            2, // default max_parallel_agents
         )
     }
 
@@ -160,6 +161,7 @@ impl ExecutionRunner {
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+        max_parallel_agents: u32,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -184,7 +186,7 @@ impl ExecutionRunner {
             memory_repo,
             distiller,
             memory_recall,
-            delegation_semaphore: Arc::new(Semaphore::new(2)),
+            delegation_semaphore: Arc::new(Semaphore::new(max_parallel_agents as usize)),
             embedding_client,
             model_registry: None,
             rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),

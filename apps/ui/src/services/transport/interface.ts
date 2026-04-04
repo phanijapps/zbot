@@ -31,6 +31,7 @@ import type {
   ToolSettings,
   LogSettings,
   UpdateLogSettingsRequest,
+  ExecutionSettings,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -233,6 +234,12 @@ export interface Transport {
 
   /** Update log settings */
   updateLogSettings(settings: UpdateLogSettingsRequest): Promise<TransportResult<LogSettings & { restartRequired: boolean }>>;
+
+  /** Get execution settings */
+  getExecutionSettings(): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>>;
+
+  /** Update execution settings */
+  updateExecutionSettings(settings: ExecutionSettings): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>>;
 
   // =========================================================================
   // Execution Log Operations

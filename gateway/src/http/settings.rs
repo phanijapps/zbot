@@ -9,7 +9,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_services::LogSettings;
+use gateway_services::{ExecutionSettings, LogSettings};
 use serde::{Deserialize, Serialize};
 
 /// Response for settings endpoints.
@@ -221,6 +221,93 @@ pub async fn update_log_settings(
         Ok(()) => Ok(Json(SettingsResponse {
             success: true,
             data: Some(LogSettingsResponse {
+                settings,
+                restart_required: true,
+            }),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(SettingsResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            }),
+        )),
+    }
+}
+
+// ============================================================================
+// EXECUTION SETTINGS ENDPOINTS
+// ============================================================================
+
+/// Response wrapper for execution settings with restart warning.
+#[derive(Debug, Serialize)]
+pub struct ExecutionSettingsResponse {
+    /// The current execution settings
+    #[serde(flatten)]
+    pub settings: ExecutionSettings,
+    /// Changes require daemon restart to take effect
+    pub restart_required: bool,
+}
+
+/// GET /api/settings/execution - Get execution settings.
+pub async fn get_execution_settings(
+    State(state): State<AppState>,
+) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
+    match state.settings.get_execution_settings() {
+        Ok(settings) => Ok(Json(SettingsResponse {
+            success: true,
+            data: Some(ExecutionSettingsResponse {
+                settings,
+                restart_required: false,
+            }),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SettingsResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            }),
+        )),
+    }
+}
+
+/// Request for updating execution settings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateExecutionSettingsRequest {
+    /// Maximum parallel subagents (default: 2)
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel_agents: u32,
+}
+
+fn default_max_parallel() -> u32 { 2 }
+
+impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
+    fn from(req: UpdateExecutionSettingsRequest) -> Self {
+        ExecutionSettings {
+            max_parallel_agents: req.max_parallel_agents,
+        }
+    }
+}
+
+/// PUT /api/settings/execution - Update execution settings.
+///
+/// Changes require a daemon restart to take effect (semaphore is
+/// initialized once at startup).
+pub async fn update_execution_settings(
+    State(state): State<AppState>,
+    Json(request): Json<UpdateExecutionSettingsRequest>,
+) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
+    let settings: ExecutionSettings = request.into();
+
+    match state.settings.update_execution_settings(settings.clone()) {
+        Ok(()) => Ok(Json(SettingsResponse {
+            success: true,
+            data: Some(ExecutionSettingsResponse {
                 settings,
                 restart_required: true,
             }),

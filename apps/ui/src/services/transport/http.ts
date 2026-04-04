@@ -35,6 +35,8 @@ import type {
   LogSettings,
   LogSettingsResponse,
   UpdateLogSettingsRequest,
+  ExecutionSettings,
+  ExecutionSettingsResponse,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -348,6 +350,22 @@ export class HttpTransport implements Transport {
       return { success: true, data: result.data.data };
     }
     return { success: false, error: result.error || result.data?.error || "Failed to update log settings" };
+  }
+
+  async getExecutionSettings(): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>> {
+    const result = await this.get<ExecutionSettingsResponse>("/api/settings/execution");
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to get execution settings" };
+  }
+
+  async updateExecutionSettings(settings: ExecutionSettings): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>> {
+    const result = await this.put<ExecutionSettingsResponse>("/api/settings/execution", settings);
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to update execution settings" };
   }
 
   // =========================================================================

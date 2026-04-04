@@ -140,6 +140,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/tools", put(settings::update_tool_settings))
         .route("/api/settings/logs", get(settings::get_log_settings))
         .route("/api/settings/logs", put(settings::update_log_settings))
+        .route("/api/settings/execution", get(settings::get_execution_settings))
+        .route("/api/settings/execution", put(settings::update_execution_settings))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route("/api/memory/:agent_id", get(memory::list_memory_facts))

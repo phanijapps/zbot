@@ -23,6 +23,30 @@ pub struct AppSettings {
     /// Logging configuration (file logging, rotation, etc.)
     #[serde(default)]
     pub logs: LogSettings,
+
+    /// Execution settings (concurrency, delegation limits, etc.)
+    #[serde(default)]
+    pub execution: ExecutionSettings,
+}
+
+/// Execution settings for controlling agent concurrency and delegation behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionSettings {
+    /// Maximum number of subagents that can run in parallel across all sessions.
+    /// Default: 2. Set lower for resource-constrained environments.
+    #[serde(default = "default_max_parallel_agents")]
+    pub max_parallel_agents: u32,
+}
+
+fn default_max_parallel_agents() -> u32 { 2 }
+
+impl Default for ExecutionSettings {
+    fn default() -> Self {
+        Self {
+            max_parallel_agents: default_max_parallel_agents(),
+        }
+    }
 }
 
 /// Service for managing application settings.
@@ -144,6 +168,24 @@ impl SettingsService {
 
         let mut settings = self.load().unwrap_or_default();
         settings.logs = log_settings;
+        self.save(&settings)
+    }
+
+    /// Get execution settings.
+    pub fn get_execution_settings(&self) -> Result<ExecutionSettings, String> {
+        let settings = self.load()?;
+        Ok(settings.execution)
+    }
+
+    /// Update execution settings.
+    ///
+    /// Note: Changes to max_parallel_agents require a daemon restart to take effect.
+    pub fn update_execution_settings(&self, execution_settings: ExecutionSettings) -> Result<(), String> {
+        if execution_settings.max_parallel_agents == 0 {
+            return Err("max_parallel_agents must be at least 1".to_string());
+        }
+        let mut settings = self.load().unwrap_or_default();
+        settings.execution = execution_settings;
         self.save(&settings)
     }
 }

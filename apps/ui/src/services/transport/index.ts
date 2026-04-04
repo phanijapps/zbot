@@ -43,6 +43,7 @@ export type {
   ToolSettings,
   LogSettings,
   UpdateLogSettingsRequest,
+  ExecutionSettings,
   LogLevel,
   LogCategory,
   SessionStatus,

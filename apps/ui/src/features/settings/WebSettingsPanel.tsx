@@ -14,6 +14,7 @@ import {
   type ToolSettings,
   type LogSettings,
   type UpdateLogSettingsRequest,
+  type ExecutionSettings,
   type ProviderResponse,
   type ModelRegistryResponse,
 } from "@/services/transport";
@@ -70,6 +71,13 @@ export function WebSettingsPanel() {
   const [isSavingLogs, setIsSavingLogs] = useState(false);
   const [logsSaveMessage, setLogsSaveMessage] = useState<string | null>(null);
 
+  // ── Execution settings state ──
+  const [execSettings, setExecSettings] = useState<ExecutionSettings | null>(null);
+  const [isLoadingExec, setIsLoadingExec] = useState(true);
+  const [isSavingExec, setIsSavingExec] = useState(false);
+  const [execSaveMessage, setExecSaveMessage] = useState<string | null>(null);
+  const [execRestartRequired, setExecRestartRequired] = useState(false);
+
   // ── Section open/close (General tab) ──
   const [memoryOpen, setMemoryOpen] = useState(false);
 
@@ -82,14 +90,16 @@ export function WebSettingsPanel() {
     setIsLoadingProviders(true);
     setIsLoadingTools(true);
     setIsLoadingLogs(true);
+    setIsLoadingExec(true);
     setProviderError(null);
     try {
       const transport = await getTransport();
-      const [providersResult, modelsResult, toolsResult, logsResult] = await Promise.all([
+      const [providersResult, modelsResult, toolsResult, logsResult, execResult] = await Promise.all([
         transport.listProviders(),
         transport.listModels(),
         transport.getToolSettings(),
         transport.getLogSettings(),
+        transport.getExecutionSettings(),
       ]);
       if (providersResult.success && providersResult.data) {
         setProviders(providersResult.data);
@@ -101,12 +111,14 @@ export function WebSettingsPanel() {
       }
       if (toolsResult.success && toolsResult.data) setToolSettings(toolsResult.data);
       if (logsResult.success && logsResult.data) setLogSettings(logsResult.data);
+      if (execResult.success && execResult.data) setExecSettings(execResult.data);
     } catch (err) {
       setProviderError(err instanceof Error ? err.message : "Unknown error");
     } finally {
       setIsLoadingProviders(false);
       setIsLoadingTools(false);
       setIsLoadingLogs(false);
+      setIsLoadingExec(false);
     }
   };
 
@@ -222,6 +234,34 @@ export function WebSettingsPanel() {
     }
   };
 
+  // ── Execution setting save handler ──
+  const handleExecChange = async (updates: Partial<ExecutionSettings>) => {
+    if (!execSettings) return;
+    const newSettings = { ...execSettings, ...updates };
+    // Strip restartRequired before sending
+    const { restartRequired: _, ...clean } = newSettings as ExecutionSettings & { restartRequired?: boolean };
+    setExecSettings(clean);
+    setIsSavingExec(true);
+    setExecSaveMessage(null);
+    try {
+      const transport = await getTransport();
+      const result = await transport.updateExecutionSettings(clean);
+      if (result.success) {
+        setExecSaveMessage("Saved");
+        setExecRestartRequired(result.data?.restartRequired ?? false);
+      } else {
+        setExecSaveMessage(result.error || "Failed to save");
+        setExecSettings(execSettings);
+      }
+    } catch {
+      setExecSaveMessage("Failed to save");
+      setExecSettings(execSettings);
+    } finally {
+      setIsSavingExec(false);
+      setTimeout(() => setExecSaveMessage(null), 2500);
+    }
+  };
+
   // ── Derived ──
   const hasProviders = providers.length > 0;
   const availablePresets = getAvailablePresets(providers);
@@ -242,6 +282,7 @@ export function WebSettingsPanel() {
           { id: "providers", label: "Providers", count: providers.length },
           { id: "general", label: "General" },
           { id: "logging", label: "Logging" },
+          { id: "advanced", label: "Advanced" },
         ]}
         activeTab={activeTab}
         onTabChange={setActiveTab}
@@ -522,6 +563,74 @@ export function WebSettingsPanel() {
           <HelpBox>
             <strong>Logs</strong> help you troubleshoot when something goes wrong. You usually don't need to
             change these unless you're debugging. Changes take effect after restarting the daemon.
+          </HelpBox>
+        </TabPanel>
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            ADVANCED TAB
+           ═══════════════════════════════════════════════════════════════════ */}
+        <TabPanel id="advanced" activeTab={activeTab}>
+          <div className="flex flex-col gap-4">
+            <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)" }}>
+              Changes to execution settings require a daemon restart to take effect.
+            </p>
+
+            {isLoadingExec ? (
+              <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>
+            ) : execSettings ? (
+              <div className="flex flex-col gap-4">
+
+                {/* Max Parallel Agents */}
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Activity style={{ width: 18, height: 18 }} />
+                    </div>
+                    <div>
+                      <h2 className="settings-section-header">Execution</h2>
+                      <p className="page-subtitle">Control how agents run in parallel</p>
+                    </div>
+                  </div>
+
+                  <div style={{ marginTop: "var(--spacing-3)" }}>
+                    <label className="settings-field-label">Max Parallel Agents</label>
+                    <input
+                      type="number"
+                      value={execSettings.maxParallelAgents}
+                      onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                      disabled={isSavingExec}
+                      className="form-input"
+                      min={1}
+                      max={10}
+                      style={{ maxWidth: 200 }}
+                    />
+                    <p className="settings-hint">
+                      Maximum subagents that can execute simultaneously across all sessions.
+                      Lower values reduce API load; higher values speed up parallel tasks.
+                      Default: 2.
+                    </p>
+                  </div>
+
+                  {execRestartRequired && (
+                    <div className="settings-alert settings-alert--warning" style={{ marginTop: "var(--spacing-3)" }}>
+                      Restart the daemon for changes to take effect.
+                    </div>
+                  )}
+
+                  {execSaveMessage && (
+                    <div className={`settings-alert ${execSaveMessage === "Saved" ? "settings-alert--success" : "settings-alert--error"}`} style={{ marginTop: "var(--spacing-3)" }}>
+                      {execSaveMessage === "Saved" && <Check style={{ width: 14, height: 14 }} />}
+                      {execSaveMessage}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+
+          <HelpBox>
+            <strong>Advanced settings</strong> control low-level execution behavior.
+            Most users won't need to change these. Changes require a daemon restart.
           </HelpBox>
         </TabPanel>
       </div>

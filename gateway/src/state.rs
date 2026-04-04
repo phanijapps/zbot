@@ -261,6 +261,14 @@ impl AppState {
         // Keep a handle for on-demand distillation (backfill, trigger)
         let distiller_ref = distiller.clone();
 
+        // Create settings service (before runtime, so we can read execution settings)
+        let settings = Arc::new(SettingsService::new(paths.clone()));
+        let max_parallel_agents = settings
+            .get_execution_settings()
+            .map(|s| s.max_parallel_agents)
+            .unwrap_or(2);
+        tracing::info!(max_parallel_agents, "Execution settings loaded");
+
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
             event_bus.clone(),
@@ -280,6 +288,7 @@ impl AppState {
             Some(bridge_registry.clone()),
             Some(bridge_outbox.clone()),
             runner_embedding_client,
+            max_parallel_agents,
         ));
 
         // Create hook registry
@@ -287,9 +296,6 @@ impl AppState {
 
         // Create delegation registry
         let delegation_registry = Arc::new(DelegationRegistry::new());
-
-        // Create settings service
-        let settings = Arc::new(SettingsService::new(paths.clone()));
 
         // Create plugin manager
         let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(

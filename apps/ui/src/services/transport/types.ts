@@ -392,6 +392,18 @@ export interface UpdateLogSettingsRequest {
   suppressStdout?: boolean;
 }
 
+/** Execution settings for controlling agent concurrency */
+export interface ExecutionSettings {
+  /** Maximum parallel subagents across all sessions (default: 2) */
+  maxParallelAgents: number;
+}
+
+export interface ExecutionSettingsResponse {
+  success: boolean;
+  data?: ExecutionSettings & { restartRequired: boolean };
+  error?: string;
+}
+
 // ============================================================================
 // Event Types
 // ============================================================================
