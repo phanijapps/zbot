@@ -190,6 +190,8 @@ export interface ProviderResponse {
   verified?: boolean;
   isDefault?: boolean;
   createdAt?: string;
+  rateLimits?: RateLimits;
+  modelConfigs?: Record<string, ModelConfig>;
 }
 
 export interface CreateProviderRequest {
@@ -201,6 +203,8 @@ export interface CreateProviderRequest {
   models: string[];
   embeddingModels?: string[];
   defaultModel?: string;
+  rateLimits?: RateLimits;
+  modelConfigs?: Record<string, ModelConfig>;
 }
 
 export interface UpdateProviderRequest {
@@ -211,6 +215,8 @@ export interface UpdateProviderRequest {
   models?: string[];
   embeddingModels?: string[];
   defaultModel?: string;
+  rateLimits?: RateLimits;
+  modelConfigs?: Record<string, ModelConfig>;
 }
 
 /** Get the default model for a provider response. */
@@ -244,6 +250,18 @@ export interface ModelCapabilities {
   voice: boolean;
   imageGeneration: boolean;
   videoGeneration: boolean;
+}
+
+export interface RateLimits {
+  requestsPerMinute: number;
+  concurrentRequests: number;
+}
+
+export interface ModelConfig {
+  capabilities: ModelCapabilities;
+  maxInput?: number;
+  maxOutput?: number;
+  source: "registry" | "discovered" | "user";
 }
 
 export interface ContextWindow {
