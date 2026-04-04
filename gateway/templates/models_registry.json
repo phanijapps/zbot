@@ -276,7 +276,7 @@
     },
     "context": {
       "input": 200000,
-      "output": 16384
+      "output": 64000
     }
   },
   "claude-opus-4-20250514": {
@@ -981,7 +981,7 @@
     },
     "context": {
       "input": 1000000,
-      "output": 64000
+      "output": 128000
     }
   },
   "claude-haiku-4-5": {
@@ -990,7 +990,7 @@
     "capabilities": {
       "tools": true,
       "vision": true,
-      "thinking": false,
+      "thinking": true,
       "embeddings": false,
       "voice": false,
       "imageGeneration": false,
@@ -998,7 +998,7 @@
     },
     "context": {
       "input": 200000,
-      "output": 8192
+      "output": 64000
     }
   }
 }
