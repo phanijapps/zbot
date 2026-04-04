@@ -5,6 +5,7 @@
 
 use crate::paths::SharedVaultPaths;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::RwLock;
@@ -46,6 +47,12 @@ pub struct Provider {
     /// that don't specify a model. Falls back to `models[0]` if not set.
     #[serde(rename = "defaultModel", skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
+    /// Rate limiting configuration for this provider.
+    #[serde(rename = "rateLimits", skip_serializing_if = "Option::is_none", default)]
+    pub rate_limits: Option<RateLimits>,
+    /// Enriched model configurations with capabilities and limits.
+    #[serde(rename = "modelConfigs", skip_serializing_if = "Option::is_none", default)]
+    pub model_configs: Option<HashMap<String, ModelConfig>>,
 }
 
 impl Provider {
@@ -57,7 +64,59 @@ impl Provider {
             .or_else(|| self.models.first().map(|s| s.as_str()))
             .unwrap_or("gpt-4o")
     }
+
+    /// Get effective max_output for a model from model_configs.
+    pub fn effective_max_output(&self, model_id: &str) -> Option<u64> {
+        self.model_configs
+            .as_ref()
+            .and_then(|configs| configs.get(model_id))
+            .and_then(|c| c.max_output)
+    }
+
+    /// Get effective rate limits. Falls back to defaults if not set.
+    pub fn effective_rate_limits(&self) -> RateLimits {
+        self.rate_limits.clone().unwrap_or_default()
+    }
 }
+
+/// Per-provider rate limit configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RateLimits {
+    /// Maximum requests per minute. Default: 60.
+    #[serde(rename = "requestsPerMinute", default = "default_rpm")]
+    pub requests_per_minute: u32,
+    /// Maximum concurrent requests. Default: 3.
+    #[serde(rename = "concurrentRequests", default = "default_concurrent")]
+    pub concurrent_requests: u32,
+}
+
+fn default_rpm() -> u32 { 60 }
+fn default_concurrent() -> u32 { 3 }
+
+impl Default for RateLimits {
+    fn default() -> Self {
+        Self { requests_per_minute: default_rpm(), concurrent_requests: default_concurrent() }
+    }
+}
+
+/// Per-model configuration with capabilities and token limits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelConfig {
+    /// Model capabilities (text, tools, vision, etc.)
+    #[serde(default)]
+    pub capabilities: crate::models::ModelCapabilities,
+    /// Maximum input tokens.
+    #[serde(rename = "maxInput", skip_serializing_if = "Option::is_none")]
+    pub max_input: Option<u64>,
+    /// Maximum output tokens.
+    #[serde(rename = "maxOutput", skip_serializing_if = "Option::is_none")]
+    pub max_output: Option<u64>,
+    /// Data source: "registry", "discovered", or "user".
+    #[serde(default = "default_source")]
+    pub source: String,
+}
+
+fn default_source() -> String { "registry".to_string() }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderTestResult {
