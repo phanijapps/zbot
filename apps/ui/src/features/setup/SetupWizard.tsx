@@ -273,15 +273,13 @@ export function SetupWizard() {
         <StepIndicator currentStep={state.currentStep} />
 
         {state.currentStep < 6 && (
-          <div className="setup-wizard__nav">
-            <WizardNav
-              currentStep={state.currentStep}
-              canNext={canNext()}
-              onBack={handleBack}
-              onNext={handleNext}
-              onSkip={isSkippable || state.currentStep === 1 ? handleSkip : undefined}
-            />
-          </div>
+          <WizardNav
+            currentStep={state.currentStep}
+            canNext={canNext()}
+            onBack={handleBack}
+            onNext={handleNext}
+            onSkip={isSkippable || state.currentStep === 1 ? handleSkip : undefined}
+          />
         )}
 
         <div className="setup-wizard__header">

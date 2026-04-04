@@ -3806,15 +3806,6 @@
   padding: 0 var(--spacing-4);
 }
 
-.setup-wizard__nav {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  padding-bottom: var(--spacing-4);
-  border-bottom: 1px solid var(--border);
-  margin-bottom: var(--spacing-4);
-  flex-shrink: 0;
-}
 
 .setup-wizard__header {
   text-align: center;
@@ -3848,11 +3839,14 @@
   border-top: 1px solid var(--border);
 }
 
-/* Keep __footer as alias for backward compat with WizardNav */
 .setup-wizard__footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  padding-bottom: var(--spacing-4);
+  border-bottom: 1px solid var(--border);
+  margin-bottom: var(--spacing-4);
+  flex-shrink: 0;
 }
 
 .setup-wizard__skip {
