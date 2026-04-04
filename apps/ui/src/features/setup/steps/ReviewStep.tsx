@@ -25,6 +25,9 @@ interface ReviewStepProps {
   mcpConfigs: McpServerConfig[];
   globalDefault: GlobalDefault;
   agentOverrides: Record<string, AgentOverride>;
+  originalAgentName: string;
+  originalAgentConfigs: Record<string, GlobalDefault>;
+  originalMcpIds: string[];
   onLaunchComplete: () => void;
 }
 
@@ -36,6 +39,9 @@ export function ReviewStep({
   mcpConfigs,
   globalDefault,
   agentOverrides,
+  originalAgentName,
+  originalAgentConfigs,
+  originalMcpIds,
   onLaunchComplete,
 }: ReviewStepProps) {
   const [isLaunching, setIsLaunching] = useState(false);
@@ -58,16 +64,16 @@ export function ReviewStep({
     try {
       const transport = await getTransport();
 
-      // 1. Get all agents to find root
+      // 1. Get all agents
       const agentsResult = await transport.listAgents();
       if (!agentsResult.success || !agentsResult.data) {
         throw new Error("Failed to load agents");
       }
       const agents = agentsResult.data;
-      const rootAgent = agents.find((a) => a.name === "root");
+      const rootAgent = agents.find((a) => a.name === "root" || a.displayName === originalAgentName);
 
-      // 2. Rename root agent
-      if (rootAgent) {
+      // 2. Rename root agent — only if name changed
+      if (rootAgent && agentName !== originalAgentName) {
         await transport.updateAgent(rootAgent.id, {
           name: agentName.toLowerCase().replace(/\s+/g, "-"),
           displayName: agentName,
@@ -79,10 +85,10 @@ export function ReviewStep({
         await transport.setDefaultProvider(defaultProviderId);
       }
 
-      // 4. Update agent configs
+      // 4. Update agent configs — only agents whose config changed
       for (const agent of agents) {
         const override = agentOverrides[agent.id];
-        const config = override
+        const desired = override
           ? {
               providerId: override.providerId || globalDefault.providerId,
               model: override.model || globalDefault.model,
@@ -91,28 +97,40 @@ export function ReviewStep({
             }
           : globalDefault;
 
-        await transport.updateAgent(agent.id, {
-          providerId: config.providerId,
-          model: config.model,
-          temperature: config.temperature,
-          maxTokens: config.maxTokens,
-        });
+        const original = originalAgentConfigs[agent.id];
+        const changed = !original
+          || original.providerId !== desired.providerId
+          || original.model !== desired.model
+          || original.temperature !== desired.temperature
+          || original.maxTokens !== desired.maxTokens;
+
+        if (changed) {
+          await transport.updateAgent(agent.id, {
+            providerId: desired.providerId,
+            model: desired.model,
+            temperature: desired.temperature,
+            maxTokens: desired.maxTokens,
+          });
+        }
       }
 
-      // 5. Create enabled MCP servers
+      // 5. Create MCP servers — only new ones (not already existing)
+      const existingMcpSet = new Set(originalMcpIds);
       for (const mcp of enabledMcps) {
-        await transport.createMcp({
-          type: mcp.type,
-          id: mcp.id,
-          name: mcp.name,
-          description: mcp.description,
-          command: mcp.command,
-          args: mcp.args,
-          env: mcp.env,
-          url: mcp.url,
-          headers: mcp.headers,
-          enabled: true,
-        });
+        if (!existingMcpSet.has(mcp.id || "")) {
+          await transport.createMcp({
+            type: mcp.type,
+            id: mcp.id,
+            name: mcp.name,
+            description: mcp.description,
+            command: mcp.command,
+            args: mcp.args,
+            env: mcp.env,
+            url: mcp.url,
+            headers: mcp.headers,
+            enabled: true,
+          });
+        }
       }
 
       // 6. Mark setup complete

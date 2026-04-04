@@ -13,6 +13,13 @@ import { McpStep } from "./steps/McpStep";
 import { AgentsStep } from "./steps/AgentsStep";
 import { ReviewStep } from "./steps/ReviewStep";
 
+interface AgentConfig {
+  providerId: string;
+  model: string;
+  temperature: number;
+  maxTokens: number;
+}
+
 interface WizardState {
   currentStep: number;
   agentName: string;
@@ -21,18 +28,12 @@ interface WizardState {
   defaultProviderId: string;
   enabledSkillIds: string[];
   mcpConfigs: McpServerConfig[];
-  globalDefault: {
-    providerId: string;
-    model: string;
-    temperature: number;
-    maxTokens: number;
-  };
-  agentOverrides: Record<string, {
-    providerId?: string;
-    model?: string;
-    temperature?: number;
-    maxTokens?: number;
-  }>;
+  globalDefault: AgentConfig;
+  agentOverrides: Record<string, Partial<AgentConfig>>;
+  // Original state for delta detection
+  originalAgentName: string;
+  originalAgentConfigs: Record<string, AgentConfig>;
+  originalMcpIds: string[];
 }
 
 type WizardAction =
@@ -69,6 +70,9 @@ const initialState: WizardState = {
   mcpConfigs: [],
   globalDefault: { providerId: "", model: "", temperature: 0.7, maxTokens: 4096 },
   agentOverrides: {},
+  originalAgentName: "",
+  originalAgentConfigs: {},
+  originalMcpIds: [],
 };
 
 const STEP_TITLES: Record<number, { title: string; subtitle: string }> = {
@@ -116,21 +120,33 @@ export function SetupWizard() {
           }
         }
 
-        // Pre-fill agent name from root agent
+        // Pre-fill agent name and configs from existing agents
         if (agentsRes.success && agentsRes.data) {
-          const rootAgent = agentsRes.data.find((a) => a.name === "root");
+          const agents = agentsRes.data;
+          const rootAgent = agents.find((a) => a.name === "root");
           if (rootAgent && rootAgent.displayName && rootAgent.displayName !== "root") {
             const name = rootAgent.displayName;
             hydrated.agentName = name;
+            hydrated.originalAgentName = name;
             const matchingPreset = NAME_PRESETS.find((p) => p.name === name && p.id !== "custom");
             hydrated.namePreset = matchingPreset?.id || "custom";
           }
+
+          // Store original agent configs for delta detection
+          const originalConfigs: Record<string, AgentConfig> = {};
+          for (const agent of agents) {
+            originalConfigs[agent.id] = {
+              providerId: agent.providerId || "",
+              model: agent.model || "",
+              temperature: agent.temperature ?? 0.7,
+              maxTokens: agent.maxTokens ?? 4096,
+            };
+          }
+          hydrated.originalAgentConfigs = originalConfigs;
         }
 
-        // Pre-fill MCP configs from existing servers
+        // Pre-fill MCP configs from existing servers + track originals
         if (mcpsRes.success && mcpsRes.data && mcpsRes.data.servers && mcpsRes.data.servers.length > 0) {
-          // Existing MCPs are already configured — map summaries to configs
-          // The McpStep will still load defaults for new servers, but we mark existing as done
           hydrated.mcpConfigs = mcpsRes.data.servers.map((s) => ({
             type: s.type as McpServerConfig["type"],
             id: s.id,
@@ -138,6 +154,7 @@ export function SetupWizard() {
             description: s.description,
             enabled: s.enabled,
           }));
+          hydrated.originalMcpIds = mcpsRes.data.servers.map((s) => s.id);
         }
 
         if (Object.keys(hydrated).length > 0) {
@@ -257,6 +274,9 @@ export function SetupWizard() {
               mcpConfigs={state.mcpConfigs}
               globalDefault={state.globalDefault}
               agentOverrides={state.agentOverrides}
+              originalAgentName={state.originalAgentName}
+              originalAgentConfigs={state.originalAgentConfigs}
+              originalMcpIds={state.originalMcpIds}
               onLaunchComplete={handleLaunchComplete}
             />
           )}

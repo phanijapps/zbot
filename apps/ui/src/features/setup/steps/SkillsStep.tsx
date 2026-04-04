@@ -3,8 +3,6 @@ import { Loader2 } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { SkillResponse } from "@/services/transport";
 
-const RECOMMENDED_SKILLS = ["coding", "doc", "duckduckgo-search"];
-
 interface SkillsStepProps {
   enabledSkillIds: string[];
   onChange: (ids: string[]) => void;
@@ -21,11 +19,9 @@ export function SkillsStep({ enabledSkillIds, onChange }: SkillsStepProps) {
         const result = await transport.listSkills();
         if (result.success && result.data) {
           setSkills(result.data);
+          // Select all skills by default on first load
           if (enabledSkillIds.length === 0) {
-            const recommended = result.data
-              .filter((s) => RECOMMENDED_SKILLS.includes(s.name))
-              .map((s) => s.id);
-            if (recommended.length > 0) onChange(recommended);
+            onChange(result.data.map((s) => s.id));
           }
         }
       } finally {
