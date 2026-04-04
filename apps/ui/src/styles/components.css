@@ -1555,6 +1555,39 @@
   margin-top: var(--spacing-3);
 }
 
+.provider-card__capabilities {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.cap-badge {
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.cap-badge--tools {
+  background: rgba(74, 153, 99, 0.15);
+  color: #4a9963;
+}
+
+.cap-badge--vision {
+  background: rgba(74, 99, 153, 0.15);
+  color: #4a63a9;
+}
+
+.cap-badge--thinking {
+  background: rgba(153, 74, 153, 0.15);
+  color: #994a99;
+}
+
+.cap-badge--embed {
+  background: rgba(153, 130, 74, 0.15);
+  color: #99824a;
+}
+
 /* Model chip — tag with capability badges */
 .model-chip {
   display: inline-flex;
