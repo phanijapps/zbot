@@ -2009,6 +2009,7 @@
   display: flex;
   gap: var(--spacing-3);
   align-items: flex-start;
+  margin-top: var(--spacing-5);
 }
 
 .help-box__icon {
