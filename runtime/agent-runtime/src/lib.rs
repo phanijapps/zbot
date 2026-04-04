@@ -73,6 +73,7 @@ pub use llm::{
     LlmClient, LlmError, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
     ToolCallChunk, ChatResponse, TokenUsage,
     RetryingLlmClient, RetryPolicy, ThrottledLlmClient,
+    ProviderRateLimiter, RateLimitedLlmClient,
     EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError,
     OpenAiEmbeddingClient, LocalEmbeddingClient, content_hash,
 };
