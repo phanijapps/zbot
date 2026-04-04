@@ -1339,7 +1339,7 @@ impl ExecutionRunner {
                                     // Inject intent analysis into agent instructions
                                     // so the agent can follow ward/skill/strategy recommendations
                                     agent_for_build.instructions.push_str(
-                                        &format_intent_injection(&analysis, spec_guidance.as_deref()),
+                                        &format_intent_injection(&analysis, spec_guidance.as_deref(), user_message),
                                     );
                                 }
                                 Err(e) => {

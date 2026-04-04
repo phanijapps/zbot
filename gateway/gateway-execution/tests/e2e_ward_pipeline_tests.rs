@@ -357,7 +357,7 @@ fn test_intent_injection_sdlc_for_graph() {
         rewritten_prompt: String::new(),
     };
 
-    let injection = format_intent_injection(&analysis, None);
+    let injection = format_intent_injection(&analysis, None, None);
 
     // Graph approach should route to planner-agent
     assert!(injection.contains("## Task Analysis"), "Graph approach should include task analysis");
@@ -391,7 +391,7 @@ fn test_intent_injection_no_sdlc_for_simple() {
         rewritten_prompt: String::new(),
     };
 
-    let injection = format_intent_injection(&analysis, None);
+    let injection = format_intent_injection(&analysis, None, None);
 
     assert!(!injection.contains("SDLC Pattern"), "Simple approach should NOT include SDLC");
     assert!(!injection.contains("tasks.json"), "Simple approach should NOT mention tasks.json");
@@ -422,7 +422,7 @@ fn test_ward_rules_domain_agnostic() {
         rewritten_prompt: String::new(),
     };
 
-    let injection = format_intent_injection(&analysis, None);
+    let injection = format_intent_injection(&analysis, None, None);
 
     // Should NOT have financial domain terms
     assert!(!injection.contains("SPY"), "Ward rules should not mention SPY");

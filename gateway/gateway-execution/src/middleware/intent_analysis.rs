@@ -133,10 +133,15 @@ Respond with ONLY a JSON object (no markdown fences):
 /// `spec_guidance` is optional domain-specific guidance for writing specs
 /// (e.g., "Cover data sources and rate limits"). When provided, it is appended
 /// after the ward rules section.
-pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option<&str>) -> String {
+pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option<&str>, original_message: Option<&str>) -> String {
     let mut out = String::from("\n\n## Task Analysis\n\n");
 
-    // Goal
+    // Original user request — verbatim, unmodified
+    if let Some(msg) = original_message {
+        out.push_str(&format!("**Original Request:** {}\n", msg));
+    }
+
+    // Analyzed goal
     out.push_str(&format!("**Goal:** {}\n", analysis.primary_intent));
 
     // Hidden requirements — things the user expects but didn't say
@@ -957,7 +962,7 @@ mod tests {
             rewritten_prompt: String::new(),
         };
 
-        let injection = format_intent_injection(&analysis, None);
+        let injection = format_intent_injection(&analysis, None, None);
         assert!(injection.contains("## Task Analysis"));
         assert!(injection.contains("financial-analysis"));
         assert!(injection.contains("stocks/spy"));
@@ -988,7 +993,7 @@ mod tests {
             rewritten_prompt: String::new(),
         };
 
-        let injection = format_intent_injection(&analysis, None);
+        let injection = format_intent_injection(&analysis, None, None);
         assert!(injection.contains("Ward Rule:"));
         assert!(injection.contains("test-ward"));
     }
@@ -1016,7 +1021,7 @@ mod tests {
             rewritten_prompt: String::new(),
         };
 
-        let injection = format_intent_injection(&analysis, Some("Cover data sources and rate limits"));
+        let injection = format_intent_injection(&analysis, Some("Cover data sources and rate limits"), None);
         // Should still produce valid injection without spec guidance section
         assert!(injection.contains("## Task Analysis"));
         assert!(injection.contains("test-ward"));
@@ -1044,7 +1049,7 @@ mod tests {
             rewritten_prompt: String::new(),
         };
 
-        let injection = format_intent_injection(&analysis, None);
+        let injection = format_intent_injection(&analysis, None, None);
         assert!(!injection.contains("Domain Spec Guidance:"));
     }
 }

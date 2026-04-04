@@ -184,7 +184,7 @@ async fn test_full_enrichment_flow() {
     assert_eq!(graph.edges.len(), 5);
 
     // Verify injection formatting
-    let injection = format_intent_injection(&analysis, None);
+    let injection = format_intent_injection(&analysis, None, None);
     assert!(injection.contains("## Task Analysis"));
     assert!(injection.contains("financial-analysis"));
     assert!(injection.contains("planner-agent"));
