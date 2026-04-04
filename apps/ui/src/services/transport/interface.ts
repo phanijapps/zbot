@@ -148,6 +148,7 @@ export interface Transport {
 
   /** Test a provider connection */
   testProvider(provider: CreateProviderRequest): Promise<TransportResult<ProviderTestResult>>;
+  testProviderById(id: string): Promise<TransportResult<ProviderTestResult>>;
 
   /** Set a provider as the default */
   setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>>;

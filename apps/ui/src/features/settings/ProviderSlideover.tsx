@@ -164,15 +164,26 @@ export function ProviderSlideover({
     setTestResult(null);
     try {
       const transport = await getTransport();
-      const result = await transport.testProvider({
-        name: form.name,
-        description: form.description,
-        apiKey: form.apiKey,
-        baseUrl: form.baseUrl,
-        models: form.models,
-      });
+      let result;
+      if (provider?.id && mode === "view") {
+        // Existing provider — use ID-based test that persists verified + models
+        result = await transport.testProviderById(provider.id);
+      } else {
+        // New provider (create mode) — inline test
+        result = await transport.testProvider({
+          name: form.name,
+          description: form.description,
+          apiKey: form.apiKey,
+          baseUrl: form.baseUrl,
+          models: form.models,
+        });
+      }
       if (result.success && result.data) {
         setTestResult(result.data);
+        // Refresh parent to show updated verified status + models
+        if (result.data.success) {
+          onSaved();
+        }
       } else {
         setTestResult({ success: false, message: result.error || "Test failed" });
       }

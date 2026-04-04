@@ -232,6 +232,10 @@ export class HttpTransport implements Transport {
     return this.post<ProviderTestResult>("/api/providers/test", provider);
   }
 
+  async testProviderById(id: string): Promise<TransportResult<ProviderTestResult>> {
+    return this.post<ProviderTestResult>(`/api/providers/${encodeURIComponent(id)}/test`, {});
+  }
+
   async setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>> {
     return this.post<ProviderResponse>(`/api/providers/${encodeURIComponent(id)}/default`, {});
   }
