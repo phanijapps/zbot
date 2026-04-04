@@ -81,6 +81,7 @@ import type {
   GraphSubgraphResponse,
   GraphNeighborOptions,
   GraphSubgraphOptions,
+  SetupStatus,
 } from "./types";
 
 // ============================================================================
@@ -366,6 +367,14 @@ export class HttpTransport implements Transport {
       return { success: true, data: result.data.data };
     }
     return { success: false, error: result.error || result.data?.error || "Failed to update execution settings" };
+  }
+
+  async getSetupStatus(): Promise<TransportResult<SetupStatus>> {
+    return this.get<SetupStatus>("/api/setup/status");
+  }
+
+  async getMcpDefaults(): Promise<TransportResult<McpServerConfig[]>> {
+    return this.get<McpServerConfig[]>("/api/setup/mcp-defaults");
   }
 
   // =========================================================================

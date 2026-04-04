@@ -406,6 +406,12 @@ export interface ExecutionSettingsResponse {
   error?: string;
 }
 
+/** Setup wizard status check */
+export interface SetupStatus {
+  setupComplete: boolean;
+  hasProviders: boolean;
+}
+
 // ============================================================================
 // Event Types
 // ============================================================================

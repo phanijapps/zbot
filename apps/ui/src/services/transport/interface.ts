@@ -71,6 +71,7 @@ import type {
   GraphSubgraphResponse,
   GraphNeighborOptions,
   GraphSubgraphOptions,
+  SetupStatus,
 } from "./types";
 
 // ============================================================================
@@ -240,6 +241,16 @@ export interface Transport {
 
   /** Update execution settings */
   updateExecutionSettings(settings: ExecutionSettings): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>>;
+
+  // =========================================================================
+  // Setup Wizard Operations
+  // =========================================================================
+
+  /** Check if first-time setup is needed */
+  getSetupStatus(): Promise<TransportResult<SetupStatus>>;
+
+  /** Get sanitized MCP server templates for wizard */
+  getMcpDefaults(): Promise<TransportResult<McpServerConfig[]>>;
 
   // =========================================================================
   // Execution Log Operations

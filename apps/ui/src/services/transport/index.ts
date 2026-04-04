@@ -62,6 +62,7 @@ export type {
   CreateCronJobRequest,
   UpdateCronJobRequest,
   CronTriggerResult,
+  SetupStatus,
 } from "./types";
 
 export { getProviderDefaultModel } from "./types";
