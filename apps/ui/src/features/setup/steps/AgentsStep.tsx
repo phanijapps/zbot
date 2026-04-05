@@ -64,16 +64,22 @@ export function AgentsStep({
           setFreshProviders(resolvedProviders);
         }
 
-        // Initialize global default if model is empty
-        const pid = globalDefault.providerId || defaultProviderId;
-        const provider = resolvedProviders.find((p) => p.id === pid) || resolvedProviders[0];
-        if (provider && (!globalDefault.model || !globalDefault.providerId)) {
-          onGlobalChange({
-            providerId: provider.id!,
-            model: provider.defaultModel || provider.models[0] || "",
-            temperature: globalDefault.temperature || 0.7,
-            maxTokens: globalDefault.maxTokens || 4096,
-          });
+        // Ensure global default has a valid provider and model
+        if (resolvedProviders.length > 0) {
+          const pid = globalDefault.providerId || defaultProviderId;
+          const matchedProvider = resolvedProviders.find((p) => p.id === pid);
+          const provider = matchedProvider || resolvedProviders[0];
+          const providerModels = provider.models || [];
+          const currentModelValid = globalDefault.model && providerModels.includes(globalDefault.model);
+
+          if (!matchedProvider || !globalDefault.providerId || !currentModelValid) {
+            onGlobalChange({
+              providerId: provider.id!,
+              model: currentModelValid ? globalDefault.model : (provider.defaultModel || providerModels[0] || ""),
+              temperature: globalDefault.temperature || 0.7,
+              maxTokens: globalDefault.maxTokens || 4096,
+            });
+          }
         }
       } finally {
         setIsLoading(false);
@@ -88,6 +94,13 @@ export function AgentsStep({
 
   const selectedProvider = activeProviders.find((p) => p.id === globalDefault.providerId);
   const globalModels = selectedProvider?.models || [];
+
+  // Sync: if current model isn't in the provider's model list, select first available
+  useEffect(() => {
+    if (globalModels.length > 0 && !globalModels.includes(globalDefault.model)) {
+      onGlobalChange({ ...globalDefault, model: globalModels[0] });
+    }
+  }, [globalDefault.providerId, globalModels.length]);
 
   const getEffectiveConfig = (agentId: string) => {
     const override = agentOverrides[agentId];
@@ -143,6 +156,9 @@ export function AgentsStep({
                 onGlobalChange({ ...globalDefault, providerId: pid, model: models[0] || "" });
               }}
             >
+              {activeProviders.length === 0 && (
+                <option value="">No providers configured</option>
+              )}
               {activeProviders.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
@@ -155,6 +171,9 @@ export function AgentsStep({
               value={globalDefault.model}
               onChange={(e) => onGlobalChange({ ...globalDefault, model: e.target.value })}
             >
+              {globalModels.length === 0 && (
+                <option value="">No models available</option>
+              )}
               {globalModels.map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
