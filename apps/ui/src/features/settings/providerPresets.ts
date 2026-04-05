@@ -35,7 +35,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     name: "Ollama",
     baseUrl: "http://localhost:11434/v1",
-    models: "llama3.3, qwen2.5-coder, deepseek-r1, gemma3",
+    models: "gemma4:cloud, nemotron-3-super:cloud, glm-5:cloud, gemini-3-flash-preview:cloud, deepseek-v3.2:cloud, kimi-k2.5:cloud, qwen3.5:cloud, devstral-2:cloud, minimax-m2.7:cloud",
     apiKeyHint: "",
     apiKeyPlaceholder: "",
     noApiKey: true,
@@ -74,13 +74,6 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     baseUrl: "https://api.mistral.ai/v1",
     models: "mistral-large-latest, mistral-small-latest, codestral-latest",
     apiKeyHint: "console.mistral.ai/api-keys",
-    apiKeyPlaceholder: "your-api-key",
-  },
-  {
-    name: "Ollama Cloud",
-    baseUrl: "https://api.ollama.com/v1",
-    models: "gemma4:cloud, minimax-m2.7:cloud, qwen3.5:cloud, nemotron-3-super:cloud, glm-5:cloud, gemini-3-flash-preview:cloud, deepseek-v3.2:cloud, kimi-k2.5:cloud, devstral-2:cloud",
-    apiKeyHint: "ollama.com/settings",
     apiKeyPlaceholder: "your-api-key",
   },
 ];

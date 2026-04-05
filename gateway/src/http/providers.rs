@@ -148,13 +148,22 @@ async fn test_provider(
         Ok(mut provider) => {
             let result = state.provider_service.test(&provider).await;
 
-            // Persist verified status + discovered models back to providers.json
+            // Persist verified status + merge discovered models back to providers.json
             if result.success {
                 provider.verified = Some(true);
-                // Update model list if test discovered models
-                if let Some(ref models) = result.models {
-                    if !models.is_empty() {
-                        provider.models = models.clone();
+                // Merge discovered models: keep existing, add new ones not already listed
+                if let Some(ref discovered) = result.models {
+                    if !discovered.is_empty() {
+                        if provider.models.is_empty() {
+                            provider.models = discovered.clone();
+                        } else {
+                            let existing: std::collections::HashSet<String> = provider.models.iter().cloned().collect();
+                            let new_models: Vec<String> = discovered.iter()
+                                .filter(|m| !existing.contains(*m))
+                                .cloned()
+                                .collect();
+                            provider.models.extend(new_models);
+                        }
                     }
                 }
                 // Enrich with registry capabilities
