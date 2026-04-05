@@ -148,6 +148,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
+        .route("/api/memory/search", get(memory::search_all_memory_facts))
         .route("/api/memory/:agent_id", get(memory::list_memory_facts).post(memory::create_memory_fact))
         .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
         .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))

@@ -353,6 +353,69 @@ impl MemoryRepository {
     /// When `ward_id` is `Some(w)`, results are filtered to facts belonging to
     /// the `__global__` ward **or** the specified ward. When `None`, all wards
     /// are returned (no ward filtering).
+    /// FTS5 keyword search across ALL agents (no agent_id filter).
+    pub fn search_all_memory_facts_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        category: Option<&str>,
+    ) -> Result<Vec<ScoredFact>, String> {
+        let sanitized_query = sanitize_fts_query(query);
+        if sanitized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = &sanitized_query;
+
+        self.db.with_connection(|conn| {
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cat) = category {
+                (
+                    "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
+                            mf.content, mf.confidence, mf.mention_count, mf.source_summary,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            rank
+                     FROM memory_facts_fts fts
+                     JOIN memory_facts mf ON mf.rowid = fts.rowid
+                     WHERE memory_facts_fts MATCH ?1 AND mf.category = ?2
+                     ORDER BY rank
+                     LIMIT ?3".to_string(),
+                    vec![
+                        Box::new(query.to_string()),
+                        Box::new(cat.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            } else {
+                (
+                    "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
+                            mf.content, mf.confidence, mf.mention_count, mf.source_summary,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            rank
+                     FROM memory_facts_fts fts
+                     JOIN memory_facts mf ON mf.rowid = fts.rowid
+                     WHERE memory_facts_fts MATCH ?1
+                     ORDER BY rank
+                     LIMIT ?2".to_string(),
+                    vec![
+                        Box::new(query.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            };
+
+            let mut stmt = conn.prepare(&sql)?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| {
+                let fact = row_to_memory_fact(row)?;
+                let bm25: f64 = row.get(17)?;
+                Ok(ScoredFact { fact, score: -bm25 })
+            })?;
+
+            let results: Vec<ScoredFact> = rows.filter_map(|r| r.ok()).collect();
+            Ok(results)
+        })
+    }
+
+    /// FTS5 keyword search for a specific agent.
     pub fn search_memory_facts_fts(
         &self,
         query: &str,

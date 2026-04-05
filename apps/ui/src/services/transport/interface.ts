@@ -405,6 +405,9 @@ export interface Transport {
   /** Search memory facts for an agent */
   searchMemory(agentId: string, query: string, filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
 
+  /** Search ALL memory facts across all agents (server-side FTS5) */
+  searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>>;
+
   /** Get a single memory fact */
   getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>>;
 

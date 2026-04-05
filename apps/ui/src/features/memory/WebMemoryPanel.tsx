@@ -122,7 +122,7 @@ export function WebMemoryPanel() {
       const transport = await getTransport();
 
       if (selectedAgentId) {
-        // Agent-specific semantic search (server-side)
+        // Agent-specific search (server-side FTS5)
         const response = await transport.searchMemory(selectedAgentId, searchQuery, {
           category: filter.category,
           limit: filter.limit,
@@ -133,16 +133,14 @@ export function WebMemoryPanel() {
           setError(response.error || "Search failed");
         }
       } else {
-        // Universal search — load all facts and filter client-side
-        const response = await transport.listAllMemory({ ...filter, limit: 500 });
+        // Global search across all agents (server-side FTS5)
+        const response = await transport.searchAllMemory(
+          searchQuery,
+          filter.limit || 50,
+          filter.category,
+        );
         if (response.success && response.data) {
-          const query = searchQuery.toLowerCase();
-          const filtered = response.data.facts.filter((f) =>
-            f.content.toLowerCase().includes(query) ||
-            f.key.toLowerCase().includes(query) ||
-            f.category.toLowerCase().includes(query)
-          );
-          setFacts(filtered);
+          setFacts(response.data.facts);
         } else {
           setError(response.error || "Search failed");
         }

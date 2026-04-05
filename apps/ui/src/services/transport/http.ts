@@ -1395,6 +1395,13 @@ export class HttpTransport implements Transport {
     return this.delete(`/api/memory/${encodeURIComponent(agentId)}/facts/${encodeURIComponent(factId)}`);
   }
 
+  async searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>> {
+    const params = new URLSearchParams({ q: query });
+    if (limit) params.set("limit", String(limit));
+    if (category) params.set("category", category);
+    return this.get(`/api/memory/search?${params.toString()}`);
+  }
+
   async createMemory(agentId: string, fact: {
     category: string;
     key: string;
