@@ -237,7 +237,7 @@ export function WebMemoryPanel() {
                   ? "Add a rule agents MUST follow (e.g., 'Always use research-agent for factual data')"
                   : addType === "instruction"
                   ? "Add a preference or guideline (e.g., 'Prefer interactive HTML outputs')"
-                  : "Tell z-Bot about yourself (e.g., 'I have a 9th grade son with ADHD')"
+                  : "Tell z-Bot about yourself (e.g., 'I'm a data engineer who prefers Python and visual dashboards')"
               }
               value={addContent}
               onChange={(e) => setAddContent(e.target.value)}
