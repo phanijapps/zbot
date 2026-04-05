@@ -168,7 +168,7 @@ async fn test_full_enrichment_flow() {
     };
     let fact_store = MockFactStore;
 
-    let analysis = analyze_intent(&mock, "Analyze my investment portfolio", &fact_store)
+    let analysis = analyze_intent(&mock, "Analyze my investment portfolio", &fact_store, None)
         .await
         .expect("analyze_intent should succeed with valid JSON");
 
@@ -196,7 +196,7 @@ async fn test_graceful_degradation_on_llm_failure() {
     let client = FailingLlmClient;
     let fact_store = MockFactStore;
 
-    let result = analyze_intent(&client, "Create a dashboard for monitoring server metrics", &fact_store).await;
+    let result = analyze_intent(&client, "Create a dashboard for monitoring server metrics", &fact_store, None).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -215,7 +215,7 @@ async fn test_graceful_degradation_on_malformed_json() {
     };
     let fact_store = MockFactStore;
 
-    let result = analyze_intent(&mock, "Do something", &fact_store).await;
+    let result = analyze_intent(&mock, "Do something", &fact_store, None).await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -252,7 +252,7 @@ async fn test_simple_request_no_graph() {
     };
     let fact_store = MockFactStore;
 
-    let analysis = analyze_intent(&mock, "What is the weather forecast for this weekend", &fact_store)
+    let analysis = analyze_intent(&mock, "What is the weather forecast for this weekend", &fact_store, None)
         .await
         .expect("should parse simple intent");
 
@@ -269,7 +269,7 @@ async fn test_skills_recommended() {
     };
     let fact_store = MockFactStore;
 
-    let analysis = analyze_intent(&mock, "Analyze my portfolio", &fact_store)
+    let analysis = analyze_intent(&mock, "Analyze my portfolio", &fact_store, None)
         .await
         .expect("should succeed");
 
