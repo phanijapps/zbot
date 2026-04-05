@@ -309,28 +309,27 @@ pub async fn spawn_delegated_agent(
 
     // Delegation recall: inject relevant knowledge for the child agent
     let initial_history = if let Some(recall) = &memory_recall {
-        match recall.recall_with_graph(
+        let ward_id = session_ward_id.as_deref();
+        match recall.recall_for_delegation(
             &request.child_agent_id,
             &request.task,
-            5,
-            session_ward_id.as_deref(),
-            Some(&request.session_id),
+            ward_id,
+            8,
         ).await {
-            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+            Ok(context) if !context.is_empty() => {
                 tracing::info!(
-                    child_agent = %request.child_agent_id,
-                    fact_count = result.facts.len(),
-                    episode_count = result.episodes.len(),
-                    "Injected recalled knowledge for delegated agent"
+                    agent = %request.child_agent_id,
+                    context_len = context.len(),
+                    "Primed subagent with recalled memory context"
                 );
-                vec![ChatMessage::system(result.formatted)]
+                vec![ChatMessage::system(context)]
             }
             Ok(_) => Vec::new(),
             Err(e) => {
                 tracing::warn!(
-                    child_agent = %request.child_agent_id,
+                    agent = %request.child_agent_id,
                     error = %e,
-                    "Delegation recall failed"
+                    "Delegation recall failed, proceeding without priming"
                 );
                 Vec::new()
             }

@@ -565,6 +565,66 @@ impl MemoryRecall {
         Ok(output)
     }
 
+    /// Recall facts for a delegated subagent — corrections, skills, domain context.
+    /// Output formatted as <primed_context> block for system prompt injection.
+    pub async fn recall_for_delegation(
+        &self,
+        agent_id: &str,
+        task: &str,
+        ward_id: Option<&str>,
+        limit: usize,
+    ) -> Result<String, String> {
+        // 1. Recall facts relevant to the task, scoped to ward
+        let facts = self.recall(agent_id, task, limit, ward_id).await?;
+
+        // Also try global recall for cross-agent corrections
+        let global_facts = self.recall("__global__", task, 3, ward_id).await.unwrap_or_default();
+
+        if facts.is_empty() && global_facts.is_empty() {
+            return Ok(String::new());
+        }
+
+        let mut sections: Vec<String> = Vec::new();
+
+        // Corrections first (highest priority) — from both agent-specific and global
+        let mut correction_lines: Vec<String> = Vec::new();
+        for f in facts.iter().chain(global_facts.iter()) {
+            if f.fact.category == "correction" || f.fact.category == "instruction" {
+                let line = format!("- {}", f.fact.content);
+                if !correction_lines.contains(&line) {
+                    correction_lines.push(line);
+                }
+            }
+        }
+        if !correction_lines.is_empty() {
+            sections.push(format!("## Corrections (MUST follow)\n{}", correction_lines.join("\n")));
+        }
+
+        // Strategy/pattern knowledge
+        let strategies: Vec<String> = facts.iter()
+            .filter(|f| f.fact.category == "strategy" || f.fact.category == "pattern")
+            .map(|f| format!("- {}", f.fact.content))
+            .collect();
+        if !strategies.is_empty() {
+            sections.push(format!("## Strategies\n{}", strategies.join("\n")));
+        }
+
+        // Domain knowledge
+        let domain: Vec<String> = facts.iter()
+            .filter(|f| !["correction", "instruction", "strategy", "pattern"].contains(&f.fact.category.as_str()))
+            .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+            .collect();
+        if !domain.is_empty() {
+            sections.push(format!("## Context\n{}", domain.join("\n")));
+        }
+
+        if sections.is_empty() {
+            return Ok(String::new());
+        }
+
+        Ok(format!("<primed_context>\n{}\n</primed_context>", sections.join("\n\n")))
+    }
+
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
