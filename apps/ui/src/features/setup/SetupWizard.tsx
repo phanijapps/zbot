@@ -323,7 +323,13 @@ export function SetupWizard() {
               agentName={state.agentName}
               globalDefault={state.globalDefault}
               agentOverrides={state.agentOverrides}
-              onGlobalChange={(defaults) => dispatch({ type: "SET_GLOBAL_DEFAULT", defaults })}
+              onGlobalChange={(defaults) => {
+                dispatch({ type: "SET_GLOBAL_DEFAULT", defaults });
+                // Keep defaultProviderId in sync — the global default provider IS the default
+                if (defaults.providerId && defaults.providerId !== state.defaultProviderId) {
+                  dispatch({ type: "SET_PROVIDERS", providers: state.providers, defaultId: defaults.providerId });
+                }
+              }}
               onOverrideChange={(overrides) => dispatch({ type: "SET_OVERRIDES", overrides })}
             />
           )}
