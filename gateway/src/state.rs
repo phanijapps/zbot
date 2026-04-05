@@ -501,11 +501,25 @@ impl AppState {
             })
             .unwrap_or_else(|| "default".to_string());
 
+        // Resolve default model from default provider (first model in list)
+        let default_model = self
+            .provider_service
+            .list()
+            .ok()
+            .and_then(|providers| {
+                providers.iter()
+                    .find(|p| p.is_default)
+                    .or_else(|| providers.first())
+                    .and_then(|p| p.default_model().to_string().into())
+            })
+            .unwrap_or_else(|| "gpt-4o".to_string());
+
         // Seed default agents from bundled templates (configs + AGENTS.md instructions)
         let agent_template = gateway_templates::Templates::get("default_agents.json")
             .map(|f| f.data.to_vec());
         if let Err(e) = self.agents.seed_default_agents(
             &default_provider_id,
+            &default_model,
             agent_template.as_deref(),
             |name| {
                 let path = format!("agents/{}.md", name);

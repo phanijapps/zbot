@@ -353,6 +353,7 @@ impl AgentService {
     pub async fn seed_default_agents(
         &self,
         default_provider_id: &str,
+        default_model: &str,
         template_json: Option<&[u8]>,
         instructions_loader: impl Fn(&str) -> Option<String>,
     ) -> Result<(), String> {
@@ -406,7 +407,7 @@ impl AgentService {
                 description: description.to_string(),
                 agent_type: Some(agent_type.to_string()),
                 provider_id: default_provider_id.to_string(),
-                model: "gpt-4o".to_string(), // placeholder — wizard sets the real model
+                model: default_model.to_string(),
                 temperature,
                 max_tokens,
                 thinking_enabled: false,

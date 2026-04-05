@@ -37,25 +37,43 @@ export function AgentsStep({
   onOverrideChange,
 }: AgentsStepProps) {
   const [agents, setAgents] = useState<AgentResponse[]>([]);
+  const [freshProviders, setFreshProviders] = useState<ProviderResponse[]>(providers);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+
+  // Use fresh providers (with models) for dropdowns
+  const activeProviders = freshProviders.length > 0 ? freshProviders : providers;
 
   useEffect(() => {
     const load = async () => {
       try {
         const transport = await getTransport();
-        const result = await transport.listAgents();
-        if (result.success && result.data) {
-          setAgents(result.data);
-          if (!globalDefault.providerId && defaultProviderId) {
-            const provider = providers.find((p) => p.id === defaultProviderId);
-            onGlobalChange({
-              providerId: defaultProviderId,
-              model: provider?.models[0] || "",
-              temperature: 0.7,
-              maxTokens: 4096,
-            });
-          }
+        const [agentsRes, providersRes] = await Promise.all([
+          transport.listAgents(),
+          transport.listProviders(), // Refresh to get enriched models
+        ]);
+
+        if (agentsRes.success && agentsRes.data) {
+          setAgents(agentsRes.data);
+        }
+
+        // Use refreshed providers (enriched with model lists)
+        let resolvedProviders = providers;
+        if (providersRes.success && providersRes.data && providersRes.data.length > 0) {
+          resolvedProviders = providersRes.data;
+          setFreshProviders(resolvedProviders);
+        }
+
+        // Initialize global default if model is empty
+        const pid = globalDefault.providerId || defaultProviderId;
+        const provider = resolvedProviders.find((p) => p.id === pid) || resolvedProviders[0];
+        if (provider && (!globalDefault.model || !globalDefault.providerId)) {
+          onGlobalChange({
+            providerId: provider.id!,
+            model: provider.defaultModel || provider.models[0] || "",
+            temperature: globalDefault.temperature || 0.7,
+            maxTokens: globalDefault.maxTokens || 4096,
+          });
         }
       } finally {
         setIsLoading(false);
@@ -68,7 +86,7 @@ export function AgentsStep({
     return <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>;
   }
 
-  const selectedProvider = providers.find((p) => p.id === globalDefault.providerId);
+  const selectedProvider = activeProviders.find((p) => p.id === globalDefault.providerId);
   const globalModels = selectedProvider?.models || [];
 
   const getEffectiveConfig = (agentId: string) => {
@@ -83,11 +101,11 @@ export function AgentsStep({
   };
 
   const getProviderModels = (providerId: string) => {
-    return providers.find((p) => p.id === providerId)?.models || [];
+    return activeProviders.find((p) => p.id === providerId)?.models || [];
   };
 
   const getProviderName = (providerId: string) => {
-    return providers.find((p) => p.id === providerId)?.name || providerId;
+    return activeProviders.find((p) => p.id === providerId)?.name || providerId;
   };
 
   const handleOverride = (agentId: string, field: string, value: string | number) => {
@@ -125,7 +143,7 @@ export function AgentsStep({
                 onGlobalChange({ ...globalDefault, providerId: pid, model: models[0] || "" });
               }}
             >
-              {providers.map((p) => (
+              {activeProviders.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
