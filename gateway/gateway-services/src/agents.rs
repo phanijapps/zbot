@@ -346,7 +346,16 @@ impl AgentService {
     ///
     /// Accepts agent definitions as JSON (loaded from `default_agents.json` by caller).
     /// Falls back to hardcoded defaults if `template_json` is None.
-    pub async fn seed_default_agents(&self, default_provider_id: &str, template_json: Option<&[u8]>) -> Result<(), String> {
+    /// Seed default subagents if they don't exist.
+    ///
+    /// - `template_json`: Agent definitions from `default_agents.json`
+    /// - `instructions_loader`: Callback to load AGENTS.md from embedded templates by agent name
+    pub async fn seed_default_agents(
+        &self,
+        default_provider_id: &str,
+        template_json: Option<&[u8]>,
+        instructions_loader: impl Fn(&str) -> Option<String>,
+    ) -> Result<(), String> {
         let template_agents: Vec<serde_json::Value> = template_json
             .and_then(|data| serde_json::from_slice(data).ok())
             .unwrap_or_else(|| {
@@ -357,17 +366,10 @@ impl AgentService {
                 ]).as_array().cloned().unwrap_or_default()
             });
 
-        let instructions_map: std::collections::HashMap<&str, &str> = [
-            ("research-agent", RESEARCH_AGENT_INSTRUCTIONS),
-            ("code-agent", CODE_AGENT_INSTRUCTIONS),
-            ("writing-agent", WRITING_AGENT_INSTRUCTIONS),
-        ].into_iter().collect();
-
         for entry in &template_agents {
             let name = entry["name"].as_str().unwrap_or_default();
             if name.is_empty() { continue; }
 
-            // Check if agent already exists
             if self.get(name).await.is_ok() {
                 tracing::debug!("Agent {} already exists, skipping seed", name);
                 continue;
@@ -387,10 +389,15 @@ impl AgentService {
                 .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
                 .unwrap_or_default();
 
-            // Use embedded instructions if available, otherwise generic
-            let instructions = instructions_map.get(name)
-                .copied()
-                .unwrap_or("You are a helpful AI assistant.");
+            // Load instructions: try bundled template first, then hardcoded fallback
+            let instructions = instructions_loader(name)
+                .or_else(|| match name {
+                    "research-agent" => Some(RESEARCH_AGENT_INSTRUCTIONS.to_string()),
+                    "code-agent" => Some(CODE_AGENT_INSTRUCTIONS.to_string()),
+                    "writing-agent" => Some(WRITING_AGENT_INSTRUCTIONS.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "You are a helpful AI assistant.".to_string());
 
             let agent = Agent {
                 id: name.to_string(),
@@ -405,7 +412,7 @@ impl AgentService {
                 thinking_enabled: false,
                 voice_recording_enabled: false,
                 system_instruction: None,
-                instructions: instructions.to_string(),
+                instructions,
                 mcps,
                 skills,
                 middleware: None,

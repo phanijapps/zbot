@@ -501,15 +501,23 @@ impl AppState {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        // Seed default agents from bundled template
+        // Seed default agents from bundled templates (configs + AGENTS.md instructions)
         let agent_template = gateway_templates::Templates::get("default_agents.json")
             .map(|f| f.data.to_vec());
         if let Err(e) = self.agents.seed_default_agents(
             &default_provider_id,
             agent_template.as_deref(),
+            |name| {
+                let path = format!("agents/{}.md", name);
+                gateway_templates::Templates::get(&path)
+                    .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            },
         ).await {
             tracing::warn!("Failed to seed default agents: {}", e);
         }
+
+        // Seed default skills from bundled templates if skills dir is empty
+        self.seed_default_skills();
 
         // Preload skills into cache
         if let Err(e) = self.skills.preload().await {
@@ -542,6 +550,47 @@ impl AppState {
                 tracing::warn!("Failed to discover plugins: {}", e);
             }
         }
+    }
+
+    /// Seed default skills from bundled templates if skills directory is empty.
+    fn seed_default_skills(&self) {
+        let skills_dir = self.paths.vault_dir().join("skills");
+
+        // Only seed if skills dir is empty or doesn't exist
+        let has_skills = skills_dir.exists() && std::fs::read_dir(&skills_dir)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+
+        if has_skills {
+            tracing::debug!("Skills directory not empty, skipping seed");
+            return;
+        }
+
+        tracing::info!("Seeding default skills from bundled templates");
+        std::fs::create_dir_all(&skills_dir).ok();
+
+        // Iterate all embedded files under skills/
+        for path in gateway_templates::Templates::iter() {
+            let path_str = path.as_ref();
+            if !path_str.starts_with("skills/") { continue; }
+
+            // path_str is like "skills/coding/SKILL.md" or "skills/yf-data/scripts/run.py"
+            let dest = self.paths.vault_dir().join(path_str);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            if let Some(file) = gateway_templates::Templates::get(path_str) {
+                if let Err(e) = std::fs::write(&dest, &file.data) {
+                    tracing::warn!("Failed to seed skill file {}: {}", path_str, e);
+                }
+            }
+        }
+
+        let count = std::fs::read_dir(&skills_dir)
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        tracing::info!("Seeded {} default skills", count);
     }
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.
