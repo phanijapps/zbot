@@ -779,10 +779,32 @@ pub fn format_prioritized_recall(
         }
     }
 
-    // Section 3: Relevant Past Experiences (episodes)
-    if !episodes.is_empty() && output.len() < max_chars {
+    // Section 3: Failed episode warnings (highest priority after rules)
+    let failed_episodes: Vec<&SessionEpisode> = episodes.iter()
+        .filter(|ep| ep.outcome == "failed" || ep.outcome == "crashed")
+        .collect();
+    if !failed_episodes.is_empty() && output.len() < max_chars {
+        output.push_str("### Warnings (past failures — avoid these approaches)\n");
+        for ep in &failed_episodes {
+            let strategy = ep.strategy_used.as_deref().unwrap_or("unknown approach");
+            let learnings = ep.key_learnings.as_deref().unwrap_or("");
+            let line = format!(
+                "- FAILED: {} — strategy: {}. {}\n",
+                ep.task_summary, strategy,
+                if learnings.is_empty() { "Avoid this approach.".to_string() } else { learnings.to_string() }
+            );
+            if output.len() + line.len() > max_chars { break; }
+            output.push_str(&line);
+        }
+    }
+
+    // Section 4: Successful past experiences
+    let successful_episodes: Vec<&SessionEpisode> = episodes.iter()
+        .filter(|ep| ep.outcome == "success" || ep.outcome == "partial")
+        .collect();
+    if !successful_episodes.is_empty() && output.len() < max_chars {
         output.push_str("### Past Experiences\n");
-        for ep in episodes {
+        for ep in &successful_episodes {
             let strategy = ep.strategy_used.as_deref().unwrap_or("unknown");
             let tokens = ep.token_cost.unwrap_or(0);
             let date = ep.created_at.split('T').next().unwrap_or(&ep.created_at);
@@ -790,9 +812,7 @@ pub fn format_prioritized_recall(
                 "- {} ({}): {} — {}, {} tokens\n",
                 ep.task_summary, date, ep.outcome.to_uppercase(), strategy, tokens
             );
-            if output.len() + line.len() > max_chars {
-                break;
-            }
+            if output.len() + line.len() > max_chars { break; }
             output.push_str(&line);
         }
     }

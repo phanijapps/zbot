@@ -334,6 +334,8 @@ pub async fn analyze_intent(
             memory_context_len = memory_context.len(),
             "Memory context retrieved for intent analysis"
         );
+    } else {
+        tracing::debug!("No memory context for intent analysis (recall returned empty or unavailable)");
     }
 
     // Step 1: Semantic search for relevant resources

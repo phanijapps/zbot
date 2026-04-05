@@ -281,9 +281,17 @@ impl SessionDistiller {
             response.facts.len(), response.entities.len(), response.relationships.len()
         );
 
-        // 4. Upsert each fact with embedding
+        // 4. Upsert each fact with embedding — dedup against existing facts first
         let now = chrono::Utc::now().to_rfc3339();
         let mut upserted = 0;
+
+        // Load existing facts for content-similarity dedup
+        let existing_facts = self.memory_repo
+            .get_memory_facts(agent_id, None, 500)
+            .unwrap_or_default();
+        let existing_contents: Vec<(String, String)> = existing_facts.iter()
+            .map(|f: &gateway_database::MemoryFact| (f.key.clone(), f.content.clone()))
+            .collect();
 
         for ef in &response.facts {
             let verified_confidence = verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
@@ -291,6 +299,22 @@ impl SessionDistiller {
             // Skip facts with very low grounding
             if verified_confidence < 0.2 {
                 tracing::debug!(key = %ef.key, confidence = verified_confidence, "Skipping ungrounded fact");
+                continue;
+            }
+
+            // Content-similarity dedup: skip if an existing fact has 60%+ word overlap
+            // (even with a different key). Prevents "user holds PTON" appearing 5 times.
+            let new_words: std::collections::HashSet<&str> = ef.content.split_whitespace().collect();
+            let is_duplicate = existing_contents.iter().any(|(existing_key, existing_content)| {
+                if existing_key == &ef.key { return false; } // Same key = upsert, not dedup
+                let existing_words: std::collections::HashSet<&str> = existing_content.split_whitespace().collect();
+                if new_words.is_empty() || existing_words.is_empty() { return false; }
+                let overlap = new_words.intersection(&existing_words).count();
+                let smaller = new_words.len().min(existing_words.len());
+                overlap as f64 / smaller as f64 > 0.6
+            });
+            if is_duplicate {
+                tracing::debug!(key = %ef.key, "Skipping duplicate fact (60%+ content overlap with existing)");
                 continue;
             }
 
