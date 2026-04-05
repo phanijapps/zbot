@@ -309,6 +309,7 @@ pub async fn analyze_intent(
     llm_client: &dyn LlmClient,
     user_message: &str,
     fact_store: &dyn MemoryFactStore,
+    memory_recall: Option<&crate::recall::MemoryRecall>,
 ) -> Result<IntentAnalysis, String> {
     // Fast path: skip LLM for trivial messages
     if is_simple_message(user_message) {
@@ -321,6 +322,20 @@ pub async fn analyze_intent(
 
     tracing::info!("Starting intent analysis for root session");
 
+    // Step 0: Query memory for relevant past context (corrections, strategies, episodes)
+    let memory_context = if let Some(recall) = memory_recall {
+        recall.recall_for_intent(user_message, 5).await.unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    if !memory_context.is_empty() {
+        tracing::info!(
+            memory_context_len = memory_context.len(),
+            "Memory context retrieved for intent analysis"
+        );
+    }
+
     // Step 1: Semantic search for relevant resources
     let results = search_resources(fact_store, user_message).await;
 
@@ -331,15 +346,24 @@ pub async fn analyze_intent(
         "Semantic search complete"
     );
 
-    // Step 3: Build LLM prompt with only relevant resources
+    // Step 2: Build LLM prompt with only relevant resources
+    let user_template = format_user_template(
+        user_message,
+        &results.skills,
+        &results.agents,
+        &results.wards,
+    );
+
+    // Prepend memory context to user message if available
+    let user_content = if memory_context.is_empty() {
+        user_template
+    } else {
+        format!("{}\n\n{}", memory_context, user_template)
+    };
+
     let messages = vec![
         ChatMessage::system(INTENT_ANALYSIS_PROMPT.to_string()),
-        ChatMessage::user(format_user_template(
-            user_message,
-            &results.skills,
-            &results.agents,
-            &results.wards,
-        )),
+        ChatMessage::user(user_content),
     ];
 
     tracing::info!(
@@ -852,7 +876,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Tell me about the weather forecast for tomorrow", &fact_store).await;
+        let result = analyze_intent(&mock, "Tell me about the weather forecast for tomorrow", &fact_store, None).await;
         let analysis = result.expect("should parse simple intent");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.execution_strategy.approach, "simple");
@@ -885,7 +909,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Write code", &fact_store).await;
+        let result = analyze_intent(&mock, "Write code", &fact_store, None).await;
         let analysis = result.expect("should parse graph intent");
         assert_eq!(analysis.primary_intent, "code_generation");
         assert_eq!(analysis.recommended_skills, vec!["code-gen"]);
@@ -905,7 +929,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Build me a web scraper for news articles", &fact_store).await;
+        let result = analyze_intent(&mock, "Build me a web scraper for news articles", &fact_store, None).await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -935,7 +959,7 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Analyze this dataset and create visualizations", &fact_store).await;
+        let result = analyze_intent(&mock, "Analyze this dataset and create visualizations", &fact_store, None).await;
         let analysis = result.expect("should strip fences and parse");
         assert_eq!(analysis.primary_intent, "greeting");
     }

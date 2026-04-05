@@ -1319,6 +1319,7 @@ impl ExecutionRunner {
                                 &retrying,
                                 msg,
                                 fs.as_ref(),
+                                self.memory_recall.as_ref().map(|r| r.as_ref()),
                             )
                             .await
                             {

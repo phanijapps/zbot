@@ -439,6 +439,132 @@ impl MemoryRecall {
         })
     }
 
+    /// Recall memory context specifically for intent analysis.
+    ///
+    /// Returns a formatted `<memory_context>` string containing corrections,
+    /// proven strategies, domain knowledge, and similar past sessions. This is
+    /// injected into the intent analysis LLM call so the planner benefits from
+    /// prior experience.
+    ///
+    /// Uses `"__global__"` as agent_id for cross-agent recall since intent
+    /// analysis runs at root level before any specific agent is selected.
+    pub async fn recall_for_intent(
+        &self,
+        user_message: &str,
+        limit: usize,
+    ) -> Result<String, String> {
+        const GLOBAL_AGENT: &str = "__global__";
+
+        // 1. Run hybrid search for top facts relevant to the user message
+        let facts = self.recall(GLOBAL_AGENT, user_message, limit, None).await?;
+
+        if facts.is_empty() {
+            tracing::debug!("recall_for_intent: no facts found");
+            return Ok(String::new());
+        }
+
+        // 2. Group facts by category
+        let mut corrections: Vec<&ScoredFact> = Vec::new();
+        let mut strategies: Vec<&ScoredFact> = Vec::new();
+        let mut domain: Vec<&ScoredFact> = Vec::new();
+
+        for sf in &facts {
+            match sf.fact.category.as_str() {
+                "correction" | "instruction" => corrections.push(sf),
+                "strategy" | "user" => strategies.push(sf),
+                _ => domain.push(sf),
+            }
+        }
+
+        let mut output = String::from("<memory_context>\n");
+
+        // Corrections — strongest language, must follow
+        if !corrections.is_empty() {
+            output.push_str("## Corrections (MUST follow)\n");
+            for sf in &corrections {
+                output.push_str(&format!("- {}\n", sf.fact.content));
+            }
+            output.push('\n');
+        }
+
+        // Proven strategies
+        if !strategies.is_empty() {
+            output.push_str("## Proven Strategies\n");
+            for sf in &strategies {
+                output.push_str(&format!("- {}\n", sf.fact.content));
+            }
+            output.push('\n');
+        }
+
+        // Domain knowledge
+        if !domain.is_empty() {
+            output.push_str("## Domain Knowledge\n");
+            for sf in &domain {
+                output.push_str(&format!("- {}\n", sf.fact.content));
+            }
+            output.push('\n');
+        }
+
+        // 3. Optionally query graph for related entities (1-hop neighbors)
+        if let Some(ref graph_service) = self.graph_service {
+            let entity_names = extract_entity_names_from_facts(&facts);
+            if !entity_names.is_empty() {
+                match get_graph_context_for_entities(graph_service, GLOBAL_AGENT, &entity_names).await {
+                    Ok(Some(ctx)) if !ctx.entities.is_empty() => {
+                        output.push_str("## Related Entities\n");
+                        for ec in &ctx.entities {
+                            let mut line = format!("- {} ({})", ec.entity.name, ec.entity.entity_type.as_str());
+                            if !ec.outgoing.is_empty() {
+                                let rels: Vec<String> = ec.outgoing.iter()
+                                    .map(|(rel, target)| format!("{} -> {}", rel.relationship_type.as_str(), target.name))
+                                    .collect();
+                                line.push_str(&format!(": {}", rels.join(", ")));
+                            }
+                            output.push_str(&format!("{}\n", line));
+                        }
+                        output.push('\n');
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::debug!("recall_for_intent graph lookup skipped: {}", e),
+                }
+            }
+        }
+
+        // 4. Optionally search episodes for similar past sessions
+        if let Some(ref episode_repo) = self.episode_repo {
+            let query_embedding = self.embed_query(user_message).await;
+            if let Some(ref emb) = query_embedding {
+                match episode_repo.search_by_similarity(GLOBAL_AGENT, emb, 0.5, 3) {
+                    Ok(scored_episodes) if !scored_episodes.is_empty() => {
+                        output.push_str("## Similar Past Sessions\n");
+                        for (ep, _score) in &scored_episodes {
+                            let strategy = ep.strategy_used.as_deref().unwrap_or("unknown");
+                            output.push_str(&format!(
+                                "- \"{}\" -> {}, strategy: {}\n",
+                                ep.task_summary, ep.outcome, strategy
+                            ));
+                        }
+                        output.push('\n');
+                    }
+                    Ok(_) => {}
+                    Err(e) => tracing::debug!("recall_for_intent episode search skipped: {}", e),
+                }
+            }
+        }
+
+        output.push_str("</memory_context>");
+
+        tracing::info!(
+            facts_count = facts.len(),
+            corrections = corrections.len(),
+            strategies = strategies.len(),
+            domain_facts = domain.len(),
+            "recall_for_intent complete"
+        );
+
+        Ok(output)
+    }
+
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
