@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { Loader2 } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { ProviderResponse, AgentResponse } from "@/services/transport";
@@ -37,49 +37,34 @@ export function AgentsStep({
   onOverrideChange,
 }: AgentsStepProps) {
   const [agents, setAgents] = useState<AgentResponse[]>([]);
-  const [freshProviders, setFreshProviders] = useState<ProviderResponse[]>(providers);
+  const [loadedProviders, setLoadedProviders] = useState<ProviderResponse[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedAgent, setExpandedAgent] = useState<string | null>(null);
+  const initDone = useRef(false);
 
-  // Use fresh providers (with models) for dropdowns
-  const activeProviders = freshProviders.length > 0 ? freshProviders : providers;
+  // The providers we actually use for rendering — loaded from API, fallback to props
+  const allProviders = loadedProviders.length > 0 ? loadedProviders : providers;
 
+  // Derive models for the currently selected provider
+  const selectedProvider = allProviders.find((p) => p.id === globalDefault.providerId);
+  const globalModels = selectedProvider?.models || [];
+
+  // Load agents + fresh providers on mount
   useEffect(() => {
     const load = async () => {
       try {
         const transport = await getTransport();
         const [agentsRes, providersRes] = await Promise.all([
           transport.listAgents(),
-          transport.listProviders(), // Refresh to get enriched models
+          transport.listProviders(),
         ]);
 
         if (agentsRes.success && agentsRes.data) {
           setAgents(agentsRes.data);
         }
 
-        // Use refreshed providers (enriched with model lists)
-        let resolvedProviders = providers;
         if (providersRes.success && providersRes.data && providersRes.data.length > 0) {
-          resolvedProviders = providersRes.data;
-          setFreshProviders(resolvedProviders);
-        }
-
-        // Ensure global default has a valid provider and model
-        if (resolvedProviders.length > 0) {
-          const pid = globalDefault.providerId || defaultProviderId;
-          const matchedProvider = resolvedProviders.find((p) => p.id === pid);
-          const provider = matchedProvider || resolvedProviders[0];
-          const providerModels = provider.models || [];
-          const currentModelValid = globalDefault.model && providerModels.includes(globalDefault.model);
-
-          if (!matchedProvider || !globalDefault.providerId || !currentModelValid) {
-            onGlobalChange({
-              providerId: provider.id!,
-              model: currentModelValid ? globalDefault.model : (provider.defaultModel || providerModels[0] || ""),
-              temperature: globalDefault.temperature || 0.7,
-              maxTokens: globalDefault.maxTokens || 4096,
-            });
-          }
+          setLoadedProviders(providersRes.data);
         }
       } finally {
         setIsLoading(false);
@@ -88,19 +73,46 @@ export function AgentsStep({
     load();
   }, []);
 
-  const selectedProvider = activeProviders.find((p) => p.id === globalDefault.providerId);
-  const globalModels = selectedProvider?.models || [];
-
-  // Sync: if current model isn't in the provider's model list, select first available
+  // Once loading is done AND we have providers, initialize globalDefault if needed
   useEffect(() => {
-    if (!isLoading && globalModels.length > 0 && !globalModels.includes(globalDefault.model)) {
+    if (isLoading || initDone.current || allProviders.length === 0) return;
+    initDone.current = true;
+
+    const pid = globalDefault.providerId || defaultProviderId;
+    const matched = allProviders.find((p) => p.id === pid);
+    const provider = matched || allProviders[0];
+    const models = provider?.models || [];
+    const modelValid = globalDefault.model && models.includes(globalDefault.model);
+
+    if (!matched || !modelValid) {
+      onGlobalChange({
+        providerId: provider.id!,
+        model: modelValid ? globalDefault.model : (provider.defaultModel || models[0] || ""),
+        temperature: globalDefault.temperature || 0.7,
+        maxTokens: globalDefault.maxTokens || 4096,
+      });
+    }
+  }, [isLoading, allProviders.length]);
+
+  // When user changes provider in the dropdown, sync model to first of that provider
+  useEffect(() => {
+    if (isLoading || !initDone.current) return;
+    if (globalModels.length > 0 && globalDefault.model && !globalModels.includes(globalDefault.model)) {
       onGlobalChange({ ...globalDefault, model: globalModels[0] });
     }
-  }, [isLoading, globalDefault.providerId, globalModels.length]);
+  }, [globalDefault.providerId]);
 
   if (isLoading) {
     return <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>;
   }
+
+  const getProviderModels = (providerId: string) => {
+    return allProviders.find((p) => p.id === providerId)?.models || [];
+  };
+
+  const getProviderName = (providerId: string) => {
+    return allProviders.find((p) => p.id === providerId)?.name || providerId;
+  };
 
   const getEffectiveConfig = (agentId: string) => {
     const override = agentOverrides[agentId];
@@ -111,14 +123,6 @@ export function AgentsStep({
       temperature: override.temperature ?? globalDefault.temperature,
       maxTokens: override.maxTokens ?? globalDefault.maxTokens,
     };
-  };
-
-  const getProviderModels = (providerId: string) => {
-    return activeProviders.find((p) => p.id === providerId)?.models || [];
-  };
-
-  const getProviderName = (providerId: string) => {
-    return activeProviders.find((p) => p.id === providerId)?.name || providerId;
   };
 
   const handleOverride = (agentId: string, field: string, value: string | number) => {
@@ -156,10 +160,10 @@ export function AgentsStep({
                 onGlobalChange({ ...globalDefault, providerId: pid, model: models[0] || "" });
               }}
             >
-              {activeProviders.length === 0 && (
+              {allProviders.length === 0 && (
                 <option value="">No providers configured</option>
               )}
-              {activeProviders.map((p) => (
+              {allProviders.map((p) => (
                 <option key={p.id} value={p.id}>{p.name}</option>
               ))}
             </select>
@@ -246,7 +250,7 @@ export function AgentsStep({
                       value={agentOverrides[agent.id]?.providerId || globalDefault.providerId}
                       onChange={(e) => handleOverride(agent.id, "providerId", e.target.value)}
                     >
-                      {providers.map((p) => (
+                      {allProviders.map((p) => (
                         <option key={p.id} value={p.id}>{p.name}</option>
                       ))}
                     </select>
