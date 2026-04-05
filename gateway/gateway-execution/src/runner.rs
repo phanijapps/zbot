@@ -1795,21 +1795,24 @@ async fn invoke_continuation(
         }
     }
 
-    // Build a focused continuation message that tells root exactly what to do next.
-    // If specs/plan.md exists in the ward, read it and tell root which step is next.
+    // Build a focused continuation message with the plan injected.
+    // Search specs/**/plan.md (planner saves to specs/{domain_task}/plan.md).
     let continuation_message = {
         let plan_hint = session_ward_id.as_ref().and_then(|ward_id| {
-            let plan_path = paths.vault_dir().join("wards").join(ward_id).join("specs").join("plan.md");
-            std::fs::read_to_string(&plan_path).ok()
+            let specs_dir = paths.vault_dir().join("wards").join(ward_id).join("specs");
+            find_latest_plan(&specs_dir)
         });
 
         if let Some(plan) = plan_hint {
             format!(
-                "[Delegation completed. Here is the current plan — find the next pending step and delegate it immediately. \
-                 Do ONE action: delegate the next step.]\n\n{}", plan
+                "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
+                 DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
+                 Just find the next step that hasn't been done and delegate it NOW.\n\
+                 One action only: delegate_to_agent.]\n\n{}", plan
             )
         } else {
-            "[Delegation completed. Continue executing your plan — delegate the next step immediately.]".to_string()
+            "[Delegation completed. Delegate the next step in your plan immediately. \
+             Do NOT read files or analyze — just delegate.]".to_string()
         }
     };
 
@@ -2080,6 +2083,54 @@ async fn cancel_session_delegations(
 // ============================================================================
 
 /// Auto-update ward AGENTS.md by scanning the directory structure.
+/// Find the most recent plan.md under a specs/ directory.
+/// Planner saves to specs/{domain_task}/plan.md — we glob for it.
+fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
+    if !specs_dir.exists() {
+        return None;
+    }
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+
+    // Search specs/*/plan.md and specs/plan.md
+    if let Ok(entries) = std::fs::read_dir(specs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Direct specs/plan.md
+            if path.is_file() && path.file_name().map(|f| f == "plan.md").unwrap_or(false) {
+                if let Ok(meta) = path.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                            newest = Some((modified, path));
+                        }
+                    }
+                }
+            } else if path.is_dir() {
+            // specs/{subdir}/plan.md
+                let plan_path = path.join("plan.md");
+                if plan_path.exists() {
+                    if let Ok(meta) = plan_path.metadata() {
+                        if let Ok(modified) = meta.modified() {
+                            if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                                newest = Some((modified, plan_path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((_, path)) = newest {
+        let content = std::fs::read_to_string(&path).ok()?;
+        if content.trim().is_empty() { return None; }
+        tracing::info!(path = %path.display(), "Injecting plan into continuation message");
+        Some(content)
+    } else {
+        None
+    }
+}
+
 /// Called by the system after delegations complete, before continuation.
 /// Extract Python function signatures from a .py file.
 /// Returns lines like `def fetch_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame`
