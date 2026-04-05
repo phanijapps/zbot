@@ -66,35 +66,40 @@ Connect to external tools via Model Context Protocol servers. Configure in `mcps
 }
 ```
 
-### 6. Persistent Memory & Learning
+### 6. Memory Brain — Persistent Intelligence
 
-Hybrid memory system combining key-value storage, semantic search, and automatic session distillation.
+The memory layer is z-Bot's cognitive system. Every session teaches it something. Agents learn from experience, avoid past mistakes, and reuse existing work. See [components/memory-layer/overview.md](components/memory-layer/overview.md) for full architecture.
 
-**Manual Memory** (key-value store):
-```
-memory set user_name "Alice"           # agent-scoped
-memory get user_name
-memory search preferences
-memory set scope=ward key=purpose ...  # ward-scoped
-```
+**Five Memory Loops** (all active):
+1. **System recall** — facts, episodes, graph entities injected as system message on every first message
+2. **Intent + memory** — corrections and strategies enriches intent analysis before planning
+3. **Subagent priming** — corrections, skills, ward context injected when spawning subagents
+4. **Mid-session refresh** — new relevant facts injected every N turns during long sessions
+5. **Post-session distillation** — LLM extracts facts, entities, relationships, episodes with verification
 
-**Structured Facts** (automatic + manual):
-```
-memory save_fact category=preference key=user.language content="User prefers Rust"
-memory recall query="language preferences" limit=5
-memory graph query="zbot"              # knowledge graph entities
-```
+**Agent Tools**: All agents (root + subagents) have WardTool, MemoryTool, GrepTool — they can enter wards, recall memory, and search code.
 
-**Tiers**: Global shared → Agent → Ward → Session (ephemeral)
+**Recall Output** (priority order):
+- Rules (corrections — ALWAYS followed)
+- Warnings (past failures — avoid these)
+- Preferences & instructions
+- Past experiences (with outcome + strategy)
+- Domain knowledge
 
-**Memory Evolution Features**:
-- **Hybrid Search**: FTS5 BM25 keyword search (30%) + cosine vector similarity (70%) with confidence, recency, and mention-count boosting
-- **Embedding Providers**: Configurable backends — local ONNX (fastembed, default, zero cost), OpenAI-compatible APIs (Ollama, OpenAI, Voyage)
-- **Embedding Cache**: SHA-256 hash-based dedup prevents re-embedding unchanged content
-- **Session Distillation**: After sessions complete, an LLM automatically extracts durable facts (preferences, decisions, patterns, entities, instructions, corrections) and stores them with embeddings
-- **Smart Recall**: At session start, relevant facts are retrieved via hybrid search and injected as context
-- **Pre-Compaction Flush**: Before context window trimming, the agent gets a warning turn to save important facts
-- **Knowledge Graph**: Distillation extracts entities and relationships (person, project, tool, concept, file) into a graph store for structured queries
+**Accuracy Layer**:
+- Fact verification: distilled facts grounded against tool outputs (confidence scaled by match ratio)
+- Fact dedup: 60% word overlap check prevents near-duplicates under different keys
+- Entity normalization: file basename matching, alias tracking
+- Relationship dedup: unique index on (source, target, type)
+
+**Policies**: High-priority rules injected as memory facts (correction category, confidence 1.0, global scope). Surface at top of every recall. Currently via SQL; UI planned.
+
+**Ward Knowledge** (auto-generated after each session):
+- `ward.md` — curated rules only (max 5 corrections, 3 strategies, 2 warnings, deduped)
+- `core_docs.md` — all code files with function signatures (scans entire ward recursively)
+- `structure.md` — directory tree
+
+**Storage**: SQLite (memory_facts, episodes, recall_log, embeddings) + Knowledge Graph (entities, relationships)
 - **Fact Dedup**: UNIQUE constraint on (agent_id, scope, key) — repeated mentions update content and bump mention_count
 
 ### 7. Code Wards

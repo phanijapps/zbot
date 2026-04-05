@@ -374,6 +374,57 @@ Step 1 offers quick-pick personalities: **Brahmi**, **JohnnyLever**, **z-Bot**, 
 
 Wizard renders outside the app shell (no sidebar). State managed via `useReducer` with `HYDRATE` action for pre-filling on re-run. Each step is a standalone component receiving wizard state + onChange callback. CSS uses BEM classes under `.setup-wizard`, `.step-indicator`, `.name-preset`, `.provider-add-*`, `.skill-category`, `.mcp-*`, `.agent-*`, `.review-*`.
 
+## Memory Brain
+
+The memory layer is z-Bot's cognitive system. Full documentation: [components/memory-layer/overview.md](components/memory-layer/overview.md). Backlog: [components/memory-layer/backlog.md](components/memory-layer/backlog.md).
+
+### Five Active Memory Loops
+
+| Loop | When | What | Files |
+|------|------|------|-------|
+| System recall | First message | `recall_with_graph()` → facts + episodes + graph → system message | `runner.rs:642` |
+| Intent + memory | Before intent LLM | `recall_for_intent()` → corrections, strategies, episodes | `intent_analysis.rs:326` |
+| Subagent priming | Delegation spawn | `recall_for_delegation()` → corrections, skills, ward files | `spawn.rs:311` |
+| Mid-session | Every N turns | RecallHook → new relevant facts injected | `executor.rs` |
+| Distillation | Session end | LLM extracts facts (verified), entities (normalized), relationships (deduped), episodes | `distillation.rs` |
+
+### Subagent Tool Registry
+
+All subagents (planner, code-agent, research-agent, etc.) now have:
+
+| Tool | Purpose |
+|------|---------|
+| ShellTool | Run commands, read files |
+| WriteFileTool | Create/overwrite files |
+| EditFileTool | Find-and-replace edits |
+| LoadSkillTool | Load skill instructions |
+| **WardTool** | Enter ward → AGENTS.md context + ward-entry recall |
+| **MemoryTool** | recall/save_fact → access the brain |
+| **GrepTool** | Search files efficiently |
+| RespondTool | Return result to parent |
+
+### Recall Scoring
+
+```
+score = (0.7 × vector + 0.3 × BM25) × category_weight × ward_affinity × temporal_decay × mention_boost × contradiction_penalty × predictive_boost
+```
+
+FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax).
+
+### Accuracy Layer
+
+- **Fact verification**: grounded against tool outputs (confidence scaled by match ratio)
+- **Fact dedup**: 60% word overlap check in distillation prevents near-duplicates
+- **Entity normalization**: file basename matching, alias tracking in properties
+- **Relationship dedup**: unique index on (source_entity_id, target_entity_id, relationship_type)
+- **Failed episode warnings**: surface in recall as "Warnings — avoid these approaches" before successes
+
+### Ward Knowledge (auto-generated)
+
+- `ward.md` — curated: max 5 corrections, 3 strategies, 2 warnings (deduped by word overlap)
+- `core_docs.md` — all `.py/.js/.ts/.rs` files with function signatures (recursive scan)
+- `structure.md` — directory tree
+
 ## Crate Structure
 
 ### Layer Overview

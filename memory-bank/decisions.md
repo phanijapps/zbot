@@ -339,3 +339,50 @@ Distilled patterns from building z-Bot:
 **Problem**: 28 skills with scripts, assets, and ONNX models are too large for binary embedding.
 **Decision**: Skills remain disk-only. Wizard shows "No skills installed" on fresh install. Users install skills separately.
 **Rationale**: Skills have external dependencies (npm packages, Python scripts, browser binaries). Bundling would bloat the binary and create a maintenance burden. The skill ecosystem is designed for independent installation.
+
+## Memory Brain Decisions
+
+### FTS5 Query Sanitization
+**Problem**: Raw user messages passed to FTS5 MATCH contain commas, parens, dashes that break FTS5 syntax. Multi-word queries used implicit AND — requiring ALL terms in one fact (never matches).
+**Decision**: `sanitize_fts_query()` extracts alphanumeric words (>2 chars), filters stopwords, joins with OR.
+**Rationale**: "portfolio risk PTON NVDA" → "portfolio OR risk OR PTON OR NVDA" matches any fact with any term. This was THE fix that unblocked the entire memory brain.
+
+### Subagents Get WardTool + MemoryTool + GrepTool
+**Problem**: Subagents (planner, code-agent, etc.) had only Shell, WriteFile, EditFile, LoadSkill, Respond. They couldn't enter wards, recall memory, or search code efficiently. Planner was planning blind.
+**Decision**: Add WardTool, MemoryTool, GrepTool to ALL subagents.
+**Rationale**: Every subagent benefits from ward context (AGENTS.md, core_docs), memory (corrections, strategies), and grep (find functions without cat-ing files). Read-only awareness tools have no downside.
+
+### Fact Dedup by Content Similarity
+**Problem**: Distillation creates near-duplicate facts under different keys ("user.portfolio.holdings" vs "domain.finance.portfolio_holdings"). Same content appears 3-5 times.
+**Decision**: Before upserting, check if any existing fact has 60%+ word overlap with the new fact. Skip if duplicate.
+**Rationale**: Better to miss a slightly-different fact than to waste recall slots on 5 copies of the same information.
+
+### Failed Episodes as Warnings
+**Problem**: 43 episodes, many failed/crashed. Agents repeated failed strategies because failures weren't surfaced.
+**Decision**: Recall now has a "Warnings (past failures)" section that surfaces failed/crashed episodes BEFORE successful experiences.
+**Rationale**: Knowing what NOT to do is as important as knowing what worked. Failed strategies with key_learnings prevent the same mistake twice.
+
+### Ward.md Curated, Not Dumped
+**Problem**: ward.md was auto-dumped with all distillation facts — 40+ items, 6x duplicates, 3KB noise.
+**Decision**: Max 5 corrections, 3 strategies, 2 warnings. Deduped by 60% word overlap. No domain knowledge dump.
+**Rationale**: ward.md is what the agent reads FIRST — it must be concise and actionable. Domain knowledge stays in memory_facts (queryable via recall).
+
+### core_docs.md Scans All Code Files
+**Problem**: core_docs.md only scanned `core/` directory. 80% of code (analysis.py, task-specific scripts) was invisible.
+**Decision**: Recursive scan of ALL `.py/.js/.ts/.rs` files in the ward, excluding node_modules, .venv, __pycache__.
+**Rationale**: Agents need to know what code exists ANYWHERE in the ward, not just in a conventional `core/` directory.
+
+### Policies as Memory Facts
+**Problem**: Need to inject persistent rules (e.g., "always use research-agent for factual data") without prompt changes.
+**Decision**: Policies are memory facts with category=correction, confidence=1.0, ward_id=__global__, mention_count=5.
+**Rationale**: Corrections have 1.5x recall weight, highest priority. Global scope means they apply everywhere. High mention_count ensures high ranking. No new tables, no code changes — just a fact with the right metadata.
+
+### Stream Decode Fallback
+**Problem**: Z.AI/GLM returns malformed HTTP chunks during streaming, causing "error decoding response body" crashes.
+**Decision**: On stream error before any content emitted, silently retry as non-streaming (single JSON). On stream error after content emitted, break gracefully and return partial response.
+**Rationale**: Non-streaming is more reliable (single JSON, no SSE parsing). Automatic fallback is transparent to the executor.
+
+### Z.AI Rate Limit Detection
+**Problem**: Z.AI returns 500 with code 1234 for rate limits (not 429). Our retry logic didn't recognize it.
+**Decision**: RetryingLlmClient treats error codes 1234 (network error), 1302 (rate limit), 1303 (frequency limit) as retryable. Z.AI concurrent limit set to 1 in provider config.
+**Rationale**: GLM Coding Plan has a documented concurrent request limit of 1. Two simultaneous requests = instant 500.

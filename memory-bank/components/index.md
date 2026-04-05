@@ -13,6 +13,13 @@ Quick reference for all system components. Check this before planning changes.
 | — Error Handling | [intent-analysis/error-handling.md](intent-analysis/error-handling.md) | Truncation repair, fallback events, degradation hierarchy |
 | — Files | [intent-analysis/files.md](intent-analysis/files.md) | Every file with line numbers |
 
+## Memory & Intelligence
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| Memory Layer | [memory-layer/overview.md](memory-layer/overview.md) | The brain: facts, embeddings, knowledge graph, recall, distillation, ward knowledge sync. Stores/retrieves/applies knowledge across sessions. |
+| — Backlog | [memory-layer/backlog.md](memory-layer/backlog.md) | Planned: policies UI, graph query tool, pruning, cross-ward synthesis, dashboard |
+
 ## Adding New Components
 
 When adding a new component to `memory-bank/components/`:
