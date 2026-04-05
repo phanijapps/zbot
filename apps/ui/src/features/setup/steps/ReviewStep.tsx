@@ -70,12 +70,13 @@ export function ReviewStep({
         throw new Error("Failed to load agents");
       }
       const agents = agentsResult.data;
-      const rootAgent = agents.find((a) => a.name === "root" || a.displayName === originalAgentName);
+      const rootAgent = agents.find((a) => a.name === "root" || a.id === "root" || a.displayName === originalAgentName);
 
-      // 2. Rename root agent — only if name changed
+      // 2. Set root agent display name — only if name changed
+      // IMPORTANT: only update displayName, never change name/id from "root"
+      // The entire system (memory, recall, delegation) keys on agent_id = "root"
       if (rootAgent && agentName !== originalAgentName) {
         await transport.updateAgent(rootAgent.id, {
-          name: agentName.toLowerCase().replace(/\s+/g, "-"),
           displayName: agentName,
         });
       }

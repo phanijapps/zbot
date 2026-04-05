@@ -139,7 +139,7 @@ export function AgentsStep({
     setExpandedAgent(null);
   };
 
-  const rootAgent = agents.find((a) => a.name === "root");
+  const rootAgent = agents.find((a) => a.name === "root" || a.id === "root");
   const specialists = agents.filter((a) => a !== rootAgent).sort((a, b) => a.name.localeCompare(b.name));
   const sortedAgents = rootAgent ? [rootAgent, ...specialists] : specialists;
 

@@ -655,8 +655,26 @@ impl ExecutionRunner {
                         "Recalled memory context for first message"
                     );
                 }
-                Ok(_) => {}
-                Err(e) => tracing::warn!("First-message recall failed: {}", e),
+                Ok(_) => {
+                    tracing::debug!("First-message recall returned empty — no relevant facts/episodes");
+                }
+                Err(e) => {
+                    tracing::warn!("First-message graph recall failed: {}, falling back to basic recall", e);
+                    // Fallback: try basic recall without graph
+                    match recall.recall(&config.agent_id, &message, 5, setup.ward_id.as_deref()).await {
+                        Ok(facts) if !facts.is_empty() => {
+                            let formatted: Vec<String> = facts.iter()
+                                .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                                .collect();
+                            history.insert(0, ChatMessage::system(
+                                format!("## Recalled Context\n{}", formatted.join("\n"))
+                            ));
+                            tracing::info!(facts = facts.len(), "Fallback recall injected facts");
+                        }
+                        Ok(_) => {}
+                        Err(e2) => tracing::warn!("Fallback recall also failed: {}", e2),
+                    }
+                }
             }
         }
 
