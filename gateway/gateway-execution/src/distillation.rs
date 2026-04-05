@@ -97,6 +97,53 @@ fn default_confidence() -> f64 {
     0.8
 }
 
+/// Verify a distilled fact against the session transcript's tool outputs.
+/// Grounded facts keep confidence; ungrounded get reduced; contradicted get discarded.
+fn verify_fact_confidence(
+    fact_content: &str,
+    fact_confidence: f64,
+    tool_outputs: &[String],
+) -> f64 {
+    // Extract key terms from the fact (words > 3 chars, skip stopwords)
+    let stopwords = ["that", "this", "with", "from", "have", "been", "were", "will",
+                     "should", "would", "could", "their", "there", "about", "which",
+                     "when", "into", "also", "than", "then", "them", "very", "just"];
+    let key_terms: Vec<&str> = fact_content.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| w.len() > 3)
+        .filter(|w| !stopwords.contains(&w.to_lowercase().as_str()))
+        .collect();
+
+    if key_terms.is_empty() {
+        return fact_confidence * 0.6;
+    }
+
+    // Check how many key terms appear in tool outputs
+    let mut matches = 0;
+    for term in &key_terms {
+        let term_lower = term.to_lowercase();
+        for output in tool_outputs {
+            if output.to_lowercase().contains(&term_lower) {
+                matches += 1;
+                break;
+            }
+        }
+    }
+
+    let match_ratio = matches as f64 / key_terms.len() as f64;
+
+    if match_ratio >= 0.5 {
+        // Well-grounded in tool outputs
+        fact_confidence
+    } else if match_ratio > 0.0 {
+        // Partially grounded
+        fact_confidence * 0.8
+    } else {
+        // Not grounded — reduce confidence significantly
+        fact_confidence * 0.5
+    }
+}
+
 /// Minimum number of messages in a session to trigger distillation.
 /// Set low to capture learnings from even short sessions.
 const MIN_MESSAGES_FOR_DISTILLATION: usize = 4;
@@ -196,6 +243,12 @@ impl SessionDistiller {
         // Insert optimistic-failure record before attempting distillation
         self.record_pending(session_id);
 
+        // Collect tool outputs from transcript for fact verification
+        let tool_outputs: Vec<String> = messages.iter()
+            .filter(|m| m.role == "tool")
+            .map(|m| m.content.clone())
+            .collect();
+
         // 2. Build transcript for the LLM
         let transcript = build_transcript(&messages);
 
@@ -233,6 +286,14 @@ impl SessionDistiller {
         let mut upserted = 0;
 
         for ef in &response.facts {
+            let verified_confidence = verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
+
+            // Skip facts with very low grounding
+            if verified_confidence < 0.2 {
+                tracing::debug!(key = %ef.key, confidence = verified_confidence, "Skipping ungrounded fact");
+                continue;
+            }
+
             let fact_id = format!("fact-{}", uuid::Uuid::new_v4());
 
             // Embed the fact content
@@ -246,7 +307,7 @@ impl SessionDistiller {
                 category: ef.category.clone(),
                 key: ef.key.clone(),
                 content: ef.content.clone(),
-                confidence: ef.confidence,
+                confidence: verified_confidence,
                 mention_count: 1,
                 source_summary: Some(format!("Distilled from session {}", session_id)),
                 embedding,
