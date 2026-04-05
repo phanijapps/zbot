@@ -151,19 +151,12 @@ async fn test_provider(
             // Persist verified status + merge discovered models back to providers.json
             if result.success {
                 provider.verified = Some(true);
-                // Merge discovered models: keep existing, add new ones not already listed
+                // Only populate models if the provider had none (empty list).
+                // If the provider already has a curated model list (from preset),
+                // keep it — don't pollute with every model the API discovers.
                 if let Some(ref discovered) = result.models {
-                    if !discovered.is_empty() {
-                        if provider.models.is_empty() {
-                            provider.models = discovered.clone();
-                        } else {
-                            let existing: std::collections::HashSet<String> = provider.models.iter().cloned().collect();
-                            let new_models: Vec<String> = discovered.iter()
-                                .filter(|m| !existing.contains(*m))
-                                .cloned()
-                                .collect();
-                            provider.models.extend(new_models);
-                        }
+                    if !discovered.is_empty() && provider.models.is_empty() {
+                        provider.models = discovered.clone();
                     }
                 }
                 // Enrich with registry capabilities
