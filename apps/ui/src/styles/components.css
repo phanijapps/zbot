@@ -145,9 +145,10 @@
 }
 
 .nav-link--active {
-  color: var(--sidebar-primary);
+  color: var(--sidebar-foreground);
   background-color: var(--primary-muted);
-  border-left: 2px solid var(--sidebar-primary);
+  border-left: 2px solid var(--primary);
+  font-weight: 500;
 }
 
 .nav-link__icon {
