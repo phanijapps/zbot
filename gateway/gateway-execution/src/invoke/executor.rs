@@ -249,20 +249,13 @@ impl ExecutorBuilder {
             Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
 
         // Wrap with shared rate limiter if configured (limits concurrent calls and RPM per provider)
-        let rate_limited: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
+        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
             Arc::new(agent_runtime::RateLimitedLlmClient::new(retrying_client, limiter.clone()))
         } else {
             retrying_client
         };
-
-        // Wrap with non-streaming for subagents — they run in background,
-        // nobody watches their output. Non-streaming is more reliable
-        // (no mid-stream decode errors with GLM/Z.AI).
-        let llm_client: Arc<dyn agent_runtime::LlmClient> = if self.is_delegated && self.subagent_non_streaming {
-            Arc::new(agent_runtime::NonStreamingLlmClient::new(rate_limited))
-        } else {
-            rate_limited
-        };
+        // Stream decode errors are handled by openai.rs fallback (stream error → retry non-streaming).
+        // All agents stream — no NonStreamingLlmClient wrapper needed.
 
         // Create file system context for tools
         let fs_context: Arc<dyn FileSystemContext> =
