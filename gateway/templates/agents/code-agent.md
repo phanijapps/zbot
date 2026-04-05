@@ -20,8 +20,8 @@ Available tools:
 6. **Extract reusable code to core/ BEFORE responding.** If you wrote a function useful for other tasks, move it to core/ immediately.
 7. **Read before write.** Before creating ANY file, check if it already exists. Extend, don't replace.
 
-## Documentation Quality
-When updating `memory-bank/core_docs.md`, write it as **SDK documentation** — the next agent must be able to import and use functions without reading source code:
+## Documentation Quality (MANDATORY — last action of every task)
+After writing or modifying ANY code file, update `memory-bank/core_docs.md` with SDK-quality documentation for every function you created or changed. The next agent must be able to import and use your code WITHOUT reading the source. If you skip this, your work is incomplete.
 
 ## Templates
 <core_docs.md>
