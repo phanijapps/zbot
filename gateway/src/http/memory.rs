@@ -315,6 +315,66 @@ pub async fn delete_memory_fact(
     }
 }
 
+/// POST /api/memory/:agent_id — Create a new memory fact (policy, instruction, or about-me).
+#[derive(Debug, Deserialize)]
+pub struct CreateMemoryFactRequest {
+    pub category: String,
+    pub key: String,
+    pub content: String,
+    #[serde(default = "default_confidence")]
+    pub confidence: f64,
+    #[serde(default)]
+    pub ward_id: Option<String>,
+    #[serde(default = "default_true")]
+    pub pinned: bool,
+}
+
+fn default_confidence() -> f64 { 1.0 }
+fn default_true() -> bool { true }
+
+pub async fn create_memory_fact(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(request): Json<CreateMemoryFactRequest>,
+) -> Result<(StatusCode, Json<MemoryFactResponse>), (StatusCode, Json<ErrorResponse>)> {
+    let memory_repo = match &state.memory_repo {
+        Some(repo) => repo,
+        None => {
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(ErrorResponse { error: "Memory service not available".to_string() }),
+            ));
+        }
+    };
+
+    let now = chrono::Utc::now().to_rfc3339();
+    let fact = MemoryFact {
+        id: format!("fact-{}", uuid::Uuid::new_v4()),
+        session_id: None,
+        agent_id: agent_id.clone(),
+        scope: "agent".to_string(),
+        category: request.category.clone(),
+        key: request.key.clone(),
+        content: request.content.clone(),
+        confidence: request.confidence,
+        mention_count: 5,
+        source_summary: Some("User-created via UI".to_string()),
+        embedding: None,
+        ward_id: request.ward_id.unwrap_or_else(|| "__global__".to_string()),
+        contradicted_by: None,
+        created_at: now.clone(),
+        updated_at: now,
+        expires_at: None,
+        pinned: request.pinned,
+    };
+
+    memory_repo.upsert_memory_fact(&fact).map_err(|e| {
+        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to create fact: {}", e) }))
+    })?;
+
+    Ok((StatusCode::CREATED, Json(MemoryFactResponse::from(fact))))
+}
+
 /// GET /api/memory - List ALL memory facts across all agents.
 pub async fn list_all_memory_facts(
     Query(query): Query<AllMemoryListQuery>,

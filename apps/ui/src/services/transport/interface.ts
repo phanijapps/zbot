@@ -411,6 +411,16 @@ export interface Transport {
   /** Delete a memory fact */
   deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>>;
 
+  /** Create a memory fact (policy, instruction, or about-me) */
+  createMemory(agentId: string, fact: {
+    category: string;
+    key: string;
+    content: string;
+    confidence?: number;
+    ward_id?: string;
+    pinned?: boolean;
+  }): Promise<TransportResult<MemoryFact>>;
+
   // =========================================================================
   // Knowledge Graph Operations
   // =========================================================================

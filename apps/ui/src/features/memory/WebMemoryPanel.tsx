@@ -8,7 +8,7 @@ import type {
   AgentResponse,
 } from "@/services/transport/types";
 import { MemoryFactCard } from "./MemoryFactCard";
-import { Loader2, Database } from "lucide-react";
+import { Loader2, Database, Plus, Shield, Lightbulb, User } from "lucide-react";
 
 const CATEGORIES: MemoryCategory[] = [
   "preference",
@@ -31,6 +31,10 @@ export function WebMemoryPanel() {
   const [loading, setLoading] = useState(true);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addType, setAddType] = useState<"correction" | "instruction" | "user">("correction");
+  const [addContent, setAddContent] = useState("");
+  const [addSaving, setAddSaving] = useState(false);
 
   // Load ALL facts with optional agent filter
   const fetchFacts = useCallback(async (filterParams: MemoryFilter) => {
@@ -152,6 +156,39 @@ export function WebMemoryPanel() {
     }
   };
 
+  const handleCreate = async () => {
+    if (!addContent.trim()) return;
+    setAddSaving(true);
+    try {
+      const transport = await getTransport();
+      const typeConfig = {
+        correction: { confidence: 1.0, prefix: "policy" },
+        instruction: { confidence: 0.9, prefix: "instruction" },
+        user: { confidence: 0.95, prefix: "user.profile" },
+      }[addType];
+      const key = `${typeConfig.prefix}.${Date.now()}`;
+      const result = await transport.createMemory("root", {
+        category: addType,
+        key,
+        content: addContent.trim(),
+        confidence: typeConfig.confidence,
+        pinned: true,
+      });
+      if (result.success) {
+        setAddContent("");
+        setShowAddForm(false);
+        fetchFacts(filter);
+        fetchStats();
+      } else {
+        setError(result.error || "Failed to create");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create");
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
   // Group facts by agent for display
   const agentMap = new Map(agents.map(a => [a.id, a.name || a.id]));
 
@@ -164,7 +201,62 @@ export function WebMemoryPanel() {
             <h1 className="page-title">Memory Explorer</h1>
             <p className="page-subtitle">View and manage agent memory facts</p>
           </div>
+          <button className="btn btn--primary btn--sm" onClick={() => setShowAddForm(!showAddForm)}>
+            <Plus size={14} /> Add
+          </button>
         </div>
+
+        {/* Add Form */}
+        {showAddForm && (
+          <div className="card card__padding--lg" style={{ marginBottom: "var(--spacing-4)" }}>
+            <div className="flex gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+              <button
+                className={`btn btn--sm ${addType === "correction" ? "btn--primary" : "btn--outline"}`}
+                onClick={() => setAddType("correction")}
+              >
+                <Shield size={14} /> Policy
+              </button>
+              <button
+                className={`btn btn--sm ${addType === "instruction" ? "btn--primary" : "btn--outline"}`}
+                onClick={() => setAddType("instruction")}
+              >
+                <Lightbulb size={14} /> Instruction
+              </button>
+              <button
+                className={`btn btn--sm ${addType === "user" ? "btn--primary" : "btn--outline"}`}
+                onClick={() => setAddType("user")}
+              >
+                <User size={14} /> About Me
+              </button>
+            </div>
+            <textarea
+              className="form-input"
+              rows={3}
+              placeholder={
+                addType === "correction"
+                  ? "Add a rule agents MUST follow (e.g., 'Always use research-agent for factual data')"
+                  : addType === "instruction"
+                  ? "Add a preference or guideline (e.g., 'Prefer interactive HTML outputs')"
+                  : "Tell z-Bot about yourself (e.g., 'I have a 9th grade son with ADHD')"
+              }
+              value={addContent}
+              onChange={(e) => setAddContent(e.target.value)}
+            />
+            <div className="flex gap-2" style={{ marginTop: "var(--spacing-2)" }}>
+              <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={!addContent.trim() || addSaving}>
+                {addSaving ? "Saving..." : "Save"}
+              </button>
+              <button className="btn btn--ghost btn--sm" onClick={() => { setShowAddForm(false); setAddContent(""); }}>
+                Cancel
+              </button>
+              <span className="settings-hint" style={{ marginLeft: "auto" }}>
+                {addType === "correction" ? "📛 Highest priority — always recalled first"
+                  : addType === "instruction" ? "💡 Guides behavior — recalled as preferences"
+                  : "👤 Personal context — agents personalize their work"}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Agent selector and stats */}
         <div

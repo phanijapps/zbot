@@ -1395,6 +1395,17 @@ export class HttpTransport implements Transport {
     return this.delete(`/api/memory/${encodeURIComponent(agentId)}/facts/${encodeURIComponent(factId)}`);
   }
 
+  async createMemory(agentId: string, fact: {
+    category: string;
+    key: string;
+    content: string;
+    confidence?: number;
+    ward_id?: string;
+    pinned?: boolean;
+  }): Promise<TransportResult<MemoryFact>> {
+    return this.post(`/api/memory/${encodeURIComponent(agentId)}`, fact);
+  }
+
   // =========================================================================
   // Knowledge Graph Operations
   // =========================================================================

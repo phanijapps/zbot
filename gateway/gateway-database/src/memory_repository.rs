@@ -101,7 +101,7 @@ impl MemoryRepository {
                     confidence = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.confidence ELSE MAX(memory_facts.confidence, excluded.confidence) END,
                     mention_count = memory_facts.mention_count + 1,
                     source_summary = COALESCE(excluded.source_summary, memory_facts.source_summary),
-                    embedding = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.embedding ELSE COALESCE(excluded.embedding, memory_facts.embedding) END,
+                    embedding = CASE WHEN memory_facts.pinned = 1 AND memory_facts.embedding IS NOT NULL THEN memory_facts.embedding ELSE COALESCE(excluded.embedding, memory_facts.embedding) END,
                     updated_at = excluded.updated_at,
                     session_id = COALESCE(excluded.session_id, memory_facts.session_id)",
                 params![
