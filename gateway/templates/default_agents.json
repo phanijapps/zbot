@@ -16,7 +16,7 @@
     "agentType": "specialist",
     "temperature": 0.3,
     "maxTokens": 100000,
-    "skills": ["duckduckgo-search", "playwright", "spreadsheet"],
+    "skills": ["duckduckgo-search", "light-panda-browser", "playwright", "spreadsheet"],
     "mcps": ["sequential-thinking"]
   },
   {
@@ -36,7 +36,7 @@
     "agentType": "specialist",
     "temperature": 0.7,
     "maxTokens": 16000,
-    "skills": ["duckduckgo-search", "playwright", "light-panda-browser"],
+    "skills": ["duckduckgo-search", "light-panda-browser", "playwright"],
     "mcps": ["Brave Search"]
   },
   {
@@ -46,7 +46,7 @@
     "agentType": "specialist",
     "temperature": 0.3,
     "maxTokens": 100000,
-    "skills": ["duckduckgo-search"],
+    "skills": ["duckduckgo-search", "light-panda-browser"],
     "mcps": []
   },
   {
@@ -56,7 +56,7 @@
     "agentType": "specialist",
     "temperature": 0.5,
     "maxTokens": 50000,
-    "skills": ["duckduckgo-search", "playwright"],
+    "skills": ["duckduckgo-search", "light-panda-browser", "playwright"],
     "mcps": []
   },
   {
