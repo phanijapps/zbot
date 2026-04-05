@@ -262,7 +262,117 @@ zerod --log-level debug
 | `gateway/gateway-services/src/settings.rs` | `AppSettings` with `logs` field, CRUD methods |
 | `gateway/src/http/settings.rs` | HTTP endpoints for log settings |
 | `apps/daemon/src/main.rs` | Logging initialization with settings.json + CLI merge |
-| `apps/ui/src/features/settings/WebSettingsPanel.tsx` | Settings page (context protection, logging) |
+| `apps/ui/src/features/settings/WebSettingsPanel.tsx` | Settings page (context protection, logging, advanced) |
+
+## Execution Settings
+
+Controls agent concurrency and first-time setup state. Stored in `settings.json` under `execution`.
+
+### ExecutionSettings Structure
+
+```json
+{
+  "execution": {
+    "maxParallelAgents": 2,
+    "setupComplete": false,
+    "agentName": "Brahmi"
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `maxParallelAgents` | number | `2` | Max subagents running concurrently (global semaphore) |
+| `setupComplete` | bool | `false` | Whether setup wizard has been completed |
+| `agentName` | string\|null | `null` | User-chosen root agent name (also written to SOUL.md) |
+
+### HTTP API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/settings/execution` | Get execution settings |
+| PUT | `/api/settings/execution` | Update (also writes SOUL.md if agentName changes) |
+| GET | `/api/setup/status` | Lightweight check: `{ setupComplete, hasProviders }` |
+| GET | `/api/setup/mcp-defaults` | Sanitized MCP templates for wizard |
+
+## Provider Management
+
+Providers are LLM API connections stored in `providers.json`. Each provider has rate limits, model configs enriched from the bundled registry, and a verified status.
+
+### Rate Limiting
+
+Default: 30 RPM / 2 concurrent (configurable per provider). Shared across all executors using the same provider via `ProviderRateLimiter`.
+
+```
+OpenAiClient → RetryingLlmClient → RateLimitedLlmClient
+```
+
+| Layer | Purpose | File |
+|-------|---------|------|
+| `OpenAiClient` | Raw OpenAI-compatible API calls | `runtime/agent-runtime/src/llm/openai.rs` |
+| `RetryingLlmClient` | Automatic retry on transient errors | `runtime/agent-runtime/src/llm/retry.rs` |
+| `RateLimitedLlmClient` | Per-provider semaphore + sliding window RPM | `runtime/agent-runtime/src/llm/rate_limiter.rs` |
+
+### Model Enrichment
+
+API responses (`GET /api/providers`) enrich each provider's model list with capabilities and token limits from the bundled model registry. `enrich_provider()` also injects default rate limits if none are explicitly set.
+
+## First-Time Setup Wizard
+
+A 6-step onboarding wizard at `/setup` that configures a fresh z-Bot installation.
+
+### Trigger
+
+On app load, `SetupGuard` calls `GET /api/setup/status`. If `setupComplete === false` AND no providers exist, redirects to `/setup`. Result cached in sessionStorage.
+
+### Steps
+
+| Step | Name | Required | Persisted When |
+|------|------|----------|----------------|
+| 1 | Name Your Agent | Yes | On Launch (Step 6) |
+| 2 | Connect Providers | Yes (≥1 verified) | Immediately (test & add) |
+| 3 | Enable Skills | No (skippable) | Informational only |
+| 4 | MCP Servers | No (skippable) | On Launch (Step 6) |
+| 5 | Configure Agents | Yes | On Launch (Step 6) |
+| 6 | Review & Launch | — | Submits all deltas |
+
+### Delta-Only Updates
+
+On re-run, the wizard hydrates from current state (providers, agent configs, MCPs, agent name). Launch only applies changes:
+- Root agent renamed only if name changed
+- Agent configs updated only where provider/model/temp/tokens differ from original
+- MCP servers created only if not already existing
+- `setupComplete` set to `true`, `agentName` persisted (also updates SOUL.md)
+
+### Bundled Templates
+
+| Template | Contents |
+|----------|----------|
+| `gateway/templates/default_agents.json` | 7 agents: code, data-analyst, planner, research, summarizer, tutor, writing (with temps, maxTokens, skill/MCP refs) |
+| `gateway/templates/default_mcps.json` | 8 MCP servers: time, github, brave-search, google-maps, sequential-thinking, google-drive, drawio, drawio-sse (all keys blanked, disabled) |
+
+### Name Presets
+
+Step 1 offers quick-pick personalities: **Brahmi**, **JohnnyLever**, **z-Bot**, or custom. The chosen name is stored in `settings.json` (`execution.agentName`) and written to `config/SOUL.md` (first line: `You are **Name**`).
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-services/src/settings.rs` | `ExecutionSettings` with `setup_complete`, `agent_name` |
+| `gateway/src/http/setup.rs` | Setup status + MCP defaults endpoints |
+| `gateway/src/http/settings.rs` | Updates SOUL.md when `agentName` changes |
+| `gateway/templates/default_agents.json` | Bundled agent definitions |
+| `gateway/templates/default_mcps.json` | Sanitized MCP server templates |
+| `apps/ui/src/features/setup/SetupWizard.tsx` | Wizard container, `useReducer` state, hydration |
+| `apps/ui/src/features/setup/SetupGuard.tsx` | Route guard — checks status, redirects |
+| `apps/ui/src/features/setup/steps/` | 6 step components (Name, Providers, Skills, Mcp, Agents, Review) |
+| `apps/ui/src/features/setup/components/` | StepIndicator, WizardNav |
+| `apps/ui/src/features/setup/presets.ts` | Name preset data |
+
+### UI Architecture
+
+Wizard renders outside the app shell (no sidebar). State managed via `useReducer` with `HYDRATE` action for pre-filling on re-run. Each step is a standalone component receiving wizard state + onChange callback. CSS uses BEM classes under `.setup-wizard`, `.step-indicator`, `.name-preset`, `.provider-add-*`, `.skill-category`, `.mcp-*`, `.agent-*`, `.review-*`.
 
 ## Crate Structure
 
@@ -398,16 +508,16 @@ pub trait LlmClient: Send + Sync {
 The LLM client is wrapped in a chain of decorators for reliability and rate limiting:
 
 ```
-OpenAiClient → RetryingLlmClient → ThrottledLlmClient
+OpenAiClient → RetryingLlmClient → RateLimitedLlmClient
 ```
 
 | Layer | Purpose | File |
 |-------|---------|------|
 | `OpenAiClient` | Raw OpenAI-compatible API calls | `runtime/agent-runtime/src/llm/openai.rs` |
 | `RetryingLlmClient` | Automatic retry on transient errors | `runtime/agent-runtime/src/llm/retry.rs` |
-| `ThrottledLlmClient` | Per-provider concurrent request limiting | `runtime/agent-runtime/src/llm/throttle.rs` |
+| `RateLimitedLlmClient` | Per-provider concurrency semaphore + sliding window RPM | `runtime/agent-runtime/src/llm/rate_limiter.rs` |
 
-The `ThrottledLlmClient` uses a shared `tokio::sync::Semaphore` per provider. All executors for the same provider share the same semaphore, preventing burst 429 rate limits. Configured via `maxConcurrentRequests` in `providers.json` (default: 3).
+The `RateLimitedLlmClient` uses a shared `ProviderRateLimiter` per provider (concurrency semaphore + RPM sliding window). All executors for the same provider share the same limiter, preventing burst 429s. Auto-halves RPM after a 429. Configured via `rateLimits` in `providers.json` (default: 30 RPM / 2 concurrent).
 
 ## Session Management Architecture
 

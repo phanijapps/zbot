@@ -302,3 +302,40 @@ Distilled patterns from building z-Bot:
 4. **Test each phase** — `cargo check --workspace` after Rust changes, `npm run build` after TypeScript. Don't batch all testing at the end.
 5. **Read before write** — Check existing patterns, understand current state, avoid duplicating functionality.
 6. **Anti-patterns**: Starting without reading context. Solving problems not asked. Ignoring existing patterns. Plans without data models. Skipping root cause analysis.
+
+## Setup Wizard Decisions
+
+### Dedicated Route Over Settings Enhancement
+**Problem**: New users land on an empty app with no guidance.
+**Decision**: Full-page `/setup` wizard at a dedicated route, outside the app shell (no sidebar). Not a modal inside Settings.
+**Rationale**: The wizard is a distinct user journey with its own lifecycle. Coupling it to Settings would make both harder to maintain. The wizard calls the same transport APIs — it just has its own UI flow.
+
+### Hybrid Trigger (Auto-Redirect + Manual Re-Run)
+**Problem**: First-time users need guidance, but the wizard should also be accessible later.
+**Decision**: Auto-redirect to `/setup` if no providers AND `setupComplete === false`. Re-run button in Settings > Advanced. `SetupGuard` checks `GET /api/setup/status` (lightweight) and caches result in sessionStorage.
+**Rationale**: Catches new users without locking out the wizard for reconfiguration.
+
+### Providers Persisted Immediately, Everything Else at Launch
+**Problem**: Step 5 (agent config) needs real provider IDs and discovered model lists from Step 2.
+**Decision**: Provider create + test happens in real-time during Step 2. All other changes (name, agent configs, MCPs) are held in React state and submitted on Launch.
+**Rationale**: Model discovery requires a real API call. If user abandons mid-wizard, they keep configured providers (useful work preserved).
+
+### Delta-Only Updates on Re-Run
+**Problem**: Re-running the wizard could overwrite customized agent configs, duplicate MCPs, or reset the agent name.
+**Decision**: Wizard hydrates from current state on mount. Launch only applies changes: agent configs updated only where different, MCPs created only if new, root renamed only if name changed.
+**Rationale**: Users customize agents over time. A re-run that resets everything would destroy their work.
+
+### Agent Name in settings.json + SOUL.md
+**Problem**: The root agent's name needs to persist across restarts and appear in the system prompt.
+**Decision**: Store `agentName` in `settings.json` (source of truth). When updated, gateway also writes it to `config/SOUL.md` first line (`You are **Name**`).
+**Rationale**: settings.json is the API-accessible config. SOUL.md is what the LLM sees. Both must stay in sync.
+
+### Bundled Agent Templates Over Hardcoded Constants
+**Problem**: Only 3 agents were hardcoded in Rust. User had 7 custom agents that wouldn't ship to new installs.
+**Decision**: `default_agents.json` template with all 7 agents (temps, maxTokens, skill/MCP refs). Seed function reads template, falls back to hardcoded 3 if missing.
+**Rationale**: Templates are editable without recompilation. New agents added by editing JSON, not Rust code.
+
+### Skills Not Bundled
+**Problem**: 28 skills with scripts, assets, and ONNX models are too large for binary embedding.
+**Decision**: Skills remain disk-only. Wizard shows "No skills installed" on fresh install. Users install skills separately.
+**Rationale**: Skills have external dependencies (npm packages, Python scripts, browser binaries). Bundling would bloat the binary and create a maintenance burden. The skill ecosystem is designed for independent installation.
