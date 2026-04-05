@@ -54,6 +54,9 @@ pub struct MemoryFact {
     pub created_at: String,
     pub updated_at: String,
     pub expires_at: Option<String>,
+    /// Pinned facts can't be overwritten by distillation. User-authored facts are pinned.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// A memory fact with a computed relevance score from hybrid search.
@@ -91,14 +94,14 @@ impl MemoryRepository {
 
         self.db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, pinned)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                  ON CONFLICT(agent_id, scope, ward_id, key) DO UPDATE SET
-                    content = excluded.content,
-                    confidence = MAX(memory_facts.confidence, excluded.confidence),
+                    content = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.content ELSE excluded.content END,
+                    confidence = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.confidence ELSE MAX(memory_facts.confidence, excluded.confidence) END,
                     mention_count = memory_facts.mention_count + 1,
                     source_summary = COALESCE(excluded.source_summary, memory_facts.source_summary),
-                    embedding = COALESCE(excluded.embedding, memory_facts.embedding),
+                    embedding = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.embedding ELSE COALESCE(excluded.embedding, memory_facts.embedding) END,
                     updated_at = excluded.updated_at,
                     session_id = COALESCE(excluded.session_id, memory_facts.session_id)",
                 params![
@@ -118,6 +121,7 @@ impl MemoryRepository {
                     fact.created_at,
                     fact.updated_at,
                     fact.expires_at,
+                    fact.pinned as i32,
                 ],
             )?;
             Ok(())
@@ -370,7 +374,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -389,7 +393,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -873,6 +877,7 @@ fn row_to_memory_fact(row: &rusqlite::Row) -> Result<MemoryFact, rusqlite::Error
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
         expires_at: row.get(15)?,
+        pinned: row.get::<_, i32>(16).unwrap_or(0) != 0,
     })
 }
 
@@ -951,6 +956,7 @@ mod tests {
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
             expires_at: None,
+            pinned: false,
         }
     }
 

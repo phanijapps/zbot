@@ -95,6 +95,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
+            pinned: false,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;

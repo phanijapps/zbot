@@ -533,6 +533,9 @@ impl AppState {
         // Seed default skills from bundled templates if skills dir is empty
         self.seed_default_skills();
 
+        // Seed default policies from bundled template if no policies exist
+        self.seed_default_policies();
+
         // Preload skills into cache
         if let Err(e) = self.skills.preload().await {
             tracing::warn!("Failed to preload skills: {}", e);
@@ -605,6 +608,76 @@ impl AppState {
             .map(|entries| entries.count())
             .unwrap_or(0);
         tracing::info!("Seeded {} default skills", count);
+    }
+
+    /// Seed default policies from bundled template if no policies/corrections exist.
+    fn seed_default_policies(&self) {
+        let memory_repo = match &self.memory_repo {
+            Some(repo) => repo,
+            None => return,
+        };
+
+        // Check if any correction facts already exist
+        let existing = memory_repo.get_facts_by_category("root", "correction", 1)
+            .unwrap_or_default();
+        if !existing.is_empty() {
+            tracing::debug!("Policies already exist, skipping seed");
+            return;
+        }
+
+        let template = match gateway_templates::Templates::get("default_policies.json") {
+            Some(f) => f.data.to_vec(),
+            None => return,
+        };
+
+        let policies: Vec<serde_json::Value> = match serde_json::from_slice(&template) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("Failed to parse default_policies.json: {}", e);
+                return;
+            }
+        };
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut count = 0;
+
+        for policy in &policies {
+            let category = policy["category"].as_str().unwrap_or("correction");
+            let key = policy["key"].as_str().unwrap_or_default();
+            let content = policy["content"].as_str().unwrap_or_default();
+            let confidence = policy["confidence"].as_f64().unwrap_or(1.0);
+            let pinned = policy["pinned"].as_bool().unwrap_or(true);
+
+            if key.is_empty() || content.is_empty() { continue; }
+
+            let fact = gateway_database::MemoryFact {
+                id: format!("policy-{}", uuid::Uuid::new_v4()),
+                session_id: None,
+                agent_id: "root".to_string(),
+                scope: "agent".to_string(),
+                category: category.to_string(),
+                key: key.to_string(),
+                content: content.to_string(),
+                confidence,
+                mention_count: 5,
+                source_summary: Some("Default policy".to_string()),
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+                expires_at: None,
+                pinned,
+            };
+
+            if memory_repo.upsert_memory_fact(&fact).is_ok() {
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            tracing::info!("Seeded {} default policies/instructions", count);
+        }
     }
 
     /// Ensure Python venv and Node.js environment exist, then seed workspace memory.

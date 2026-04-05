@@ -340,6 +340,7 @@ impl SessionDistiller {
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
+                pinned: false,
             };
 
             if let Err(e) = self.memory_repo.upsert_memory_fact(&fact) {
@@ -824,6 +825,7 @@ impl SessionDistiller {
             created_at: now.to_string(),
             updated_at: now.to_string(),
             expires_at: None,
+            pinned: false,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;
@@ -915,6 +917,7 @@ impl SessionDistiller {
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
+            pinned: false,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;

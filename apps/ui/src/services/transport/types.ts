@@ -851,6 +851,8 @@ export interface MemoryFact {
   contradicted_by?: string;
   created_at: string;
   updated_at: string;
+  /** Pinned facts can't be overwritten by distillation. User-authored facts are pinned. */
+  pinned?: boolean;
 }
 
 /** Filter options for listing memory facts */

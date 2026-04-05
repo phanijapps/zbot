@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 13;
+const SCHEMA_VERSION: i32 = 14;
 
 /// Run migrations for existing databases.
 ///
@@ -186,6 +186,14 @@ fn migrate_database(conn: &Connection) -> Result<()> {
 
         let _ = conn.execute(
             "ALTER TABLE sessions ADD COLUMN archived INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+    }
+
+    // v13 → v14: Add pinned column to memory_facts
+    if version < 14 {
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
             [],
         );
     }
@@ -406,6 +414,7 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             created_at TEXT NOT NULL DEFAULT (datetime('now')),
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at TEXT,
+            pinned INTEGER NOT NULL DEFAULT 0,
             UNIQUE(agent_id, scope, ward_id, key)
         )",
         [],
