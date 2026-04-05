@@ -8,7 +8,8 @@ import type {
   AgentResponse,
 } from "@/services/transport/types";
 import { MemoryFactCard } from "./MemoryFactCard";
-import { Loader2, Database, Plus, Shield, Lightbulb, User } from "lucide-react";
+import { Slideover } from "@/components/Slideover";
+import { Loader2, Database, Plus, Shield, Lightbulb, User, Brain } from "lucide-react";
 
 const CATEGORIES: MemoryCategory[] = [
   "preference",
@@ -206,10 +207,27 @@ export function WebMemoryPanel() {
           </button>
         </div>
 
-        {/* Add Form */}
-        {showAddForm && (
-          <div className="card card__padding--lg" style={{ marginBottom: "var(--spacing-4)" }}>
-            <div className="flex gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+        {/* Add Memory Slideover */}
+        <Slideover
+          open={showAddForm}
+          onClose={() => { setShowAddForm(false); setAddContent(""); }}
+          title="Add Memory"
+          subtitle="Teach z-Bot something it should always remember"
+          icon={<Brain size={20} />}
+          footer={
+            <div className="flex gap-2">
+              <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={!addContent.trim() || addSaving}>
+                {addSaving ? "Saving..." : "Save"}
+              </button>
+              <button className="btn btn--ghost btn--sm" onClick={() => { setShowAddForm(false); setAddContent(""); }}>
+                Cancel
+              </button>
+            </div>
+          }
+        >
+          <section className="slideover__section">
+            <div className="field-label">Type</div>
+            <div className="flex gap-2" style={{ marginBottom: "var(--spacing-4)" }}>
               <button
                 className={`btn btn--sm ${addType === "correction" ? "btn--primary" : "btn--outline"}`}
                 onClick={() => setAddType("correction")}
@@ -229,34 +247,33 @@ export function WebMemoryPanel() {
                 <User size={14} /> About Me
               </button>
             </div>
+            <p className="settings-hint">
+              {addType === "correction"
+                ? "Policies are hard rules agents MUST follow. They surface at the top of every recall with highest priority."
+                : addType === "instruction"
+                ? "Instructions are soft preferences that guide agent behavior. They surface as recommendations."
+                : "About Me facts tell z-Bot who you are. Agents use this to personalize their work for you."}
+            </p>
+          </section>
+
+          <section className="slideover__section">
+            <div className="field-label">Content</div>
             <textarea
               className="form-input"
-              rows={3}
+              rows={5}
               placeholder={
                 addType === "correction"
                   ? "Add a rule agents MUST follow (e.g., 'Always use research-agent for factual data')"
                   : addType === "instruction"
-                  ? "Add a preference or guideline (e.g., 'Prefer interactive HTML outputs')"
+                  ? "Add a preference or guideline (e.g., 'Prefer interactive HTML outputs with Tailwind CSS')"
                   : "Tell z-Bot about yourself (e.g., 'I'm a data engineer who prefers Python and visual dashboards')"
               }
               value={addContent}
               onChange={(e) => setAddContent(e.target.value)}
+              autoFocus
             />
-            <div className="flex gap-2" style={{ marginTop: "var(--spacing-2)" }}>
-              <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={!addContent.trim() || addSaving}>
-                {addSaving ? "Saving..." : "Save"}
-              </button>
-              <button className="btn btn--ghost btn--sm" onClick={() => { setShowAddForm(false); setAddContent(""); }}>
-                Cancel
-              </button>
-              <span className="settings-hint" style={{ marginLeft: "auto" }}>
-                {addType === "correction" ? "📛 Highest priority — always recalled first"
-                  : addType === "instruction" ? "💡 Guides behavior — recalled as preferences"
-                  : "👤 Personal context — agents personalize their work"}
-              </span>
-            </div>
-          </div>
-        )}
+          </section>
+        </Slideover>
 
         {/* Agent selector and stats */}
         <div
