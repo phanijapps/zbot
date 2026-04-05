@@ -33,13 +33,21 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     featured: true,
   },
   {
-    name: "Ollama",
+    name: "Ollama Cloud",
     baseUrl: "http://localhost:11434/v1",
-    models: "gemma4:cloud, nemotron-3-super:cloud, glm-5:cloud, gemini-3-flash-preview:cloud, deepseek-v3.2:cloud, kimi-k2.5:cloud, qwen3.5:cloud, devstral-2:cloud, minimax-m2.7:cloud",
+    models: "gemma4:31b-cloud, nemotron-3-super:cloud, glm-5:cloud, gemini-3-flash-preview:cloud, deepseek-v3.2:cloud, kimi-k2.5:cloud, qwen3.5:cloud, devstral-2:cloud, minimax-m2.7:cloud",
     apiKeyHint: "",
     apiKeyPlaceholder: "",
     noApiKey: true,
     featured: true,
+  },
+  {
+    name: "Ollama Local",
+    baseUrl: "http://localhost:11434/v1",
+    models: "gemma4, devstral-small-2, nemotron-3-nano, ministral-3, qwen3.5:4b, llama3.3",
+    apiKeyHint: "",
+    apiKeyPlaceholder: "",
+    noApiKey: true,
   },
   {
     name: "Google Gemini",
@@ -75,6 +83,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     models: "mistral-large-latest, mistral-small-latest, codestral-latest",
     apiKeyHint: "console.mistral.ai/api-keys",
     apiKeyPlaceholder: "your-api-key",
+  },
+  {
+    name: "Azure OpenAI",
+    baseUrl: "https://YOUR-RESOURCE.openai.azure.com/openai/deployments/YOUR-DEPLOYMENT/v1",
+    models: "gpt-4o, gpt-4.1, o4-mini",
+    apiKeyHint: "portal.azure.com → OpenAI resource → Keys",
+    apiKeyPlaceholder: "your-azure-api-key",
   },
 ];
 

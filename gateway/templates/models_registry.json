@@ -1001,8 +1001,8 @@
       "output": 64000
     }
   },
-  "gemma4:cloud": {
-    "name": "Gemma 4 Cloud",
+  "gemma4:31b-cloud": {
+    "name": "Gemma 4 31B Cloud",
     "provider": "ollama-cloud",
     "capabilities": {
       "tools": true,
@@ -1100,6 +1100,91 @@
     },
     "context": {
       "input": 256000,
+      "output": 65536
+    }
+  },
+  "gemma4": {
+    "name": "Gemma 4 26B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 128000,
+      "output": 65536
+    }
+  },
+  "devstral-small-2": {
+    "name": "Devstral Small 2 24B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 131072,
+      "output": 65536
+    }
+  },
+  "nemotron-3-nano": {
+    "name": "Nemotron 3 Nano 4B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 128000,
+      "output": 65536
+    }
+  },
+  "ministral-3": {
+    "name": "Ministral 3 8B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 128000,
+      "output": 32768
+    }
+  },
+  "qwen3.5:4b": {
+    "name": "Qwen 3.5 4B",
+    "provider": "ollama",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 131072,
       "output": 65536
     }
   }
