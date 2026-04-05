@@ -10,6 +10,24 @@ use std::sync::Arc;
 use crate::DatabaseManager;
 
 // ============================================================================
+// FTS5 QUERY SANITIZATION
+// ============================================================================
+
+/// Sanitize a raw user message for FTS5 MATCH queries.
+/// Extracts alphanumeric words (>2 chars), joins with OR.
+/// Raw messages contain commas, parens, dashes, dollar signs that break FTS5 syntax.
+pub fn sanitize_fts_query(raw: &str) -> String {
+    let words: Vec<&str> = raw.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|w| w.trim())
+        .filter(|w| w.len() > 2)
+        .filter(|w| !["the", "and", "for", "with", "that", "this", "from", "have",
+                      "been", "will", "should", "would", "could", "their", "there",
+                      "not", "are", "was", "can", "all", "has", "its", "than"].contains(w))
+        .collect();
+    words.join(" OR ")
+}
+
+// ============================================================================
 // TYPES
 // ============================================================================
 
@@ -338,6 +356,15 @@ impl MemoryRepository {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
+        // Sanitize query for FTS5: extract alphanumeric words, join with OR.
+        // Raw user messages contain commas, parens, dashes that break FTS5 syntax.
+        // Using OR ensures any matching term contributes to results.
+        let sanitized_query = sanitize_fts_query(query);
+        if sanitized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = &sanitized_query;
+
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = ward_id {
                 (
@@ -1076,6 +1103,15 @@ mod tests {
         for (a, b) in original.iter().zip(recovered.iter()) {
             assert!((a - b).abs() < 0.0001);
         }
+    }
+
+    #[test]
+    fn test_sanitize_fts_query() {
+        assert_eq!(sanitize_fts_query("hello world"), "hello OR world");
+        assert_eq!(sanitize_fts_query("PTON, NVDA, TSLA"), "PTON OR NVDA OR TSLA");
+        assert_eq!(sanitize_fts_query("portfolio risk (VaR 95%)"), "portfolio OR risk OR VaR");
+        assert_eq!(sanitize_fts_query(""), "");
+        assert_eq!(sanitize_fts_query("a b"), ""); // words <= 2 chars filtered
     }
 
     #[test]
