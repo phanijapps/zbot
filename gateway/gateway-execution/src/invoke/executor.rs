@@ -407,11 +407,14 @@ impl ExecutorBuilder {
         let mut tool_registry = ToolRegistry::new();
 
         if self.is_delegated {
-            // Subagents: execute tools + respond.
+            // Subagents: execute + context awareness + respond.
             tool_registry.register(Arc::new(ShellTool::new()));
             tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(GrepTool));
+            tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
             tool_registry.register(Arc::new(RespondTool::new()));
         } else {
             // Root agent: orchestrator tools only.
