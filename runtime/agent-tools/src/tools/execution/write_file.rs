@@ -67,9 +67,10 @@ impl Tool for WriteFileTool {
         }
 
         // Sanitize path — reject absolute paths and home-relative paths
-        let path = path.trim_start_matches("~/")
+        let mut path = path.trim_start_matches("~/")
             .trim_start_matches("/")
-            .trim_start_matches("./");
+            .trim_start_matches("./")
+            .to_string();
 
         // Reject paths that try to escape the ward
         if path.contains("..") {
@@ -78,7 +79,33 @@ impl Tool for WriteFileTool {
 
         // Resolve CWD from ward context
         let cwd = resolve_ward_cwd(&self.fs, &ctx);
-        let full_path = cwd.join(path);
+
+        // Fix path doubling: if the agent used an absolute path like
+        // ~/Documents/zbot/wards/{ward}/specs/plan.md, the sanitizer strips ~/
+        // but leaves Documents/zbot/wards/{ward}/specs/plan.md.
+        // Detect and extract only the relative part after the ward directory.
+        let cwd_str = cwd.to_string_lossy();
+        if let Some(home) = dirs::home_dir() {
+            let home_relative = cwd_str.trim_start_matches(home.to_string_lossy().as_ref())
+                .trim_start_matches('/');
+            if path.starts_with(home_relative) {
+                path = path[home_relative.len()..].trim_start_matches('/').to_string();
+                tracing::debug!(original = %args.get("path").and_then(|v| v.as_str()).unwrap_or(""), resolved = %path, "Fixed doubled ward path");
+            }
+        }
+        // Also strip if path contains "wards/{ward_id}/" pattern
+        if let Some(ward_pos) = path.find("wards/") {
+            let after_wards = &path[ward_pos + 6..]; // skip "wards/"
+            if let Some(slash) = after_wards.find('/') {
+                let ward_relative = &after_wards[slash + 1..];
+                if !ward_relative.is_empty() {
+                    tracing::debug!(original = %path, resolved = %ward_relative, "Stripped wards/ prefix from path");
+                    path = ward_relative.to_string();
+                }
+            }
+        }
+
+        let full_path = cwd.join(&path);
 
         // Create parent directories
         if let Some(parent) = full_path.parent() {

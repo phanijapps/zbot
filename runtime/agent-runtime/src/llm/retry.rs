@@ -74,13 +74,19 @@ impl RetryPolicy {
             LlmError::ApiError(msg) => {
                 // Retry on 5xx server errors
                 if self.retry_on_server_error {
-                    // API errors contain status code like "(500): ..."
                     if msg.starts_with("(5") {
                         return true;
                     }
                 }
                 // Retry on 429 rate limit errors from API
                 if self.retry_on_rate_limit && msg.contains("429") {
+                    return true;
+                }
+                // Z.AI/GLM returns 500 with code 1234 for rate limits (disguised as "network error")
+                // Also catch code 1302 (explicit rate limit) and 1303 (frequency limit)
+                if self.retry_on_rate_limit
+                    && (msg.contains("1234") || msg.contains("1302") || msg.contains("1303"))
+                {
                     return true;
                 }
                 false
