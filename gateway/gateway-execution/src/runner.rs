@@ -1477,7 +1477,7 @@ impl ExecutionRunner {
             }
         }
 
-        let executor = builder
+        let mut executor = builder
             .build(
                 &agent_for_build,
                 provider,
@@ -1490,6 +1490,56 @@ impl ExecutionRunner {
                 ward_id,
             )
             .await?;
+
+        // Wire mid-session recall hook so the executor refreshes memory every N turns.
+        if let Some(recall) = &self.memory_recall {
+            let mid_cfg = &recall.config().mid_session_recall;
+            if mid_cfg.enabled {
+                let recall = Arc::clone(recall);
+                let agent_id = agent.id.clone();
+                let ward = ward_id.map(String::from);
+                let min_novelty = mid_cfg.min_novelty_score;
+                let every_n = mid_cfg.every_n_turns as u32;
+
+                executor.set_recall_hook(
+                    Box::new(move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                        let recall = Arc::clone(&recall);
+                        let agent_id = agent_id.clone();
+                        let ward = ward.clone();
+                        let query = query.to_string();
+                        let already_injected = already_injected.clone();
+                        Box::pin(async move {
+                            let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                            // Filter out already-injected facts and low-novelty results
+                            let novel: Vec<_> = facts.into_iter()
+                                .filter(|f| !already_injected.contains(&f.fact.key))
+                                .filter(|f| f.score >= min_novelty)
+                                .collect();
+                            if novel.is_empty() {
+                                return Ok(agent_runtime::RecallHookResult {
+                                    system_message: String::new(),
+                                    fact_keys: Vec::new(),
+                                });
+                            }
+                            let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
+                            let lines: Vec<String> = novel.iter().map(|f| {
+                                format!("- [{}] {}", f.fact.category, f.fact.content)
+                            }).collect();
+                            Ok(agent_runtime::RecallHookResult {
+                                system_message: format!(
+                                    "[Memory Refresh] Relevant facts for current context:\n{}",
+                                    lines.join("\n")
+                                ),
+                                fact_keys: keys,
+                            })
+                        })
+                    }),
+                    every_n,
+                    std::collections::HashSet::new(),
+                );
+                tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
+            }
+        }
 
         Ok((executor, recommended_skills))
     }
@@ -1664,7 +1714,7 @@ async fn invoke_continuation(
         builder = builder.with_fact_store(fs);
     }
 
-    let executor = builder
+    let mut executor = builder
         .build(
             &agent,
             &provider,
@@ -1677,6 +1727,55 @@ async fn invoke_continuation(
             session_ward_id.as_deref(),
         )
         .await?;
+
+    // Wire mid-session recall hook for continuation executor.
+    if let Some(recall) = &memory_recall {
+        let mid_cfg = &recall.config().mid_session_recall;
+        if mid_cfg.enabled {
+            let recall = Arc::clone(recall);
+            let agent_id = root_agent_id.to_string();
+            let ward = session_ward_id.clone();
+            let min_novelty = mid_cfg.min_novelty_score;
+            let every_n = mid_cfg.every_n_turns as u32;
+
+            executor.set_recall_hook(
+                Box::new(move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                    let recall = Arc::clone(&recall);
+                    let agent_id = agent_id.clone();
+                    let ward = ward.clone();
+                    let query = query.to_string();
+                    let already_injected = already_injected.clone();
+                    Box::pin(async move {
+                        let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                        let novel: Vec<_> = facts.into_iter()
+                            .filter(|f| !already_injected.contains(&f.fact.key))
+                            .filter(|f| f.score >= min_novelty)
+                            .collect();
+                        if novel.is_empty() {
+                            return Ok(agent_runtime::RecallHookResult {
+                                system_message: String::new(),
+                                fact_keys: Vec::new(),
+                            });
+                        }
+                        let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
+                        let lines: Vec<String> = novel.iter().map(|f| {
+                            format!("- [{}] {}", f.fact.category, f.fact.content)
+                        }).collect();
+                        Ok(agent_runtime::RecallHookResult {
+                            system_message: format!(
+                                "[Memory Refresh] Relevant facts for current context:\n{}",
+                                lines.join("\n")
+                            ),
+                            fact_keys: keys,
+                        })
+                    })
+                }),
+                every_n,
+                std::collections::HashSet::new(),
+            );
+            tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired (continuation)");
+        }
+    }
 
     // Build a focused continuation message that tells root exactly what to do next.
     // If specs/plan.md exists in the ward, read it and tell root which step is next.

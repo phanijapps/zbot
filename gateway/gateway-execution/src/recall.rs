@@ -75,6 +75,11 @@ impl MemoryRecall {
         }
     }
 
+    /// Access the recall configuration.
+    pub fn config(&self) -> &RecallConfig {
+        &self.config
+    }
+
     /// Create a new memory recall service with graph support.
     pub fn with_graph(
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
