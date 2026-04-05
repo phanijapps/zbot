@@ -637,6 +637,29 @@ impl ExecutionRunner {
             .map(|messages| self.conversation_repo.session_messages_to_chat_format(&messages))
             .unwrap_or_default();
 
+        // Graph-powered recall for first message — inject remembered facts, episodes, and
+        // entity context before the agent sees the user's message.
+        if let Some(recall) = &self.memory_recall {
+            match recall.recall_with_graph(
+                &config.agent_id,
+                &message,
+                5,
+                setup.ward_id.as_deref(),
+                Some(&session_id),
+            ).await {
+                Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+                    history.insert(0, ChatMessage::system(result.formatted));
+                    tracing::info!(
+                        facts = result.facts.len(),
+                        episodes = result.episodes.len(),
+                        "Recalled memory context for first message"
+                    );
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!("First-message recall failed: {}", e),
+            }
+        }
+
         // Nudge the agent to use memory.recall tool at session start (visible, agent-driven)
         if history.is_empty() {
             history.push(ChatMessage::system(
