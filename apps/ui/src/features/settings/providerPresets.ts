@@ -79,7 +79,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     name: "Ollama Cloud",
     baseUrl: "https://api.ollama.com/v1",
-    models: "llama3.3, qwen2.5-coder, deepseek-r1",
+    models: "gemma4:cloud, minimax-m2.7:cloud, qwen3.5:cloud, nemotron-3-super:cloud, glm-5:cloud, gemini-3-flash-preview:cloud, deepseek-v3.2:cloud, kimi-k2.5:cloud, devstral-2:cloud",
     apiKeyHint: "ollama.com/settings",
     apiKeyPlaceholder: "your-api-key",
   },

@@ -933,8 +933,8 @@
       "output": 65536
     }
   },
-  "qwen3.5:397b-cloud": {
-    "name": "Qwen 3.5 397B Cloud",
+  "qwen3.5:cloud": {
+    "name": "Qwen 3.5 Cloud",
     "provider": "alibaba",
     "capabilities": {
       "tools": true,
@@ -999,6 +999,108 @@
     "context": {
       "input": 200000,
       "output": 64000
+    }
+  },
+  "gemma4:cloud": {
+    "name": "Gemma 4 Cloud",
+    "provider": "ollama-cloud",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 128000,
+      "output": 65536
+    }
+  },
+  "glm-5:cloud": {
+    "name": "GLM-5 Cloud",
+    "provider": "ollama-cloud",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 200000,
+      "output": 128000
+    }
+  },
+  "gemini-3-flash-preview:cloud": {
+    "name": "Gemini 3 Flash Preview Cloud",
+    "provider": "ollama-cloud",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 1048576,
+      "output": 65536
+    }
+  },
+  "deepseek-v3.2:cloud": {
+    "name": "DeepSeek V3.2 Cloud",
+    "provider": "ollama-cloud",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 128000,
+      "output": 64000
+    }
+  },
+  "kimi-k2.5:cloud": {
+    "name": "Kimi K2.5 Cloud",
+    "provider": "ollama-cloud",
+    "capabilities": {
+      "tools": true,
+      "vision": true,
+      "thinking": true,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 131072,
+      "output": 65536
+    }
+  },
+  "devstral-2:cloud": {
+    "name": "Devstral 2 Cloud",
+    "provider": "ollama-cloud",
+    "capabilities": {
+      "tools": true,
+      "vision": false,
+      "thinking": false,
+      "embeddings": false,
+      "voice": false,
+      "imageGeneration": false,
+      "videoGeneration": false
+    },
+    "context": {
+      "input": 256000,
+      "output": 65536
     }
   }
 }
