@@ -209,14 +209,27 @@ export function useMissionControl() {
     rafIdRef.current = null;
 
     setBlocks((prev) => {
-      const last = prev[prev.length - 1];
-      if (last && last.type === "response" && last.isStreaming) {
-        return [
-          ...prev.slice(0, -1),
-          { ...last, data: { ...last.data, content: (last.data.content as string) + buffered } },
-        ];
+      // Find the most recent streaming response block (not necessarily last —
+      // intent_analysis or tool blocks may have been inserted in between)
+      let targetIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].type === "response" && prev[i].isStreaming) {
+          targetIdx = i;
+          break;
+        }
       }
-      // Create new response block
+
+      if (targetIdx >= 0) {
+        const updated = [...prev];
+        const target = updated[targetIdx];
+        updated[targetIdx] = {
+          ...target,
+          data: { ...target.data, content: (target.data.content as string) + buffered },
+        };
+        return updated;
+      }
+
+      // No streaming response found — create new block
       return [
         ...prev,
         {
@@ -711,6 +724,13 @@ export function useMissionControl() {
         };
         setIntentAnalysis(ia);
 
+        // Update active ward from intent analysis recommendation
+        if (ia.wardRecommendation.wardName) {
+          setActiveWard((prev) =>
+            prev ?? { name: ia.wardRecommendation.wardName, content: ia.wardRecommendation.reason }
+          );
+        }
+
         // Update the streaming intent_analysis block with full data
         setBlocks((prev) => {
           const idx = prev.findIndex(
@@ -855,27 +875,40 @@ export function useMissionControl() {
   // ========================================================================
 
   useEffect(() => {
-    const subscriptionKey = activeSessionId || conversationId;
-    if (!subscriptionKey) return;
+    if (!conversationId) return;
 
-    let unsubscribe: (() => void) | null = null;
+    const unsubs: (() => void)[] = [];
     let cancelled = false;
 
     const setup = async () => {
       const transport = await getTransport();
       if (cancelled) return;
 
-      unsubscribe = transport.subscribeConversation(subscriptionKey, {
-        onEvent: handleStreamEvent,
-        scope: "session",
-      });
+      // Always subscribe to conversationId — this catches early events
+      // (invoke_accepted, intent_analysis) before session ID is known
+      unsubs.push(
+        transport.subscribeConversation(conversationId, {
+          onEvent: handleStreamEvent,
+          scope: "session",
+        })
+      );
+
+      // If we already have a session ID (e.g. resuming), also subscribe to it
+      if (activeSessionId && activeSessionId !== conversationId) {
+        unsubs.push(
+          transport.subscribeConversation(activeSessionId, {
+            onEvent: handleStreamEvent,
+            scope: "session",
+          })
+        );
+      }
     };
 
     setup();
 
     return () => {
       cancelled = true;
-      if (unsubscribe) unsubscribe();
+      unsubs.forEach((u) => u());
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
@@ -1337,6 +1370,9 @@ export function switchToSession(sessionId: string, conversationId: string): void
 
 export function useRecentSessions() {
   const [sessions, setSessions] = useState<LogSession[]>([]);
+  const [refreshCount, setRefreshCount] = useState(0);
+
+  const refresh = useCallback(() => setRefreshCount((c) => c + 1), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1377,7 +1413,7 @@ export function useRecentSessions() {
     };
     load();
     return () => { cancelled = true; };
-  }, []);
+  }, [refreshCount]);
 
-  return sessions;
+  return { sessions, refresh };
 }

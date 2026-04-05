@@ -4,6 +4,7 @@
 // Shows HeroInput when idle with no blocks, full layout otherwise.
 // ============================================================================
 
+import { useEffect } from "react";
 import { useMissionControl, useRecentSessions } from "./mission-hooks";
 import { SessionBar } from "./SessionBar";
 import { ExecutionNarrative } from "./ExecutionNarrative";
@@ -25,7 +26,14 @@ import { HeroInput } from "./HeroInput";
  */
 export function MissionControl() {
   const { state, sendMessage, stopAgent, startNewSession } = useMissionControl();
-  const recentSessions = useRecentSessions();
+  const { sessions: recentSessions, refresh: refreshSessions } = useRecentSessions();
+
+  // Refresh recent sessions when returning to idle/hero state
+  useEffect(() => {
+    if (state.blocks.length === 0 && state.status === "idle") {
+      refreshSessions();
+    }
+  }, [state.blocks.length, state.status, refreshSessions]);
 
   // No blocks and idle — show the beautiful landing input
   if (state.blocks.length === 0 && state.status === "idle") {
