@@ -89,7 +89,7 @@ impl OpenAiClient {
             .tcp_nodelay(true)
             .pool_max_idle_per_host(4)
             .pool_idle_timeout(std::time::Duration::from_secs(90))
-            .timeout(std::time::Duration::from_secs(300))
+            .timeout(std::time::Duration::from_secs(600))
             .build()?;
         Ok(Self {
             config: Arc::new(config),
