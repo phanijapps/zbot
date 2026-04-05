@@ -294,6 +294,10 @@ impl LlmClient for OpenAiClient {
     ) -> Result<ChatResponse, LlmError> {
         tracing::info!("Starting streaming chat with {} messages", messages.len());
 
+        // Clone messages+tools for non-streaming fallback if stream breaks
+        let fallback_messages = messages.clone();
+        let fallback_tools = tools.clone();
+
         let url = format!("{}/chat/completions", self.config.base_url);
 
         let mut body_obj = self.build_request_body(messages, tools);
@@ -352,10 +356,38 @@ impl LlmClient for OpenAiClient {
         let mut sse_buffer = String::new();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                tracing::error!("Stream error: {}", e);
-                LlmError::HttpError(e)
-            })?;
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        emitted_chars = full_content.len(),
+                        tool_calls = tool_accumulators.len(),
+                        "Stream decode error — falling back to non-streaming: {}",
+                        e
+                    );
+
+                    // If we haven't emitted anything yet, retry as non-streaming
+                    if full_content.is_empty() && tool_accumulators.is_empty() {
+                        tracing::info!("No content emitted yet, retrying as non-streaming request");
+                        let body = self.build_request_body(fallback_messages, fallback_tools);
+                        let response = self.make_request(body).await?;
+                        let parsed = self.parse_response(response);
+                        // Emit the full response as a single token
+                        if !parsed.content.is_empty() {
+                            callback(StreamChunk::Token(parsed.content.clone()));
+                        }
+                        return Ok(parsed);
+                    }
+
+                    // If we already emitted content, return what we have as partial
+                    // (better than crashing — executor can continue)
+                    tracing::warn!(
+                        "Stream broke after {} chars emitted — returning partial response",
+                        full_content.len()
+                    );
+                    break;
+                }
+            };
             sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             // Find the last complete line boundary
