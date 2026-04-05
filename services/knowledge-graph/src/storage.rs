@@ -937,6 +937,21 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
         ).map_err(|e| GraphError::Database(e))?;
     }
 
+    // One-time migration: dedup existing relationships before adding unique index
+    // Keep the row with lowest rowid per (source, target, type) triple
+    conn.execute_batch("
+        DELETE FROM kg_relationships WHERE rowid NOT IN (
+            SELECT MIN(rowid) FROM kg_relationships
+            GROUP BY source_entity_id, target_entity_id, relationship_type
+        );
+    ").map_err(GraphError::Database)?;
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_rel_unique
+         ON kg_relationships(source_entity_id, target_entity_id, relationship_type)",
+        [],
+    ).map_err(GraphError::Database)?;
+
     Ok(())
 }
 
@@ -1029,7 +1044,7 @@ fn store_relationship(conn: &Connection, agent_id: &str, relationship: Relations
     conn.execute(
         "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(id) DO UPDATE SET
+         ON CONFLICT(source_entity_id, target_entity_id, relationship_type) DO UPDATE SET
             last_seen_at = excluded.last_seen_at,
             mention_count = mention_count + 1,
             properties = excluded.properties",
