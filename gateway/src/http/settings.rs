@@ -288,9 +288,13 @@ pub struct UpdateExecutionSettingsRequest {
     /// The user-chosen name for the root agent
     #[serde(default)]
     pub agent_name: Option<String>,
+    /// Disable streaming for subagents (default: true)
+    #[serde(default = "default_non_streaming")]
+    pub subagent_non_streaming: bool,
 }
 
 fn default_max_parallel() -> u32 { 2 }
+fn default_non_streaming() -> bool { true }
 
 impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
     fn from(req: UpdateExecutionSettingsRequest) -> Self {
@@ -298,6 +302,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
             max_parallel_agents: req.max_parallel_agents,
             setup_complete: req.setup_complete,
             agent_name: req.agent_name,
+            subagent_non_streaming: req.subagent_non_streaming,
         }
     }
 }

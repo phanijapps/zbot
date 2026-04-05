@@ -52,6 +52,7 @@ pub struct ExecutorBuilder {
     rate_limiter: Option<Arc<agent_runtime::ProviderRateLimiter>>,
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
+    subagent_non_streaming: bool,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
 }
 
@@ -67,6 +68,7 @@ impl ExecutorBuilder {
             rate_limiter: None,
             model_registry: None,
             is_delegated: false,
+            subagent_non_streaming: true,
             extra_initial_state: None,
         }
     }
@@ -101,6 +103,12 @@ impl ExecutorBuilder {
     /// Mark this executor as a delegated subagent (enables plan step cap).
     pub fn with_delegated(mut self, is_delegated: bool) -> Self {
         self.is_delegated = is_delegated;
+        self
+    }
+
+    /// Set whether subagents use non-streaming requests.
+    pub fn with_subagent_non_streaming(mut self, non_streaming: bool) -> Self {
+        self.subagent_non_streaming = non_streaming;
         self
     }
 
@@ -241,10 +249,19 @@ impl ExecutorBuilder {
             Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
 
         // Wrap with shared rate limiter if configured (limits concurrent calls and RPM per provider)
-        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
+        let rate_limited: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
             Arc::new(agent_runtime::RateLimitedLlmClient::new(retrying_client, limiter.clone()))
         } else {
             retrying_client
+        };
+
+        // Wrap with non-streaming for subagents — they run in background,
+        // nobody watches their output. Non-streaming is more reliable
+        // (no mid-stream decode errors with GLM/Z.AI).
+        let llm_client: Arc<dyn agent_runtime::LlmClient> = if self.is_delegated && self.subagent_non_streaming {
+            Arc::new(agent_runtime::NonStreamingLlmClient::new(rate_limited))
+        } else {
+            rate_limited
         };
 
         // Create file system context for tools

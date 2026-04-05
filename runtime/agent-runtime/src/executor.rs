@@ -181,6 +181,7 @@ pub struct ExecutorConfig {
     /// Extra tool calls are dropped with a log message.
     /// Default: false. Set true for orchestrator agents (root).
     pub single_action_mode: bool,
+
 }
 
 impl ExecutorConfig {
@@ -767,6 +768,8 @@ impl AgentExecutor {
             // Real streaming via chat_stream() with mpsc channel bridge.
             // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
             // including intermediate text that accompanies tool calls.
+            // NOTE: When non_streaming is enabled on the LLM client wrapper,
+            // chat_stream() internally uses chat() and emits content as a single chunk.
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamChunk>();
 
             let llm_client = self.llm_client.clone();

@@ -45,9 +45,15 @@ pub struct ExecutionSettings {
     /// Used in SOUL.md and displayed in the UI.
     #[serde(default)]
     pub agent_name: Option<String>,
+    /// Disable streaming (SSE) for subagents — use non-streaming requests instead.
+    /// Default: true. Subagents run in background, nobody watches their output in
+    /// real-time. Non-streaming is more reliable (no mid-stream decode errors).
+    #[serde(default = "default_true")]
+    pub subagent_non_streaming: bool,
 }
 
 fn default_max_parallel_agents() -> u32 { 2 }
+fn default_true() -> bool { true }
 
 impl Default for ExecutionSettings {
     fn default() -> Self {
@@ -55,6 +61,7 @@ impl Default for ExecutionSettings {
             max_parallel_agents: default_max_parallel_agents(),
             setup_complete: false,
             agent_name: None,
+            subagent_non_streaming: true,
         }
     }
 }
