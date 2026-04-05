@@ -88,19 +88,19 @@ export function AgentsStep({
     load();
   }, []);
 
-  if (isLoading) {
-    return <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>;
-  }
-
   const selectedProvider = activeProviders.find((p) => p.id === globalDefault.providerId);
   const globalModels = selectedProvider?.models || [];
 
   // Sync: if current model isn't in the provider's model list, select first available
   useEffect(() => {
-    if (globalModels.length > 0 && !globalModels.includes(globalDefault.model)) {
+    if (!isLoading && globalModels.length > 0 && !globalModels.includes(globalDefault.model)) {
       onGlobalChange({ ...globalDefault, model: globalModels[0] });
     }
-  }, [globalDefault.providerId, globalModels.length]);
+  }, [isLoading, globalDefault.providerId, globalModels.length]);
+
+  if (isLoading) {
+    return <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>;
+  }
 
   const getEffectiveConfig = (agentId: string) => {
     const override = agentOverrides[agentId];
