@@ -2796,59 +2796,78 @@ fn generate_core_docs_md(
     output_path: &std::path::Path,
     lang_configs_dir: &std::path::Path,
 ) {
-    let core_dir = ward_dir.join("core");
-    if !core_dir.exists() { return; }
-
     let lang_configs = {
         let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
             .unwrap_or_default();
         gateway_services::lang_config::compile_all(&raw)
     };
 
-    let mut entries: Vec<_> = std::fs::read_dir(&core_dir)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter(|e| {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    e.path().is_file() && !name.starts_with('.') && name != "__init__.py"
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    entries.sort_by_key(|e| e.file_name());
+    // Scan ALL code files in the ward (not just core/) — recursively
+    let code_extensions = ["py", "js", "ts", "rs", "go", "rb", "sh"];
+    let skip_dirs = ["node_modules", ".venv", "__pycache__", ".git", "memory-bank", "specs"];
 
-    if entries.is_empty() { return; }
+    let mut all_files: Vec<std::path::PathBuf> = Vec::new();
+    fn walk_dir(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>, exts: &[&str], skip: &[&str]) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; }
+            if path.is_dir() {
+                if !skip.contains(&name.as_str()) {
+                    walk_dir(&path, files, exts, skip);
+                }
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if exts.contains(&ext) && name != "__init__.py" {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+    walk_dir(ward_dir, &mut all_files, &code_extensions, &skip_dirs);
+    all_files.sort();
 
-    let mut content = String::from("# Core Module Documentation\n\nImport pattern: `from core.{module} import {function}`\n\n");
+    if all_files.is_empty() { return; }
 
-    for entry in &entries {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
+    let mut content = String::from("# Code Inventory\n\n*Auto-generated. Lists all code files with function signatures.*\n\n");
+
+    for path in &all_files {
+        let relative = path.strip_prefix(ward_dir).unwrap_or(path);
+        let rel_str = relative.to_string_lossy();
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let module_name = name.trim_end_matches(&format!(".{}", ext));
 
-        content.push_str(&format!("## core/{}\n\n", name));
+        // File size
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let size_str = if size > 1024 { format!("{:.1}KB", size as f64 / 1024.0) } else { format!("{}B", size) };
 
+        content.push_str(&format!("## {} ({})\n\n", rel_str, size_str));
+
+        // Extract signatures
         if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
-            let desc = config.extract_first_docstring(&path).unwrap_or_default();
+            let desc = config.extract_first_docstring(path).unwrap_or_default();
             if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
-            let sigs = config.extract_signatures(&path);
+            let sigs = config.extract_signatures(path);
             if !sigs.is_empty() {
                 content.push_str("**Functions:**\n");
                 for sig in &sigs { content.push_str(&format!("- `{}`\n", sig)); }
-                content.push_str(&format!("\n**Usage:** `from core.{} import ...`\n\n", module_name));
+                content.push('\n');
             }
         } else {
-            let desc = extract_first_docstring(&path);
+            let desc = extract_first_docstring(path);
             if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
-            let sigs = extract_function_signatures(&path);
+            let sigs = extract_function_signatures(path);
             if !sigs.is_empty() {
                 content.push_str("**Functions:**\n");
                 for sig in &sigs {
-                    let display = sig.strip_prefix("def ").unwrap_or(&sig);
+                    let display = sig.strip_prefix("def ").unwrap_or(sig);
                     content.push_str(&format!("- `{}`\n", display));
                 }
-                content.push_str(&format!("\n**Usage:** `from core.{} import ...`\n\n", module_name));
+                content.push('\n');
             }
         }
     }

@@ -123,13 +123,27 @@ impl Tool for WriteFileTool {
         let action = if is_new { "created" } else { "overwritten" };
         tracing::debug!("write_file: {} {} ({} bytes)", action, path, content.len());
 
-        Ok(json!({
+        // Size warning for large files — nudge agent to split into modules
+        let warning = if content.len() > 5120 {
+            Some(format!(
+                "⚠ This file is {}KB — consider splitting into smaller modules. Files > 5KB are harder to maintain and reuse.",
+                content.len() / 1024
+            ))
+        } else {
+            None
+        };
+
+        let mut result = json!({
             "success": true,
             "path": path,
             "action": action,
             "bytes": content.len(),
             "message": format!("File {} ({} bytes)", action, content.len())
-        }))
+        });
+        if let Some(warn) = warning {
+            result["warning"] = json!(warn);
+        }
+        Ok(result)
     }
 }
 

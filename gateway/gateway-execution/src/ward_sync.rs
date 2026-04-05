@@ -10,7 +10,31 @@
 
 use std::path::Path;
 
-use gateway_database::MemoryRepository;
+use gateway_database::{MemoryFact, MemoryRepository};
+
+/// Dedup facts by content similarity — keep highest confidence, skip near-duplicates.
+/// Two facts are considered duplicates if they share 60%+ of their words.
+fn dedup_facts(mut facts: Vec<MemoryFact>, max: usize) -> Vec<MemoryFact> {
+    // Sort by confidence descending — keep the best version
+    facts.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut result: Vec<MemoryFact> = Vec::new();
+    for fact in facts {
+        let dominated = result.iter().any(|existing| {
+            let a_words: std::collections::HashSet<&str> = existing.content.split_whitespace().collect();
+            let b_words: std::collections::HashSet<&str> = fact.content.split_whitespace().collect();
+            if a_words.is_empty() || b_words.is_empty() { return false; }
+            let overlap = a_words.intersection(&b_words).count();
+            let smaller = a_words.len().min(b_words.len());
+            overlap as f64 / smaller as f64 > 0.6
+        });
+        if !dominated {
+            result.push(fact);
+            if result.len() >= max { break; }
+        }
+    }
+    result
+}
 
 /// Generate a human-readable ward knowledge file from distilled facts.
 ///
@@ -21,49 +45,53 @@ pub fn generate_ward_knowledge_file(
     ward_id: &str,
     memory_repo: &MemoryRepository,
 ) -> Result<(), String> {
-    // 1. Fetch corrections (highest priority — always follow)
-    let corrections = memory_repo
-        .get_facts_by_category("root", "correction", 10)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
-        .collect::<Vec<_>>();
+    // Curated ward.md: ONLY actionable rules. Deduped. Max ~1KB.
+    // Everything else stays in memory_facts (queryable via recall).
 
-    // 2. Fetch strategies
-    let strategies = memory_repo
-        .get_facts_by_category("root", "strategy", 10)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
-        .collect::<Vec<_>>();
+    // 1. Corrections — max 5, highest confidence, deduped
+    let corrections = dedup_facts(
+        memory_repo.get_facts_by_category("root", "correction", 10)
+            .unwrap_or_default()
+            .into_iter()
+            .chain(
+                memory_repo.get_facts_by_category("root", "instruction", 10)
+                    .unwrap_or_default()
+            )
+            .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
+            .collect(),
+        5,
+    );
 
-    // 3. Fetch patterns
-    let patterns = memory_repo
-        .get_facts_by_category("root", "pattern", 10)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
-        .collect::<Vec<_>>();
+    // 2. Architecture decisions — max 3 strategies
+    let strategies = dedup_facts(
+        memory_repo.get_facts_by_category("root", "strategy", 5)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
+            .collect(),
+        3,
+    );
 
-    // 4. Fetch domain facts scoped to this ward
-    let domain_facts = memory_repo
-        .get_facts_by_category("root", "domain", 15)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
-        .take(10)
-        .collect::<Vec<_>>();
+    // 3. Active warnings — max 2 patterns (only high-confidence operational ones)
+    let patterns = dedup_facts(
+        memory_repo.get_facts_by_category("root", "pattern", 5)
+            .unwrap_or_default()
+            .into_iter()
+            .filter(|f| (f.ward_id == ward_id || f.ward_id == "__global__") && f.confidence >= 0.8)
+            .collect(),
+        2,
+    );
 
-    // 5. Format as markdown
+    // Format — no domain knowledge dump (that's what recall is for)
     let mut md = String::new();
-    md.push_str(&format!("# Ward Knowledge: {}\n", ward_id));
+    md.push_str(&format!("# Ward: {}\n", ward_id));
     md.push_str(&format!(
-        "*Auto-generated from knowledge graph. Last updated: {}*\n\n",
+        "*Updated: {}*\n\n",
         chrono::Utc::now().format("%Y-%m-%d")
     ));
 
     if !corrections.is_empty() {
-        md.push_str("## Corrections (ALWAYS follow)\n");
+        md.push_str("## Rules (ALWAYS follow)\n");
         for f in &corrections {
             md.push_str(&format!("- {}\n", f.content));
         }
@@ -71,7 +99,7 @@ pub fn generate_ward_knowledge_file(
     }
 
     if !strategies.is_empty() {
-        md.push_str("## Strategies\n");
+        md.push_str("## Architecture\n");
         for f in &strategies {
             md.push_str(&format!("- {}\n", f.content));
         }
@@ -79,16 +107,8 @@ pub fn generate_ward_knowledge_file(
     }
 
     if !patterns.is_empty() {
-        md.push_str("## Patterns\n");
+        md.push_str("## Warnings\n");
         for f in &patterns {
-            md.push_str(&format!("- {}\n", f.content));
-        }
-        md.push('\n');
-    }
-
-    if !domain_facts.is_empty() {
-        md.push_str("## Domain Knowledge\n");
-        for f in &domain_facts {
             md.push_str(&format!("- {}\n", f.content));
         }
         md.push('\n');
