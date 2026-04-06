@@ -293,7 +293,16 @@ impl SessionDistiller {
             .map(|f: &gateway_database::MemoryFact| (f.key.clone(), f.content.clone()))
             .collect();
 
+        // Reserved key prefixes — only created via UI, never by distillation
+        const RESERVED_PREFIXES: &[&str] = &["policy.", "instruction.", "user.profile"];
+
         for ef in &response.facts {
+            // Skip reserved keys — these are user-managed via the Memory UI
+            if RESERVED_PREFIXES.iter().any(|p| ef.key.starts_with(p)) {
+                tracing::debug!(key = %ef.key, "Skipping reserved key (user-managed)");
+                continue;
+            }
+
             let verified_confidence = verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
 
             // Skip facts with very low grounding
