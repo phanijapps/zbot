@@ -406,6 +406,14 @@ export interface OrchestratorConfig {
   thinkingEnabled: boolean;
 }
 
+/** Distillation model configuration (provider/model override) */
+export interface DistillationConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
 /** Execution settings for controlling agent concurrency */
 export interface ExecutionSettings {
   /** Maximum parallel subagents across all sessions (default: 2) */
@@ -416,6 +424,8 @@ export interface ExecutionSettings {
   agentName?: string;
   /** Orchestrator (root agent) configuration */
   orchestrator?: OrchestratorConfig;
+  /** Distillation model configuration (inherits from orchestrator by default) */
+  distillation?: DistillationConfig;
 }
 
 export interface ExecutionSettingsResponse {
