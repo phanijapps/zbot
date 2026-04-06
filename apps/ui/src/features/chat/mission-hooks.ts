@@ -966,16 +966,17 @@ export function useMissionControl() {
   // ========================================================================
 
   useEffect(() => {
-    if (!activeSessionId || hasLoadedSessionRef.current) return;
+    const logSessionId = localStorage.getItem("agentzero_log_session_id");
+    if ((!activeSessionId && !logSessionId) || hasLoadedSessionRef.current) return;
     hasLoadedSessionRef.current = true;
 
     const loadSession = async () => {
       try {
         const transport = await getTransport();
-        const logSessionId = localStorage.getItem("agentzero_log_session_id") || activeSessionId;
-        if (!logSessionId) return;
+        const sessionToLoad = logSessionId || activeSessionId;
+        if (!sessionToLoad) return;
 
-        const res = await transport.getSessionState(logSessionId);
+        const res = await transport.getSessionState(sessionToLoad);
         if (!res.success || !res.data) {
           // Session state API not available — skip loading
           console.warn("[MissionControl] getSessionState failed, skipping load");
@@ -1058,7 +1059,7 @@ export function useMissionControl() {
         const loadedBlocks: NarrativeBlock[] = [];
         if (s.userMessage) {
           loadedBlocks.push({
-            id: "user-" + logSessionId,
+            id: "user-" + sessionToLoad,
             type: "user",
             timestamp: s.session.startedAt,
             data: { content: s.userMessage, timestamp: s.session.startedAt },
@@ -1066,7 +1067,7 @@ export function useMissionControl() {
         }
         if (s.response) {
           loadedBlocks.push({
-            id: "response-" + logSessionId,
+            id: "response-" + sessionToLoad,
             type: "response",
             timestamp: s.session.startedAt,
             data: { content: s.response, timestamp: s.session.startedAt },
