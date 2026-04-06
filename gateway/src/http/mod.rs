@@ -158,6 +158,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Session archive endpoints
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
+        .route("/api/sessions/:id/state", get(sessions::get_session_state))
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))

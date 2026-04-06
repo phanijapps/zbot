@@ -8,6 +8,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
+use gateway_execution::{SessionState, SessionStateBuilder};
 use serde::{Deserialize, Serialize};
 
 // ============================================================================
@@ -130,6 +131,33 @@ pub async fn restore_session(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(SessionErrorResponse {
                 error: format!("Restore failed: {}", e),
+            }),
+        )),
+    }
+}
+
+/// GET /api/sessions/:id/state — returns structured session snapshot
+pub async fn get_session_state(
+    State(state): State<AppState>,
+    Path(session_id): Path<String>,
+) -> Result<Json<SessionState>, (StatusCode, Json<SessionErrorResponse>)> {
+    let builder = SessionStateBuilder::new(
+        state.log_service.clone(),
+        state.conversations.clone(),
+    );
+
+    match builder.build(&session_id) {
+        Ok(Some(session_state)) => Ok(Json(session_state)),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(SessionErrorResponse {
+                error: format!("Session not found: {}", session_id),
+            }),
+        )),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SessionErrorResponse {
+                error: format!("Failed to build session state: {}", e),
             }),
         )),
     }
