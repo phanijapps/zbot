@@ -34,6 +34,7 @@ pub mod pruning;
 pub mod recall;
 pub mod resource_provider;
 pub mod runner;
+pub mod session_state;
 pub mod ward_sync;
 pub mod middleware;
 
@@ -58,3 +59,4 @@ pub use recall::{MemoryRecall, RecallResult, GraphContext, format_recalled_facts
 pub use archiver::SessionArchiver;
 pub use composite_provider::CompositeResourceProvider;
 pub use resource_provider::GatewayResourceProvider;
+pub use session_state::{SessionState, SessionStateBuilder};
