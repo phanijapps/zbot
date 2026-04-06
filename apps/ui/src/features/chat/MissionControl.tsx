@@ -36,7 +36,12 @@ export function MissionControl() {
   }, [state.blocks.length, state.status, refreshSessions]);
 
   // No blocks and idle — show the beautiful landing input
-  if (state.blocks.length === 0 && state.status === "idle") {
+  // But NOT if we're about to load a session (logSessionId or activeSessionId present)
+  const hasPendingLoad = typeof window !== "undefined" && (
+    localStorage.getItem("agentzero_log_session_id") ||
+    localStorage.getItem("agentzero_web_session_id")
+  );
+  if (state.blocks.length === 0 && state.status === "idle" && !hasPendingLoad) {
     return <HeroInput onSend={sendMessage} recentSessions={recentSessions} />;
   }
 
