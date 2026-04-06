@@ -1026,7 +1026,7 @@ export function useMissionControl() {
 
         // Sidebar — ward, facts, plan
         if (s.ward) setActiveWard(s.ward);
-        if (s.recalledFacts.length > 0) {
+        if (s.recalledFacts?.length > 0) {
           setRecalledFacts(s.recalledFacts.map((f: Record<string, unknown>) => ({
             key: (f.key ?? "") as string,
             content: (f.content ?? f.text ?? "") as string,
@@ -1034,7 +1034,7 @@ export function useMissionControl() {
             confidence: (f.confidence ?? f.score) as number | undefined,
           })));
         }
-        if (s.plan.length > 0) {
+        if (s.plan?.length > 0) {
           setPlan(s.plan.map((p) => ({
             text: p.text,
             status: (p.status === "completed" ? "done" : p.status === "in_progress" ? "active" : "pending") as "done" | "active" | "pending",
@@ -1042,7 +1042,7 @@ export function useMissionControl() {
         }
 
         // Sidebar — subagents
-        if (s.subagents.length > 0) {
+        if (s.subagents?.length > 0) {
           setSubagents(s.subagents.map((sa: SubagentStateData) => ({
             agentId: sa.agentId,
             task: sa.task,
