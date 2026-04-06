@@ -25,6 +25,7 @@ interface WizardState {
   currentStep: number;
   agentName: string;
   namePreset: string | null;
+  aboutMe: string;
   providers: ProviderResponse[];
   defaultProviderId: string;
   enabledSkillIds: string[];
@@ -40,6 +41,7 @@ interface WizardState {
 type WizardAction =
   | { type: "SET_STEP"; step: number }
   | { type: "SET_NAME"; name: string; preset: string | null }
+  | { type: "SET_ABOUT_ME"; aboutMe: string }
   | { type: "SET_PROVIDERS"; providers: ProviderResponse[]; defaultId: string }
   | { type: "SET_SKILLS"; ids: string[] }
   | { type: "SET_MCPS"; configs: McpServerConfig[] }
@@ -51,6 +53,7 @@ function reducer(state: WizardState, action: WizardAction): WizardState {
   switch (action.type) {
     case "SET_STEP": return { ...state, currentStep: action.step };
     case "SET_NAME": return { ...state, agentName: action.name, namePreset: action.preset };
+    case "SET_ABOUT_ME": return { ...state, aboutMe: action.aboutMe };
     case "SET_PROVIDERS": return { ...state, providers: action.providers, defaultProviderId: action.defaultId };
     case "SET_SKILLS": return { ...state, enabledSkillIds: action.ids };
     case "SET_MCPS": return { ...state, mcpConfigs: action.configs };
@@ -65,6 +68,7 @@ const initialState: WizardState = {
   currentStep: 1,
   agentName: "Brahmi",
   namePreset: "brahmi",
+  aboutMe: "I am a private person, just call me Mr Z.",
   providers: [],
   defaultProviderId: "",
   enabledSkillIds: [],
@@ -112,6 +116,14 @@ export function SetupWizard() {
           const matchingPreset = NAME_PRESETS.find((p) => p.name === name && p.id !== "custom");
           hydrated.namePreset = matchingPreset?.id || "custom";
         }
+
+        // Pre-fill About Me from memory facts
+        try {
+          const memRes = await transport.searchAllMemory("user.profile", 1, "user");
+          if (memRes.success && memRes.data && memRes.data.facts && memRes.data.facts.length > 0) {
+            hydrated.aboutMe = memRes.data.facts[0].content;
+          }
+        } catch { /* ignore */ }
 
         // Pre-fill providers
         if (providersRes.success && providersRes.data && providersRes.data.length > 0) {
@@ -292,7 +304,9 @@ export function SetupWizard() {
             <NameStep
               agentName={state.agentName}
               namePreset={state.namePreset}
+              aboutMe={state.aboutMe}
               onChange={(name, preset) => dispatch({ type: "SET_NAME", name, preset })}
+              onAboutMeChange={(aboutMe) => dispatch({ type: "SET_ABOUT_ME", aboutMe })}
             />
           )}
           {state.currentStep === 2 && (
@@ -336,6 +350,7 @@ export function SetupWizard() {
           {state.currentStep === 6 && (
             <ReviewStep
               agentName={state.agentName}
+              aboutMe={state.aboutMe}
               providers={state.providers}
               defaultProviderId={state.defaultProviderId}
               enabledSkillIds={state.enabledSkillIds}

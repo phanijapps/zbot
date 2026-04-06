@@ -19,6 +19,7 @@ interface AgentOverride {
 
 interface ReviewStepProps {
   agentName: string;
+  aboutMe: string;
   providers: ProviderResponse[];
   defaultProviderId: string;
   enabledSkillIds: string[];
@@ -33,6 +34,7 @@ interface ReviewStepProps {
 
 export function ReviewStep({
   agentName,
+  aboutMe,
   providers,
   defaultProviderId,
   enabledSkillIds,
@@ -134,7 +136,18 @@ export function ReviewStep({
         }
       }
 
-      // 6. Mark setup complete + persist agent name (also updates SOUL.md via gateway)
+      // 6. Save About Me as a pinned user memory fact
+      if (aboutMe.trim()) {
+        await transport.createMemory("root", {
+          category: "user",
+          key: "user.profile",
+          content: aboutMe.trim(),
+          confidence: 0.95,
+          pinned: true,
+        });
+      }
+
+      // 7. Mark setup complete + persist agent name (also updates SOUL.md via gateway)
       const execResult = await transport.getExecutionSettings();
       const currentExec = execResult.data || { maxParallelAgents: 2, setupComplete: false };
       await transport.updateExecutionSettings({
@@ -160,6 +173,12 @@ export function ReviewStep({
           <span className="review-item__label">Name</span>
           <span className="review-item__value">{agentName}</span>
         </div>
+        {aboutMe && (
+          <div className="review-item">
+            <span className="review-item__label">About You</span>
+            <span className="review-item__value">{aboutMe}</span>
+          </div>
+        )}
       </Section>
 
       <Section id="providers" title="Providers" count={`${providers.length} connected`} open={openSections} onToggle={toggleSection}>

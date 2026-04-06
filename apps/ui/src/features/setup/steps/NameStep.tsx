@@ -3,10 +3,12 @@ import { NAME_PRESETS, type NamePreset } from "../presets";
 interface NameStepProps {
   agentName: string;
   namePreset: string | null;
+  aboutMe: string;
   onChange: (name: string, presetId: string | null) => void;
+  onAboutMeChange: (aboutMe: string) => void;
 }
 
-export function NameStep({ agentName, namePreset, onChange }: NameStepProps) {
+export function NameStep({ agentName, namePreset, aboutMe, onChange, onAboutMeChange }: NameStepProps) {
   const handlePresetClick = (preset: NamePreset) => {
     if (preset.id === "custom") {
       onChange("", "custom");
@@ -46,6 +48,20 @@ export function NameStep({ agentName, namePreset, onChange }: NameStepProps) {
         />
         <p className="settings-hint">
           Click a preset above or type your own name. You can always change this later.
+        </p>
+      </div>
+
+      <div className="form-group">
+        <label className="form-label">About You</label>
+        <textarea
+          className="form-input"
+          rows={3}
+          value={aboutMe}
+          onChange={(e) => onAboutMeChange(e.target.value)}
+          placeholder="Tell your agent about yourself — role, interests, preferences. This helps it personalize its work for you."
+        />
+        <p className="settings-hint">
+          Optional. Your agent remembers this across all sessions. You can update it later in Memory.
         </p>
       </div>
     </div>

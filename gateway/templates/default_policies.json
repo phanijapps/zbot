@@ -68,5 +68,12 @@
     "content": "Update memory-bank/core_docs.md with SDK-quality documentation after writing code: full signatures, params with types, return types, one usage example per function.",
     "confidence": 0.9,
     "pinned": true
+  },
+  {
+    "category": "user",
+    "key": "user.profile",
+    "content": "I am a private person, just call me Mr Z.",
+    "confidence": 0.95,
+    "pinned": true
   }
 ]
