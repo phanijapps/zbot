@@ -31,10 +31,10 @@ pub struct LocalEmbeddingClient {
 }
 
 impl LocalEmbeddingClient {
-    /// Create with default model (all-MiniLM-L6-v2), 300s idle timeout.
+    /// Create with default model (all-MiniLM-L6-v2), 600s idle timeout.
     /// Does NOT load the model — loads lazily on first embed().
     pub fn new() -> Self {
-        Self::with_model(EmbeddingModel::AllMiniLML6V2, 300)
+        Self::with_model(EmbeddingModel::AllMiniLML6V2, 600)
     }
 
     /// Create with specific model and idle timeout.
