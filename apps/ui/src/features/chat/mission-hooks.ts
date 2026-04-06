@@ -7,6 +7,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getTransport, type StreamEvent } from "@/services/transport";
 import type { LogSession } from "@/services/transport/types";
+import type { SubagentStateData } from "@/services/transport/types";
+import type { Phase } from "./PhaseIndicators";
 import type { PlanStep, StepStatus } from "./PlanBlock";
 import type { RecalledFact, SubagentInfo } from "./IntelligenceFeed";
 import type { UploadedFile } from "./ChatInput";
@@ -50,6 +52,7 @@ export interface MissionState {
   blocks: NarrativeBlock[];
   sessionTitle: string;
   status: "idle" | "running" | "completed" | "error";
+  phase: Phase;
   tokenCount: number;
   durationMs: number;
   modelName: string;
@@ -126,6 +129,7 @@ export function useMissionControl() {
   const [blocks, setBlocks] = useState<NarrativeBlock[]>([]);
   const [sessionTitle, setSessionTitle] = useState("");
   const [status, setStatus] = useState<MissionState["status"]>("idle");
+  const [phase, setPhase] = useState<Phase>("idle");
   const [tokenCount, setTokenCount] = useState(0);
   const [modelName, setModelName] = useState("");
 
@@ -173,6 +177,9 @@ export function useMissionControl() {
 
   // -- Map of tool_call_id to block id for correlating ToolResult --
   const toolCallBlockMapRef = useRef<Map<string, string>>(new Map());
+
+  // -- Map of execution_id to agent_id for subagent tool routing --
+  const executionAgentMapRef = useRef<Map<string, string>>(new Map());
 
   // ========================================================================
   // Duration timer
@@ -230,6 +237,7 @@ export function useMissionControl() {
       }
 
       // No streaming response found — create new block
+      setPhase((prev) => prev !== "responding" && prev !== "completed" ? "responding" : prev);
       return [
         ...prev,
         {
@@ -433,6 +441,7 @@ export function useMissionControl() {
               },
             ]);
           }
+          setPhase("responding");
           break;
         }
 
@@ -455,6 +464,7 @@ export function useMissionControl() {
             ...prev.filter((s) => !(s.agentId === delegateAgentId && s.status === "active")),
             { agentId: delegateAgentId, task, status: "active" },
           ]);
+          setPhase((prev) => prev === "planning" || prev === "intent" ? "executing" : prev);
           break;
         }
 
@@ -571,6 +581,12 @@ export function useMissionControl() {
       case "delegation_started": {
         const childAgentId = (event.child_agent_id ?? "") as string;
         const task = (event.task ?? "") as string;
+
+        // Populate execution→agent map for subagent tool routing
+        const childExecId = (event.child_execution_id ?? event.execution_id) as string | undefined;
+        if (childExecId && childAgentId) {
+          executionAgentMapRef.current.set(childExecId, childAgentId);
+        }
 
         // Update existing delegation block if we have one
         setBlocks((prev) => {
@@ -723,6 +739,7 @@ export function useMissionControl() {
           },
         };
         setIntentAnalysis(ia);
+        setPhase("planning");
 
         // Update active ward from intent analysis recommendation
         if (ia.wardRecommendation.wardName) {
@@ -827,6 +844,7 @@ export function useMissionControl() {
         }
 
         setStatus("completed");
+        setPhase("completed");
         stopDurationTimer();
         // Finalize any streaming blocks
         setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
@@ -840,6 +858,7 @@ export function useMissionControl() {
         }
         flushTokenBuffer();
         setStatus("error");
+        setPhase("error");
         stopDurationTimer();
         setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
         break;
@@ -953,268 +972,112 @@ export function useMissionControl() {
     const loadSession = async () => {
       try {
         const transport = await getTransport();
-        // Use the log session ID (exec-...) if available, fall back to activeSessionId
         const logSessionId = localStorage.getItem("agentzero_log_session_id") || activeSessionId;
-        const res = await transport.getLogSession(logSessionId!);
-        if (!res.success || !res.data) return;
+        if (!logSessionId) return;
 
-        const detail = res.data;
-        const session = detail.session;
-
-        // Set session metadata
-        if (session.title) setSessionTitle(session.title);
-        const sStatus = session.status as string;
-        if (sStatus === "completed" || sStatus === "stopped") {
-          setStatus("completed");
-        } else if (sStatus === "error" || sStatus === "crashed") {
-          setStatus("error");
-        } else if (sStatus === "running") {
-          setStatus("running");
-          startDurationTimer();
-        }
-        if (session.token_count) setTokenCount(session.token_count);
-        if (session.duration_ms) setDurationMs(session.duration_ms);
-
-        // Convert logs to narrative blocks
-        const loadedBlocks: NarrativeBlock[] = [];
-        const logs = detail.logs || [];
-
-        for (const log of logs) {
-          if (log.category === "tool_call") {
-            // Extract tool name from metadata (preferred) or message
-            const meta = log.metadata as Record<string, unknown> | undefined;
-            const toolName = (meta?.tool_name as string) ??
-              log.message.match(/^Calling tool:\s*(\S+)/)?.[1] ??
-              log.message.split(" ")[0];
-
-            // set_session_title tool = extract title for display
-            if (toolName === "set_session_title") {
-              const args = meta?.args as Record<string, unknown> | undefined;
-              const title = (args?.title ?? args?.name ?? "") as string;
-              if (title) setSessionTitle(title);
-              continue; // Don't render as a tool block
-            }
-
-            // update_plan tool = plan block
-            if (toolName === "update_plan") {
-              const args = meta?.args as Record<string, unknown> | undefined;
-              const rawSteps = args?.steps ?? args?.plan ?? args?.content;
-              const steps: Array<{ text: string; status: string }> = [];
-              if (Array.isArray(rawSteps)) {
-                for (const s of rawSteps) {
-                  if (typeof s === "string") {
-                    steps.push({ text: s, status: "pending" });
-                  } else if (typeof s === "object" && s) {
-                    const obj = s as Record<string, unknown>;
-                    steps.push({
-                      text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
-                      status: (obj.status ?? "pending") as string,
-                    });
-                  }
-                }
-              }
-              if (steps.length > 0) {
-                // Map statuses: completed→done, in_progress→active, pending→pending
-                const mapped = steps.map((s) => ({
-                  text: s.text,
-                  status: (s.status === "completed" ? "done" : s.status === "in_progress" ? "active" : "pending") as "done" | "active" | "pending",
-                }));
-                setPlan(mapped);
-                // Replace existing plan block — only show the latest plan
-                const existingIdx = loadedBlocks.findIndex((b) => b.type === "plan");
-                if (existingIdx >= 0) {
-                  loadedBlocks[existingIdx] = { ...loadedBlocks[existingIdx], data: { steps: mapped } };
-                } else {
-                  loadedBlocks.push({ id: log.id, type: "plan", timestamp: log.timestamp, data: { steps: mapped } });
-                }
-              }
-              continue;
-            }
-
-            // respond tool = agent's final response
-            if (toolName === "respond") {
-              const args = meta?.args as Record<string, unknown> | undefined;
-              const respondMsg = (args?.message ?? "") as string;
-              if (respondMsg) {
-                loadedBlocks.push({
-                  id: log.id,
-                  type: "response",
-                  timestamp: log.timestamp,
-                  data: { content: respondMsg, timestamp: log.timestamp },
-                  isStreaming: false,
-                });
-              }
-              continue;
-            }
-
-            // Ward tool — extract ward name for sidebar
-            if (toolName === "ward" || toolName === "set_ward" || toolName === "enter_ward") {
-              const args = meta?.args as Record<string, unknown> | undefined;
-              const wardName = (args?.name ?? args?.ward_name ?? args?.ward_id ?? "") as string;
-              if (wardName) {
-                setActiveWard({ name: wardName, content: "" });
-              }
-              continue;
-            }
-
-            if (toolName === "memory" && log.message.includes("recall")) {
-              loadedBlocks.push({
-                id: log.id,
-                type: "recall",
-                timestamp: log.timestamp,
-                data: { raw: "" },
-              });
-            } else if (toolName === "delegate_to_agent" || toolName === "delegate") {
-              const agentMatch = log.message.match(/agent[_:]?\s*["']?(\w[\w-]*)["']?/i);
-              loadedBlocks.push({
-                id: log.id,
-                type: "delegation",
-                timestamp: log.timestamp,
-                data: {
-                  agentId: agentMatch ? agentMatch[1] : "subagent",
-                  task: log.message.slice(0, 200),
-                  status: "completed",
-                },
-              });
-            } else {
-              loadedBlocks.push({
-                id: log.id,
-                type: "tool",
-                timestamp: log.timestamp,
-                data: {
-                  toolName,
-                  input: log.message.slice(0, 200),
-                  durationMs: log.duration_ms,
-                },
-              });
-            }
-          } else if (log.category === "tool_result") {
-            // Find matching tool/recall block and add output
-            const lastBlock = [...loadedBlocks].reverse().find(b => (b.type === "tool" || b.type === "recall") && !b.data.output);
-            if (lastBlock) {
-              if (lastBlock.type === "recall" && log.message) {
-                lastBlock.data.raw = log.message.slice(0, 2000);
-                // Extract recalled facts for the sidebar
-                try {
-                  const parsed = JSON.parse(log.message);
-                  const facts = (parsed.results ?? parsed.facts ?? []) as Array<Record<string, unknown>>;
-                  if (facts.length > 0) {
-                    setRecalledFacts(facts.map((f) => ({
-                      key: (f.key ?? "") as string,
-                      content: (f.content ?? f.text ?? "") as string,
-                      category: (f.category ?? "") as string,
-                      confidence: (f.confidence ?? f.score) as number | undefined,
-                    })));
-                  }
-                } catch {
-                  // Not JSON — just leave the raw text
-                }
-              } else {
-                lastBlock.data.output = log.message.slice(0, 500);
-                lastBlock.data.isError = log.level === "error";
-              }
-            }
-          } else if (log.category === "response" && log.message.length > 0) {
-            loadedBlocks.push({
-              id: log.id,
-              type: "response",
-              timestamp: log.timestamp,
-              data: { content: log.message, timestamp: log.timestamp },
-              isStreaming: false,
-            });
-          } else if (log.category === "session" && log.message.length > 20) {
-            // Could be a user message or agent response — heuristic
-            if (!loadedBlocks.some(b => b.type === "user")) {
-              loadedBlocks.push({
-                id: log.id,
-                type: "user",
-                timestamp: log.timestamp,
-                data: { content: log.message, timestamp: log.timestamp },
-              });
-            }
-          } else if (log.category === "intent" && log.metadata) {
-            try {
-              const meta = typeof log.metadata === "string" ? JSON.parse(log.metadata) : log.metadata;
-              const ia: IntentAnalysis = {
-                primaryIntent: meta.primary_intent ?? "",
-                hiddenIntents: meta.hidden_intents ?? [],
-                recommendedSkills: meta.recommended_skills ?? [],
-                recommendedAgents: meta.recommended_agents ?? [],
-                wardRecommendation: {
-                  action: meta.ward_recommendation?.action ?? "",
-                  wardName: meta.ward_recommendation?.ward_name ?? "",
-                  subdirectory: meta.ward_recommendation?.subdirectory,
-                  reason: meta.ward_recommendation?.reason ?? "",
-                },
-                executionStrategy: {
-                  approach: meta.execution_strategy?.approach ?? "simple",
-                  graph: meta.execution_strategy?.graph,
-                  explanation: meta.execution_strategy?.explanation ?? "",
-                },
-              };
-              setIntentAnalysis(ia);
-              // Populate ward from intent analysis if not already set
-              if (ia.wardRecommendation.wardName) {
-                setActiveWard((prev) => prev ?? { name: ia.wardRecommendation.wardName, content: ia.wardRecommendation.reason });
-              }
-              // Create a narrative block for the intent analysis
-              loadedBlocks.push({
-                id: log.id,
-                type: "intent_analysis",
-                timestamp: log.timestamp,
-                data: { analysis: ia },
-                isStreaming: false,
-              });
-            } catch {
-              // Ignore malformed intent metadata
-            }
-          }
+        const res = await transport.getSessionState(logSessionId);
+        if (!res.success || !res.data) {
+          // Session state API not available — skip loading
+          console.warn("[MissionControl] getSessionState failed, skipping load");
+          return;
         }
 
-        // If we got the user's first message from the session title API
-        if (session.title && !loadedBlocks.some(b => b.type === "user")) {
-          loadedBlocks.unshift({
-            id: "user-" + activeSessionId,
-            type: "user",
-            timestamp: session.started_at,
-            data: { content: session.title, timestamp: session.started_at },
+        const s = res.data;
+
+        // Session bar
+        if (s.session.title) setSessionTitle(s.session.title);
+        setTokenCount(s.session.tokenCount);
+        setDurationMs(s.session.durationMs);
+        if (s.session.model) setModelName(s.session.model);
+
+        // Status
+        const statusMap: Record<string, "idle" | "running" | "completed" | "error"> = {
+          running: "running", completed: "completed", error: "error", stopped: "completed",
+        };
+        setStatus(statusMap[s.session.status] ?? "completed");
+        if (s.session.status === "running") startDurationTimer();
+
+        // Phase
+        setPhase(s.phase as Phase);
+
+        // Sidebar — intent analysis
+        if (s.intentAnalysis) {
+          const ia = s.intentAnalysis as Record<string, unknown>;
+          const wr = (ia.ward_recommendation ?? {}) as Record<string, unknown>;
+          const es = (ia.execution_strategy ?? {}) as Record<string, unknown>;
+          setIntentAnalysis({
+            primaryIntent: (ia.primary_intent ?? "") as string,
+            hiddenIntents: (ia.hidden_intents ?? []) as string[],
+            recommendedSkills: (ia.recommended_skills ?? []) as string[],
+            recommendedAgents: (ia.recommended_agents ?? []) as string[],
+            wardRecommendation: {
+              action: (wr.action ?? "") as string,
+              wardName: (wr.ward_name ?? "") as string,
+              subdirectory: wr.subdirectory as string | undefined,
+              reason: (wr.reason ?? "") as string,
+            },
+            executionStrategy: {
+              approach: (es.approach ?? "simple") as string,
+              graph: es.graph as IntentAnalysis["executionStrategy"]["graph"],
+              explanation: (es.explanation ?? "") as string,
+            },
           });
         }
 
-        // Fallback for pre-existing sessions without Response logs:
-        // fetch conversation messages and use the last assistant message
-        if (!loadedBlocks.some((b) => b.type === "response") && session.conversation_id) {
-          try {
-            const msgRes = await transport.getMessages(session.conversation_id);
-            if (msgRes.success && msgRes.data) {
-              const lastAssistant = [...msgRes.data]
-                .reverse()
-                .find((m) => m.role === "assistant" && m.content);
-              if (lastAssistant) {
-                loadedBlocks.push({
-                  id: lastAssistant.id ?? crypto.randomUUID(),
-                  type: "response",
-                  timestamp: lastAssistant.timestamp ?? session.ended_at ?? session.started_at,
-                  data: {
-                    content: lastAssistant.content,
-                    timestamp: lastAssistant.timestamp ?? session.ended_at ?? session.started_at,
-                  },
-                  isStreaming: false,
-                });
-              }
-            }
-          } catch {
-            // Non-fatal — older sessions may not have conversation messages
+        // Sidebar — ward, facts, plan
+        if (s.ward) setActiveWard(s.ward);
+        if (s.recalledFacts.length > 0) {
+          setRecalledFacts(s.recalledFacts.map((f: Record<string, unknown>) => ({
+            key: (f.key ?? "") as string,
+            content: (f.content ?? f.text ?? "") as string,
+            category: (f.category ?? "") as string,
+            confidence: (f.confidence ?? f.score) as number | undefined,
+          })));
+        }
+        if (s.plan.length > 0) {
+          setPlan(s.plan.map((p) => ({
+            text: p.text,
+            status: (p.status === "completed" ? "done" : p.status === "in_progress" ? "active" : "pending") as "done" | "active" | "pending",
+          })));
+        }
+
+        // Sidebar — subagents
+        if (s.subagents.length > 0) {
+          setSubagents(s.subagents.map((sa: SubagentStateData) => ({
+            agentId: sa.agentId,
+            task: sa.task,
+            status: sa.status === "running" ? "active" : sa.status as "active" | "completed" | "error",
+          })));
+          // Seed execution→agent map for live event routing
+          for (const sa of s.subagents) {
+            executionAgentMapRef.current.set(sa.executionId, sa.agentId);
           }
         }
 
-        if (loadedBlocks.length > 0) {
-          setBlocks(loadedBlocks);
+        // Center — build minimal blocks (user message + response only)
+        const loadedBlocks: NarrativeBlock[] = [];
+        if (s.userMessage) {
+          loadedBlocks.push({
+            id: "user-" + logSessionId,
+            type: "user",
+            timestamp: s.session.startedAt,
+            data: { content: s.userMessage, timestamp: s.session.startedAt },
+          });
         }
+        if (s.response) {
+          loadedBlocks.push({
+            id: "response-" + logSessionId,
+            type: "response",
+            timestamp: s.session.startedAt,
+            data: { content: s.response, timestamp: s.session.startedAt },
+            isStreaming: false,
+          });
+        }
+        if (loadedBlocks.length > 0) setBlocks(loadedBlocks);
+
       } catch (err) {
         console.error("[MissionControl] Failed to load session:", err);
       } finally {
-        // Clear the resume flag after loading — next fresh page load starts a new session
         localStorage.removeItem("agentzero_log_session_id");
       }
     };
@@ -1249,6 +1112,8 @@ export function useMissionControl() {
       ]);
 
       setStatus("running");
+      setPhase("intent");
+      executionAgentMapRef.current.clear();
       startDurationTimer();
 
       try {
@@ -1302,6 +1167,7 @@ export function useMissionControl() {
     setBlocks([]);
     setSessionTitle("");
     setStatus("idle");
+    setPhase("idle");
     setTokenCount(0);
     setModelName("");
     setSubagents([]);
@@ -1314,12 +1180,14 @@ export function useMissionControl() {
     lastSeqRef.current = 0;
     streamingBufferRef.current = "";
     toolCallBlockMapRef.current.clear();
+    executionAgentMapRef.current.clear();
   }, [stopDurationTimer]);
 
   const state: MissionState = {
     blocks,
     sessionTitle,
     status,
+    phase,
     tokenCount,
     durationMs,
     modelName,
