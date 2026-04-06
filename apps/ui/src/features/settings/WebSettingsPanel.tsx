@@ -743,6 +743,58 @@ export function WebSettingsPanel() {
                     </div>
                   </div>
                 </label>
+
+                {/* Distillation Config */}
+                <div style={{ marginTop: "var(--spacing-4)", paddingTop: "var(--spacing-3)", borderTop: "1px solid var(--border-secondary)" }}>
+                  <div style={{ marginBottom: "var(--spacing-2)" }}>
+                    <h3 className="settings-field-label" style={{ fontSize: "var(--font-size-sm)", fontWeight: 600 }}>Distillation</h3>
+                    <p className="page-subtitle" style={{ fontSize: "var(--font-size-xs)" }}>Override the model used for memory extraction. Inherits from orchestrator by default.</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label">Provider</label>
+                      <select
+                        className="form-input form-select"
+                        value={execSettings.distillation?.providerId || ""}
+                        onChange={(e) => handleExecChange({
+                          distillation: {
+                            ...execSettings.distillation,
+                            providerId: e.target.value || null,
+                            model: e.target.value ? (execSettings.distillation?.model || null) : null,
+                          },
+                        })}
+                      >
+                        <option value="">Inherit from Orchestrator</option>
+                        {providers.filter((p) => p.verified).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="settings-field-label">Model</label>
+                      <select
+                        className="form-input form-select"
+                        value={execSettings.distillation?.model || ""}
+                        onChange={(e) => handleExecChange({
+                          distillation: {
+                            ...execSettings.distillation,
+                            model: e.target.value || null,
+                          },
+                        })}
+                      >
+                        <option value="">Inherit from Orchestrator</option>
+                        {(() => {
+                          const distProviderId = execSettings.distillation?.providerId
+                            || execSettings.orchestrator?.providerId
+                            || defaultProviderId;
+                          return (providers.find((p) => p.id === distProviderId)?.models || []).map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ));
+                        })()}
+                      </select>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
           </div>
