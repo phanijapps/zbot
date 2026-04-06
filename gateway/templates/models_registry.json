@@ -455,7 +455,7 @@
     "capabilities": {
       "tools": true,
       "vision": false,
-      "thinking": false,
+      "thinking": true,
       "embeddings": false,
       "voice": false,
       "imageGeneration": false,
@@ -472,7 +472,7 @@
     "capabilities": {
       "tools": true,
       "vision": false,
-      "thinking": false,
+      "thinking": true,
       "embeddings": false,
       "voice": false,
       "imageGeneration": false,
@@ -489,7 +489,7 @@
     "capabilities": {
       "tools": true,
       "vision": false,
-      "thinking": false,
+      "thinking": true,
       "embeddings": false,
       "voice": false,
       "imageGeneration": false,
