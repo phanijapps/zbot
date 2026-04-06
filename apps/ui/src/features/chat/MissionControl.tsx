@@ -65,7 +65,12 @@ export function MissionControl() {
 
       <div className="mission-control__body">
         <div className="mission-control__main">
-          <ExecutionNarrative blocks={state.blocks} status={state.status} />
+          <ExecutionNarrative
+                blocks={state.blocks}
+                status={state.status}
+                phase={state.phase}
+                subagents={state.subagents as unknown as import("@/services/transport/types").SubagentStateData[]}
+              />
           <div className="mission-control__input">
             <ChatInput
               onSend={sendMessage}
