@@ -275,7 +275,14 @@ Controls agent concurrency and first-time setup state. Stored in `settings.json`
   "execution": {
     "maxParallelAgents": 2,
     "setupComplete": false,
-    "agentName": "Brahmi"
+    "agentName": "Brahmi",
+    "orchestrator": {
+      "providerId": null,
+      "model": null,
+      "temperature": 0.7,
+      "maxTokens": 16384,
+      "thinkingEnabled": true
+    }
   }
 }
 ```
@@ -285,6 +292,11 @@ Controls agent concurrency and first-time setup state. Stored in `settings.json`
 | `maxParallelAgents` | number | `2` | Max subagents running concurrently (global semaphore) |
 | `setupComplete` | bool | `false` | Whether setup wizard has been completed |
 | `agentName` | string\|null | `null` | User-chosen root agent name (also written to SOUL.md) |
+| `orchestrator.providerId` | string\|null | `null` | Provider for root agent (null = default provider) |
+| `orchestrator.model` | string\|null | `null` | Model for root agent (null = provider's default) |
+| `orchestrator.temperature` | number | `0.7` | Temperature (0-2) |
+| `orchestrator.maxTokens` | number | `16384` | Max output tokens (higher for thinking) |
+| `orchestrator.thinkingEnabled` | bool | `true` | Extended reasoning before delegating |
 
 ### HTTP API Endpoints
 

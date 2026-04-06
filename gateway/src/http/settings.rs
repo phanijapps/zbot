@@ -291,6 +291,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Disable streaming for subagents (default: true)
     #[serde(default = "default_non_streaming")]
     pub subagent_non_streaming: bool,
+    /// Orchestrator (root agent) configuration
+    #[serde(default)]
+    pub orchestrator: Option<gateway_services::OrchestratorConfig>,
 }
 
 fn default_max_parallel() -> u32 { 2 }
@@ -303,6 +306,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
             setup_complete: req.setup_complete,
             agent_name: req.agent_name,
             subagent_non_streaming: req.subagent_non_streaming,
+            orchestrator: req.orchestrator.unwrap_or_default(),
         }
     }
 }

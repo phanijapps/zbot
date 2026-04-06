@@ -50,10 +50,50 @@ pub struct ExecutionSettings {
     /// real-time. Non-streaming is more reliable (no mid-stream decode errors).
     #[serde(default = "default_true")]
     pub subagent_non_streaming: bool,
+    /// Root agent (orchestrator) configuration.
+    #[serde(default)]
+    pub orchestrator: OrchestratorConfig,
+}
+
+/// Root agent (orchestrator) configuration.
+/// Stored in settings.json, NOT in agents/root/config.yaml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchestratorConfig {
+    /// Provider ID for the orchestrator. None = use default provider.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model for the orchestrator. None = use provider's default model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Temperature (0.0 - 2.0). Default: 0.7.
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+    /// Maximum output tokens. Default: 16384 (higher to accommodate thinking).
+    #[serde(default = "default_orchestrator_max_tokens")]
+    pub max_tokens: u32,
+    /// Enable extended thinking/reasoning. Default: true.
+    /// Orchestrator reasons before delegating — improves planning quality.
+    #[serde(default = "default_true")]
+    pub thinking_enabled: bool,
 }
 
 fn default_max_parallel_agents() -> u32 { 2 }
 fn default_true() -> bool { true }
+fn default_temperature() -> f64 { 0.7 }
+fn default_orchestrator_max_tokens() -> u32 { 16384 }
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model: None,
+            temperature: default_temperature(),
+            max_tokens: default_orchestrator_max_tokens(),
+            thinking_enabled: true,
+        }
+    }
+}
 
 impl Default for ExecutionSettings {
     fn default() -> Self {
@@ -62,6 +102,7 @@ impl Default for ExecutionSettings {
             setup_complete: false,
             agent_name: None,
             subagent_non_streaming: true,
+            orchestrator: OrchestratorConfig::default(),
         }
     }
 }

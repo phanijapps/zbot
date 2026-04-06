@@ -621,7 +621,9 @@ impl ExecutionRunner {
         .await;
 
         // Load agent configuration (or create default for "root" agent)
-        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone());
+        let settings_for_loader = gateway_services::SettingsService::new(self.paths.clone());
+        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone())
+            .with_settings(&settings_for_loader);
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -1653,8 +1655,10 @@ async fn invoke_continuation(
     // Emit agent started event
     emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
 
-    // Load agent and provider
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
+    // Load agent and provider (with orchestrator config from settings)
+    let settings_for_loader = gateway_services::SettingsService::new(paths.clone());
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone())
+        .with_settings(&settings_for_loader);
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
     // Load full session conversation (includes tool calls, results, and callbacks)

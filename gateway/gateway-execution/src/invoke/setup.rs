@@ -106,6 +106,7 @@ pub struct AgentLoader<'a> {
     agent_service: &'a AgentService,
     provider_resolver: ProviderResolver<'a>,
     paths: SharedVaultPaths,
+    settings: Option<&'a SettingsService>,
 }
 
 impl<'a> AgentLoader<'a> {
@@ -119,7 +120,14 @@ impl<'a> AgentLoader<'a> {
             agent_service,
             provider_resolver: ProviderResolver::new(provider_service),
             paths,
+            settings: None,
         }
+    }
+
+    /// Set settings service for reading orchestrator config.
+    pub fn with_settings(mut self, settings: &'a SettingsService) -> Self {
+        self.settings = Some(settings);
+        self
     }
 
     /// Load an agent by ID.
@@ -155,10 +163,33 @@ impl<'a> AgentLoader<'a> {
                 Ok((agent, provider))
             }
             Err(_) if agent_id == "root" => {
-                // Create a default root agent using the default provider
-                let provider = self.provider_resolver.get_default()?;
+                // Read orchestrator config from settings.json
+                let orch = self.settings
+                    .and_then(|s| s.get_execution_settings().ok())
+                    .map(|s| s.orchestrator)
+                    .unwrap_or_default();
 
-                let model = provider.default_model().to_string();
+                // Resolve provider: orchestrator config → default provider
+                let provider = match &orch.provider_id {
+                    Some(id) if !id.is_empty() => {
+                        self.provider_resolver.get_or_default(id)?
+                    }
+                    _ => self.provider_resolver.get_default()?,
+                };
+
+                // Resolve model: orchestrator config → provider default
+                let model = orch.model
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| provider.default_model().to_string());
+
+                tracing::info!(
+                    provider = %provider.name,
+                    model = %model,
+                    temperature = orch.temperature,
+                    max_tokens = orch.max_tokens,
+                    thinking = orch.thinking_enabled,
+                    "Creating root agent from orchestrator config"
+                );
 
                 let agent = gateway_services::agents::Agent {
                     id: "root".to_string(),
@@ -168,9 +199,9 @@ impl<'a> AgentLoader<'a> {
                     agent_type: Some("orchestrator".to_string()),
                     provider_id: provider.id.clone().unwrap_or_default(),
                     model,
-                    temperature: 0.7,
-                    max_tokens: 8192,
-                    thinking_enabled: false,
+                    temperature: orch.temperature,
+                    max_tokens: orch.max_tokens,
+                    thinking_enabled: orch.thinking_enabled,
                     voice_recording_enabled: false,
                     system_instruction: None,
                     instructions: gateway_templates::load_system_prompt_from_paths(&self.paths),

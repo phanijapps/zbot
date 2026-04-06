@@ -639,6 +639,112 @@ export function WebSettingsPanel() {
                 </div>
               </div>
             ) : null}
+
+            {/* Orchestrator Config */}
+            {execSettings && (
+              <div className="card card__padding--lg">
+                <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                  <div className="card__icon card__icon--primary">
+                    <Activity style={{ width: 18, height: 18 }} />
+                  </div>
+                  <div>
+                    <h2 className="settings-section-header">Orchestrator</h2>
+                    <p className="page-subtitle">Configure the root agent that handles your conversations</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="settings-field-label">Provider</label>
+                    <select
+                      className="form-input form-select"
+                      value={execSettings.orchestrator?.providerId || ""}
+                      onChange={(e) => handleExecChange({
+                        orchestrator: {
+                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                          providerId: e.target.value || null,
+                          model: null,
+                        },
+                      })}
+                    >
+                      <option value="">Default Provider</option>
+                      {providers.filter((p) => p.verified).map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="settings-field-label">Model</label>
+                    <select
+                      className="form-input form-select"
+                      value={execSettings.orchestrator?.model || ""}
+                      onChange={(e) => handleExecChange({
+                        orchestrator: {
+                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                          model: e.target.value || null,
+                        },
+                      })}
+                    >
+                      <option value="">Default Model</option>
+                      {(providers.find((p) => p.id === (execSettings.orchestrator?.providerId || defaultProviderId))?.models || []).map((m) => (
+                        <option key={m} value={m}>{m}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="settings-field-label">Temperature</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={0} max={2} step={0.1}
+                      value={execSettings.orchestrator?.temperature ?? 0.7}
+                      onChange={(e) => handleExecChange({
+                        orchestrator: {
+                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                          temperature: parseFloat(e.target.value) || 0.7,
+                        },
+                      })}
+                    />
+                  </div>
+                  <div>
+                    <label className="settings-field-label">Max Output Tokens</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={1024} step={1024}
+                      value={execSettings.orchestrator?.maxTokens ?? 16384}
+                      onChange={(e) => handleExecChange({
+                        orchestrator: {
+                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                          maxTokens: parseInt(e.target.value) || 16384,
+                        },
+                      })}
+                    />
+                  </div>
+                </div>
+
+                <label className={`settings-toggle-option ${execSettings.orchestrator?.thinkingEnabled !== false ? "settings-toggle-option--active" : ""}`}
+                  style={{ marginTop: "var(--spacing-3)" }}>
+                  <input
+                    type="checkbox"
+                    checked={execSettings.orchestrator?.thinkingEnabled !== false}
+                    onChange={() => handleExecChange({
+                      orchestrator: {
+                        ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                        thinkingEnabled: execSettings.orchestrator?.thinkingEnabled === false,
+                      },
+                    })}
+                    className="settings-toggle-option__checkbox"
+                  />
+                  <div className="flex-1">
+                    <div className="settings-toggle-option__title">Thinking Mode</div>
+                    <div className="settings-toggle-option__description">
+                      Enable extended reasoning — the orchestrator thinks before delegating, improving plan quality.
+                    </div>
+                  </div>
+                </label>
+              </div>
+            )}
           </div>
 
           <HelpBox>

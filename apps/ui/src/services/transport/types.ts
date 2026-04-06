@@ -392,6 +392,20 @@ export interface UpdateLogSettingsRequest {
   suppressStdout?: boolean;
 }
 
+/** Orchestrator (root agent) configuration */
+export interface OrchestratorConfig {
+  /** Provider ID. null = use default provider */
+  providerId?: string | null;
+  /** Model. null = use provider's default model */
+  model?: string | null;
+  /** Temperature (0-2). Default: 0.7 */
+  temperature: number;
+  /** Max output tokens. Default: 16384 */
+  maxTokens: number;
+  /** Enable extended thinking/reasoning. Default: true */
+  thinkingEnabled: boolean;
+}
+
 /** Execution settings for controlling agent concurrency */
 export interface ExecutionSettings {
   /** Maximum parallel subagents across all sessions (default: 2) */
@@ -400,6 +414,8 @@ export interface ExecutionSettings {
   setupComplete: boolean;
   /** The user-chosen name for the root agent */
   agentName?: string;
+  /** Orchestrator (root agent) configuration */
+  orchestrator?: OrchestratorConfig;
 }
 
 export interface ExecutionSettingsResponse {

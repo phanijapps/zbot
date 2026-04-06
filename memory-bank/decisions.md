@@ -391,3 +391,18 @@ Distilled patterns from building z-Bot:
 **Problem**: Z.AI returns 500 with code 1234 for rate limits (not 429). Our retry logic didn't recognize it.
 **Decision**: RetryingLlmClient treats error codes 1234 (network error), 1302 (rate limit), 1303 (frequency limit) as retryable. Z.AI concurrent limit set to 1 in provider config.
 **Rationale**: GLM Coding Plan has a documented concurrent request limit of 1. Two simultaneous requests = instant 500.
+
+### Orchestrator Config in settings.json (Not agents/root/)
+**Problem**: Root agent was auto-created with hardcoded settings (temp 0.7, max_tokens 8192, thinking=false). No UI to configure. No config.yaml on disk.
+**Decision**: Store orchestrator config in `settings.json` > `execution.orchestrator` — NOT in `agents/root/config.yaml`. Root is a system agent, not a user-created agent.
+**Rationale**: Root lives in config/ alongside providers.json and settings.json. Creating agents/root/ would confuse it with specialist agents. Settings.json is the single source of truth for system config.
+
+### Thinking Mode Default ON for Orchestrator
+**Problem**: Root agent delegated without reasoning, leading to suboptimal agent selection and planning.
+**Decision**: `thinkingEnabled: true` by default for the orchestrator. Extended thinking via OpenAI-compatible `{"thinking": {"type": "enabled"}}`.
+**Rationale**: The orchestrator's job is to think BEFORE delegating — which agent, which ward, which approach. Thinking mode improves planning quality. Max tokens raised to 16384 to accommodate reasoning output.
+
+### Single Action Mode Stays Hardcoded
+**Problem**: Should `single_action_mode` (one tool call per LLM turn) be configurable for root?
+**Decision**: Keep hardcoded `true` for root. Not exposed in UI.
+**Rationale**: Architectural enforcement — root orchestrates one delegation at a time. Multiple simultaneous delegations would confuse the delegation queue, race for the semaphore, and produce unpredictable ordering. If root needs parallel delegation, it should be via the delegation semaphore (maxParallelAgents), not via parallel tool calls.
