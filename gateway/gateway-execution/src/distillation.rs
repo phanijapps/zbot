@@ -25,7 +25,7 @@ use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
 use gateway_database::{ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact, MemoryRepository, SessionEpisode};
-use gateway_services::{ProviderService, VaultPaths};
+use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{GraphStorage, Entity, EntityType, Relationship, RelationshipType};
 use serde::Deserialize;
 
@@ -39,6 +39,7 @@ pub struct SessionDistiller {
     distillation_repo: Option<Arc<DistillationRepository>>,
     episode_repo: Option<Arc<EpisodeRepository>>,
     paths: Arc<VaultPaths>,
+    settings_service: Option<Arc<SettingsService>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -166,6 +167,7 @@ impl SessionDistiller {
         distillation_repo: Option<Arc<DistillationRepository>>,
         episode_repo: Option<Arc<EpisodeRepository>>,
         paths: Arc<VaultPaths>,
+        settings_service: Option<Arc<SettingsService>>,
     ) -> Self {
         Self {
             provider_service,
@@ -176,7 +178,40 @@ impl SessionDistiller {
             distillation_repo,
             episode_repo,
             paths,
+            settings_service,
         }
+    }
+
+    /// Resolve the target provider ID and model for distillation.
+    ///
+    /// Resolution chain:
+    /// 1. distillation.provider_id / distillation.model (if set)
+    /// 2. orchestrator.provider_id / orchestrator.model (if set)
+    /// 3. None (falls through to default provider in extract_all)
+    fn resolve_distillation_target(&self) -> (Option<String>, Option<String>) {
+        let settings = self.settings_service.as_ref()
+            .and_then(|s| s.get_execution_settings().ok());
+
+        let settings = match settings {
+            Some(s) => s,
+            None => return (None, None),
+        };
+
+        let provider_id = settings.distillation.provider_id.clone()
+            .or_else(|| settings.orchestrator.provider_id.clone());
+
+        let model = settings.distillation.model.clone()
+            .or_else(|| settings.orchestrator.model.clone());
+
+        if provider_id.is_some() || model.is_some() {
+            tracing::debug!(
+                provider = ?provider_id,
+                model = ?model,
+                "Distillation using configured target"
+            );
+        }
+
+        (provider_id, model)
     }
 
     /// Load the distillation prompt from filesystem or use embedded default.
@@ -582,20 +617,44 @@ impl SessionDistiller {
             transcript
         );
 
-        // Order: default provider first, then the rest
+        // Resolve distillation provider/model from settings chain:
+        // distillation config → orchestrator config → default provider
+        let (target_provider_id, target_model) = self.resolve_distillation_target();
+
+        // Order providers: target first (if specified), then default, then rest
         let default_idx = providers.iter().position(|p| p.is_default);
-        let ordered_indices: Vec<usize> = match default_idx {
-            Some(idx) => std::iter::once(idx)
-                .chain((0..providers.len()).filter(move |&i| i != idx))
-                .collect(),
-            None => (0..providers.len()).collect(),
+        let target_idx = target_provider_id.as_ref().and_then(|tid| {
+            providers.iter().position(|p| p.id.as_deref() == Some(tid.as_str()))
+        });
+
+        let ordered_indices: Vec<usize> = {
+            let mut indices = Vec::new();
+            if let Some(idx) = target_idx {
+                indices.push(idx);
+            }
+            if let Some(idx) = default_idx {
+                if Some(idx) != target_idx {
+                    indices.push(idx);
+                }
+            }
+            for i in 0..providers.len() {
+                if !indices.contains(&i) {
+                    indices.push(i);
+                }
+            }
+            indices
         };
 
         let mut last_error = String::new();
 
-        for idx in ordered_indices {
+        for (attempt, &idx) in ordered_indices.iter().enumerate() {
             let provider = &providers[idx];
-            let model = provider.default_model();
+            // Use target model for first attempt (if configured), else provider default
+            let model = if attempt == 0 {
+                target_model.clone().unwrap_or_else(|| provider.default_model().to_string())
+            } else {
+                provider.default_model().to_string()
+            };
             let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
 
             let config = LlmConfig::new(

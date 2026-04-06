@@ -307,6 +307,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
             agent_name: req.agent_name,
             subagent_non_streaming: req.subagent_non_streaming,
             orchestrator: req.orchestrator.unwrap_or_default(),
+            distillation: Default::default(),
         }
     }
 }

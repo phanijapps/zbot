@@ -242,6 +242,9 @@ impl AppState {
 
         let episode_repo_ref = episode_repo.clone();
 
+        // Create settings service (before distiller & runtime, so we can read execution settings)
+        let settings = Arc::new(SettingsService::new(paths.clone()));
+
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
             embedding_client,
@@ -251,13 +254,11 @@ impl AppState {
             Some(distillation_repo.clone()),
             Some(episode_repo),
             paths.clone(), // For loading distillation_prompt.md
+            Some(settings.clone()),
         ));
 
         // Keep a handle for on-demand distillation (backfill, trigger)
         let distiller_ref = distiller.clone();
-
-        // Create settings service (before runtime, so we can read execution settings)
-        let settings = Arc::new(SettingsService::new(paths.clone()));
         let max_parallel_agents = settings
             .get_execution_settings()
             .map(|s| s.max_parallel_agents)
