@@ -53,6 +53,9 @@ pub struct ExecutionSettings {
     /// Root agent (orchestrator) configuration.
     #[serde(default)]
     pub orchestrator: OrchestratorConfig,
+    /// Distillation model configuration (provider/model override).
+    #[serde(default)]
+    pub distillation: DistillationConfig,
 }
 
 /// Root agent (orchestrator) configuration.
@@ -95,6 +98,29 @@ impl Default for OrchestratorConfig {
     }
 }
 
+/// Distillation model configuration.
+/// Controls which provider/model is used for session distillation.
+/// Both fields default to None, inheriting from orchestrator config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillationConfig {
+    /// Provider ID override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+impl Default for DistillationConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model: None,
+        }
+    }
+}
+
 impl Default for ExecutionSettings {
     fn default() -> Self {
         Self {
@@ -103,6 +129,7 @@ impl Default for ExecutionSettings {
             agent_name: None,
             subagent_non_streaming: true,
             orchestrator: OrchestratorConfig::default(),
+            distillation: DistillationConfig::default(),
         }
     }
 }
@@ -336,5 +363,46 @@ mod tests {
 
         assert!(json_content.contains("maxFiles"));
         assert!(json_content.contains("suppressStdout"));
+    }
+
+    #[test]
+    fn test_distillation_config_defaults() {
+        let config = DistillationConfig::default();
+        assert!(config.provider_id.is_none());
+        assert!(config.model.is_none());
+    }
+
+    #[test]
+    fn test_distillation_config_in_execution_settings() {
+        let dir = tempdir().unwrap();
+        let service = SettingsService::new_legacy(dir.path().to_path_buf());
+
+        let mut settings = AppSettings::default();
+        settings.execution.distillation = DistillationConfig {
+            provider_id: Some("ollama".to_string()),
+            model: Some("llama3".to_string()),
+        };
+        service.save(&settings).unwrap();
+
+        service.invalidate_cache();
+        let loaded = service.get_execution_settings().unwrap();
+        assert_eq!(loaded.distillation.provider_id.as_deref(), Some("ollama"));
+        assert_eq!(loaded.distillation.model.as_deref(), Some("llama3"));
+    }
+
+    #[test]
+    fn test_distillation_config_absent_in_json() {
+        let dir = tempdir().unwrap();
+        let service = SettingsService::new_legacy(dir.path().to_path_buf());
+
+        let json = r#"{ "execution": { "maxParallelAgents": 3 } }"#;
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("settings.json"), json).unwrap();
+
+        service.invalidate_cache();
+        let loaded = service.get_execution_settings().unwrap();
+        assert!(loaded.distillation.provider_id.is_none());
+        assert!(loaded.distillation.model.is_none());
     }
 }
