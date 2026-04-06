@@ -21,6 +21,15 @@ export interface SubagentInfo {
   agentId: string;
   task: string;
   status: "active" | "completed" | "error";
+  executionId?: string;
+  toolCalls?: Array<{
+    toolName: string;
+    status: "running" | "completed" | "error";
+    durationMs: number | null;
+    summary: string | null;
+  }>;
+  durationMs?: number | null;
+  tokenCount?: number | null;
 }
 
 export interface IntelligenceFeedProps {
@@ -39,12 +48,6 @@ const STEP_ICON: Record<string, string> = {
   done: "\u2713",
   active: "\u27F3",
   pending: "\u25CB",
-};
-
-const SUBAGENT_DOT_COLOR: Record<string, string> = {
-  active: "var(--success)",
-  completed: "var(--success)",
-  error: "var(--destructive)",
 };
 
 // ============================================================================
@@ -194,18 +197,53 @@ export function IntelligenceFeed({
         </summary>
         <div className="intel-section__body">
           {subagents.length === 0 ? (
-            <div className="intel-empty">{"\u2014"}</div>
+            <div className="intel-empty">No subagents delegated yet</div>
           ) : (
-            subagents.map((sa, i) => (
-              <div key={`${sa.agentId}-${i}`} className="intel-subagent">
-                <span className="intel-subagent__name">
-                  <span
-                    className="intel-subagent__dot"
-                    style={{ background: SUBAGENT_DOT_COLOR[sa.status] || "var(--muted-foreground)" }}
-                  />
-                  {sa.agentId}
-                </span>
-                <span className="intel-subagent__task">{sa.task}</span>
+            subagents.map((sa) => (
+              <div
+                key={sa.executionId ?? sa.agentId}
+                className={`intel-subagent-card intel-subagent-card--${sa.status}`}
+              >
+                <div className="intel-subagent-card__header">
+                  <div className="intel-subagent-card__name">
+                    <span className={`intel-subagent__dot intel-subagent__dot--${sa.status}`} />
+                    {sa.agentId}
+                  </div>
+                  <span className="intel-subagent-card__meta">
+                    {sa.status === "completed" && sa.durationMs != null
+                      ? `${(sa.durationMs / 1000).toFixed(1)}s`
+                      : ""}
+                    {sa.status === "completed" && sa.toolCalls && sa.toolCalls.length > 0
+                      ? ` · ${sa.toolCalls.length} tools`
+                      : ""}
+                  </span>
+                </div>
+                <div className="intel-subagent-card__task">
+                  {sa.task.length > 120 ? sa.task.slice(0, 120) + "..." : sa.task}
+                </div>
+                {sa.toolCalls && sa.toolCalls.length > 0 && sa.status === "active" && (
+                  <div className="intel-subagent-card__tools">
+                    {sa.toolCalls.map((tc, i) => (
+                      <div key={i} className={`intel-tool-entry intel-tool-entry--${tc.status}`}>
+                        <span className="intel-tool-entry__icon">
+                          {tc.status === "completed" && "✓"}
+                          {tc.status === "error" && "✗"}
+                          {tc.status === "running" && (
+                            <span className="phase-step__pulse" />
+                          )}
+                        </span>
+                        <span className="intel-tool-entry__name">{tc.toolName}</span>
+                        <span className="intel-tool-entry__meta">
+                          {tc.status === "running"
+                            ? "running..."
+                            : tc.durationMs != null
+                            ? `${(tc.durationMs / 1000).toFixed(1)}s`
+                            : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             ))
           )}

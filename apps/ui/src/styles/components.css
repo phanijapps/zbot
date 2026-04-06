@@ -4279,4 +4279,21 @@
 .phase-step--active .phase-step__label { color: var(--foreground); }
 .phase-step--pending .phase-step__label { color: var(--muted-foreground); opacity: 0.5; }
 .phase-step__detail { color: var(--muted-foreground); }
+
+/* Subagent Cards */
+.intel-subagent-card { background: var(--muted); border-radius: var(--radius); padding: var(--spacing-2) var(--spacing-3); margin-bottom: var(--spacing-2); border: 1px solid var(--border); }
+.intel-subagent-card--active { border-color: var(--primary); }
+.intel-subagent-card--error { border-color: var(--destructive); }
+.intel-subagent-card__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--spacing-1); }
+.intel-subagent-card__name { display: flex; align-items: center; gap: var(--spacing-1); font-weight: 600; font-size: var(--font-size-xs); }
+.intel-subagent-card__meta { font-size: var(--font-size-xs); color: var(--muted-foreground); }
+.intel-subagent-card__task { font-size: var(--font-size-xs); color: var(--muted-foreground); line-height: 1.4; margin-bottom: var(--spacing-2); }
+.intel-subagent-card__tools { padding-left: var(--spacing-2); border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+.intel-tool-entry { display: flex; align-items: center; gap: var(--spacing-1); font-size: var(--font-size-xs); }
+.intel-tool-entry__icon { width: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.intel-tool-entry--completed .intel-tool-entry__icon { color: var(--success); }
+.intel-tool-entry--error .intel-tool-entry__icon { color: var(--destructive); }
+.intel-tool-entry__name { color: var(--muted-foreground); }
+.intel-tool-entry--running .intel-tool-entry__name { color: var(--foreground); }
+.intel-tool-entry__meta { margin-left: auto; color: var(--muted-foreground); }
 @keyframes phase-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
