@@ -4263,3 +4263,20 @@
   font-weight: 500;
   color: var(--foreground);
 }
+
+/* Phase Indicators */
+.phase-indicators { padding: var(--spacing-4); background: var(--muted); border-radius: var(--radius-lg); border: 1px solid var(--border); margin-bottom: var(--spacing-4); }
+.phase-indicators__label { font-size: var(--font-size-xs); color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: var(--spacing-3); }
+.phase-indicators__steps { display: flex; flex-direction: column; gap: var(--spacing-2); }
+.phase-step { display: flex; align-items: center; gap: var(--spacing-2); }
+.phase-step__icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+.phase-step__icon--done { background: var(--success); color: white; }
+.phase-step__icon--active { background: var(--primary); }
+.phase-step__icon--pending { border: 1.5px solid var(--border); }
+.phase-step__icon--error { background: var(--destructive); color: white; }
+.phase-step__pulse { width: 8px; height: 8px; border-radius: 50%; background: white; animation: phase-pulse 1.5s infinite; }
+.phase-step__label { font-size: var(--font-size-sm); color: var(--muted-foreground); }
+.phase-step--active .phase-step__label { color: var(--foreground); }
+.phase-step--pending .phase-step__label { color: var(--muted-foreground); opacity: 0.5; }
+.phase-step__detail { color: var(--muted-foreground); }
+@keyframes phase-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }

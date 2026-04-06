@@ -35,3 +35,6 @@ export type { NarrativeBlock, MissionState, IntentAnalysis } from "./mission-hoo
 
 export { IntentAnalysisBlock } from "./IntentAnalysisBlock";
 export type { IntentAnalysisBlockProps } from "./IntentAnalysisBlock";
+
+export { PhaseIndicators } from "./PhaseIndicators";
+export type { Phase } from "./PhaseIndicators";
