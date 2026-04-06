@@ -182,18 +182,13 @@ impl AppState {
                 }
             };
 
-        let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
-            Ok(client) => {
-                tracing::info!(
-                    "Local embedding client initialized ({}d)",
-                    client.dimensions()
-                );
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                tracing::warn!("Local embedding unavailable, FTS5-only recall: {}", e);
-                None
-            }
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = {
+            let client = LocalEmbeddingClient::new();
+            tracing::info!(
+                "Local embedding client created (lazy, {}d)",
+                client.dimensions()
+            );
+            Some(Arc::new(client))
         };
 
         // Load recall configuration (compiled defaults merged with optional user overrides)
