@@ -835,7 +835,13 @@ export type MemoryCategory =
   | "pattern"
   | "entity"
   | "instruction"
-  | "correction";
+  | "correction"
+  | "user"
+  | "domain"
+  | "strategy"
+  | "skill"
+  | "agent"
+  | "ward";
 
 /** A memory fact stored in the agent's memory system */
 export interface MemoryFact {

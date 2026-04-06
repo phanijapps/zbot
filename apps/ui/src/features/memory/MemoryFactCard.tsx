@@ -8,12 +8,18 @@ interface MemoryFactCardProps {
 }
 
 const CATEGORY_COLORS: Record<MemoryCategory, { bg: string; text: string; border: string }> = {
-  preference: { bg: "var(--primary-muted)", text: "var(--primary)", border: "var(--primary)" },
-  decision: { bg: "rgba(139, 92, 246, 0.15)", text: "#a78bfa", border: "rgba(139, 92, 246, 0.5)" },
-  pattern: { bg: "rgba(34, 197, 94, 0.15)", text: "#4ade80", border: "rgba(34, 197, 94, 0.5)" },
-  entity: { bg: "rgba(234, 179, 8, 0.15)", text: "#facc15", border: "rgba(234, 179, 8, 0.5)" },
-  instruction: { bg: "rgba(249, 115, 22, 0.15)", text: "#fb923c", border: "rgba(249, 115, 22, 0.5)" },
   correction: { bg: "var(--destructive-muted)", text: "var(--destructive)", border: "var(--destructive)" },
+  instruction: { bg: "rgba(249, 115, 22, 0.15)", text: "#fb923c", border: "rgba(249, 115, 22, 0.5)" },
+  user: { bg: "rgba(59, 130, 246, 0.15)", text: "#60a5fa", border: "rgba(59, 130, 246, 0.5)" },
+  strategy: { bg: "rgba(139, 92, 246, 0.15)", text: "#a78bfa", border: "rgba(139, 92, 246, 0.5)" },
+  domain: { bg: "rgba(34, 197, 94, 0.15)", text: "#4ade80", border: "rgba(34, 197, 94, 0.5)" },
+  pattern: { bg: "rgba(34, 197, 94, 0.15)", text: "#4ade80", border: "rgba(34, 197, 94, 0.5)" },
+  skill: { bg: "rgba(20, 184, 166, 0.15)", text: "#2dd4bf", border: "rgba(20, 184, 166, 0.5)" },
+  agent: { bg: "rgba(20, 184, 166, 0.15)", text: "#2dd4bf", border: "rgba(20, 184, 166, 0.5)" },
+  ward: { bg: "var(--primary-muted)", text: "var(--primary)", border: "var(--primary)" },
+  preference: { bg: "var(--primary-muted)", text: "var(--primary)", border: "var(--primary)" },
+  entity: { bg: "rgba(234, 179, 8, 0.15)", text: "#facc15", border: "rgba(234, 179, 8, 0.5)" },
+  decision: { bg: "rgba(139, 92, 246, 0.15)", text: "#a78bfa", border: "rgba(139, 92, 246, 0.5)" },
 };
 
 function formatDate(dateStr: string): string {

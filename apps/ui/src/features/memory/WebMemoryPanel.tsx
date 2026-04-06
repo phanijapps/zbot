@@ -12,12 +12,18 @@ import { Slideover } from "@/components/Slideover";
 import { Loader2, Database, Plus, Shield, Lightbulb, User, Brain } from "lucide-react";
 
 const CATEGORIES: MemoryCategory[] = [
-  "preference",
-  "decision",
-  "pattern",
-  "entity",
-  "instruction",
   "correction",
+  "instruction",
+  "user",
+  "strategy",
+  "domain",
+  "pattern",
+  "skill",
+  "agent",
+  "ward",
+  "preference",
+  "entity",
+  "decision",
 ];
 
 const SCOPES: MemoryScope[] = ["agent", "shared", "ward"];
@@ -36,6 +42,8 @@ export function WebMemoryPanel() {
   const [addType, setAddType] = useState<"correction" | "instruction" | "user">("correction");
   const [addContent, setAddContent] = useState("");
   const [addSaving, setAddSaving] = useState(false);
+  // Existing facts by type — for pre-populating the slideover
+  const [existingByType, setExistingByType] = useState<Record<string, MemoryFact[]>>({});
 
   // Load ALL facts with optional agent filter
   const fetchFacts = useCallback(async (filterParams: MemoryFilter) => {
@@ -152,6 +160,23 @@ export function WebMemoryPanel() {
     }
   };
 
+  // Load existing facts by type when slideover opens
+  const openAddForm = async () => {
+    setShowAddForm(true);
+    try {
+      const transport = await getTransport();
+      const res = await transport.listAllMemory({ limit: 200 });
+      if (res.success && res.data) {
+        const byType: Record<string, MemoryFact[]> = {
+          correction: res.data.facts.filter((f) => f.category === "correction"),
+          instruction: res.data.facts.filter((f) => f.category === "instruction"),
+          user: res.data.facts.filter((f) => f.category === "user"),
+        };
+        setExistingByType(byType);
+      }
+    } catch { /* ignore */ }
+  };
+
   const handleDelete = async (fact: MemoryFact) => {
     try {
       const transport = await getTransport();
@@ -212,7 +237,7 @@ export function WebMemoryPanel() {
             <h1 className="page-title">Memory Explorer</h1>
             <p className="page-subtitle">View and manage agent memory facts</p>
           </div>
-          <button className="btn btn--primary btn--sm" onClick={() => setShowAddForm(!showAddForm)}>
+          <button className="btn btn--primary btn--sm" onClick={openAddForm}>
             <Plus size={14} /> Add
           </button>
         </div>
@@ -267,10 +292,10 @@ export function WebMemoryPanel() {
           </section>
 
           <section className="slideover__section">
-            <div className="field-label">Content</div>
+            <div className="field-label">New Entry</div>
             <textarea
               className="form-input"
-              rows={5}
+              rows={4}
               placeholder={
                 addType === "correction"
                   ? "Add a rule agents MUST follow (e.g., 'Always use research-agent for factual data')"
@@ -283,6 +308,43 @@ export function WebMemoryPanel() {
               autoFocus
             />
           </section>
+
+          {/* Existing entries for the selected type */}
+          {(existingByType[addType] || []).length > 0 && (
+            <section className="slideover__section">
+              <div className="field-label">
+                Existing {addType === "correction" ? "Policies" : addType === "instruction" ? "Instructions" : "About Me"} ({(existingByType[addType] || []).length})
+              </div>
+              <div className="flex flex-col gap-2">
+                {(existingByType[addType] || []).map((fact) => (
+                  <div key={fact.id} className="card card__padding" style={{ fontSize: "var(--text-sm)" }}>
+                    <div style={{ color: "var(--foreground)", marginBottom: "var(--spacing-1)" }}>{fact.content}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="badge badge--xs" style={{ opacity: 0.7 }}>{fact.key}</span>
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        style={{ marginLeft: "auto", fontSize: "var(--text-xs)" }}
+                        onClick={async () => {
+                          try {
+                            const transport = await getTransport();
+                            await transport.deleteMemory(fact.agent_id, fact.id);
+                            setExistingByType((prev) => ({
+                              ...prev,
+                              [addType]: (prev[addType] || []).filter((f) => f.id !== fact.id),
+                            }));
+                            fetchFacts(filter);
+                            fetchStats();
+                          } catch { /* ignore */ }
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
         </Slideover>
 
         {/* Agent selector and stats */}
