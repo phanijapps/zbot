@@ -117,11 +117,14 @@ export function SetupWizard() {
           hydrated.namePreset = matchingPreset?.id || "custom";
         }
 
-        // Pre-fill About Me from memory facts
+        // Pre-fill About Me from memory facts (category=user, look for user.profile key)
         try {
-          const memRes = await transport.searchAllMemory("user.profile", 1, "user");
-          if (memRes.success && memRes.data && memRes.data.facts && memRes.data.facts.length > 0) {
-            hydrated.aboutMe = memRes.data.facts[0].content;
+          const memRes = await transport.listAllMemory({ category: "user" as any, limit: 20 });
+          if (memRes.success && memRes.data && memRes.data.facts) {
+            const profileFact = memRes.data.facts.find((f) => f.key === "user.profile");
+            if (profileFact) {
+              hydrated.aboutMe = profileFact.content;
+            }
           }
         } catch { /* ignore */ }
 
