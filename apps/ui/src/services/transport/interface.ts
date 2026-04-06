@@ -72,6 +72,7 @@ import type {
   GraphNeighborOptions,
   GraphSubgraphOptions,
   SetupStatus,
+  SessionState,
 } from "./types";
 
 // ============================================================================
@@ -261,6 +262,9 @@ export interface Transport {
 
   /** Get a session with its logs */
   getLogSession(sessionId: string): Promise<TransportResult<SessionDetail>>;
+
+  /** Get structured session state snapshot for reconnection */
+  getSessionState(sessionId: string): Promise<TransportResult<SessionState>>;
 
   /** Delete a log session */
   deleteLogSession(sessionId: string): Promise<TransportResult<void>>;

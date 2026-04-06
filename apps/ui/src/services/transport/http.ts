@@ -82,6 +82,7 @@ import type {
   GraphNeighborOptions,
   GraphSubgraphOptions,
   SetupStatus,
+  SessionState,
 } from "./types";
 
 // ============================================================================
@@ -397,6 +398,10 @@ export class HttpTransport implements Transport {
 
   async getLogSession(sessionId: string): Promise<TransportResult<SessionDetail>> {
     return this.get<SessionDetail>(`/api/logs/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async getSessionState(sessionId: string): Promise<TransportResult<SessionState>> {
+    return this.get<SessionState>(`/api/sessions/${encodeURIComponent(sessionId)}/state`);
   }
 
   async deleteLogSession(sessionId: string): Promise<TransportResult<void>> {

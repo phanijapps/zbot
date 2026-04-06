@@ -414,6 +414,50 @@ export interface DistillationConfig {
   model?: string | null;
 }
 
+// ============================================================================
+// Session State (snapshot API for reconnection)
+// ============================================================================
+
+export type SessionPhase = "intent" | "planning" | "executing" | "responding" | "completed" | "error";
+
+export interface SessionState {
+  session: {
+    id: string;
+    title: string | null;
+    status: "running" | "completed" | "error" | "stopped";
+    startedAt: string;
+    durationMs: number;
+    tokenCount: number;
+    model: string | null;
+  };
+  userMessage: string | null;
+  phase: SessionPhase;
+  response: string | null;
+  intentAnalysis: Record<string, unknown> | null;
+  ward: { name: string; content: string } | null;
+  recalledFacts: Array<Record<string, unknown>>;
+  plan: Array<{ text: string; status: string }>;
+  subagents: SubagentStateData[];
+  isLive: boolean;
+}
+
+export interface SubagentStateData {
+  agentId: string;
+  executionId: string;
+  task: string;
+  status: "queued" | "running" | "completed" | "error";
+  durationMs: number | null;
+  tokenCount: number | null;
+  toolCalls: ToolCallEntryData[];
+}
+
+export interface ToolCallEntryData {
+  toolName: string;
+  status: "running" | "completed" | "error";
+  durationMs: number | null;
+  summary: string | null;
+}
+
 /** Execution settings for controlling agent concurrency */
 export interface ExecutionSettings {
   /** Maximum parallel subagents across all sessions (default: 2) */
