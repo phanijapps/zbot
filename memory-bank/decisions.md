@@ -382,6 +382,11 @@ Distilled patterns from building z-Bot:
 **Decision**: On stream error before any content emitted, silently retry as non-streaming (single JSON). On stream error after content emitted, break gracefully and return partial response.
 **Rationale**: Non-streaming is more reliable (single JSON, no SSE parsing). Automatic fallback is transparent to the executor.
 
+### Reserved Key Prefixes for User-Managed Facts
+**Problem**: Distillation creates competing facts under similar keys to user-authored policies (e.g., user sets `policy.research_first`, distillation creates `correction.always_research` with overlapping content).
+**Decision**: Keys starting with `policy.`, `instruction.`, or `user.profile` are reserved — distillation skips them entirely. Three protection layers: reserved prefixes (distillation skip), pinned flag (SQL content guard), content dedup (60% word overlap).
+**Rationale**: User-authored policies are the source of truth for agent behavior rules. The system should learn around them, not compete with them.
+
 ### Z.AI Rate Limit Detection
 **Problem**: Z.AI returns 500 with code 1234 for rate limits (not 429). Our retry logic didn't recognize it.
 **Decision**: RetryingLlmClient treats error codes 1234 (network error), 1302 (rate limit), 1303 (frequency limit) as retryable. Z.AI concurrent limit set to 1 in provider config.

@@ -128,15 +128,51 @@ base_score = (0.7 × vector_cosine) + (0.3 × BM25_score)
 - PTON (organization) — analyzed by data-analyst, code-agent
 ```
 
-## Policies
+## Policies, Instructions & About Me
 
-High-priority corrections injected as memory facts with:
-- `category: "correction"` (1.5x weight in recall)
-- `confidence: 1.0`
-- `ward_id: "__global__"` (applies everywhere)
-- `mention_count: 5` (high boost)
+Three types of user-managed memory entries, all stored as regular memory facts with different categories:
 
-Policies surface at the top of every recall. Currently managed via direct SQL; UI planned (see backlog).
+| Type | Category | Confidence | Weight | Purpose |
+|------|----------|------------|--------|---------|
+| **Policy** | `correction` | 1.0 | 1.5x | Hard rules agents MUST follow |
+| **Instruction** | `instruction` | 0.9 | 1.2x | Soft preferences that guide behavior |
+| **About Me** | `user` | 0.95 | 1.3x | Personal context for personalization |
+
+All user-created entries are **pinned** (protected from distillation overwrite).
+
+### Reserved Key Prefixes
+
+Keys starting with `policy.`, `instruction.`, or `user.profile` are **reserved** — distillation skips them entirely. Only the user can create/edit/delete these via the Memory UI or setup wizard.
+
+### Default Policies (shipped in template)
+
+8 policies + 2 instructions + 1 about-me seeded on first run from `gateway/templates/default_policies.json`:
+- Research first (never rely on training data)
+- Code modularity (files < 3KB, import existing)
+- Web research tools (use skills, not shell curl)
+- Atomic delegation (one file per step)
+- Ward first (enter ward, read docs)
+- Planner discovers agents (call list_agents)
+- Update docs after code (core_docs.md mandatory)
+- Full delegation spec (include goal, input, output, acceptance)
+- Output format preference (interactive HTML, Tailwind)
+- Documentation quality (SDK-level core_docs.md)
+- Default about-me ("I am a private person, just call me Mr Z.")
+
+### Protection Layers
+
+1. **Reserved key prefixes** — distillation skips `policy.*`, `instruction.*`, `user.profile*`
+2. **Pinned flag** — SQL guards prevent content/confidence overwrite on pinned facts
+3. **Content dedup** — 60% word overlap check prevents near-duplicate facts under different keys
+
+### UI
+
+Memory page → "Add" button → Slideover with:
+- Type selector: Policy (shield), Instruction (lightbulb), About Me (user)
+- New entry textarea with contextual placeholder
+- Existing entries for selected type (view + remove)
+
+Setup wizard Step 1 includes "About You" textarea alongside agent name.
 
 ## Key Files
 
