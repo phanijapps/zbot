@@ -1,7 +1,12 @@
 // ============================================================================
 // LOCAL EMBEDDING CLIENT
 // ONNX-based local embeddings via fastembed — zero API calls
+// Lazy load/unload: model loads on first embed(), unloads after idle timeout.
 // ============================================================================
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use fastembed::{InitOptions, TextEmbedding, EmbeddingModel};
@@ -12,38 +17,128 @@ use super::embedding::{EmbeddingClient, EmbeddingError};
 ///
 /// Default model: `all-MiniLM-L6-v2` (384 dims, ~100MB, fastest).
 /// Runs entirely on CPU — no API key, no network, no cost.
+///
+/// The model is loaded lazily on first `embed()` call and unloaded
+/// after `idle_timeout_secs` of inactivity to free memory.
 pub struct LocalEmbeddingClient {
-    model: TextEmbedding,
+    model: Mutex<Option<TextEmbedding>>,
+    model_id: EmbeddingModel,
     model_name: String,
     dimensions: usize,
+    last_used: AtomicU64,
+    idle_timeout_secs: u64,
+    unload_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
 impl LocalEmbeddingClient {
-    /// Create a local embedding client with the default model (all-MiniLM-L6-v2).
-    pub fn new() -> Result<Self, EmbeddingError> {
-        Self::with_model(EmbeddingModel::AllMiniLML6V2)
+    /// Create with default model (all-MiniLM-L6-v2), 300s idle timeout.
+    /// Does NOT load the model — loads lazily on first embed().
+    pub fn new() -> Self {
+        Self::with_model(EmbeddingModel::AllMiniLML6V2, 300)
     }
 
-    /// Create a local embedding client with a specific fastembed model.
-    pub fn with_model(model_id: EmbeddingModel) -> Result<Self, EmbeddingError> {
+    /// Create with specific model and idle timeout.
+    /// Set idle_timeout_secs=0 to never unload.
+    pub fn with_model(model_id: EmbeddingModel, idle_timeout_secs: u64) -> Self {
         let (name, dims) = model_info(&model_id);
-
-        let options = InitOptions::new(model_id)
-            .with_show_download_progress(true);
-
-        let model = TextEmbedding::try_new(options)
-            .map_err(|e| EmbeddingError::ModelError(format!("Failed to init fastembed model: {}", e)))?;
-
         tracing::info!(
-            "Local embedding model loaded: {} ({}d)",
-            name, dims
+            "Local embedding client created (lazy): {} ({}d, idle_timeout={}s)",
+            name, dims, idle_timeout_secs
         );
-
-        Ok(Self {
-            model,
+        Self {
+            model: Mutex::new(None),
+            model_id,
             model_name: name.to_string(),
             dimensions: dims,
-        })
+            last_used: AtomicU64::new(0),
+            idle_timeout_secs,
+            unload_handle: Mutex::new(None),
+        }
+    }
+
+    /// Load model if not loaded, return mutex guard.
+    fn ensure_loaded(&self) -> Result<std::sync::MutexGuard<'_, Option<TextEmbedding>>, EmbeddingError> {
+        let mut guard = self.model.lock()
+            .map_err(|e| EmbeddingError::ModelError(format!("Mutex poisoned: {}", e)))?;
+
+        if guard.is_none() {
+            tracing::info!("Loading embedding model: {} ...", self.model_name);
+            let options = InitOptions::new(self.model_id.clone())
+                .with_show_download_progress(true);
+            let model = TextEmbedding::try_new(options)
+                .map_err(|e| EmbeddingError::ModelError(format!(
+                    "Failed to load fastembed model: {}", e
+                )))?;
+            tracing::info!("Embedding model loaded: {}", self.model_name);
+            *guard = Some(model);
+        }
+
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        self.last_used.store(now, Ordering::Relaxed);
+
+        Ok(guard)
+    }
+
+    /// Start idle watcher if not running and timeout > 0.
+    fn ensure_watcher_running(&self) {
+        if self.idle_timeout_secs == 0 {
+            return;
+        }
+
+        let mut handle_guard = match self.unload_handle.lock() {
+            Ok(g) => g,
+            Err(_) => return,
+        };
+
+        if handle_guard.as_ref().is_some_and(|h| !h.is_finished()) {
+            return;
+        }
+
+        let timeout_secs = self.idle_timeout_secs;
+        let last_used = &self.last_used as *const AtomicU64 as usize;
+        let model_ptr = &self.model as *const Mutex<Option<TextEmbedding>> as usize;
+        let model_name = self.model_name.clone();
+
+        // SAFETY: The watcher only runs while `self` is alive because:
+        // - LocalEmbeddingClient is stored in Arc<dyn EmbeddingClient> in AppState
+        // - AppState lives for the entire application lifetime
+        // - The watcher exits when the model is already None (client dropped)
+        let handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
+
+                let last_used = unsafe { &*(last_used as *const AtomicU64) };
+                let model_mutex = unsafe { &*(model_ptr as *const Mutex<Option<TextEmbedding>>) };
+
+                let last = last_used.load(Ordering::Relaxed);
+                if last == 0 {
+                    continue;
+                }
+
+                let now = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs();
+
+                if now.saturating_sub(last) >= timeout_secs {
+                    if let Ok(mut guard) = model_mutex.lock() {
+                        if guard.is_some() {
+                            *guard = None;
+                            tracing::info!(
+                                "Embedding model unloaded after {}s idle: {}",
+                                timeout_secs, model_name
+                            );
+                        }
+                    }
+                    break;
+                }
+            }
+        });
+
+        *handle_guard = Some(handle);
     }
 }
 
@@ -54,23 +149,20 @@ impl EmbeddingClient for LocalEmbeddingClient {
             return Ok(Vec::new());
         }
 
-        // fastembed expects Vec<String>
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-
         tracing::debug!("Embedding {} text(s) locally via {}", owned.len(), self.model_name);
 
-        // fastembed is sync + CPU-bound — run on blocking thread pool
-        let model_name = self.model_name.clone();
-        let embeddings = {
-            // TextEmbedding is not Send, so we create it fresh in the blocking closure
-            // Actually, we can't move self.model across threads easily.
-            // Instead, embed synchronously (fastembed is fast enough for <100 texts).
-            self.model
-                .embed(owned, None)
-                .map_err(|e| EmbeddingError::ModelError(format!(
-                    "Embedding failed ({}): {}", model_name, e
-                )))?
-        };
+        let guard = self.ensure_loaded()?;
+        let embeddings = guard
+            .as_ref()
+            .expect("ensure_loaded guarantees Some")
+            .embed(owned, None)
+            .map_err(|e| EmbeddingError::ModelError(format!(
+                "Embedding failed ({}): {}", self.model_name, e
+            )))?;
+
+        drop(guard);
+        self.ensure_watcher_running();
 
         Ok(embeddings)
     }
@@ -115,12 +207,28 @@ mod tests {
         assert_eq!(dims, 384);
     }
 
-    // Integration test: actually loads the model and embeds text.
-    // Skipped in CI (model download required).
+    #[test]
+    fn test_lazy_construction() {
+        let client = LocalEmbeddingClient::new();
+        assert_eq!(client.dimensions(), 384);
+        assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
+        let guard = client.model.lock().unwrap();
+        assert!(guard.is_none(), "Model should be lazy — not loaded at construction");
+    }
+
+    #[test]
+    fn test_custom_timeout() {
+        let client = LocalEmbeddingClient::with_model(EmbeddingModel::AllMiniLML6V2, 0);
+        assert_eq!(client.idle_timeout_secs, 0);
+
+        let client2 = LocalEmbeddingClient::with_model(EmbeddingModel::AllMiniLML6V2, 600);
+        assert_eq!(client2.idle_timeout_secs, 600);
+    }
+
     #[test]
     #[ignore]
     fn test_local_embedding_end_to_end() {
-        let client = LocalEmbeddingClient::new().expect("Should create local client");
+        let client = LocalEmbeddingClient::new();
         assert_eq!(client.dimensions(), 384);
         assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
 
@@ -130,5 +238,8 @@ mod tests {
         assert_eq!(embeddings.len(), 2);
         assert_eq!(embeddings[0].len(), 384);
         assert_eq!(embeddings[1].len(), 384);
+
+        let guard = client.model.lock().unwrap();
+        assert!(guard.is_some(), "Model should be loaded after embed()");
     }
 }
