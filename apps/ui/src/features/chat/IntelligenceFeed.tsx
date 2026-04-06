@@ -199,9 +199,9 @@ export function IntelligenceFeed({
           {subagents.length === 0 ? (
             <div className="intel-empty">No subagents delegated yet</div>
           ) : (
-            subagents.map((sa) => (
+            subagents.map((sa, idx) => (
               <div
-                key={sa.executionId ?? sa.agentId}
+                key={sa.executionId ?? `${sa.agentId}-${idx}`}
                 className={`intel-subagent-card intel-subagent-card--${sa.status}`}
               >
                 <div className="intel-subagent-card__header">
