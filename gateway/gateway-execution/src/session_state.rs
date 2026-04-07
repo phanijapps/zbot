@@ -180,7 +180,9 @@ impl SessionStateBuilder {
                 status: session.status.as_str().to_string(),
                 started_at: session.started_at.clone(),
                 duration_ms: session.duration_ms,
-                token_count: session.token_count,
+                // LogSession.token_count is often 0 — sum from messages table instead
+                token_count: self.sum_token_count(&session.session_id)
+                    .unwrap_or(session.token_count),
                 model,
             },
             user_message,
@@ -198,6 +200,13 @@ impl SessionStateBuilder {
     // ========================================================================
     // EXTRACTION HELPERS
     // ========================================================================
+
+    /// Sum token counts from the messages table for this execution.
+    fn sum_token_count(&self, execution_id: &str) -> Option<i32> {
+        let messages = self.conversations.get_messages(execution_id).ok()?;
+        let total: i32 = messages.iter().map(|m| m.token_count).sum();
+        if total > 0 { Some(total) } else { None }
+    }
 
     /// Extract the first user message from the conversation messages table.
     fn extract_user_message(&self, conversation_id: &str) -> Option<String> {
