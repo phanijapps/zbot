@@ -41,6 +41,7 @@ pub mod capability;
 pub mod registry;
 pub mod memory;
 pub mod connectors;
+pub mod multimodal;
 
 // ============================================================================
 // CONVENIENCE RE-EXPORTS
