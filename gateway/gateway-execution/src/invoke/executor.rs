@@ -5,7 +5,7 @@
 use gateway_services::agents::Agent;
 use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
-use gateway_services::{McpService, SkillService};
+use gateway_services::{McpService, SettingsService, SkillService};
 use agent_runtime::{
     AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
     LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, RespondTool, RetryPolicy,
@@ -208,6 +208,23 @@ impl ExecutorBuilder {
         if let Some(entries) = &self.extra_initial_state {
             for (key, value) in entries {
                 executor_config = executor_config.with_initial_state(key, value.clone());
+            }
+        }
+
+        // Inject multimodal config for the multimodal_analyze tool
+        let settings_service = SettingsService::new_legacy(self.config_dir.clone());
+        if let Ok(settings) = settings_service.load() {
+            let mm = &settings.execution.multimodal;
+            if mm.provider_id.is_some() && mm.model.is_some() {
+                executor_config = executor_config.with_initial_state(
+                    "multimodal_config",
+                    serde_json::json!({
+                        "providerId": mm.provider_id,
+                        "model": mm.model,
+                        "temperature": mm.temperature,
+                        "maxTokens": mm.max_tokens,
+                    }),
+                );
             }
         }
 
