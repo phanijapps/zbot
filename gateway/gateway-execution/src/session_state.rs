@@ -167,8 +167,8 @@ impl SessionStateBuilder {
         let ward = Self::extract_ward(logs, intent_analysis.as_ref());
         let recalled_facts = Self::extract_recalled_facts(logs);
         let plan = Self::extract_plan(logs);
-        let response = self.extract_response(logs, &session.session_id);
         let subagents = self.build_subagents(&session.child_session_ids);
+        let response = self.extract_response(logs, &session.session_id, &session.child_session_ids);
         let phase = Self::derive_phase(&session.status, logs, response.as_ref());
 
         let model = Self::extract_model(logs);
@@ -413,26 +413,43 @@ impl SessionStateBuilder {
     ///
     /// Prefers the `respond` tool call args, falls back to the last assistant
     /// message in the conversation.
-    fn extract_response(&self, logs: &[ExecutionLog], conversation_id: &str) -> Option<String> {
-        // First: look for a respond tool_call
-        for log in logs.iter().rev() {
-            if log.category == LogCategory::ToolCall {
-                if let Some(meta) = &log.metadata {
-                    let tool_name = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
-                    if tool_name == "respond" {
-                        if let Some(text) = meta
-                            .get("args")
-                            .and_then(|a| a.get("text").or_else(|| a.get("message")))
-                            .and_then(|v| v.as_str())
-                        {
-                            return Some(text.to_string());
+    fn extract_response(&self, logs: &[ExecutionLog], execution_id: &str, child_session_ids: &[String]) -> Option<String> {
+        // Helper: find respond tool call in a set of logs
+        let find_respond = |logs: &[ExecutionLog]| -> Option<String> {
+            for log in logs.iter().rev() {
+                if log.category == LogCategory::ToolCall {
+                    if let Some(meta) = &log.metadata {
+                        let tool_name = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                        if tool_name == "respond" {
+                            if let Some(text) = meta
+                                .get("args")
+                                .and_then(|a| a.get("text").or_else(|| a.get("message")))
+                                .and_then(|v| v.as_str())
+                            {
+                                return Some(text.to_string());
+                            }
                         }
                     }
                 }
             }
+            None
+        };
+
+        // First: check root session logs
+        if let Some(r) = find_respond(logs) {
+            return Some(r);
         }
 
-        // Second: look for a Response-category log
+        // Second: check child session logs (subagent may have called respond)
+        for child_id in child_session_ids {
+            if let Ok(Some(detail)) = self.log_service.get_session_detail(child_id) {
+                if let Some(r) = find_respond(&detail.logs) {
+                    return Some(r);
+                }
+            }
+        }
+
+        // Third: look for a Response-category log
         for log in logs.iter().rev() {
             if log.category == LogCategory::Response {
                 if !log.message.is_empty() {
@@ -442,7 +459,7 @@ impl SessionStateBuilder {
         }
 
         // Fallback: last assistant message from conversation (skip tool-call-only messages)
-        if let Ok(messages) = self.conversations.get_messages(conversation_id) {
+        if let Ok(messages) = self.conversations.get_messages(execution_id) {
             for msg in messages.iter().rev() {
                 if msg.role == "assistant"
                     && !msg.content.is_empty()
