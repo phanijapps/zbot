@@ -153,7 +153,7 @@ export function IntelligenceFeed({
         <div className="intel-section__body">
           {ward ? (
             <div className="intel-ward__content">
-              {ward.content.length > 200 ? ward.content.slice(0, 200) + "..." : ward.content}
+              {(ward.content || "").length > 200 ? ward.content.slice(0, 200) + "..." : ward.content || ward.name}
             </div>
           ) : (
             <div className="intel-empty">No active ward</div>
