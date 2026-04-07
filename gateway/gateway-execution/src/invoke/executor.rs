@@ -215,16 +215,33 @@ impl ExecutorBuilder {
         let settings_service = SettingsService::new_legacy(self.config_dir.clone());
         if let Ok(settings) = settings_service.load() {
             let mm = &settings.execution.multimodal;
-            if mm.provider_id.is_some() && mm.model.is_some() {
-                executor_config = executor_config.with_initial_state(
-                    "multimodal_config",
-                    serde_json::json!({
-                        "providerId": mm.provider_id,
-                        "model": mm.model,
-                        "temperature": mm.temperature,
-                        "maxTokens": mm.max_tokens,
-                    }),
-                );
+            if let (Some(provider_id), Some(model)) = (&mm.provider_id, &mm.model) {
+                // Resolve the provider to get base_url and api_key
+                let providers_path = self.config_dir.join("providers.json");
+                let provider_creds = std::fs::read_to_string(&providers_path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<Vec<serde_json::Value>>(&content).ok())
+                    .and_then(|providers| {
+                        providers.into_iter().find(|p| {
+                            p.get("id").and_then(|v| v.as_str()) == Some(provider_id)
+                        })
+                    });
+
+                if let Some(prov) = provider_creds {
+                    let base_url = prov.get("baseUrl").and_then(|v| v.as_str()).unwrap_or("");
+                    let api_key = prov.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
+                    executor_config = executor_config.with_initial_state(
+                        "multimodal_config",
+                        serde_json::json!({
+                            "providerId": provider_id,
+                            "model": model,
+                            "temperature": mm.temperature,
+                            "maxTokens": mm.max_tokens,
+                            "baseUrl": base_url,
+                            "apiKey": api_key,
+                        }),
+                    );
+                }
             }
         }
 
