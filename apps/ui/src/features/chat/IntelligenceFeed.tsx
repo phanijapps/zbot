@@ -205,8 +205,11 @@ export function IntelligenceFeed({
                 className={`intel-subagent-card intel-subagent-card--${sa.status}`}
               >
                 <div className="intel-subagent-card__header">
-                  <div className="intel-subagent-card__name">
-                    <span className={`intel-subagent__dot intel-subagent__dot--${sa.status}`} />
+                  <div className={`intel-subagent-card__name ${sa.status === "completed" ? "intel-subagent-card__name--done" : ""}`}>
+                    <span className={`intel-subagent__icon intel-subagent__icon--${sa.status}`}>
+                      {sa.status === "completed" ? "✓" : sa.status === "error" ? "✗" : ""}
+                      {sa.status === "active" && <span className="phase-step__pulse" />}
+                    </span>
                     {sa.agentId}
                   </div>
                   <span className="intel-subagent-card__meta">

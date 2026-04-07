@@ -3679,10 +3679,10 @@
 .intel-fact--correction { border-left-color: var(--destructive); background: rgba(239,68,68,0.04); }
 .intel-subagent { display: flex; justify-content: space-between; align-items: center; font-size: var(--text-xs); padding: var(--spacing-1) 0; }
 .intel-subagent__name { display: flex; align-items: center; gap: var(--spacing-1); }
-.intel-subagent__dot { width: 6px; height: 6px; border-radius: var(--radius-full); display: inline-block; flex-shrink: 0; background: var(--muted-foreground); }
-.intel-subagent__dot--active { background: var(--primary); animation: phase-pulse 1.5s infinite; }
-.intel-subagent__dot--completed { background: var(--success); }
-.intel-subagent__dot--error { background: var(--destructive); }
+.intel-subagent__icon { flex-shrink: 0; width: 14px; text-align: center; font-size: 10px; }
+.intel-subagent__icon--active { color: var(--warning); }
+.intel-subagent__icon--completed { color: var(--success); }
+.intel-subagent__icon--error { color: var(--destructive); }
 .intel-subagent__task { color: var(--muted-foreground); font-size: 10px; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .intel-ward__name { font-weight: 600; font-size: var(--text-xs); color: var(--foreground); margin-bottom: var(--spacing-1); }
 .intel-ward__content { font-size: var(--text-xs); color: var(--muted-foreground); }
@@ -4286,8 +4286,9 @@
 /* Subagent Cards (sidebar) */
 .intel-subagent-card { background: var(--muted); border-radius: var(--radius); padding: 6px 10px; margin-bottom: 6px; border: 1px solid var(--border); }
 .intel-subagent-card--active { border-color: var(--primary); }
-.intel-subagent-card--completed { border-color: var(--border); opacity: 0.8; }
-.intel-subagent-card--completed .intel-subagent-card__name { color: var(--muted-foreground); }
+.intel-subagent-card--completed { border-color: var(--border); opacity: 0.7; }
+.intel-subagent-card__name--done { color: var(--muted-foreground); text-decoration: line-through; text-decoration-color: var(--muted-foreground); }
+.intel-subagent-card--completed .intel-subagent-card__task { text-decoration: line-through; text-decoration-color: var(--muted-foreground); }
 .intel-subagent-card--error { border-color: var(--destructive); }
 .intel-subagent-card__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
 .intel-subagent-card__name { display: flex; align-items: center; gap: 4px; font-weight: 600; font-size: 11px; }
