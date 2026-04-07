@@ -241,6 +241,20 @@ impl<D: DbProvider> LogsRepository<D> {
         })
     }
 
+    /// Get the status from the sessions table (not execution_logs).
+    /// Returns the raw status string: "running", "completed", "crashed", "error", etc.
+    pub fn get_session_status_from_sessions_table(&self, conversation_id: &str) -> Option<String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT status FROM sessions WHERE id = ?1 LIMIT 1"
+            )?;
+            let status = stmt.query_row([conversation_id], |row| {
+                row.get::<_, String>(0)
+            }).ok();
+            Ok(status)
+        }).ok().flatten()
+    }
+
     /// Get all logs for a session.
     pub fn get_session_logs(&self, session_id: &str) -> Result<Vec<ExecutionLog>, String> {
         self.db.with_connection(|conn| {

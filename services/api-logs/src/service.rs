@@ -328,9 +328,16 @@ impl<D: DbProvider> LogService<D> {
                     }
                 }
 
-                // Compute status
-                if session.error_count > 0 {
+                // Compute status — check sessions table first for crash state
+                let db_status = self.repo.get_session_status_from_sessions_table(
+                    &session.conversation_id
+                );
+                if matches!(db_status.as_deref(), Some("crashed") | Some("error")) {
                     session.status = SessionStatus::Error;
+                } else if session.error_count > 0 {
+                    session.status = SessionStatus::Error;
+                } else if matches!(db_status.as_deref(), Some("running")) {
+                    session.status = SessionStatus::Running;
                 } else if session.ended_at.is_some() {
                     session.status = SessionStatus::Completed;
                 } else {
