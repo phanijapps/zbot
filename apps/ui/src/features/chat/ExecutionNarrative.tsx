@@ -39,28 +39,31 @@ export function ExecutionNarrative({ blocks, status, phase, subagents }: Executi
         </div>
       )}
 
-      {userBlocks.map((block, i) => (
-        <div key={block.id}>
-          <UserMessage
-            content={block.data.content as string}
-            timestamp={(block.data.timestamp ?? block.timestamp) as string}
-            attachments={block.data.attachments as string[] | undefined}
-          />
-
-          {/* Phase indicators after each user message */}
-          {status !== "idle" && (
-            <PhaseIndicators phase={phase} subagents={subagents} />
-          )}
-
-          {/* Matching response */}
-          {responseBlocks[i] && (
-            <AgentResponse
-              content={responseBlocks[i].data.content as string}
-              timestamp={(responseBlocks[i].data.timestamp ?? responseBlocks[i].timestamp) as string}
+      {userBlocks.map((block, i) => {
+        const isLastTurn = i === userBlocks.length - 1;
+        return (
+          <div key={block.id}>
+            <UserMessage
+              content={block.data.content as string}
+              timestamp={(block.data.timestamp ?? block.timestamp) as string}
+              attachments={block.data.attachments as string[] | undefined}
             />
-          )}
-        </div>
-      ))}
+
+            {/* Phase indicators only on the latest turn */}
+            {isLastTurn && status !== "idle" && (
+              <PhaseIndicators phase={phase} subagents={subagents} />
+            )}
+
+            {/* Matching response */}
+            {responseBlocks[i] && (
+              <AgentResponse
+                content={responseBlocks[i].data.content as string}
+                timestamp={(responseBlocks[i].data.timestamp ?? responseBlocks[i].timestamp) as string}
+              />
+            )}
+          </div>
+        );
+      })}
 
       {/* Thinking indicator when working and no response streaming yet */}
       {status === "running" && phase !== "responding" && phase !== "completed" && (
