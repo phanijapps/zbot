@@ -151,7 +151,7 @@ impl<D: DbProvider> LogsRepository<D> {
             }
 
             if filter.root_only {
-                sql.push_str(" AND e.parent_session_id IS NULL");
+                sql.push_str(" AND s.parent_session_id IS NULL");
             }
 
             sql.push_str(" GROUP BY e.session_id ORDER BY started_at DESC");
