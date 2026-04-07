@@ -1250,7 +1250,7 @@ export function useRecentSessions() {
     const load = async () => {
       try {
         const transport = await getTransport();
-        const res = await transport.listLogSessions({ limit: 10 });
+        const res = await transport.listLogSessions({ limit: 5 });
         if (cancelled || !res.success || !res.data) return;
 
         // Filter to root sessions only (no parent)
