@@ -192,7 +192,12 @@ impl SessionStateBuilder {
             intent_analysis,
             ward,
             recalled_facts,
-            plan,
+            // If session is completed, mark all plan steps as done
+            plan: if matches!(phase, SessionPhase::Completed) {
+                plan.into_iter().map(|mut s| { s.status = Some("completed".to_string()); s }).collect()
+            } else {
+                plan
+            },
             subagents,
             is_live: session.status == SessionStatus::Running,
         }))

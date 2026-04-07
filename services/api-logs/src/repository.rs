@@ -121,7 +121,8 @@ impl<D: DbProvider> LogsRepository<D> {
                     SUM(CASE WHEN e.category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
                     SUM(CASE WHEN e.level = 'error' THEN 1 ELSE 0 END) as error_count,
                     MAX(e.parent_session_id) as parent_session_id,
-                    s.title as session_title
+                    s.title as session_title,
+                    s.status as session_status
                 FROM execution_logs e
                 LEFT JOIN sessions s ON s.id = e.conversation_id
                 WHERE 1=1",
@@ -175,7 +176,12 @@ impl<D: DbProvider> LogsRepository<D> {
                         title: row.get::<_, Option<String>>(10).ok().flatten(),
                         started_at: row.get(3)?,
                         ended_at: row.get(4)?,
-                        status: SessionStatus::Completed, // Will be computed
+                        status: match row.get::<_, Option<String>>(11).ok().flatten().as_deref() {
+                            Some("running") => SessionStatus::Running,
+                            Some("error") | Some("crashed") => SessionStatus::Error,
+                            Some("stopped") => SessionStatus::Stopped,
+                            _ => SessionStatus::Completed,
+                        },
                         token_count: row.get(6)?,
                         tool_call_count: row.get(7)?,
                         error_count: row.get(8)?,
