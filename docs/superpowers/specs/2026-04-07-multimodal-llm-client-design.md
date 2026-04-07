@@ -240,6 +240,8 @@ let encoder = OpenAiEncoder::new(capabilities, model_id.clone());
 | `zero-llm` | `framework/zero-llm/src/openai.rs` | `OpenAiEncoder` impl, update message building |
 | `agent-runtime` | `runtime/agent-runtime/src/types/messages.rs` | `ChatMessage.content` → `Vec<Part>` |
 | `agent-runtime` | `runtime/agent-runtime/src/executor.rs` | Wire encoder into LLM call path, base64 flush before DB write |
+| `agent-tools` | `runtime/agent-tools/src/tools/multimodal.rs` (new) | `multimodal_analyze` tool implementation |
+| `gateway` | Settings schema | `multimodal` config block (provider, model, temperature, maxTokens) |
 
 ## Migration: ChatMessage Content Field
 
@@ -277,6 +279,133 @@ This lets existing callsites migrate from `ChatMessage { content: "hello".into()
 - **Skills and planning agent** — consume these types when ready
 - **Model registry** — already has `vision` capability; no schema changes needed
 
+## Layer 5: Default Multimodal Config + `multimodal_analyze` Tool
+
+### Settings Configuration
+
+A default multimodal model in `settings.json` ensures the system always has a vision-capable path, even without specialized agents:
+
+```json
+{
+  "multimodal": {
+    "provider": "openai",
+    "model": "gpt-4o",
+    "temperature": 0.3,
+    "maxTokens": 4096
+  }
+}
+```
+
+This is the "always available" vision model. Skills, tools, and agents reference it by convention rather than hardcoding model IDs.
+
+### `multimodal_analyze` Tool
+
+A framework-level tool available to all agents. Any agent — even one running on a text-only model — can process visual content by calling this tool.
+
+**Tool Definition:**
+
+```rust
+multimodal_analyze {
+    /// Content items to analyze — images, files, or a mix
+    content: Vec<MultimodalInput>,
+
+    /// Natural language prompt describing what to extract or analyze
+    prompt: String,
+
+    /// Optional JSON Schema — when provided, the response is structured JSON
+    output_schema: Option<serde_json::Value>,
+}
+
+enum MultimodalInput {
+    /// Image from URL, file path, or base64
+    Image { source: String, detail: Option<String> },
+
+    /// Document file (PDF, etc.) from URL or file path
+    File { source: String },
+}
+```
+
+**Example tool calls:**
+
+```json
+// Extract tables from a PDF
+{
+  "name": "multimodal_analyze",
+  "arguments": {
+    "content": [
+      { "file": { "source": "file:///workspace/report.pdf" } }
+    ],
+    "prompt": "Extract all tables with their headers and row data",
+    "output_schema": {
+      "type": "object",
+      "properties": {
+        "tables": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "title": { "type": "string" },
+              "headers": { "type": "array", "items": { "type": "string" } },
+              "rows": { "type": "array", "items": { "type": "array", "items": { "type": "string" } } }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+// Describe a screenshot
+{
+  "name": "multimodal_analyze",
+  "arguments": {
+    "content": [
+      { "image": { "source": "file:///tmp/screenshot.png", "detail": "high" } }
+    ],
+    "prompt": "Describe the UI layout, identify interactive elements, and note any visual issues"
+  }
+}
+
+// Compare two images
+{
+  "name": "multimodal_analyze",
+  "arguments": {
+    "content": [
+      { "image": { "source": "file:///workspace/before.png" } },
+      { "image": { "source": "file:///workspace/after.png" } }
+    ],
+    "prompt": "What changed between these two screenshots?"
+  }
+}
+```
+
+**Internal execution flow:**
+
+1. Read `settings.multimodal` for provider/model config
+2. Resolve `source` strings: `file://` paths → read from disk → `ContentSource::Base64`, URLs → `ContentSource::Url`
+3. Build `Vec<Part>` from inputs + `Part::Text` from prompt
+4. Create `OpenAiEncoder` with the multimodal model's capabilities
+5. Make a one-shot LLM call (not a conversation — single request/response)
+6. If `output_schema` provided, pass as `response_format` for structured output
+7. Return response text (or parsed JSON) as the tool result
+
+**Why a tool, not a subagent:**
+
+- **Zero overhead** — no session, no execution context, no ward injection. Just a direct LLM call.
+- **Synchronous** — result comes back in the same turn, agent continues reasoning immediately.
+- **Universal** — available to every agent by default. No delegation, no capability matching.
+- **Composable** — an agent can call it multiple times in one turn (e.g., analyze page 1, then page 2).
+
+### Fallback Chain
+
+When an agent encounters multimodal content:
+
+1. **Specialized agent/skill exists** (doc-shard, vision-analyzer) → delegate to it (richest behavior, domain knowledge)
+2. **No specialist available** → call `multimodal_analyze` tool directly (universal fallback, always works)
+3. **No multimodal config in settings** → return clear error: "No multimodal model configured. Add a vision-capable model to Settings > Multimodal."
+
+The planning agent learns this chain. The framework provides the tool and config; the agent provides the intelligence.
+
 ## Error Flow
 
 1. Agent (or subagent/skill) builds a message with `Part::Image` content
@@ -294,3 +423,6 @@ No silent dropping. No auto-fallback. Clear error, agent adapts.
 - **Unit tests** for base64 flush: verify Base64 → FileRef conversion, deduplication via hash
 - **Integration test**: round-trip — create multimodal ChatMessage, persist to DB (verify no base64), rehydrate for LLM call (verify base64 restored)
 - **Backward compat test**: text-only messages still encode as plain string, not content array
+- **Unit tests** for `multimodal_analyze` tool: verify source resolution (file://, URL, base64), prompt construction, output_schema passthrough
+- **Integration test** for `multimodal_analyze`: end-to-end call with mock provider, verify correct OpenAI content blocks sent
+- **Settings test**: missing multimodal config returns clear error, valid config resolves to correct provider/model
