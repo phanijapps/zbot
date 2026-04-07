@@ -150,6 +150,10 @@ impl<D: DbProvider> LogsRepository<D> {
                 params_vec.push(Box::new(to_time.clone()));
             }
 
+            if filter.root_only {
+                sql.push_str(" AND e.parent_session_id IS NULL");
+            }
+
             sql.push_str(" GROUP BY e.session_id ORDER BY started_at DESC");
 
             if let Some(limit) = filter.limit {

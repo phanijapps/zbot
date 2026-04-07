@@ -553,6 +553,7 @@ export interface LogFilter {
   to_time?: string;
   limit?: number;
   offset?: number;
+  root_only?: boolean;
 }
 
 // ============================================================================

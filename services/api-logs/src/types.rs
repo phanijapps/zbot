@@ -328,6 +328,9 @@ pub struct LogFilter {
     /// Offset for pagination
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
+    /// Only return root sessions (no parent)
+    #[serde(default)]
+    pub root_only: bool,
 }
 
 // ============================================================================

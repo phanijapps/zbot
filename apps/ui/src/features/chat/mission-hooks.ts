@@ -1250,13 +1250,10 @@ export function useRecentSessions() {
     const load = async () => {
       try {
         const transport = await getTransport();
-        const res = await transport.listLogSessions({ limit: 5 });
+        const res = await transport.listLogSessions({ limit: 5, root_only: true });
         if (cancelled || !res.success || !res.data) return;
 
-        // Filter to root sessions only (no parent)
-        const rootSessions = res.data.filter((s) => !s.parent_session_id);
-
-        if (!cancelled) setSessions(rootSessions);
+        if (!cancelled) setSessions(res.data);
       } catch (err) {
         console.error("[useRecentSessions] Failed to load sessions:", err);
       }
