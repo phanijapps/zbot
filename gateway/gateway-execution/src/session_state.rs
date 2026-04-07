@@ -487,11 +487,9 @@ impl SessionStateBuilder {
             let child_session = &detail.session;
             let child_logs = &detail.logs;
 
-            // Extract the delegation task from the parent's delegation log
-            let task = child_logs
-                .iter()
-                .find(|l| l.category == LogCategory::Delegation || l.category == LogCategory::Session)
-                .map(|l| l.message.clone());
+            // Extract the delegation task: check parent's delegation logs (metadata.task),
+            // then child's delegation logs, then fall back to agent_executions.task via child session
+            let task = self.extract_delegation_task(child_id, &child_session.agent_id, child_logs);
 
             // Build tool call entries for this subagent
             let tool_calls = Self::build_tool_calls(child_logs);
@@ -508,6 +506,55 @@ impl SessionStateBuilder {
         }
 
         subagents
+    }
+
+    /// Extract the delegation task for a child session.
+    /// Checks parent's delegation logs (metadata.task matching child_agent),
+    /// then child's own delegation/session logs.
+    fn extract_delegation_task(
+        &self,
+        _child_session_id: &str,
+        child_agent_id: &str,
+        child_logs: &[ExecutionLog],
+    ) -> Option<String> {
+        // Try to find the parent session and its delegation logs
+        // The child's logs contain parent_session_id references
+        if let Some(parent_sid) = child_logs.iter()
+            .find_map(|l| l.parent_session_id.as_deref())
+        {
+            if let Ok(Some(parent_detail)) = self.log_service.get_session_detail(parent_sid) {
+                // Find delegation log in parent matching this child agent
+                for log in &parent_detail.logs {
+                    if log.category == LogCategory::Delegation {
+                        if let Some(meta) = &log.metadata {
+                            let agent = meta.get("child_agent")
+                                .or_else(|| meta.get("child_agent_id"))
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            if agent == child_agent_id {
+                                // Check metadata.task first, then message
+                                if let Some(task) = meta.get("task").and_then(|v| v.as_str()) {
+                                    return Some(task.chars().take(200).collect());
+                                }
+                                if !log.message.is_empty() && log.message != "Session started" {
+                                    return Some(log.message.chars().take(200).collect());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: first non-"Session started" delegation or session log in child
+        child_logs.iter()
+            .find(|l| {
+                (l.category == LogCategory::Delegation || l.category == LogCategory::Session)
+                    && !l.message.is_empty()
+                    && l.message != "Session started"
+                    && l.message != "Execution completed successfully"
+            })
+            .map(|l| l.message.chars().take(200).collect())
     }
 
     /// Build tool call entries from a set of logs.
