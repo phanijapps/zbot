@@ -182,7 +182,7 @@ impl SessionStateBuilder {
                 started_at: session.started_at.clone(),
                 duration_ms: session.duration_ms,
                 // LogSession.token_count is often 0 — sum from messages table instead
-                token_count: self.sum_token_count(&session.session_id)
+                token_count: self.sum_token_count(&session.session_id, &session.child_session_ids)
                     .unwrap_or(session.token_count),
                 model,
             },
@@ -226,9 +226,18 @@ impl SessionStateBuilder {
     }
 
     /// Sum token counts from the messages table for this execution.
-    fn sum_token_count(&self, execution_id: &str) -> Option<i32> {
-        let messages = self.conversations.get_messages(execution_id).ok()?;
-        let total: i32 = messages.iter().map(|m| m.token_count).sum();
+    fn sum_token_count(&self, execution_id: &str, child_session_ids: &[String]) -> Option<i32> {
+        let mut total: i32 = 0;
+        // Root session tokens
+        if let Ok(messages) = self.conversations.get_messages(execution_id) {
+            total += messages.iter().map(|m| m.token_count).sum::<i32>();
+        }
+        // Child session tokens
+        for child_id in child_session_ids {
+            if let Ok(messages) = self.conversations.get_messages(child_id) {
+                total += messages.iter().map(|m| m.token_count).sum::<i32>();
+            }
+        }
         if total > 0 { Some(total) } else { None }
     }
 
@@ -432,10 +441,14 @@ impl SessionStateBuilder {
             }
         }
 
-        // Fallback: last assistant message from conversation
+        // Fallback: last assistant message from conversation (skip tool-call-only messages)
         if let Ok(messages) = self.conversations.get_messages(conversation_id) {
             for msg in messages.iter().rev() {
-                if msg.role == "assistant" && !msg.content.is_empty() {
+                if msg.role == "assistant"
+                    && !msg.content.is_empty()
+                    && msg.content.trim() != "[tool calls]"
+                    && !msg.content.starts_with("[tool")
+                {
                     return Some(msg.content.clone());
                 }
             }
