@@ -13,6 +13,12 @@ Quick reference for all system components. Check this before planning changes.
 | — Error Handling | [intent-analysis/error-handling.md](intent-analysis/error-handling.md) | Truncation repair, fallback events, degradation hierarchy |
 | — Files | [intent-analysis/files.md](intent-analysis/files.md) | Every file with line numbers |
 
+## Chat Experience
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| Chat Experience | [chat-experience/overview.md](chat-experience/overview.md) | 3-panel chat UI: center (message → phases → response), sidebar (intent, ward, facts, subagents, plan). Session State API for reconnection. |
+
 ## Memory & Intelligence
 
 | Component | Location | Description |
