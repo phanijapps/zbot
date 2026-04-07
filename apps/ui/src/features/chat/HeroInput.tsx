@@ -6,7 +6,7 @@
 // ============================================================================
 
 import { useState, useRef, useCallback } from "react";
-import { Paperclip, ImagePlus, ArrowUp, CheckCircle2, XCircle } from "lucide-react";
+import { Paperclip, ArrowUp, CheckCircle2, XCircle } from "lucide-react";
 import type { UploadedFile } from "./ChatInput";
 import type { LogSession } from "@/services/transport/types";
 import { timeAgo, switchToSession } from "./mission-hooks";
@@ -55,7 +55,6 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const imageInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const canSend = text.trim().length > 0 || attachments.length > 0;
@@ -152,26 +151,6 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
             type="file"
             hidden
             multiple
-            onChange={(e) => {
-              handleFileSelect(e.target.files);
-              e.target.value = "";
-            }}
-          />
-
-          <button
-            className="hero-input__action-btn"
-            title="Attach image"
-            onClick={() => imageInputRef.current?.click()}
-            disabled={isDisabled}
-          >
-            <ImagePlus style={{ width: 18, height: 18 }} />
-          </button>
-          <input
-            ref={imageInputRef}
-            type="file"
-            hidden
-            multiple
-            accept="image/*"
             onChange={(e) => {
               handleFileSelect(e.target.files);
               e.target.value = "";
