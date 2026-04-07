@@ -15,6 +15,8 @@ use crate::llm::client::{
 };
 use crate::llm::config::LlmConfig;
 use crate::types::{ChatMessage, ToolCall};
+use zero_core::types::{Part, ContentSource};
+use zero_core::multimodal::rehydrate_source;
 
 /// OpenAI-compatible LLM client
 ///
@@ -103,12 +105,51 @@ impl OpenAiClient {
         &self.config
     }
 
+    /// Rehydrate any FileRef sources in messages to Base64 before sending to the API.
+    fn rehydrate_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+        messages.into_iter().map(|mut msg| {
+            msg.content = msg.content.into_iter().map(|part| {
+                match &part {
+                    Part::Image { source: source @ ContentSource::FileRef(path), mime_type, detail } => {
+                        match rehydrate_source(source) {
+                            Ok(new_source) => Part::Image {
+                                source: new_source,
+                                mime_type: mime_type.clone(),
+                                detail: detail.clone(),
+                            },
+                            Err(e) => {
+                                tracing::warn!("Failed to rehydrate FileRef {}: {}", path, e);
+                                part
+                            }
+                        }
+                    }
+                    Part::File { source: source @ ContentSource::FileRef(path), mime_type, filename } => {
+                        match rehydrate_source(source) {
+                            Ok(new_source) => Part::File {
+                                source: new_source,
+                                mime_type: mime_type.clone(),
+                                filename: filename.clone(),
+                            },
+                            Err(e) => {
+                                tracing::warn!("Failed to rehydrate FileRef {}: {}", path, e);
+                                part
+                            }
+                        }
+                    }
+                    _ => part,
+                }
+            }).collect();
+            msg
+        }).collect()
+    }
+
     /// Build the request body for the API
     fn build_request_body(
         &self,
         messages: Vec<ChatMessage>,
         tools: Option<Value>,
     ) -> Value {
+        let messages = Self::rehydrate_messages(messages);
         let mut body_obj = json!({
             "model": self.config.model,
             "messages": messages,
