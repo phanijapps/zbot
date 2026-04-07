@@ -1,0 +1,296 @@
+# Multimodal LLM Client — Design Spec
+
+**Date:** 2026-04-07
+**Status:** Draft
+**Scope:** Backend only — framework message types, LLM client encoding, persistence. No UI changes.
+
+## Problem
+
+The agent layer currently handles text-only messages. The `Part` enum in `zero-core` has an unused `Binary` variant, the model registry tracks `vision` capabilities, and the OpenAI client hardcodes `supports_vision() -> false`. There is no end-to-end path for multimodal content (images, PDFs, documents) to flow through the system to LLM providers.
+
+This blocks:
+- PDF processing (text + images across pages) via doc-shard agents
+- Visual webpage understanding via browsing agents
+- Agent→agent multimodal communication (e.g., chart-builder → visual-reviewer)
+- Any skill or subagent that produces or consumes non-text content
+
+## Design Principles
+
+1. **Framework as backbone** — carries content, enforces capability checks, no processing logic
+2. **Intelligence in agents** — planning agent handles routing, sharding, delegation for multimodal tasks
+3. **Content-type-agnostic, capability-aware** — the framework doesn't care what content means, but does prevent sending images to text-only models
+4. **No silent degradation** — unsupported content returns clear errors; the agent decides what to do
+5. **No DB bloat** — base64 blobs are flushed to disk, only file references are persisted
+
+## Approach: Hybrid (Extend Part Enum + Provider Encoder Trait)
+
+Extend the existing `Part` enum with `Image` and `File` variants for minimal core change. Introduce a `ProviderEncoder` trait in the LLM client layer to isolate provider-specific wire format encoding. Today only OpenAI-compatible format; the trait makes adding providers trivial later.
+
+## Layer 1: Core Types (`zero-core`)
+
+**File:** `framework/zero-core/src/types.rs`
+
+### Part Enum (updated)
+
+```rust
+pub enum Part {
+    // Existing
+    Text { text: String },
+    FunctionCall { name: String, args: String, id: String },
+    FunctionResponse { id: String, response: String },
+
+    // New multimodal variants (replaces unused Binary)
+    Image {
+        source: ContentSource,
+        mime_type: String,          // "image/png", "image/jpeg", "image/webp", "image/gif"
+        detail: Option<ImageDetail>,
+    },
+    File {
+        source: ContentSource,
+        mime_type: String,          // "application/pdf", "text/csv", etc.
+        filename: Option<String>,   // original filename for display/context
+    },
+}
+```
+
+### ContentSource
+
+```rust
+pub enum ContentSource {
+    /// Remote or data: URL — stored as-is in DB
+    Url(String),
+
+    /// Raw base64 encoded bytes — ephemeral, never persisted to DB
+    Base64(String),
+
+    /// Local file path — what DB stores after flushing Base64 to disk
+    FileRef(String),
+}
+```
+
+### ImageDetail
+
+```rust
+pub enum ImageDetail {
+    Low,    // 512px fixed — fast, fewer tokens
+    High,   // full resolution with tiling
+    Auto,   // provider decides based on image size
+}
+```
+
+### Removed
+
+- `Part::Binary { mime_type, data: Vec<u8> }` — removed. Was unused. Replaced by typed `Image` and `File` variants with proper metadata.
+
+## Layer 2: Provider Encoder Trait (`zero-llm`)
+
+**File:** `framework/zero-llm/src/encoding.rs` (new)
+**File:** `framework/zero-llm/src/openai.rs` (updated)
+
+### Trait
+
+```rust
+pub trait ProviderEncoder {
+    /// Encode parts into provider-specific JSON content array
+    fn encode_content(&self, parts: &[Part]) -> Result<serde_json::Value, EncodingError>;
+
+    /// Check if this provider/model supports a specific part type
+    fn supports_part(&self, part: &Part) -> bool;
+
+    /// Partition parts into supported and unsupported
+    fn filter_unsupported<'a>(&self, parts: &'a [Part]) -> (Vec<&'a Part>, Vec<&'a Part>) {
+        let mut supported = vec![];
+        let mut unsupported = vec![];
+        for part in parts {
+            if self.supports_part(part) {
+                supported.push(part);
+            } else {
+                unsupported.push(part);
+            }
+        }
+        (supported, unsupported)
+    }
+}
+
+pub enum EncodingError {
+    UnsupportedContentType { part_type: String, model: String },
+    EncodingFailed { reason: String },
+}
+```
+
+### OpenAI Encoder
+
+```rust
+pub struct OpenAiEncoder {
+    capabilities: ModelCapabilities,
+    model_id: String,
+}
+
+impl ProviderEncoder for OpenAiEncoder {
+    fn supports_part(&self, part: &Part) -> bool {
+        match part {
+            Part::Text { .. } => true,
+            Part::Image { .. } => self.capabilities.vision,
+            Part::File { .. } => self.capabilities.vision,
+            Part::FunctionCall { .. } | Part::FunctionResponse { .. } => self.capabilities.tools,
+        }
+    }
+
+    fn encode_content(&self, parts: &[Part]) -> Result<serde_json::Value, EncodingError> {
+        // Check all parts are supported first
+        for part in parts {
+            if !self.supports_part(part) {
+                return Err(EncodingError::UnsupportedContentType {
+                    part_type: part.type_name().to_string(),
+                    model: self.model_id.clone(),
+                });
+            }
+        }
+        // Encode to OpenAI content array format
+        // ... (implementation details in plan)
+    }
+}
+```
+
+### OpenAI Encoding Map
+
+| Part Variant | OpenAI Content Block |
+|---|---|
+| `Part::Text { text }` | `{ "type": "text", "text": "..." }` |
+| `Part::Image { source: Base64(data), mime_type, detail }` | `{ "type": "image_url", "image_url": { "url": "data:{mime};base64,{data}", "detail": "{detail}" } }` |
+| `Part::Image { source: Url(url), detail }` | `{ "type": "image_url", "image_url": { "url": "{url}", "detail": "{detail}" } }` |
+| `Part::Image { source: FileRef(path), ... }` | Read file → encode as Base64 variant above |
+| `Part::File { source: Base64(data), mime_type }` | `{ "type": "file", "file": { "url": "data:{mime};base64,{data}" } }` |
+| `Part::File { source: Url(url) }` | `{ "type": "file", "file": { "url": "{url}" } }` |
+| `Part::File { source: FileRef(path), ... }` | Read file → encode as Base64 variant above |
+
+### Backward Compatibility
+
+When a message contains only `Part::Text`, the `content` field is encoded as a plain `String` (not a content array). This ensures backward compatibility with providers or models that don't support the content array format.
+
+When a message contains any non-text parts, `content` is encoded as a JSON array of content blocks.
+
+## Layer 3: Content Persistence
+
+### Base64 Flush Strategy
+
+Before any `ChatMessage` is written to DB:
+
+1. Walk all `Part`s in the message
+2. For each `Part::Image` or `Part::File` with `source: Base64(data)`:
+   a. Compute content hash (SHA-256 of the raw bytes)
+   b. Write to `agent_data/{session_id}/attachments/{hash}.{ext}`
+   c. Replace `source` with `FileRef("agent_data/{session_id}/attachments/{hash}.{ext}")`
+3. `Part::Text`, `Url`, and `FileRef` sources pass through unchanged
+
+### Rehydration
+
+When a message with `FileRef` sources needs to go to an LLM:
+
+1. `ProviderEncoder` encounters `FileRef(path)`
+2. Reads file from disk
+3. Encodes as base64 for the API call
+4. The `FileRef` in the stored message is not modified
+
+This means disk is the source of truth for blob content. DB stores only references.
+
+### Deduplication
+
+Content-addressed storage (`{hash}.{ext}`) means the same image sent twice only stores once. The hash-based naming handles this automatically.
+
+## Layer 4: Integration — Agent Runtime
+
+**File:** `runtime/agent-runtime/src/types/messages.rs`
+
+### ChatMessage Update
+
+```rust
+pub struct ChatMessage {
+    pub role: String,
+    pub content: Vec<Part>,          // Was: String — now multimodal
+    pub tool_calls: Option<Vec<ToolCall>>,
+    pub tool_call_id: Option<String>,
+}
+```
+
+### Executor Changes
+
+**File:** `runtime/agent-runtime/src/executor.rs`
+
+1. When building LLM request, create `OpenAiEncoder` with model's capabilities from registry
+2. Pass `message.content` (Vec<Part>) through `encoder.encode_content()`
+3. If `EncodingError::UnsupportedContentType` returned, propagate as execution error back to the agent
+4. Before persisting any message to DB, run the base64 flush
+
+### Model Capability Lookup
+
+The executor already has access to the model registry via services. When creating the encoder:
+
+```rust
+let capabilities = model_service.get_capabilities(&model_id);
+let encoder = OpenAiEncoder::new(capabilities, model_id.clone());
+```
+
+## What Changes
+
+| Layer | File(s) | Change |
+|---|---|---|
+| `zero-core` | `framework/zero-core/src/types.rs` | Update `Part` enum, add `ContentSource`, `ImageDetail` |
+| `zero-llm` | `framework/zero-llm/src/encoding.rs` (new) | `ProviderEncoder` trait, `EncodingError` |
+| `zero-llm` | `framework/zero-llm/src/openai.rs` | `OpenAiEncoder` impl, update message building |
+| `agent-runtime` | `runtime/agent-runtime/src/types/messages.rs` | `ChatMessage.content` → `Vec<Part>` |
+| `agent-runtime` | `runtime/agent-runtime/src/executor.rs` | Wire encoder into LLM call path, base64 flush before DB write |
+
+## Migration: ChatMessage Content Field
+
+Changing `ChatMessage.content` from `String` to `Vec<Part>` is a breaking change. All existing code that constructs or reads `ChatMessage` needs updating. To ease migration:
+
+```rust
+impl ChatMessage {
+    /// Convenience constructor for text-only messages (most common case)
+    pub fn text(role: &str, text: impl Into<String>) -> Self {
+        Self {
+            role: role.to_string(),
+            content: vec![Part::Text { text: text.into() }],
+            tool_calls: None,
+            tool_call_id: None,
+        }
+    }
+
+    /// Get text content as a single string (for backward compat in consumers that only need text)
+    pub fn text_content(&self) -> String {
+        self.content.iter().filter_map(|p| match p {
+            Part::Text { text } => Some(text.as_str()),
+            _ => None,
+        }).collect::<Vec<_>>().join("\n")
+    }
+}
+```
+
+This lets existing callsites migrate from `ChatMessage { content: "hello".into(), .. }` to `ChatMessage::text("user", "hello")` with minimal churn, while new multimodal callsites construct `Vec<Part>` directly.
+
+## What Does NOT Change
+
+- **Gateway WebSocket protocol** — UI changes are a separate activity
+- **Agent tools** — existing tools produce text; they'll produce `Part`s when individual tools are updated
+- **Delegation/subagent spawning** — already passes messages; multimodal parts flow through automatically
+- **Skills and planning agent** — consume these types when ready
+- **Model registry** — already has `vision` capability; no schema changes needed
+
+## Error Flow
+
+1. Agent (or subagent/skill) builds a message with `Part::Image` content
+2. Executor passes it to `OpenAiEncoder::encode_content()`
+3. If model lacks vision: `EncodingError::UnsupportedContentType { part_type: "Image", model: "gpt-3.5-turbo" }`
+4. Executor surfaces this as an execution error in the conversation
+5. Planning agent sees the error, delegates to a vision-capable model/subagent
+
+No silent dropping. No auto-fallback. Clear error, agent adapts.
+
+## Testing Strategy
+
+- **Unit tests** for `OpenAiEncoder`: encode each Part variant, verify JSON output matches OpenAI spec
+- **Unit tests** for capability checks: text-only model rejects Image parts, vision model accepts all
+- **Unit tests** for base64 flush: verify Base64 → FileRef conversion, deduplication via hash
+- **Integration test**: round-trip — create multimodal ChatMessage, persist to DB (verify no base64), rehydrate for LLM call (verify base64 restored)
+- **Backward compat test**: text-only messages still encode as plain string, not content array
