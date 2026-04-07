@@ -26,14 +26,7 @@ import { HeroInput } from "./HeroInput";
  */
 export function MissionControl() {
   const { state, sendMessage, stopAgent, startNewSession } = useMissionControl();
-  const { sessions: recentSessions, refresh: refreshSessions } = useRecentSessions();
-
-  // Refresh recent sessions when returning to idle/hero state
-  useEffect(() => {
-    if (state.blocks.length === 0 && state.status === "idle") {
-      refreshSessions();
-    }
-  }, [state.blocks.length, state.status, refreshSessions]);
+  const { sessions: recentSessions } = useRecentSessions();
 
   // No blocks and idle — show the beautiful landing input
   // But NOT if we're about to load a session (logSessionId or activeSessionId present)
