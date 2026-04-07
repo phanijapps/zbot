@@ -967,6 +967,7 @@ export function useMissionControl() {
 
   useEffect(() => {
     const logSessionId = localStorage.getItem("agentzero_log_session_id");
+    console.log("[MissionControl] loadSession check:", { logSessionId, activeSessionId, hasLoaded: hasLoadedSessionRef.current });
     if ((!activeSessionId && !logSessionId) || hasLoadedSessionRef.current) return;
     hasLoadedSessionRef.current = true;
 
@@ -974,12 +975,13 @@ export function useMissionControl() {
       try {
         const transport = await getTransport();
         const sessionToLoad = logSessionId || activeSessionId;
+        console.log("[MissionControl] Loading session state:", sessionToLoad);
         if (!sessionToLoad) return;
 
         const res = await transport.getSessionState(sessionToLoad);
+        console.log("[MissionControl] getSessionState result:", res.success, res.error, res.data ? "has data" : "no data");
         if (!res.success || !res.data) {
-          // Session state API not available — skip loading
-          console.warn("[MissionControl] getSessionState failed, skipping load");
+          console.warn("[MissionControl] getSessionState failed:", res.error);
           return;
         }
 
@@ -1254,28 +1256,7 @@ export function useRecentSessions() {
         // Filter to root sessions only (no parent)
         const rootSessions = res.data.filter((s) => !s.parent_session_id);
 
-        // Enrich untitled sessions by fetching logs for set_session_title tool calls
-        const enriched = await Promise.all(
-          rootSessions.map(async (s) => {
-            if (s.title) return s;
-            try {
-              const detail = await transport.getLogSession(s.session_id);
-              if (!detail.success || !detail.data?.logs) return s;
-              for (const log of detail.data.logs) {
-                if (log.category !== "tool_call") continue;
-                const meta = log.metadata as Record<string, unknown> | undefined;
-                if ((meta?.tool_name as string) === "set_session_title") {
-                  const args = meta?.args as Record<string, unknown> | undefined;
-                  const title = (args?.title ?? args?.name ?? "") as string;
-                  if (title) return { ...s, title };
-                }
-              }
-            } catch { /* ignore */ }
-            return s;
-          }),
-        );
-
-        if (!cancelled) setSessions(enriched);
+        if (!cancelled) setSessions(rootSessions);
       } catch (err) {
         console.error("[useRecentSessions] Failed to load sessions:", err);
       }
