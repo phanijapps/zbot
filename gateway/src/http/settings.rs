@@ -294,6 +294,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Orchestrator (root agent) configuration
     #[serde(default)]
     pub orchestrator: Option<gateway_services::OrchestratorConfig>,
+    /// Default multimodal (vision) model configuration
+    #[serde(default)]
+    pub multimodal: Option<gateway_services::MultimodalConfig>,
 }
 
 fn default_max_parallel() -> u32 { 2 }
@@ -308,6 +311,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
             subagent_non_streaming: req.subagent_non_streaming,
             orchestrator: req.orchestrator.unwrap_or_default(),
             distillation: Default::default(),
+            multimodal: req.multimodal.unwrap_or_default(),
         }
     }
 }

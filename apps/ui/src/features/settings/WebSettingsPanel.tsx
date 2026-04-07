@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Loader2, ChevronDown, ChevronRight, Plus,
-  Shield, Activity, Check,
+  Shield, Activity, Check, Eye,
 } from "lucide-react";
 import {
   getTransport,
@@ -795,6 +795,105 @@ export function WebSettingsPanel() {
                     </div>
                   </div>
                 </div>
+              </div>
+            )}
+          </div>
+
+          {/* Multimodal (Vision) Configuration */}
+          <div>
+            {execSettings && (
+              <div className="card card__padding--lg">
+                <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                  <div className="card__icon card__icon--primary">
+                    <Eye style={{ width: 18, height: 18 }} />
+                  </div>
+                  <div>
+                    <h2 className="settings-section-header">Multimodal</h2>
+                    <p className="page-subtitle">Default vision model for analyzing images, PDFs, and visual content. Used by the <code>multimodal_analyze</code> tool.</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="settings-field-label">Provider</label>
+                    <select
+                      className="form-input form-select"
+                      value={execSettings.multimodal?.providerId || ""}
+                      onChange={(e) => handleExecChange({
+                        multimodal: {
+                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                          providerId: e.target.value || null,
+                          model: null,
+                        },
+                      })}
+                    >
+                      <option value="">Select Provider</option>
+                      {providers.filter((p) => p.verified).map((p) => (
+                        <option key={p.id} value={p.id}>{p.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="settings-field-label">Model</label>
+                    <select
+                      className="form-input form-select"
+                      value={execSettings.multimodal?.model || ""}
+                      onChange={(e) => handleExecChange({
+                        multimodal: {
+                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                          model: e.target.value || null,
+                        },
+                      })}
+                    >
+                      <option value="">Select Vision Model</option>
+                      {(() => {
+                        const mmProviderId = execSettings.multimodal?.providerId || defaultProviderId;
+                        return (providers.find((p) => p.id === mmProviderId)?.models || []).map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ));
+                      })()}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="settings-field-label">Temperature</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={0}
+                      max={2}
+                      step={0.1}
+                      value={execSettings.multimodal?.temperature ?? 0.3}
+                      onChange={(e) => handleExecChange({
+                        multimodal: {
+                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                          temperature: parseFloat(e.target.value) || 0.3,
+                        },
+                      })}
+                    />
+                  </div>
+                  <div>
+                    <label className="settings-field-label">Max Output Tokens</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      min={256}
+                      step={256}
+                      value={execSettings.multimodal?.maxTokens ?? 4096}
+                      onChange={(e) => handleExecChange({
+                        multimodal: {
+                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                          maxTokens: parseInt(e.target.value) || 4096,
+                        },
+                      })}
+                    />
+                  </div>
+                </div>
+
+                {!execSettings.multimodal?.providerId && (
+                  <p style={{ marginTop: "var(--spacing-2)", fontSize: "var(--font-size-xs)", color: "var(--text-tertiary)" }}>
+                    Select a provider with a vision-capable model (e.g., GPT-4o) to enable multimodal analysis.
+                  </p>
+                )}
               </div>
             )}
           </div>

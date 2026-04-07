@@ -458,6 +458,18 @@ export interface ToolCallEntryData {
   summary: string | null;
 }
 
+/** Default multimodal (vision) model configuration */
+export interface MultimodalConfig {
+  /** Provider ID. null = not configured */
+  providerId?: string | null;
+  /** Vision-capable model. null = not configured */
+  model?: string | null;
+  /** Temperature for analysis calls (default: 0.3) */
+  temperature: number;
+  /** Max output tokens (default: 4096) */
+  maxTokens: number;
+}
+
 /** Execution settings for controlling agent concurrency */
 export interface ExecutionSettings {
   /** Maximum parallel subagents across all sessions (default: 2) */
@@ -470,6 +482,8 @@ export interface ExecutionSettings {
   orchestrator?: OrchestratorConfig;
   /** Distillation model configuration (inherits from orchestrator by default) */
   distillation?: DistillationConfig;
+  /** Default multimodal (vision) model for the multimodal_analyze tool */
+  multimodal?: MultimodalConfig;
 }
 
 export interface ExecutionSettingsResponse {
