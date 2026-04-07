@@ -224,7 +224,7 @@ impl SessionStateBuilder {
         for log in logs {
             if log.category == LogCategory::ToolCall {
                 if let Some(meta) = &log.metadata {
-                    let tool_name = meta.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                    let tool_name = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                     if tool_name.contains("ward") || tool_name == "load_ward" {
                         let name = meta
                             .get("args")
@@ -245,8 +245,9 @@ impl SessionStateBuilder {
         // Fallback: extract from intent analysis
         if let Some(intent_val) = intent {
             if let Some(ward_name) = intent_val
-                .get("ward")
-                .or_else(|| intent_val.get("matched_ward"))
+                .get("ward_recommendation")
+                .and_then(|wr| wr.get("ward_name"))
+                .or_else(|| intent_val.get("ward"))
                 .and_then(|v| v.as_str())
             {
                 return Some(WardInfo {
@@ -265,7 +266,7 @@ impl SessionStateBuilder {
         for log in logs {
             if log.category == LogCategory::ToolResult {
                 if let Some(meta) = &log.metadata {
-                    let tool_name = meta.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                    let tool_name = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                     if tool_name.contains("memory") || tool_name.contains("recall") {
                         // Try to extract facts from the result
                         if let Some(result) = meta.get("result").and_then(|v| v.as_str()) {
@@ -375,7 +376,7 @@ impl SessionStateBuilder {
         for log in logs.iter().rev() {
             if log.category == LogCategory::ToolCall {
                 if let Some(meta) = &log.metadata {
-                    let tool_name = meta.get("tool").and_then(|v| v.as_str()).unwrap_or("");
+                    let tool_name = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                     if tool_name == "respond" {
                         if let Some(text) = meta
                             .get("args")
