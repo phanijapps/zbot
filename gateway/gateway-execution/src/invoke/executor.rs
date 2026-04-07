@@ -19,6 +19,8 @@ use agent_tools::{
     MemoryTool, WardTool, UpdatePlanTool, SetSessionTitleTool, GrepTool,
     // Optional file reading tools
     ReadTool, GlobTool,
+    // Multimodal vision fallback
+    MultimodalAnalyzeTool,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -416,6 +418,7 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
             tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
             tool_registry.register(Arc::new(RespondTool::new()));
+            tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
         } else {
             // Root agent: orchestrator tools only.
             // Root delegates — it doesn't do specialist work.
@@ -432,6 +435,7 @@ impl ExecutorBuilder {
             // Delegation + response
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(DelegateTool::new()));
+            tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
             // Optional file reading (root may need to review delegation results)
             if self.tool_settings.file_tools {

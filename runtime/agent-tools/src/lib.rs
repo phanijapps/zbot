@@ -19,6 +19,8 @@ pub use tools::{
     ShellTool, ApplyPatchTool, WriteFileTool, EditFileTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
     // Orchestrator tools
     WardTool, UpdatePlanTool, SetSessionTitleTool,
+    // Multimodal vision fallback
+    MultimodalAnalyzeTool,
 };
 
 // Re-export from zero-core

@@ -12,6 +12,7 @@ mod memory;
 mod introspection;
 mod ward;
 mod connectors;
+mod multimodal;
 pub(crate) mod guards;
 
 use std::sync::Arc;
@@ -40,6 +41,7 @@ pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
 pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
 pub use ward::WardTool;
 pub use connectors::QueryResourceTool;
+pub use multimodal::MultimodalAnalyzeTool;
 
 // ============================================================================
 // TOOL SETTINGS
@@ -202,6 +204,9 @@ pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -
         tools.push(Arc::new(ListToolsTool::new()));
         tools.push(Arc::new(ListMcpsTool::new(fs.clone())));
     }
+
+    // Multimodal analysis — always available as a vision fallback
+    tools.push(Arc::new(multimodal::MultimodalAnalyzeTool::new()));
 
     tools
 }
