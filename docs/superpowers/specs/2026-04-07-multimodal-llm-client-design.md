@@ -396,15 +396,34 @@ enum MultimodalInput {
 - **Universal** — available to every agent by default. No delegation, no capability matching.
 - **Composable** — an agent can call it multiple times in one turn (e.g., analyze page 1, then page 2).
 
-### Fallback Chain
+### Multimodal Processing Paths
 
-When an agent encounters multimodal content:
+There are three ways multimodal content gets processed, from most natural to most fallback:
 
-1. **Specialized agent/skill exists** (doc-shard, vision-analyzer) → delegate to it (richest behavior, domain knowledge)
-2. **No specialist available** → call `multimodal_analyze` tool directly (universal fallback, always works)
-3. **No multimodal config in settings** → return clear error: "No multimodal model configured. Add a vision-capable model to Settings > Multimodal."
+**Path 1: Native multimodal agent (primary)**
+The agent itself runs on a vision-capable model (e.g., a subagent spawned with GPT-4o). Multimodal `Part`s flow directly in `ChatMessage.content` — the agent sees images/files natively alongside text. No tool call, no delegation. This is the most natural and efficient path.
 
-The planning agent learns this chain. The framework provides the tool and config; the agent provides the intelligence.
+- Root agent on a vision model → processes directly
+- Subagent spawned with a vision model → receives multimodal content in its task context
+- Planning agent delegates *with* the image content inline → subagent sees it immediately
+
+**Path 2: Specialized agent/skill delegation**
+A specialized agent (doc-shard, vision-analyzer) exists with domain knowledge for the content type. The planning agent delegates the multimodal content to it. The specialist runs on a vision model and returns structured results.
+
+- Best for complex tasks: multi-page PDFs, visual QA workflows, comparative analysis
+- The specialist adds domain intelligence beyond raw vision capability
+
+**Path 3: `multimodal_analyze` tool (safety net)**
+The agent is on a text-only model and no specialist is available. It calls `multimodal_analyze` as a tool — a one-shot LLM call to the default vision model from settings. Results come back as text/JSON in the same turn.
+
+- Universal fallback — available to every agent regardless of its own model
+- Zero overhead — no session, no execution context, just a direct call
+- Handles the "fresh install, no specialists configured" case
+
+**Path 4: No vision capability at all**
+No multimodal config in settings, no vision-capable agents. The system returns a clear error: "No multimodal model configured. Add a vision-capable model to Settings > Multimodal."
+
+The planning agent learns these paths. The framework provides the pipes (Layer 1-4) and the safety net (Layer 5); agent intelligence decides which path to use.
 
 ## Error Flow
 
