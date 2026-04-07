@@ -176,7 +176,8 @@ impl SessionStateBuilder {
         Ok(Some(SessionState {
             session: SessionMeta {
                 id: session.session_id.clone(),
-                title: session.title.clone(),
+                title: session.title.clone()
+                    .or_else(|| Self::extract_title(logs)),
                 status: session.status.as_str().to_string(),
                 started_at: session.started_at.clone(),
                 duration_ms: session.duration_ms,
@@ -200,6 +201,24 @@ impl SessionStateBuilder {
     // ========================================================================
     // EXTRACTION HELPERS
     // ========================================================================
+
+    /// Extract session title from set_session_title tool call.
+    fn extract_title(logs: &[ExecutionLog]) -> Option<String> {
+        for log in logs {
+            if log.category == LogCategory::ToolCall {
+                if let Some(meta) = &log.metadata {
+                    let tool = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                    if tool == "set_session_title" {
+                        return meta.get("args")
+                            .and_then(|a| a.get("title").or_else(|| a.get("name")))
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string());
+                    }
+                }
+            }
+        }
+        None
+    }
 
     /// Sum token counts from the messages table for this execution.
     fn sum_token_count(&self, execution_id: &str) -> Option<i32> {
