@@ -327,7 +327,7 @@ impl SessionStateBuilder {
             l.category == LogCategory::ToolCall
                 && l.metadata
                     .as_ref()
-                    .and_then(|m| m.get("tool"))
+                    .and_then(|m| m.get("tool_name"))
                     .and_then(|v| v.as_str())
                     == Some("update_plan")
         });
@@ -484,7 +484,7 @@ impl SessionStateBuilder {
                 let tool_name = log
                     .metadata
                     .as_ref()
-                    .and_then(|m| m.get("tool"))
+                    .and_then(|m| m.get("tool_name"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("unknown")
                     .to_string();
@@ -550,7 +550,7 @@ impl SessionStateBuilder {
             l.category == LogCategory::ToolCall
                 && l.metadata
                     .as_ref()
-                    .and_then(|m| m.get("tool"))
+                    .and_then(|m| m.get("tool_name"))
                     .and_then(|v| v.as_str())
                     == Some("respond")
         });
@@ -568,7 +568,7 @@ impl SessionStateBuilder {
             l.category == LogCategory::ToolCall
                 && l.metadata
                     .as_ref()
-                    .and_then(|m| m.get("tool"))
+                    .and_then(|m| m.get("tool_name"))
                     .and_then(|v| v.as_str())
                     .map(|name| !INTERNAL_TOOLS.contains(&name))
                     .unwrap_or(false)
@@ -583,7 +583,7 @@ impl SessionStateBuilder {
             l.category == LogCategory::ToolCall
                 && l.metadata
                     .as_ref()
-                    .and_then(|m| m.get("tool"))
+                    .and_then(|m| m.get("tool_name"))
                     .and_then(|v| v.as_str())
                     == Some("update_plan")
         });
