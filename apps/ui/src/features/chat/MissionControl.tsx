@@ -4,7 +4,6 @@
 // Shows HeroInput when idle with no blocks, full layout otherwise.
 // ============================================================================
 
-import { useEffect } from "react";
 import { useMissionControl, useRecentSessions } from "./mission-hooks";
 import { SessionBar } from "./SessionBar";
 import { ExecutionNarrative } from "./ExecutionNarrative";
