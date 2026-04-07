@@ -28,6 +28,7 @@ use serde_json::{json, Value};
 
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
 use crate::llm::LlmClient;
+use zero_core::types::Part;
 use crate::llm::client::StreamChunk;
 use crate::tools::ToolRegistry;
 use crate::tools::context::ToolContext;
@@ -417,24 +418,14 @@ impl AgentExecutor {
 
         // Add system instruction if available
         if let Some(instruction) = &self.config.system_instruction {
-            messages.push(ChatMessage {
-                role: "system".to_string(),
-                content: instruction.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-            });
+            messages.push(ChatMessage::system(instruction.clone()));
         }
 
         // Add conversation history
         messages.extend(history.iter().cloned());
 
         // Add current user message
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: user_message.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        messages.push(ChatMessage::user(user_message.to_string()));
 
         // Create middleware context
         let message_count = messages.len();
@@ -703,7 +694,7 @@ impl AgentExecutor {
                         .iter()
                         .rev()
                         .find(|m| m.role == "user")
-                        .map(|m| m.content.clone())
+                        .map(|m| m.text_content())
                         .unwrap_or_default();
 
                     let hook_clone = Arc::clone(hook);
@@ -875,7 +866,7 @@ impl AgentExecutor {
             // Truncation caused the LLM to copy garbled text on retries.
             current_messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: response.content.clone(),
+                content: vec![Part::Text { text: response.content.clone() }],
                 tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
             });
@@ -950,12 +941,10 @@ impl AgentExecutor {
 
                 if let Some(blocked_result) = blocked_results.remove(&tool_call.id) {
                     // Blocked by beforeToolCall hook
-                    current_messages.push(ChatMessage {
-                        role: "tool".to_string(),
-                        content: blocked_result,
-                        tool_calls: None,
-                        tool_call_id: Some(tool_call.id.clone()),
-                    });
+                    current_messages.push(ChatMessage::tool_result(
+                        tool_call.id.clone(),
+                        blocked_result,
+                    ));
                     on_event(StreamEvent::ToolResult {
                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
                         tool_id: tool_call.id.clone(),
@@ -1152,12 +1141,10 @@ impl AgentExecutor {
                             };
 
                             // Add tool result message
-                            current_messages.push(ChatMessage {
-                                role: "tool".to_string(),
-                                content: final_output,
-                                tool_calls: None,
-                                tool_call_id: Some(tool_call.id.clone()),
-                            });
+                            current_messages.push(ChatMessage::tool_result(
+                                tool_call.id.clone(),
+                                final_output,
+                            ));
                         }
                         Err(e) => {
                             tracing::debug!("Tool error: {}", e);
@@ -1185,12 +1172,10 @@ impl AgentExecutor {
                             };
 
                             // Add error result message
-                            current_messages.push(ChatMessage {
-                                role: "tool".to_string(),
-                                content: final_error,
-                                tool_calls: None,
-                                tool_call_id: Some(tool_call.id.clone()),
-                            });
+                            current_messages.push(ChatMessage::tool_result(
+                                tool_call.id.clone(),
+                                final_error,
+                            ));
                         }
                     }
                 }
@@ -1956,12 +1941,13 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     let compress_boundary = messages.len().saturating_sub(KEEP_RECENT);
     for i in 0..compress_boundary {
         if messages[i].role == "tool" {
-            let preserved = extract_key_info(&messages[i].content);
-            messages[i].content = if preserved.is_empty() {
+            let text = messages[i].text_content();
+            let preserved = extract_key_info(&text);
+            messages[i].content = vec![Part::Text { text: if preserved.is_empty() {
                 "[result cleared]".to_string()
             } else {
                 format!("[result cleared — {}]", preserved)
-            };
+            }}];
         }
     }
 
@@ -2749,14 +2735,14 @@ mod progress_tracker_tests {
         // System message
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: "You are an assistant.".to_string(),
+            content: vec![Part::Text { text: "You are an assistant.".to_string() }],
             tool_calls: None,
             tool_call_id: None,
         });
         // Original user request
         messages.push(ChatMessage {
             role: "user".to_string(),
-            content: "Build a trinomial cheat sheet.".to_string(),
+            content: vec![Part::Text { text: "Build a trinomial cheat sheet.".to_string() }],
             tool_calls: None,
             tool_call_id: None,
         });
@@ -2764,7 +2750,7 @@ mod progress_tracker_tests {
         for i in 0..30 {
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: format!("Step {}", i),
+                content: vec![Part::Text { text: format!("Step {}", i) }],
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2774,15 +2760,15 @@ mod progress_tracker_tests {
 
         // Should contain: system + original user request + compaction notice + last 20
         assert!(
-            compacted.iter().any(|m| m.content.contains("trinomial cheat sheet")),
+            compacted.iter().any(|m| m.text_content().contains("trinomial cheat sheet")),
             "Compacted messages should preserve the original user request"
         );
         assert!(
-            compacted.iter().any(|m| m.content.contains("Context compacted")),
+            compacted.iter().any(|m| m.text_content().contains("Context compacted")),
             "Compacted messages should include compaction notice"
         );
         assert!(
-            compacted.iter().any(|m| m.content.contains("original request")),
+            compacted.iter().any(|m| m.text_content().contains("original request")),
             "Compaction notice should reference the preserved original request"
         );
     }
@@ -2792,13 +2778,13 @@ mod progress_tracker_tests {
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: "system".to_string(),
+                content: vec![Part::Text { text: "system".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: "hello".to_string(),
+                content: vec![Part::Text { text: "hello".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
@@ -2934,7 +2920,7 @@ mod hook_tests {
         let mut messages = vec![ChatMessage::user("hello".to_string())];
         hook(&mut messages);
         assert_eq!(messages.len(), 2);
-        assert_eq!(messages[1].content, "injected");
+        assert_eq!(messages[1].text_content(), "injected");
     }
 
     #[test]
@@ -3009,13 +2995,13 @@ mod compaction_tests {
             );
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: format!("Creating file_{}.py with detailed explanation", i),
+                content: vec![Part::Text { text: format!("Creating file_{}.py with detailed explanation", i) }],
                 tool_calls: Some(vec![tool]),
                 tool_call_id: None,
             });
             messages.push(ChatMessage {
                 role: "tool".to_string(),
-                content: format!("File created: src/file_{}.py", i),
+                content: vec![Part::Text { text: format!("File created: src/file_{}.py", i) }],
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{}", i)),
             });
@@ -3024,12 +3010,12 @@ mod compaction_tests {
         let compacted = compact_messages(messages);
 
         // Old assistant messages should be compressed
-        let has_compressed = compacted.iter().any(|m| m.content.starts_with("[Turn"));
+        let has_compressed = compacted.iter().any(|m| m.text_content().starts_with("[Turn"));
         assert!(has_compressed, "Old assistant messages should be compressed");
 
         // Old tool results should preserve file paths
         let has_preserved = compacted.iter().any(|m|
-            m.content.contains("[result cleared") && m.content.contains(".py")
+            m.text_content().contains("[result cleared") && m.text_content().contains(".py")
         );
         assert!(has_preserved, "Cleared tool results should preserve file paths");
     }
@@ -3044,7 +3030,7 @@ mod compaction_tests {
             messages.push(ChatMessage::user(format!("msg {}", i)));
         }
         let compacted = compact_messages(messages);
-        assert!(compacted.last().unwrap().content.contains("msg 24"));
+        assert!(compacted.last().unwrap().text_content().contains("msg 24"));
     }
 
     #[test]

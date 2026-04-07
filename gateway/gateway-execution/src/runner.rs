@@ -1681,7 +1681,7 @@ async fn invoke_continuation(
         .iter()
         .rev()
         .find(|m| m.role == "user")
-        .map(|m| m.content.clone())
+        .map(|m| m.text_content())
         .unwrap_or_else(|| "continuation recall".to_string());
 
     if let Some(recall) = &memory_recall {

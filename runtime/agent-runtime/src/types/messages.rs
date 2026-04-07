@@ -6,22 +6,21 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use serde::Serializer;
+use zero_core::types::Part;
 
 /// A chat message in the conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ChatMessage {
     /// Message role (system, user, assistant, tool)
     pub role: String,
 
-    /// Message content
-    pub content: String,
+    /// Message content as a list of parts (text, image, file, etc.)
+    pub content: Vec<Part>,
 
     /// Tool calls made by the assistant (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
 
     /// ID of the tool call this message is responding to (optional)
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
 }
 
@@ -31,7 +30,7 @@ impl ChatMessage {
     pub fn user(content: String) -> Self {
         Self {
             role: "user".to_string(),
-            content,
+            content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: None,
         }
@@ -42,7 +41,7 @@ impl ChatMessage {
     pub fn assistant(content: String) -> Self {
         Self {
             role: "assistant".to_string(),
-            content,
+            content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: None,
         }
@@ -53,7 +52,7 @@ impl ChatMessage {
     pub fn system(content: String) -> Self {
         Self {
             role: "system".to_string(),
-            content,
+            content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: None,
         }
@@ -64,10 +63,90 @@ impl ChatMessage {
     pub fn tool_result(tool_call_id: String, content: String) -> Self {
         Self {
             role: "tool".to_string(),
-            content,
+            content: vec![Part::Text { text: content }],
             tool_calls: None,
             tool_call_id: Some(tool_call_id),
         }
+    }
+
+    /// Get all text content joined as a single string.
+    pub fn text_content(&self) -> String {
+        self.content
+            .iter()
+            .filter_map(|p| match p {
+                Part::Text { text } => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Returns true if this message contains any non-text parts.
+    pub fn has_multimodal_content(&self) -> bool {
+        self.content.iter().any(|p| p.is_multimodal())
+    }
+}
+
+// Custom serialization: text-only -> plain string, multimodal -> array
+impl Serialize for ChatMessage {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let field_count = 2
+            + self.tool_calls.as_ref().map_or(0, |_| 1)
+            + self.tool_call_id.as_ref().map_or(0, |_| 1);
+        let mut s = serializer.serialize_struct("ChatMessage", field_count)?;
+        s.serialize_field("role", &self.role)?;
+        if !self.has_multimodal_content() {
+            s.serialize_field("content", &self.text_content())?;
+        } else {
+            s.serialize_field("content", &self.content)?;
+        }
+        if let Some(ref tc) = self.tool_calls {
+            s.serialize_field("tool_calls", tc)?;
+        }
+        if let Some(ref id) = self.tool_call_id {
+            s.serialize_field("tool_call_id", id)?;
+        }
+        s.end()
+    }
+}
+
+// Custom deserialization: accept both string and array content
+impl<'de> Deserialize<'de> for ChatMessage {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawMessage {
+            role: String,
+            content: Value,
+            tool_calls: Option<Vec<ToolCall>>,
+            tool_call_id: Option<String>,
+        }
+        let raw = RawMessage::deserialize(deserializer)?;
+        let content = match raw.content {
+            Value::String(text) => vec![Part::Text { text }],
+            Value::Array(_) => {
+                serde_json::from_value(raw.content).map_err(serde::de::Error::custom)?
+            }
+            Value::Null => vec![],
+            other => {
+                return Err(serde::de::Error::custom(format!(
+                    "expected string or array for content, got {}",
+                    other
+                )))
+            }
+        };
+        Ok(ChatMessage {
+            role: raw.role,
+            content,
+            tool_calls: raw.tool_calls,
+            tool_call_id: raw.tool_call_id,
+        })
     }
 }
 
@@ -130,7 +209,7 @@ mod tests {
     fn test_message_creation() {
         let user_msg = ChatMessage::user("Hello".to_string());
         assert_eq!(user_msg.role, "user");
-        assert_eq!(user_msg.content, "Hello");
+        assert_eq!(user_msg.text_content(), "Hello");
     }
 
     #[test]
@@ -142,5 +221,74 @@ mod tests {
         );
         assert_eq!(tool_call.id, "call_123");
         assert_eq!(tool_call.name, "search");
+    }
+
+    #[test]
+    fn test_message_text_helper() {
+        let msg = ChatMessage::user("Hello".to_string());
+        assert_eq!(msg.text_content(), "Hello");
+        assert_eq!(msg.content.len(), 1);
+    }
+
+    #[test]
+    fn test_message_multimodal_content() {
+        use zero_core::types::{ContentSource, ImageDetail};
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: vec![
+                Part::Text { text: "What is this?".to_string() },
+                Part::Image {
+                    source: ContentSource::Base64("aGVsbG8=".to_string()),
+                    mime_type: "image/png".to_string(),
+                    detail: Some(ImageDetail::Auto),
+                },
+            ],
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        assert_eq!(msg.text_content(), "What is this?");
+        assert!(msg.has_multimodal_content());
+    }
+
+    #[test]
+    fn test_serialization_text_only_is_string() {
+        let msg = ChatMessage::user("Hello".to_string());
+        let json = serde_json::to_value(&msg).unwrap();
+        assert_eq!(json["content"], "Hello");
+    }
+
+    #[test]
+    fn test_serialization_multimodal_is_array() {
+        use zero_core::types::ContentSource;
+        let msg = ChatMessage {
+            role: "user".to_string(),
+            content: vec![
+                Part::Text { text: "Describe".to_string() },
+                Part::Image {
+                    source: ContentSource::Url("https://example.com/img.png".to_string()),
+                    mime_type: "image/png".to_string(),
+                    detail: None,
+                },
+            ],
+            tool_calls: None,
+            tool_call_id: None,
+        };
+        let json = serde_json::to_value(&msg).unwrap();
+        assert!(json["content"].is_array());
+    }
+
+    #[test]
+    fn test_deserialization_from_string() {
+        let json = r#"{"role":"user","content":"Hello"}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.text_content(), "Hello");
+        assert_eq!(msg.content.len(), 1);
+    }
+
+    #[test]
+    fn test_deserialization_from_array() {
+        let json = r#"{"role":"user","content":[{"type":"text","text":"Hello"}]}"#;
+        let msg: ChatMessage = serde_json::from_str(json).unwrap();
+        assert_eq!(msg.text_content(), "Hello");
     }
 }

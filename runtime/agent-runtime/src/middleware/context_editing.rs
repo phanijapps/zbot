@@ -11,6 +11,7 @@
 //! Manage conversation context by clearing older tool call outputs.
 
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
+use zero_core::types::Part;
 use crate::middleware::traits::{PreProcessMiddleware, MiddlewareContext, MiddlewareEffect, ExecutionState};
 use crate::middleware::config::ContextEditingConfig;
 use crate::middleware::token_counter::estimate_total_tokens;
@@ -34,8 +35,9 @@ pub(crate) fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) 
 
         format!("[Turn {}: {}]", turn_number, summaries.join(", "))
     } else if !msg.content.is_empty() {
-        let truncated: String = msg.content.chars().take(60).collect();
-        let ellipsis = if msg.content.len() > 60 { "..." } else { "" };
+        let text = msg.text_content();
+        let truncated: String = text.chars().take(60).collect();
+        let ellipsis = if text.len() > 60 { "..." } else { "" };
         format!("[Turn {}: {}{}]", turn_number, truncated, ellipsis)
     } else {
         format!("[Turn {}]", turn_number)
@@ -79,12 +81,12 @@ pub(crate) fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep
             turn_counter += 1;
 
             // Skip already-compressed messages
-            if messages[i].content.starts_with("[Turn") {
+            if messages[i].text_content().starts_with("[Turn") {
                 continue;
             }
 
             let compressed = compress_assistant_message(&messages[i], turn_counter);
-            messages[i].content = compressed;
+            messages[i].content = vec![Part::Text { text: compressed }];
             // Keep tool_calls intact — the LLM API requires them for tool result pairing
         }
     }
@@ -241,11 +243,11 @@ impl ContextEditingMiddleware {
                         {
                             if is_main_skill {
                                 // This is a SKILL.md load - use skill-specific placeholder
-                                message.content = self.format_skill_placeholder(&skill_name);
+                                message.content = vec![Part::Text { text: self.format_skill_placeholder(&skill_name) }];
                                 unloaded_skills.push(skill_name);
                             } else {
                                 // This is a resource file under a skill
-                                message.content = self.format_resource_placeholder(&skill_name);
+                                message.content = vec![Part::Text { text: self.format_resource_placeholder(&skill_name) }];
                             }
                             // Optionally clear tool call inputs from the assistant message
                             if self.config.clear_tool_inputs {
@@ -256,7 +258,7 @@ impl ContextEditingMiddleware {
                     }
 
                     // Regular tool result or skill_aware_placeholders is disabled - use generic placeholder
-                    message.content = self.config.placeholder.clone();
+                    message.content = vec![Part::Text { text: self.config.placeholder.clone() }];
 
                     // Optionally clear tool call inputs from the assistant message
                     if self.config.clear_tool_inputs {
@@ -484,25 +486,25 @@ mod tests {
         vec![
             ChatMessage {
                 role: "user".to_string(),
-                content: "Search for something".to_string(),
+                content: vec![Part::Text { text: "Search for something".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![tool1, tool2]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "Search result: lots of text here that should be cleared when context editing kicks in".to_string(),
+                content: vec![Part::Text { text: "Search result: lots of text here that should be cleared when context editing kicks in".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "2".to_string(),
+                content: vec![Part::Text { text: "2".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_2".to_string()),
             },
@@ -583,9 +585,9 @@ mod tests {
         middleware.clear_tool_results(&mut messages, &indices, &execution_state);
 
         // Check that the first tool result was cleared
-        assert_eq!(messages[2].content, "[cleared]");
+        assert_eq!(messages[2].text_content(), "[cleared]");
         // Check that the second tool result was NOT cleared
-        assert_eq!(messages[3].content, "2");
+        assert_eq!(messages[3].text_content(), "2");
     }
 
     #[test]
@@ -614,13 +616,13 @@ mod tests {
         let messages_with_skill = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "# Rust Development\n\nLots of instructions here...".to_string(),
+                content: vec![Part::Text { text: "# Rust Development\n\nLots of instructions here...".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
@@ -642,8 +644,8 @@ mod tests {
         middleware.clear_tool_results(&mut messages, &indices, &execution_state);
 
         // Check that the skill result has a skill-specific placeholder
-        assert!(messages[1].content.contains("rust-development"));
-        assert!(messages[1].content.contains("load_skill"));
+        assert!(messages[1].text_content().contains("rust-development"));
+        assert!(messages[1].text_content().contains("load_skill"));
     }
 
     #[test]
@@ -670,13 +672,13 @@ mod tests {
         let messages_with_skill = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "# Rust Development\n\nContent...".to_string(),
+                content: vec![Part::Text { text: "# Rust Development\n\nContent...".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
@@ -697,8 +699,8 @@ mod tests {
         middleware.clear_tool_results(&mut messages, &indices, &execution_state);
 
         // Should use generic placeholder, not skill-specific
-        assert_eq!(messages[1].content, "[generic placeholder]");
-        assert!(!messages[1].content.contains("rust-development"));
+        assert_eq!(messages[1].text_content(), "[generic placeholder]");
+        assert!(!messages[1].text_content().contains("rust-development"));
     }
 
     #[test]
@@ -724,13 +726,13 @@ mod tests {
         let messages_with_skill = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "# My Skill\n\nContent...".to_string(),
+                content: vec![Part::Text { text: "# My Skill\n\nContent...".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
@@ -751,7 +753,7 @@ mod tests {
         middleware.clear_tool_results(&mut messages, &indices, &execution_state);
 
         // Should use custom template
-        assert_eq!(messages[1].content, "[SKILL UNLOADED: my-skill]");
+        assert_eq!(messages[1].text_content(), "[SKILL UNLOADED: my-skill]");
     }
 
     #[test]
@@ -783,25 +785,25 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "# My Skill Content".to_string(),
+                content: vec![Part::Text { text: "# My Skill Content".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "fn example() { }".to_string(),
+                content: vec![Part::Text { text: "fn example() { }".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_resource_1".to_string()),
             },
@@ -856,25 +858,25 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "# My Skill Content".to_string(),
+                content: vec![Part::Text { text: "# My Skill Content".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "".to_string(),
+                content: vec![Part::Text { text: "".to_string() }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "fn example() { }".to_string(),
+                content: vec![Part::Text { text: "fn example() { }".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_resource_1".to_string()),
             },
@@ -913,7 +915,7 @@ mod tests {
         );
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: "Let me create the main file and read the lib file for context.".to_string(),
+            content: vec![Part::Text { text: "Let me create the main file and read the lib file for context.".to_string() }],
             tool_calls: Some(vec![tool1, tool2]),
             tool_call_id: None,
         };
@@ -931,7 +933,7 @@ mod tests {
     fn test_compress_assistant_message_no_tool_calls() {
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: "I'll help you with that. Let me think about the best approach for implementing this feature. We need to consider several factors including performance and maintainability.".to_string(),
+            content: vec![Part::Text { text: "I'll help you with that. Let me think about the best approach for implementing this feature. We need to consider several factors including performance and maintainability.".to_string() }],
             tool_calls: None,
             tool_call_id: None,
         };
@@ -957,52 +959,52 @@ mod tests {
         let mut messages = vec![
             ChatMessage {
                 role: "user".to_string(),
-                content: "Create the files".to_string(),
+                content: vec![Part::Text { text: "Create the files".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "I'll create main.rs and read lib.rs for you. Let me start with the main file.".to_string(),
+                content: vec![Part::Text { text: "I'll create main.rs and read lib.rs for you. Let me start with the main file.".to_string() }],
                 tool_calls: Some(vec![tool1, tool2]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "[cleared]".to_string(),
+                content: vec![Part::Text { text: "[cleared]".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_1".to_string()),
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: "[cleared]".to_string(),
+                content: vec![Part::Text { text: "[cleared]".to_string() }],
                 tool_calls: None,
                 tool_call_id: Some("call_2".to_string()),
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: "Now add tests".to_string(),
+                content: vec![Part::Text { text: "Now add tests".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: "I'll add tests now.".to_string(),
+                content: vec![Part::Text { text: "I'll add tests now.".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
         ];
 
-        let original_assistant_content = messages[1].content.clone();
+        let original_assistant_content = messages[1].text_content();
         compress_old_assistant_messages(&mut messages, 4);
 
         // Old assistant message (index 1) should be compressed
-        assert!(messages[1].content.starts_with("[Turn"));
-        assert!(messages[1].content.contains("write_file"));
-        assert!(messages[1].content != original_assistant_content);
+        assert!(messages[1].text_content().starts_with("[Turn"));
+        assert!(messages[1].text_content().contains("write_file"));
+        assert!(messages[1].text_content() != original_assistant_content);
 
         // Recent assistant message (index 5) should NOT be compressed
-        assert_eq!(messages[5].content, "I'll add tests now.");
+        assert_eq!(messages[5].text_content(), "I'll add tests now.");
     }
 
     #[test]
@@ -1014,7 +1016,7 @@ mod tests {
         );
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: "".to_string(),
+            content: vec![Part::Text { text: "".to_string() }],
             tool_calls: Some(vec![tool]),
             tool_call_id: None,
         };
