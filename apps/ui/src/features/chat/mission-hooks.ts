@@ -1241,26 +1241,26 @@ export function switchToSession(sessionId: string, conversationId: string): void
 
 export function useRecentSessions() {
   const [sessions, setSessions] = useState<LogSession[]>([]);
-  const [refreshCount, setRefreshCount] = useState(0);
-
-  const refresh = useCallback(() => setRefreshCount((c) => c + 1), []);
+  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
+    if (hasFetchedRef.current) return;
+    hasFetchedRef.current = true;
+
     let cancelled = false;
     const load = async () => {
       try {
         const transport = await getTransport();
         const res = await transport.listLogSessions({ limit: 5, root_only: true });
         if (cancelled || !res.success || !res.data) return;
-
-        if (!cancelled) setSessions(res.data);
+        setSessions(res.data);
       } catch (err) {
         console.error("[useRecentSessions] Failed to load sessions:", err);
       }
     };
     load();
     return () => { cancelled = true; };
-  }, [refreshCount]);
+  }, []);
 
-  return { sessions, refresh };
+  return { sessions };
 }
