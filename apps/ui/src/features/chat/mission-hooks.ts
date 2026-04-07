@@ -1241,12 +1241,8 @@ export function switchToSession(sessionId: string, conversationId: string): void
 
 export function useRecentSessions() {
   const [sessions, setSessions] = useState<LogSession[]>([]);
-  const hasFetchedRef = useRef(false);
 
   useEffect(() => {
-    if (hasFetchedRef.current) return;
-    hasFetchedRef.current = true;
-
     let cancelled = false;
     const load = async () => {
       try {
