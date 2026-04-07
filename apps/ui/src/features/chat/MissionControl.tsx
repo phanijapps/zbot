@@ -38,7 +38,7 @@ export function MissionControl() {
   }
 
   // Active session — full execution theater
-  const isDisabled = (state.status === "running" || !!hasPendingLoad) && state.status !== "error";
+  const isDisabled = state.status === "running";
 
   // Derive current session ID from localStorage for active highlight
   const currentSessionId = typeof window !== "undefined"
