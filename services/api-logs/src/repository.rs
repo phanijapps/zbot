@@ -122,9 +122,11 @@ impl<D: DbProvider> LogsRepository<D> {
                     SUM(CASE WHEN e.level = 'error' THEN 1 ELSE 0 END) as error_count,
                     MAX(e.parent_session_id) as parent_session_id,
                     s.title as session_title,
-                    s.status as session_status
+                    s.status as session_status,
+                    ae.parent_execution_id as ae_parent
                 FROM execution_logs e
                 LEFT JOIN sessions s ON s.id = e.conversation_id
+                LEFT JOIN agent_executions ae ON ae.id = e.session_id
                 WHERE 1=1",
             );
 
@@ -151,7 +153,7 @@ impl<D: DbProvider> LogsRepository<D> {
             }
 
             if filter.root_only {
-                sql.push_str(" AND s.parent_session_id IS NULL");
+                sql.push_str(" AND ae.parent_execution_id IS NULL");
             }
 
             sql.push_str(" GROUP BY e.session_id ORDER BY started_at DESC");
