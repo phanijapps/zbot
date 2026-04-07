@@ -3719,6 +3719,7 @@
 .hero-input { display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; padding: var(--spacing-8); }
 .hero-input__brand { display: flex; align-items: center; gap: var(--spacing-3); margin-bottom: var(--spacing-8); }
 .hero-input__logo { width: 44px; height: 44px; border-radius: var(--radius-full); background: var(--primary); display: flex; align-items: center; justify-content: center; color: var(--primary-foreground); font-weight: 700; font-size: var(--text-xl); font-family: var(--font-display); }
+.hero-input__logo-img { width: 44px; height: 44px; }
 .hero-input__name { font-size: var(--text-2xl); font-weight: 600; color: var(--foreground); font-family: var(--font-display); }
 .hero-input__container { width: 100%; max-width: 780px; position: relative; }
 .hero-input__field { width: 100%; min-height: 64px; max-height: 200px; padding: 18px 130px 18px 24px; background: var(--card); border: 1px solid var(--border); border-radius: 20px; font-size: var(--text-base); color: var(--foreground); outline: none; resize: none; font-family: inherit; line-height: 1.6; transition: border-color 0.15s, box-shadow 0.15s; }

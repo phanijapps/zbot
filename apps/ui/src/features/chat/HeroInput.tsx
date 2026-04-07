@@ -102,7 +102,7 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
     <div className="hero-input">
       {/* Brand */}
       <div className="hero-input__brand">
-        <div className="hero-input__logo">0</div>
+        <img src="/zbot_icon_light.svg" alt="z-Bot" className="hero-input__logo-img" />
         <span className="hero-input__name">z-Bot</span>
       </div>
 
