@@ -217,7 +217,7 @@ impl ExecutorBuilder {
             let mm = &settings.execution.multimodal;
             if let (Some(provider_id), Some(model)) = (&mm.provider_id, &mm.model) {
                 // Resolve the provider to get base_url and api_key
-                let providers_path = self.config_dir.join("providers.json");
+                let providers_path = self.config_dir.join("config/providers.json");
                 let provider_creds = std::fs::read_to_string(&providers_path)
                     .ok()
                     .and_then(|content| serde_json::from_str::<Vec<serde_json::Value>>(&content).ok())
