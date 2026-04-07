@@ -4264,36 +4264,36 @@
   color: var(--foreground);
 }
 
-/* Phase Indicators */
-.phase-indicators { padding: var(--spacing-4); background: var(--muted); border-radius: var(--radius-lg); border: 1px solid var(--border); margin-bottom: var(--spacing-4); }
-.phase-indicators__label { font-size: var(--font-size-xs); color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: var(--spacing-3); }
-.phase-indicators__steps { display: flex; flex-direction: column; gap: var(--spacing-2); }
-.phase-step { display: flex; align-items: center; gap: var(--spacing-2); }
-.phase-step__icon { width: 22px; height: 22px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 11px; flex-shrink: 0; }
+/* Phase Indicators (center panel) */
+.phase-indicators { padding: 10px 14px; background: var(--muted); border-radius: var(--radius-lg); border: 1px solid var(--border); margin-bottom: 12px; }
+.phase-indicators__label { font-size: 9px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; font-weight: 600; }
+.phase-indicators__steps { display: flex; flex-direction: column; gap: 6px; }
+.phase-step { display: flex; align-items: center; gap: 8px; }
+.phase-step__icon { width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
 .phase-step__icon--done { background: var(--success); color: white; }
 .phase-step__icon--active { background: var(--primary); }
 .phase-step__icon--pending { border: 1.5px solid var(--border); }
 .phase-step__icon--error { background: var(--destructive); color: white; }
-.phase-step__pulse { width: 8px; height: 8px; border-radius: 50%; background: white; animation: phase-pulse 1.5s infinite; }
-.phase-step__label { font-size: var(--font-size-sm); color: var(--muted-foreground); }
+.phase-step__pulse { width: 6px; height: 6px; border-radius: 50%; background: white; animation: phase-pulse 1.5s infinite; }
+.phase-step__label { font-size: 11px; color: var(--muted-foreground); }
 .phase-step--active .phase-step__label { color: var(--foreground); }
 .phase-step--pending .phase-step__label { color: var(--muted-foreground); opacity: 0.5; }
-.phase-step__detail { color: var(--muted-foreground); }
+.phase-step__detail { color: var(--muted-foreground); font-size: 10px; }
 
-/* Subagent Cards */
-.intel-subagent-card { background: var(--muted); border-radius: var(--radius); padding: var(--spacing-2) var(--spacing-3); margin-bottom: var(--spacing-2); border: 1px solid var(--border); }
+/* Subagent Cards (sidebar) */
+.intel-subagent-card { background: var(--muted); border-radius: var(--radius); padding: 6px 10px; margin-bottom: 6px; border: 1px solid var(--border); }
 .intel-subagent-card--active { border-color: var(--primary); }
 .intel-subagent-card--error { border-color: var(--destructive); }
-.intel-subagent-card__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--spacing-1); }
-.intel-subagent-card__name { display: flex; align-items: center; gap: var(--spacing-1); font-weight: 600; font-size: var(--font-size-xs); }
-.intel-subagent-card__meta { font-size: var(--font-size-xs); color: var(--muted-foreground); }
-.intel-subagent-card__task { font-size: var(--font-size-xs); color: var(--muted-foreground); line-height: 1.4; margin-bottom: var(--spacing-2); }
-.intel-subagent-card__tools { padding-left: var(--spacing-2); border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
-.intel-tool-entry { display: flex; align-items: center; gap: var(--spacing-1); font-size: var(--font-size-xs); }
-.intel-tool-entry__icon { width: 14px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.intel-subagent-card__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 2px; }
+.intel-subagent-card__name { display: flex; align-items: center; gap: 4px; font-weight: 600; font-size: 11px; }
+.intel-subagent-card__meta { font-size: 9px; color: var(--muted-foreground); }
+.intel-subagent-card__task { font-size: 10px; color: var(--muted-foreground); line-height: 1.4; margin-bottom: 4px; }
+.intel-subagent-card__tools { padding-left: 8px; border-left: 2px solid var(--border); display: flex; flex-direction: column; gap: 2px; }
+.intel-tool-entry { display: flex; align-items: center; gap: 4px; font-size: 10px; }
+.intel-tool-entry__icon { width: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; font-size: 9px; }
 .intel-tool-entry--completed .intel-tool-entry__icon { color: var(--success); }
 .intel-tool-entry--error .intel-tool-entry__icon { color: var(--destructive); }
 .intel-tool-entry__name { color: var(--muted-foreground); }
 .intel-tool-entry--running .intel-tool-entry__name { color: var(--foreground); }
-.intel-tool-entry__meta { margin-left: auto; color: var(--muted-foreground); }
+.intel-tool-entry__meta { margin-left: auto; color: var(--muted-foreground); font-size: 9px; }
 @keyframes phase-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
