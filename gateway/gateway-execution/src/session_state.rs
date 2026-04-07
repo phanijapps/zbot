@@ -161,12 +161,13 @@ impl SessionStateBuilder {
         let session = &detail.session;
         let logs = &detail.logs;
 
-        let user_message = self.extract_user_message(&session.conversation_id);
+        // Messages table uses execution_id (exec-xxx), not conversation_id (sess-xxx)
+        let user_message = self.extract_user_message(&session.session_id);
         let intent_analysis = Self::extract_intent(logs);
         let ward = Self::extract_ward(logs, intent_analysis.as_ref());
         let recalled_facts = Self::extract_recalled_facts(logs);
         let plan = Self::extract_plan(logs);
-        let response = self.extract_response(logs, &session.conversation_id);
+        let response = self.extract_response(logs, &session.session_id);
         let subagents = self.build_subagents(&session.child_session_ids);
         let phase = Self::derive_phase(&session.status, logs, response.as_ref());
 
