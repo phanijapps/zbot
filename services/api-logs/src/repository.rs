@@ -111,43 +111,45 @@ impl<D: DbProvider> LogsRepository<D> {
         self.db.with_connection(|conn| {
             let mut sql = String::from(
                 "SELECT
-                    session_id,
-                    conversation_id,
-                    agent_id,
-                    MIN(timestamp) as started_at,
-                    MAX(timestamp) as ended_at,
+                    e.session_id,
+                    e.conversation_id,
+                    e.agent_id,
+                    MIN(e.timestamp) as started_at,
+                    MAX(e.timestamp) as ended_at,
                     COUNT(*) as log_count,
-                    SUM(CASE WHEN category = 'token' THEN 1 ELSE 0 END) as token_count,
-                    SUM(CASE WHEN category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
-                    SUM(CASE WHEN level = 'error' THEN 1 ELSE 0 END) as error_count,
-                    MAX(parent_session_id) as parent_session_id
-                FROM execution_logs
+                    SUM(CASE WHEN e.category = 'token' THEN 1 ELSE 0 END) as token_count,
+                    SUM(CASE WHEN e.category = 'tool_call' THEN 1 ELSE 0 END) as tool_call_count,
+                    SUM(CASE WHEN e.level = 'error' THEN 1 ELSE 0 END) as error_count,
+                    MAX(e.parent_session_id) as parent_session_id,
+                    s.title as session_title
+                FROM execution_logs e
+                LEFT JOIN sessions s ON s.id = e.conversation_id
                 WHERE 1=1",
             );
 
             let mut params_vec: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
 
             if let Some(agent_id) = &filter.agent_id {
-                sql.push_str(" AND agent_id = ?");
+                sql.push_str(" AND e.agent_id = ?");
                 params_vec.push(Box::new(agent_id.clone()));
             }
 
             if let Some(conversation_id) = &filter.conversation_id {
-                sql.push_str(" AND conversation_id = ?");
+                sql.push_str(" AND e.conversation_id = ?");
                 params_vec.push(Box::new(conversation_id.clone()));
             }
 
             if let Some(from_time) = &filter.from_time {
-                sql.push_str(" AND timestamp >= ?");
+                sql.push_str(" AND e.timestamp >= ?");
                 params_vec.push(Box::new(from_time.clone()));
             }
 
             if let Some(to_time) = &filter.to_time {
-                sql.push_str(" AND timestamp <= ?");
+                sql.push_str(" AND e.timestamp <= ?");
                 params_vec.push(Box::new(to_time.clone()));
             }
 
-            sql.push_str(" GROUP BY session_id ORDER BY started_at DESC");
+            sql.push_str(" GROUP BY e.session_id ORDER BY started_at DESC");
 
             if let Some(limit) = filter.limit {
                 sql.push_str(&format!(" LIMIT {}", limit));
@@ -170,7 +172,7 @@ impl<D: DbProvider> LogsRepository<D> {
                         conversation_id: row.get(1)?,
                         agent_id: row.get(2)?,
                         agent_name: row.get::<_, String>(2)?, // Will be enriched later
-                        title: None, // Enriched by service layer
+                        title: row.get::<_, Option<String>>(10).ok().flatten(),
                         started_at: row.get(3)?,
                         ended_at: row.get(4)?,
                         status: SessionStatus::Completed, // Will be computed
