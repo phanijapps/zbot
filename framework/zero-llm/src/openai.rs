@@ -137,8 +137,8 @@ impl OpenAiLlm {
                     // Collect all tool responses (not just one)
                     tool_responses.push((id.clone(), response.clone()));
                 }
-                Part::Binary { .. } => {
-                    // Binary parts are ignored for now
+                Part::Image { .. } | Part::File { .. } => {
+                    // Multimodal parts are handled by the encoder layer
                 }
             }
         }
