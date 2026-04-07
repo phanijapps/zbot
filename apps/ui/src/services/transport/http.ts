@@ -390,7 +390,8 @@ export class HttpTransport implements Transport {
     if (filter?.to_time) params.set("to_time", filter.to_time);
     if (filter?.limit) params.set("limit", String(filter.limit));
     if (filter?.offset) params.set("offset", String(filter.offset));
-    
+    if (filter?.root_only) params.set("root_only", "true");
+
     const query = params.toString();
     const url = query ? `/api/logs/sessions?${query}` : "/api/logs/sessions";
     return this.get<LogSession[]>(url);
