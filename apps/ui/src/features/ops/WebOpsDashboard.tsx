@@ -165,7 +165,7 @@ function SessionCard({
   showControls = true,
 }: SessionCardProps) {
   const canPause = session.status === "running";
-  const canResume = session.status === "paused";
+  const canResume = session.status === "paused" || session.status === "crashed";
   const canCancel = session.status === "running" || session.status === "paused";
 
   const duration = session.started_at
