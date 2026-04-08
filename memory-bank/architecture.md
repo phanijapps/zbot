@@ -282,6 +282,12 @@ Controls agent concurrency and first-time setup state. Stored in `settings.json`
       "temperature": 0.7,
       "maxTokens": 16384,
       "thinkingEnabled": true
+    },
+    "multimodal": {
+      "providerId": null,
+      "model": null,
+      "temperature": 0.3,
+      "maxTokens": 4096
     }
   }
 }
@@ -297,6 +303,10 @@ Controls agent concurrency and first-time setup state. Stored in `settings.json`
 | `orchestrator.temperature` | number | `0.7` | Temperature (0-2) |
 | `orchestrator.maxTokens` | number | `16384` | Max output tokens (higher for thinking) |
 | `orchestrator.thinkingEnabled` | bool | `true` | Extended reasoning before delegating |
+| `multimodal.providerId` | string\|null | `null` | Provider for default vision model |
+| `multimodal.model` | string\|null | `null` | Vision-capable model (e.g., GPT-4o, gemma4) |
+| `multimodal.temperature` | number | `0.3` | Temperature for analysis (lower = deterministic) |
+| `multimodal.maxTokens` | number | `4096` | Max output tokens for vision responses |
 
 ### HTTP API Endpoints
 
@@ -328,6 +338,82 @@ OpenAiClient → RetryingLlmClient → RateLimitedLlmClient
 ### Model Enrichment
 
 API responses (`GET /api/providers`) enrich each provider's model list with capabilities and token limits from the bundled model registry. `enrich_provider()` also injects default rate limits if none are explicitly set.
+
+## LLM Client — Text and Multimodal Content
+
+The LLM client layer supports multimodal content (images, files) alongside text. Content flows through typed `Part` variants and gets encoded to OpenAI-compatible format at the provider boundary.
+
+### Content Model
+
+Messages carry content as `Vec<Part>` where each Part is one of:
+
+| Part | Fields | Wire Format |
+|------|--------|-------------|
+| `Text` | `text: String` | `{ "type": "text", "text": "..." }` |
+| `Image` | `source: ContentSource, mime_type, detail` | `{ "type": "image_url", "image_url": { "url": "data:...;base64,...", "detail": "high" } }` |
+| `File` | `source: ContentSource, mime_type, filename` | `{ "type": "file", "file": { "url": "data:...;base64,..." } }` |
+| `FunctionCall` | `name, args, id` | Handled separately as tool_calls |
+| `FunctionResponse` | `id, response` | Handled separately as tool results |
+
+`ContentSource` has three variants:
+- `Url(String)` — remote URL, stored as-is
+- `Base64(String)` — inline encoded bytes, ephemeral (never persisted to DB)
+- `FileRef(String)` — local file path, what DB stores after flushing Base64 to disk
+
+### Backward Compatibility
+
+`ChatMessage` has custom serde: text-only messages serialize `content` as a plain string (backward compat with all providers), multimodal messages serialize as a content array. Deserialization accepts both formats.
+
+### Provider Encoding
+
+`ProviderEncoder` trait with `OpenAiEncoder` implementation. Capability-aware — rejects Image/File parts for non-vision models with `EncodingError::UnsupportedContentType`. The planning agent handles the error and routes to a vision-capable model.
+
+### Content Persistence
+
+Base64 blobs are flushed to content-addressed files (SHA-256 hash) before DB persistence. On rehydration (before LLM call), `FileRef` sources are read from disk and re-encoded to Base64.
+
+```
+Inbound: Part::Image { Base64("...") }
+  → flush_part_to_disk() → Part::Image { FileRef("/attachments/abc123.png") }
+  → DB stores FileRef
+  → rehydrate_source() → Part::Image { Base64("...") }
+  → OpenAiEncoder encodes to API format
+```
+
+### Multimodal Processing Paths
+
+1. **Native** — agent runs on a vision model, multimodal Parts flow directly in messages
+2. **Specialist** — delegate to a domain-expert agent (doc-shard, vision-analyzer)
+3. **Tool fallback** — `multimodal_analyze` tool makes a one-shot call to the default vision model from settings
+4. **No capability** — clear error, user configures a vision model
+
+### `multimodal_analyze` Tool
+
+Universal vision fallback available to all agents (root + subagents). Makes a direct HTTP call to the configured multimodal provider. Any agent on any model can process visual content.
+
+```
+Agent calls multimodal_analyze({ content: [{ type: "image", source: "/path/to/img.png" }], prompt: "..." })
+  → Tool reads multimodal_config from executor state (baseUrl, apiKey, model)
+  → Resolves file to base64, builds OpenAI content array
+  → POST {baseUrl}/chat/completions
+  → Returns { "analysis": "..." }
+```
+
+Configured via Settings > Advanced > Multimodal (provider + model with vision capability).
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `framework/zero-core/src/types.rs` | Part enum (Text, Image, File), ContentSource, ImageDetail |
+| `framework/zero-core/src/multimodal.rs` | flush_part_to_disk, rehydrate_source, MIME utils |
+| `framework/zero-llm/src/encoding.rs` | ProviderEncoder trait, EncodingError |
+| `framework/zero-llm/src/openai_encoder.rs` | OpenAiEncoder — encodes Parts to OpenAI content blocks |
+| `runtime/agent-runtime/src/types/messages.rs` | ChatMessage with Vec<Part> content, custom serde |
+| `runtime/agent-runtime/src/llm/openai.rs` | OpenAiClient with FileRef rehydration |
+| `runtime/agent-tools/src/tools/multimodal.rs` | multimodal_analyze tool |
+| `gateway/gateway-services/src/settings.rs` | MultimodalConfig in ExecutionSettings |
+| `gateway/gateway-execution/src/invoke/executor.rs` | Injects multimodal_config into executor state |
 
 ## First-Time Setup Wizard
 
