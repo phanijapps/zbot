@@ -586,6 +586,40 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    /// Set child_session_id on an execution (for smart resume).
+    pub fn set_child_session_id(&self, execution_id: &str, child_session_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET child_session_id = ?1 WHERE id = ?2",
+                params![child_session_id, execution_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Find the most recently crashed subagent execution for a session.
+    /// Returns None if only the root execution crashed or no crashes exist.
+    pub fn get_last_crashed_subagent(&self, session_id: &str) -> Result<Option<AgentExecution>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, parent_execution_id,
+                        delegation_type, task, status,
+                        started_at, completed_at,
+                        tokens_in, tokens_out, checkpoint, error, log_path, child_session_id
+                 FROM agent_executions
+                 WHERE session_id = ? AND status = 'crashed' AND parent_execution_id IS NOT NULL
+                 ORDER BY started_at DESC
+                 LIMIT 1",
+            )?;
+
+            let execution = stmt
+                .query_row(params![session_id], |row| Self::row_to_execution(row))
+                .optional()?;
+
+            Ok(execution)
+        })
+    }
+
     /// Set execution error.
     pub fn set_execution_error(&self, id: &str, error: &str) -> Result<(), String> {
         self.db.with_connection(|conn| {
@@ -931,6 +965,7 @@ mod tests {
                     checkpoint TEXT,
                     error TEXT,
                     log_path TEXT,
+                    child_session_id TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
 

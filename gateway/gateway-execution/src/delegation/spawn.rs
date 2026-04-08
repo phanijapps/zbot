@@ -92,6 +92,11 @@ pub async fn spawn_delegated_agent(
     let execution_id = request.child_execution_id.clone();
     let session_id = request.session_id.clone();
 
+    // Link the pre-created execution to its child session (for smart resume)
+    if let Err(e) = state_service.set_child_session_id(&execution_id, &child_session_id) {
+        tracing::warn!("Failed to set child_session_id on execution: {}", e);
+    }
+
     // Start execution (QUEUED → RUNNING) and log
     start_execution(
         &state_service,
