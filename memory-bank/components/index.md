@@ -24,6 +24,10 @@ Quick reference for all system components. Check this before planning changes.
 | Component | Location | Description |
 |-----------|----------|-------------|
 | LLM Client | [llm-client/overview.md](llm-client/overview.md) | Text & multimodal content pipeline: Part types (Text, Image, File), ProviderEncoder trait, base64 flush persistence, `multimodal_analyze` tool, eagle-eye skill. Capability-aware encoding for OpenAI-compatible providers. |
+| — Data Flow | [llm-client/data-flow.md](llm-client/data-flow.md) | Message lifecycle (text & multimodal), base64 flush, rehydration, tool flow, config injection |
+| — Types | [llm-client/types.md](llm-client/types.md) | Rust + TypeScript types, Part/ContentSource/ImageDetail, ChatMessage serde, wire format mapping |
+| — Error Handling | [llm-client/error-handling.md](llm-client/error-handling.md) | 8 error points: capability rejection, missing config, file not found, decode failures, API errors, backward compat |
+| — Files | [llm-client/files.md](llm-client/files.md) | Every file across zero-core, zero-llm, agent-runtime, agent-tools, gateway, UI |
 
 ## Memory & Intelligence
 
