@@ -94,6 +94,12 @@ export function useSessionTrace(sessionId: string | null): UseSessionTraceResult
 // Helper: extract metadata field safely
 // ============================================================================
 
+/** Extract agent name from delegation message like "Delegating to code-agent" */
+function extractAgentFromMessage(message: string): string | undefined {
+  const match = message.match(/(?:Delegating to(?: agent:?)?\s+)(.+)/i);
+  return match ? match[1].trim() : undefined;
+}
+
 function extractMetaField(log: ExecutionLog, field: string): string | undefined {
   if (!log.metadata) return undefined;
   const val = log.metadata[field];
@@ -225,7 +231,11 @@ function buildChildNodes(
         children: [],
       });
     } else if (log.category === "delegation") {
-      const childAgentId = extractMetaField(log, "child_agent_id");
+      // Metadata key is "child_agent" (from stream.rs), not "child_agent_id" (from service.rs)
+      const childAgentId =
+        extractMetaField(log, "child_agent_id") ||
+        extractMetaField(log, "child_agent") ||
+        extractAgentFromMessage(log.message);
       const task = extractMetaField(log, "task") || log.message;
 
       if (childAgentId && processedChildAgents.has(childAgentId)) continue;
