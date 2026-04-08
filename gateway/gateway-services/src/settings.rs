@@ -56,6 +56,9 @@ pub struct ExecutionSettings {
     /// Distillation model configuration (provider/model override).
     #[serde(default)]
     pub distillation: DistillationConfig,
+    /// Multimodal model configuration (vision analysis fallback).
+    #[serde(default)]
+    pub multimodal: MultimodalConfig,
 }
 
 /// Root agent (orchestrator) configuration.
@@ -121,6 +124,33 @@ impl Default for DistillationConfig {
     }
 }
 
+/// Default multimodal model configuration.
+/// Used by the multimodal_analyze tool as a universal vision fallback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultimodalConfig {
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    #[serde(default = "default_multimodal_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_multimodal_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_multimodal_temperature() -> f64 { 0.3 }
+fn default_multimodal_max_tokens() -> u32 { 4096 }
+
+impl Default for MultimodalConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model: None,
+            temperature: default_multimodal_temperature(),
+            max_tokens: default_multimodal_max_tokens(),
+        }
+    }
+}
+
 impl Default for ExecutionSettings {
     fn default() -> Self {
         Self {
@@ -130,6 +160,7 @@ impl Default for ExecutionSettings {
             subagent_non_streaming: true,
             orchestrator: OrchestratorConfig::default(),
             distillation: DistillationConfig::default(),
+            multimodal: MultimodalConfig::default(),
         }
     }
 }

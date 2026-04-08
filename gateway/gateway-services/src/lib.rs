@@ -35,6 +35,6 @@ pub use paths::{SharedVaultPaths, VaultPaths};
 pub use plugin_service::PluginService;
 pub use providers::ProviderService;
 pub use recall_config::RecallConfig;
-pub use settings::{AppSettings, ExecutionSettings, OrchestratorConfig, SettingsService};
+pub use settings::{AppSettings, DistillationConfig, ExecutionSettings, MultimodalConfig, OrchestratorConfig, SettingsService};
 pub use skills::{SkillFrontmatter, SkillService, WardAgentsMdConfig, WardSetup};
 pub use watcher::{FileWatcher, WatchConfig};
