@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 14;
+const SCHEMA_VERSION: i32 = 15;
 
 /// Run migrations for existing databases.
 ///
@@ -198,6 +198,14 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         );
     }
 
+    // v14 → v15: Add child_session_id to agent_executions for smart resume
+    if version < 15 {
+        let _ = conn.execute(
+            "ALTER TABLE agent_executions ADD COLUMN child_session_id TEXT",
+            [],
+        );
+    }
+
     Ok(())
 }
 
@@ -283,8 +291,10 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             checkpoint TEXT,
             error TEXT,
             log_path TEXT,
+            child_session_id TEXT,
             FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
-            FOREIGN KEY (parent_execution_id) REFERENCES agent_executions(id) ON DELETE SET NULL
+            FOREIGN KEY (parent_execution_id) REFERENCES agent_executions(id) ON DELETE SET NULL,
+            FOREIGN KEY (child_session_id) REFERENCES sessions(id) ON DELETE SET NULL
         )",
         [],
     )?;

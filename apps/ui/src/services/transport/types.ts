@@ -622,6 +622,7 @@ export interface AgentExecution {
   tokens_in: number;
   tokens_out: number;
   error?: string;
+  child_session_id?: string;
 }
 
 /** Session with all its executions (V2 API response) */

@@ -396,8 +396,9 @@ impl<D: StateDbProvider> StateRepository<D> {
                     id, session_id, agent_id, parent_execution_id,
                     delegation_type, task, status,
                     started_at, completed_at,
-                    tokens_in, tokens_out, checkpoint, error, log_path
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    tokens_in, tokens_out, checkpoint, error, log_path,
+                    child_session_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     execution.id,
                     execution.session_id,
@@ -413,6 +414,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                     execution.checkpoint.as_ref().map(|c| serde_json::to_string(c).ok()).flatten(),
                     execution.error,
                     execution.log_path,
+                    execution.child_session_id,
                 ],
             )?;
             Ok(())
@@ -430,7 +432,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, session_id, agent_id, parent_execution_id,
                         delegation_type, task, status,
                         started_at, completed_at,
-                        tokens_in, tokens_out, checkpoint, error, log_path
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
                  FROM agent_executions WHERE id = ?",
             )?;
 
@@ -449,7 +452,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, session_id, agent_id, parent_execution_id,
                         delegation_type, task, status,
                         started_at, completed_at,
-                        tokens_in, tokens_out, checkpoint, error, log_path
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
                  FROM agent_executions WHERE 1=1",
             );
 
@@ -512,7 +516,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, session_id, agent_id, parent_execution_id,
                         delegation_type, task, status,
                         started_at, completed_at,
-                        tokens_in, tokens_out, checkpoint, error, log_path
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
                  FROM agent_executions
                  WHERE session_id = ? AND delegation_type = 'root'",
             )?;
@@ -844,6 +849,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             checkpoint: checkpoint_json.and_then(|s| serde_json::from_str(&s).ok()),
             error: row.get(12)?,
             log_path: row.get(13)?,
+            child_session_id: row.get(14)?,
         })
     }
 
