@@ -19,6 +19,12 @@ Quick reference for all system components. Check this before planning changes.
 |-----------|----------|-------------|
 | Chat Experience | [chat-experience/overview.md](chat-experience/overview.md) | 3-panel chat UI: center (message → phases → response), sidebar (intent, ward, facts, subagents, plan). Session State API for reconnection. |
 
+## LLM Client
+
+| Component | Location | Description |
+|-----------|----------|-------------|
+| LLM Client | [llm-client/overview.md](llm-client/overview.md) | Text & multimodal content pipeline: Part types (Text, Image, File), ProviderEncoder trait, base64 flush persistence, `multimodal_analyze` tool, eagle-eye skill. Capability-aware encoding for OpenAI-compatible providers. |
+
 ## Memory & Intelligence
 
 | Component | Location | Description |
