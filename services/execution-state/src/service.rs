@@ -1116,6 +1116,62 @@ mod tests {
     }
 
     #[test]
+    fn test_smart_resume_state_transitions() {
+        let service = setup_service();
+
+        // 1. Create root session (running) with root execution
+        let (session, root_exec) = service.create_session("root").unwrap();
+        service.start_execution(&root_exec.id).unwrap();
+
+        // 2. Register a delegation and create subagent with child session
+        service.register_delegation(&session.id).unwrap();
+        let child_session = Session::new_child("researcher", &session.id);
+        service.create_session_from(&child_session).unwrap();
+
+        let sub_exec = AgentExecution::new_delegated(
+            &session.id, "researcher", &root_exec.id,
+            DelegationType::Sequential, "Research task",
+        );
+        service.create_execution(&sub_exec).unwrap();
+        service.set_child_session_id(&sub_exec.id, &child_session.id).unwrap();
+        service.start_execution(&sub_exec.id).unwrap();
+
+        // 3. Complete root execution (it has pending delegations)
+        service.complete_execution(&root_exec.id).unwrap();
+        service.request_continuation(&session.id).unwrap();
+
+        // 4. Crash the subagent
+        service.crash_execution(&sub_exec.id, "LLM 500 error").unwrap();
+        service.crash_session(&session.id).unwrap();
+
+        // Verify crashed state
+        let s = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(s.status, SessionStatus::Crashed);
+
+        // 5. Find crashed subagent
+        let crashed = service.get_last_crashed_subagent(&session.id).unwrap().unwrap();
+        assert_eq!(crashed.agent_id, "researcher");
+        assert_eq!(crashed.child_session_id.as_ref().unwrap(), &child_session.id);
+
+        // 6. Simulate what resume_crashed_subagent does:
+        service.reactivate_session(&session.id).unwrap();
+        service.reactivate_execution(&root_exec.id).unwrap();
+        service.cancel_execution(&sub_exec.id).unwrap();
+        service.reactivate_session(&child_session.id).unwrap();
+        service.register_delegation(&session.id).unwrap();
+        service.request_continuation(&session.id).unwrap();
+
+        // Verify post-resume state
+        let s = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(s.status, SessionStatus::Running);
+        assert!(s.pending_delegations >= 1);
+        assert!(s.continuation_needed);
+
+        let old_exec = service.get_execution(&sub_exec.id).unwrap().unwrap();
+        assert_eq!(old_exec.status, ExecutionStatus::Cancelled);
+    }
+
+    #[test]
     fn test_resume_crashed_session() {
         let service = setup_service();
         let (session, root_exec) = service.create_session("root").unwrap();
