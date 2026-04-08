@@ -1,11 +1,11 @@
 // ============================================================================
 // WEB LOGS PANEL
-// Redirects to the Execution Intelligence Dashboard.
+// Redirects to the Observability Dashboard.
 // Keeps the WebLogsPanel export name so existing imports (App.tsx etc.) work.
 // ============================================================================
 
-import { ExecutionDashboard } from "./ExecutionDashboard";
+import { ObservabilityDashboard } from "./ObservabilityDashboard";
 
 export function WebLogsPanel() {
-  return <ExecutionDashboard />;
+  return <ObservabilityDashboard />;
 }
