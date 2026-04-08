@@ -561,6 +561,17 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    /// Cancel a single execution by marking it as cancelled with a completed_at timestamp.
+    pub fn cancel_execution(&self, execution_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET status = 'cancelled', completed_at = ?1 WHERE id = ?2",
+                params![chrono::Utc::now().to_rfc3339(), execution_id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Update execution tokens.
     pub fn update_execution_tokens(&self, id: &str, tokens_in: u64, tokens_out: u64) -> Result<(), String> {
         self.db.with_connection(|conn| {

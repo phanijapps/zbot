@@ -1095,16 +1095,122 @@ impl ExecutionRunner {
         Ok(())
     }
 
-    /// Resume a paused execution by session ID.
+    /// Resume a paused or crashed execution by session ID.
+    ///
+    /// For crashed sessions with a crashed subagent: re-spawns only the crashed
+    /// subagent using its child session's message history, avoiding root re-evaluation.
+    /// For paused sessions or root-only crashes: falls through to current behavior.
     pub async fn resume(&self, session_id: &str) -> Result<(), String> {
-        // First update the database state
+        // Check for crashed subagent first
+        if let Ok(Some(crashed_exec)) = self.state_service.get_last_crashed_subagent(session_id) {
+            if crashed_exec.child_session_id.is_some() {
+                tracing::info!(
+                    session_id = %session_id,
+                    crashed_agent = %crashed_exec.agent_id,
+                    child_session = ?crashed_exec.child_session_id,
+                    "Smart resume: re-spawning crashed subagent instead of root"
+                );
+                return self.resume_crashed_subagent(session_id, &crashed_exec).await;
+            }
+        }
+
+        // Fallback: standard resume (paused sessions or root-only crashes)
         self.state_service.resume_session(session_id)?;
 
-        // Then resume any paused execution
         let handles = self.handles.read().await;
         for handle in handles.values() {
             handle.resume();
         }
+
+        Ok(())
+    }
+
+    /// Re-spawn a crashed subagent without re-running the root agent.
+    async fn resume_crashed_subagent(
+        &self,
+        session_id: &str,
+        crashed_exec: &execution_state::AgentExecution,
+    ) -> Result<(), String> {
+        let child_session_id = crashed_exec.child_session_id.as_ref()
+            .ok_or("No child_session_id on crashed execution")?;
+
+        // 1. Reactivate root session and execution
+        self.state_service.reactivate_session(session_id)?;
+        if let Ok(Some(root_exec)) = self.state_service.get_root_execution(session_id) {
+            self.state_service.reactivate_execution(&root_exec.id)?;
+        }
+
+        // 2. Cancel the old crashed execution
+        self.state_service.cancel_execution(&crashed_exec.id)?;
+
+        // 3. Reactivate the child session
+        self.state_service.reactivate_session(child_session_id)?;
+
+        // 4. Ensure pending_delegations is at least 1
+        self.state_service.register_delegation(session_id)?;
+
+        // 5. Request continuation so root agent processes the callback when subagent finishes
+        self.state_service.request_continuation(session_id)?;
+
+        // 6. Build DelegationRequest from crashed execution's data
+        let parent_execution_id = crashed_exec.parent_execution_id.as_ref()
+            .ok_or("No parent_execution_id on crashed execution")?;
+
+        let task = crashed_exec.task.as_ref()
+            .ok_or("No task on crashed execution")?;
+
+        // Get root agent ID for parent_agent_id
+        let root_agent_id = self.state_service.get_root_execution(session_id)?
+            .map(|e| e.agent_id)
+            .unwrap_or_else(|| "root".to_string());
+
+        // Create new child execution
+        let new_exec = execution_state::AgentExecution::new_delegated(
+            session_id,
+            &crashed_exec.agent_id,
+            parent_execution_id,
+            crashed_exec.delegation_type,
+            task,
+        );
+        self.state_service.create_execution(&new_exec)?;
+        self.state_service.set_child_session_id(&new_exec.id, child_session_id)?;
+
+        let request = DelegationRequest {
+            parent_agent_id: root_agent_id,
+            session_id: session_id.to_string(),
+            parent_execution_id: parent_execution_id.clone(),
+            child_agent_id: crashed_exec.agent_id.clone(),
+            child_execution_id: new_exec.id.clone(),
+            task: task.clone(),
+            context: None,
+            max_iterations: None,
+            output_schema: None,
+            skills: vec![],
+            complexity: None,
+        };
+
+        // 7. Re-spawn the subagent
+        spawn_delegated_agent(
+            &request,
+            self.event_bus.clone(),
+            self.agent_service.clone(),
+            self.provider_service.clone(),
+            self.mcp_service.clone(),
+            self.skill_service.clone(),
+            self.paths.clone(),
+            self.conversation_repo.clone(),
+            self.handles.clone(),
+            self.delegation_registry.clone(),
+            self.delegation_tx.clone(),
+            self.log_service.clone(),
+            self.state_service.clone(),
+            self.workspace_cache.clone(),
+            None, // No delegation permit needed for resume
+            self.memory_repo.clone(),
+            self.embedding_client.clone(),
+            self.memory_recall.clone(),
+            self.rate_limiters.clone(),
+        ).await?;
 
         Ok(())
     }

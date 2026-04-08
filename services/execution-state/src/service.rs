@@ -316,6 +316,11 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.get_child_executions(parent_execution_id)
     }
 
+    /// Cancel a single execution by marking it as cancelled.
+    pub fn cancel_execution(&self, execution_id: &str) -> Result<(), String> {
+        self.repo.cancel_execution(execution_id)
+    }
+
     /// Check if a session has any pending executions (running or queued).
     ///
     /// This checks for both RUNNING and QUEUED executions. QUEUED executions
