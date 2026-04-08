@@ -43,6 +43,7 @@ export function useLogSessions(filters?: LogFilter): UseLogSessionsResult {
           agent_id: filters?.agent_id,
           level: filters?.level,
           limit: filters?.limit ?? 100,
+          root_only: filters?.root_only,
         });
 
         if (cancelled) return;
@@ -63,7 +64,7 @@ export function useLogSessions(filters?: LogFilter): UseLogSessionsResult {
 
     load();
     return () => { cancelled = true; };
-  }, [tick, filters?.agent_id, filters?.level, filters?.limit]);
+  }, [tick, filters?.agent_id, filters?.level, filters?.limit, filters?.root_only]);
 
   return { sessions, loading, error, refetch };
 }
