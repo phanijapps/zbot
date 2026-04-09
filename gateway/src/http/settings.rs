@@ -294,6 +294,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Orchestrator (root agent) configuration
     #[serde(default)]
     pub orchestrator: Option<gateway_services::OrchestratorConfig>,
+    /// Distillation (memory extraction) model configuration
+    #[serde(default)]
+    pub distillation: Option<gateway_services::DistillationConfig>,
     /// Default multimodal (vision) model configuration
     #[serde(default)]
     pub multimodal: Option<gateway_services::MultimodalConfig>,
@@ -310,7 +313,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
             agent_name: req.agent_name,
             subagent_non_streaming: req.subagent_non_streaming,
             orchestrator: req.orchestrator.unwrap_or_default(),
-            distillation: Default::default(),
+            distillation: req.distillation.unwrap_or_default(),
             multimodal: req.multimodal.unwrap_or_default(),
         }
     }
