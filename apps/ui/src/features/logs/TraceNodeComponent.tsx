@@ -10,7 +10,7 @@ interface TraceNodeComponentProps {
 
 export function TraceNodeComponent({ node, depth }: TraceNodeComponentProps) {
   const [expanded, setExpanded] = useState(false);
-  const [childrenCollapsed, setChildrenCollapsed] = useState(false);
+  const [childrenCollapsed, setChildrenCollapsed] = useState(node.type === "delegation");
 
   const isDelegation = node.type === "delegation";
   const isError = node.status === "error" || node.status === "crashed" || !!node.error;

@@ -193,8 +193,16 @@ function buildChildNodes(
   const delegations = logs.filter((l) => l.category === "delegation");
   const errors = logs.filter((l) => l.category === "error");
 
-  // Track processed delegation child_agent_ids to avoid duplicates
-  const processedChildAgents = new Set<string>();
+  // Build ordered list of child sessions matching each delegation by agent_id + order
+  // If the same agent is delegated multiple times, consume child sessions in order
+  const childSessionsByAgent = new Map<string, SessionDetail[]>();
+  for (const [, cd] of childMap) {
+    const agentId = cd.session.agent_id;
+    if (!childSessionsByAgent.has(agentId)) {
+      childSessionsByAgent.set(agentId, []);
+    }
+    childSessionsByAgent.get(agentId)!.push(cd);
+  }
 
   // Process all logs in timestamp order to maintain execution sequence
   const orderedLogs = [...toolCalls, ...delegations, ...errors].sort(
@@ -238,17 +246,12 @@ function buildChildNodes(
         extractAgentFromMessage(log.message);
       const task = extractMetaField(log, "task") || log.message;
 
-      if (childAgentId && processedChildAgents.has(childAgentId)) continue;
-      if (childAgentId) processedChildAgents.add(childAgentId);
-
-      // Find matching child session
+      // Find matching child session — consume in order for repeated agent delegations
       let childSessionDetail: SessionDetail | undefined;
       if (childAgentId) {
-        for (const [, cd] of childMap) {
-          if (cd.session.agent_id === childAgentId) {
-            childSessionDetail = cd;
-            break;
-          }
+        const queue = childSessionsByAgent.get(childAgentId);
+        if (queue && queue.length > 0) {
+          childSessionDetail = queue.shift();
         }
       }
 
