@@ -29,8 +29,8 @@ Edit `docker/.env`:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `VAULT_PATH` | `~/Documents/zbot` | Host directory for all z-Bot data |
-| `HTTP_PORT` | `8080` | Web UI and HTTP API port |
-| `WS_PORT` | `8090` | WebSocket streaming port |
+| `HTTP_PORT` | `18971` | Web UI and HTTP API port |
+| `WS_PORT` | `18790` | WebSocket streaming port |
 
 ## What's in the Container
 
