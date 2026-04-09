@@ -132,13 +132,21 @@ cargo run -p daemon --release -- --static-dir ./dist
 ┌──────────────────────────┴──────────────────────────────┐
 │                      DATA LAYER                         │
 │  ~/Documents/zbot/                                      │
-│  ├── conversations.db     # Sessions, messages, memory  │
-│  ├── knowledge_graph.db   # Entities & relationships    │
+│  ├── config/                                            │
+│  │   ├── providers.json   # LLM provider configs        │
+│  │   ├── settings.json    # System configuration        │
+│  │   ├── mcps.json        # MCP server configs          │
+│  │   ├── SOUL.md          # Root agent personality      │
+│  │   └── INSTRUCTIONS.md  # Root agent instructions     │
+│  ├── data/                                              │
+│  │   ├── conversations.db # Sessions, messages, memory  │
+│  │   └── knowledge_graph.db # Entities & relationships  │
 │  ├── agents/{name}/       # Agent configurations        │
 │  ├── skills/{name}/       # Skill definitions           │
 │  ├── wards/{name}/        # Persistent project dirs     │
-│  ├── providers.json       # LLM provider configs        │
-│  └── settings.json        # System configuration        │
+│  ├── plugins/             # Bridge workers & extensions  │
+│  ├── temp/                # Offloaded tool results      │
+│  └── logs/                # Execution logs              │
 └─────────────────────────────────────────────────────────┘
 ```
 
