@@ -36,51 +36,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /build
 
-# Copy Cargo files first for dependency caching
-COPY Cargo.toml Cargo.lock ./
-COPY apps/daemon/Cargo.toml apps/daemon/Cargo.toml
-COPY apps/cli/Cargo.toml apps/cli/Cargo.toml
-COPY runtime/agent-runtime/Cargo.toml runtime/agent-runtime/Cargo.toml
-COPY runtime/agent-tools/Cargo.toml runtime/agent-tools/Cargo.toml
-COPY runtime/zero-core/Cargo.toml runtime/zero-core/Cargo.toml
-COPY services/execution-state/Cargo.toml services/execution-state/Cargo.toml
-COPY services/api-logs/Cargo.toml services/api-logs/Cargo.toml
-COPY gateway/Cargo.toml gateway/Cargo.toml
-COPY gateway/gateway-bus/Cargo.toml gateway/gateway-bus/Cargo.toml
-COPY gateway/gateway-bridge/Cargo.toml gateway/gateway-bridge/Cargo.toml
-COPY gateway/gateway-connectors/Cargo.toml gateway/gateway-connectors/Cargo.toml
-COPY gateway/gateway-database/Cargo.toml gateway/gateway-database/Cargo.toml
-COPY gateway/gateway-events/Cargo.toml gateway/gateway-events/Cargo.toml
-COPY gateway/gateway-execution/Cargo.toml gateway/gateway-execution/Cargo.toml
-COPY gateway/gateway-services/Cargo.toml gateway/gateway-services/Cargo.toml
-COPY gateway/gateway-ws-protocol/Cargo.toml gateway/gateway-ws-protocol/Cargo.toml
-
-# Create dummy source files for dependency caching
-RUN mkdir -p apps/daemon/src apps/cli/src \
-    runtime/agent-runtime/src runtime/agent-tools/src runtime/zero-core/src \
-    services/execution-state/src services/api-logs/src \
-    gateway/src gateway/gateway-bus/src gateway/gateway-bridge/src \
-    gateway/gateway-connectors/src gateway/gateway-database/src \
-    gateway/gateway-events/src gateway/gateway-execution/src \
-    gateway/gateway-services/src gateway/gateway-ws-protocol/src \
-    && for d in apps/daemon apps/cli \
-       runtime/agent-runtime runtime/agent-tools runtime/zero-core \
-       services/execution-state services/api-logs \
-       gateway gateway/gateway-bus gateway/gateway-bridge \
-       gateway/gateway-connectors gateway/gateway-database \
-       gateway/gateway-events gateway/gateway-execution \
-       gateway/gateway-services gateway/gateway-ws-protocol; do \
-         echo "fn main() {}" > "$d/src/main.rs" 2>/dev/null; \
-         echo "" > "$d/src/lib.rs" 2>/dev/null; \
-       done
-
-# Build dependencies only (cached layer)
-RUN cargo build -p daemon --release 2>/dev/null || true
-
-# Copy actual source code
+# Copy entire workspace and build
+# Docker layer caching handles rebuild detection via .dockerignore
 COPY . .
 
-# Build the real binary
 RUN cargo build -p daemon --release
 
 # ---------------------------------------------------------------------------
