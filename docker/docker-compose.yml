@@ -1,0 +1,17 @@
+services:
+  zbot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${HTTP_PORT:-8080}:18791"
+      - "${WS_PORT:-8090}:18790"
+    volumes:
+      - ${VAULT_PATH:-~/Documents/zbot}:/data/zbot
+      - fastembed-cache:/root/.cache/fastembed
+    environment:
+      - RUST_LOG=warn
+    restart: unless-stopped
+
+volumes:
+  fastembed-cache:
