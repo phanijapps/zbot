@@ -50,14 +50,12 @@ if [ ! -f .env ]; then
     # Write .env
     cat > .env <<EOF
 VAULT_PATH=$VAULT_PATH
-HTTP_PORT=8080
-WS_PORT=8090
 EOF
 
     echo ""
     echo -e "Vault: ${GREEN}$VAULT_PATH${NC}"
-    echo -e "HTTP:  ${GREEN}http://localhost:8080${NC}"
-    echo -e "WS:    ${GREEN}ws://localhost:8090${NC}"
+    echo -e "HTTP:  ${GREEN}http://localhost:18791${NC}"
+    echo -e "WS:    ${GREEN}ws://localhost:18790${NC}"
     echo ""
 fi
 
@@ -81,7 +79,7 @@ docker compose up -d --build
 echo ""
 echo -e "${GREEN}z-Bot is running!${NC}"
 echo ""
-echo -e "  Web UI:  ${GREEN}http://localhost:${HTTP_PORT:-8080}${NC}"
+echo -e "  Web UI:  ${GREEN}http://localhost:18791${NC}"
 echo -e "  Vault:   ${DISPLAY_VAULT}"
 echo ""
 echo -e "  Stop:    ${YELLOW}docker compose down${NC}"
