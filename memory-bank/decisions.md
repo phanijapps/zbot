@@ -406,3 +406,25 @@ Distilled patterns from building z-Bot:
 **Problem**: Should `single_action_mode` (one tool call per LLM turn) be configurable for root?
 **Decision**: Keep hardcoded `true` for root. Not exposed in UI.
 **Rationale**: Architectural enforcement — root orchestrates one delegation at a time. Multiple simultaneous delegations would confuse the delegation queue, race for the semaphore, and produce unpredictable ordering. If root needs parallel delegation, it should be via the delegation semaphore (maxParallelAgents), not via parallel tool calls.
+
+### Smart Session Resume — Subagent-Level Retry (2026-04-08)
+**Problem**: When a subagent crashes (LLM 500/429 errors), hitting Resume restarts from the root agent, re-evaluating intent, re-planning, and re-delegating all subagents — wasting tokens and duplicating completed work.
+**Decision**: Resume detects the most recently crashed subagent execution via `child_session_id` on `agent_executions`, and re-spawns only that subagent using its child session's message history. Root agent stays in `running` state waiting for the retried subagent's callback.
+**Rationale**: All the infrastructure exists — child sessions have full message history, the delegation completion flow (`complete_delegation` → `SessionContinuationReady`) handles the callback. Only the resume entry point needed to be smarter.
+**Scope limitation**: If multiple subagents crash (parallel delegations), only the most recently started one is retried. This is acceptable since delegations are sequential per-session today.
+
+### Distillation Config Promoted to Own Settings Card (2026-04-08)
+**Problem**: Distillation model settings were buried inside the Orchestrator card on Settings > Advanced, and a backend bug (`UpdateExecutionSettingsRequest` missing `distillation` field) silently dropped the config on save.
+**Decision**: Fixed the backend API to persist distillation config. Promoted Distillation to its own card in a 2x2 grid layout on the Advanced tab, alongside Orchestrator, Multimodal, and Execution.
+**Rationale**: Distillation (memory extraction) is a distinct subsystem from the orchestrator. Users may want a cheaper model for distillation while keeping a powerful orchestrator model. Separate card makes it discoverable and independently configurable.
+
+### Observability Dashboard Replaces Logs Page (2026-04-08)
+**Problem**: The Logs page used a waterfall visualization that didn't show subagent tool calls. Users couldn't see the full execution narrative (root → subagent → tool calls).
+**Decision**: Replace `/logs` with a List+Detail split layout. Left panel: filterable session list. Right panel: Timeline Tree showing root → delegation → tool call hierarchy with lucide icons per tool type. Real-time updates via 3-second polling for running sessions.
+**Rationale**: All data already existed in `execution_logs` table and the `/api/logs/sessions` API. The gap was purely presentation. WebSocket `scope: "all"` delivers subagent events with `execution_id` for tagging. Polling chosen over WebSocket subscription because the subscription API uses `conversationId` (not `sessionId`) and the dashboard doesn't need sub-second latency.
+**Key detail**: Delegation logs in `stream.rs` use metadata key `"child_agent"` (not `"child_agent_id"` as in `service.rs`). The trace builder checks both keys with a fallback to parsing the message text.
+
+### Tool Result Offloading Already Exists (2026-04-08)
+**Problem**: Investigated whether to build JS/shell hooks for intercepting large tool call responses.
+**Decision**: No new work needed. The `offload_large_results` feature is already implemented, enabled by default, and fully wired: results > 20k chars saved to `{config_dir}/temp/`, agent receives a reference message with instructions to use `read`/`grep`.
+**Rationale**: Explored the executor pipeline: offload → truncate (30k safety net) → afterToolCall hook → send to LLM. All stages working. Per-tool thresholds or external hook scripts could be future enhancements if needed.
