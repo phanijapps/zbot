@@ -432,23 +432,7 @@
       "output": 8192
     }
   },
-  "glm-5.1": {
-    "name": "GLM-5.1",
-    "provider": "zhipu",
-    "capabilities": {
-      "tools": true,
-      "vision": false,
-      "thinking": true,
-      "embeddings": false,
-      "voice": false,
-      "imageGeneration": false,
-      "videoGeneration": false
-    },
-    "context": {
-      "input": 200000,
-      "output": 128000
-    }
-  },
+  
   "glm-5": {
     "name": "GLM-5",
     "provider": "zhipu",
@@ -517,23 +501,7 @@
       "output": 128000
     }
   },
-  "glm-4.5": {
-    "name": "GLM-4.5",
-    "provider": "zhipu",
-    "capabilities": {
-      "tools": true,
-      "vision": false,
-      "thinking": false,
-      "embeddings": false,
-      "voice": false,
-      "imageGeneration": false,
-      "videoGeneration": false
-    },
-    "context": {
-      "input": 128000,
-      "output": 128000
-    }
-  },
+
   "openai/gpt-4-turbo": {
     "name": "GPT-4 Turbo (OpenRouter)",
     "provider": "openai",
