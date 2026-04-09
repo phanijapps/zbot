@@ -1,9 +1,11 @@
 # z-Bot — Product Definition
 
+z-Bot is a goal-oriented AI agent that lives on your desktop. It analyzes intent, plans autonomously, delegates to specialist subagents, self-learns across sessions, and works with any OpenAI-compatible provider. It is token-intensive by design — the agent does the work so you don't have to.
+
 ## Interfaces
 
 ### Web Dashboard
-Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, and conversations.
+Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, conversations, and observability.
 
 ### CLI (zero)
 Command-line interface for scripting, automation, and terminal-based workflows. Connects to the same daemon as the web dashboard.
@@ -113,25 +115,25 @@ Agent-managed persistent project directories. The agent autonomously creates, na
 - Ward memory for project context (tech stack, build commands)
 - `scratch` ward for quick one-off tasks
 
-### 8. Operations Dashboard
-Real-time monitoring and management of agent sessions:
+### 8. Observability Dashboard
+Full execution visibility via a List + Detail split layout:
 
-**Statistics Panel:**
-- Active sessions count (running, queued)
-- Completed/crashed session counts
-- Sessions by trigger source (web, cli, api, cron, plugin)
+**Session List (left panel):**
+- Filterable list of root sessions with status badges
+- Agent count, duration, token usage per session
+- Real-time polling for running sessions
 
-**Session List:**
-- All sessions with status indicators
-- Execution hierarchy (root agent + subagents)
-- Turn counts and timing information
-- Filter by source and status
-- Auto-refresh every 5 seconds
+**Timeline Tree (right panel):**
+- Hierarchical narrative: root → subagent → tool calls
+- Contextual icons per tool type (Terminal, FileEdit, Brain, Globe, etc.)
+- Click to expand nodes and see full arguments/results
+- Subagent delegations collapsible with task description
+- Error nodes highlighted in red
 
-**Session Management:**
-- View session details and execution tree
-- Cancel running sessions
-- Track subagent delegation in real-time
+**Operations Dashboard:**
+- Real-time session monitoring and management
+- Pause, resume, cancel running sessions
+- Resume crashed sessions at the subagent level (smart resume)
 
 ### 9. Multi-Turn Session Management
 Conversations persist across multiple turns within a session:
