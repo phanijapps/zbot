@@ -34,7 +34,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl-dev \
     make \
     gcc \
+    g++ \
     libc6-dev \
+    libstdc++-12-dev \
+    libonig-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -65,8 +68,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     # LibreOffice (document conversion)
     libreoffice-core \
     libreoffice-writer \
-    # SSL for HTTPS API calls
+    # SSL and C++ runtime for ONNX
     libssl3 \
+    libstdc++6 \
+    libonig5 \
     # Cleanup
     && rm -rf /var/lib/apt/lists/*
 
