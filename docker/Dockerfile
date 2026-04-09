@@ -26,12 +26,15 @@ RUN cd apps/ui && npm run build
 # ---------------------------------------------------------------------------
 # Stage 2: Rust Build
 # ---------------------------------------------------------------------------
-FROM rust:1.88-slim-bookworm AS builder
+FROM rust:1.93-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     pkg-config \
     libssl-dev \
+    make \
+    gcc \
+    libc6-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
