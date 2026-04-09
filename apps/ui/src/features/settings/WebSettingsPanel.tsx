@@ -570,191 +570,136 @@ export function WebSettingsPanel() {
             ADVANCED TAB
            ═══════════════════════════════════════════════════════════════════ */}
         <TabPanel id="advanced" activeTab={activeTab}>
-          <div className="flex flex-col gap-4">
-            <p style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)" }}>
-              Changes to execution settings require a daemon restart to take effect.
-            </p>
+          {isLoadingExec ? (
+            <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>
+          ) : execSettings ? (
+            <>
+              {execRestartRequired && (
+                <div className="settings-alert settings-alert--warning" style={{ marginBottom: 12 }}>
+                  Restart the daemon for changes to take effect.
+                </div>
+              )}
+              {execSaveMessage && (
+                <div className={`settings-alert ${execSaveMessage === "Saved" ? "settings-alert--success" : "settings-alert--error"}`} style={{ marginBottom: 12 }}>
+                  {execSaveMessage}
+                </div>
+              )}
 
-            {isLoadingExec ? (
-              <div className="settings-loading"><Loader2 className="loading-spinner__icon" /></div>
-            ) : execSettings ? (
-              <div className="flex flex-col gap-4">
-
-                {/* Max Parallel Agents */}
-                <div className="card card__padding--lg">
-                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
-                    <div className="card__icon card__icon--primary">
-                      <Activity style={{ width: 18, height: 18 }} />
+              <div className="cmd-center">
+                {/* ── Orchestrator Card ── */}
+                <div className="cmd-card">
+                  <div className="cmd-card__accent cmd-card__accent--indigo" />
+                  <div className="cmd-card__header">
+                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #818cf8, #6366f1)" }}>
+                      <Activity style={{ width: 16, height: 16, color: "#fff" }} />
                     </div>
                     <div>
-                      <h2 className="settings-section-header">Execution</h2>
-                      <p className="page-subtitle">Control how agents run in parallel</p>
+                      <div className="cmd-card__label" style={{ color: "#818cf8" }}>Orchestrator</div>
+                      <div className="cmd-card__sublabel">Root agent steering</div>
                     </div>
                   </div>
-
-                  <div style={{ marginTop: "var(--spacing-3)" }}>
-                    <label className="settings-field-label">Max Parallel Agents</label>
-                    <input
-                      type="number"
-                      value={execSettings.maxParallelAgents}
-                      onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                      disabled={isSavingExec}
-                      className="form-input"
-                      min={1}
-                      max={10}
-                      style={{ maxWidth: 200 }}
-                    />
-                    <p className="settings-hint">
-                      Maximum subagents that can execute simultaneously across all sessions.
-                      Lower values reduce API load; higher values speed up parallel tasks.
-                      Default: 2.
-                    </p>
-                  </div>
-
-                  {execRestartRequired && (
-                    <div className="settings-alert settings-alert--warning" style={{ marginTop: "var(--spacing-3)" }}>
-                      Restart the daemon for changes to take effect.
-                    </div>
-                  )}
-
-                  {execSaveMessage && (
-                    <div className={`settings-alert ${execSaveMessage === "Saved" ? "settings-alert--success" : "settings-alert--error"}`} style={{ marginTop: "var(--spacing-3)" }}>
-                      {execSaveMessage === "Saved" && <Check style={{ width: 14, height: 14 }} />}
-                      {execSaveMessage}
-                    </div>
-                  )}
-
-                  <div style={{ marginTop: "var(--spacing-5)", paddingTop: "var(--spacing-4)", borderTop: "1px solid var(--border)" }}>
-                    <h3 className="settings-field-label" style={{ marginBottom: "var(--spacing-2)" }}>Setup Wizard</h3>
-                    <p className="settings-hint" style={{ marginBottom: "var(--spacing-3)" }}>
-                      Re-run the first-time setup wizard to reconfigure providers, agents, and defaults.
-                    </p>
-                    <button
-                      className="btn btn--outline btn--sm"
-                      onClick={() => { window.location.href = "/setup"; }}
-                    >
-                      Re-run Setup Wizard
-                    </button>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-
-            {/* Orchestrator Config */}
-            {execSettings && (
-              <div className="card card__padding--lg">
-                <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
-                  <div className="card__icon card__icon--primary">
-                    <Activity style={{ width: 18, height: 18 }} />
-                  </div>
-                  <div>
-                    <h2 className="settings-section-header">Orchestrator</h2>
-                    <p className="page-subtitle">Configure the root agent that handles your conversations</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="settings-field-label">Provider</label>
-                    <select
-                      className="form-input form-select"
-                      value={execSettings.orchestrator?.providerId || ""}
-                      onChange={(e) => handleExecChange({
-                        orchestrator: {
-                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                          providerId: e.target.value || null,
-                          model: null,
-                        },
-                      })}
-                    >
-                      <option value="">Default Provider</option>
-                      {providers.filter((p) => p.verified).map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="settings-field-label">Model</label>
-                    <select
-                      className="form-input form-select"
-                      value={execSettings.orchestrator?.model || ""}
-                      onChange={(e) => handleExecChange({
-                        orchestrator: {
-                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                          model: e.target.value || null,
-                        },
-                      })}
-                    >
-                      <option value="">Default Model</option>
-                      {(providers.find((p) => p.id === (execSettings.orchestrator?.providerId || defaultProviderId))?.models || []).map((m) => (
-                        <option key={m} value={m}>{m}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="settings-field-label">Temperature</label>
-                    <input
-                      className="form-input"
-                      type="number"
-                      min={0} max={2} step={0.1}
-                      value={execSettings.orchestrator?.temperature ?? 0.7}
-                      onChange={(e) => handleExecChange({
-                        orchestrator: {
-                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                          temperature: parseFloat(e.target.value) || 0.7,
-                        },
-                      })}
-                    />
-                  </div>
-                  <div>
-                    <label className="settings-field-label">Max Output Tokens</label>
-                    <input
-                      className="form-input"
-                      type="number"
-                      min={1024} step={1024}
-                      value={execSettings.orchestrator?.maxTokens ?? 16384}
-                      onChange={(e) => handleExecChange({
-                        orchestrator: {
-                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                          maxTokens: parseInt(e.target.value) || 16384,
-                        },
-                      })}
-                    />
-                  </div>
-                </div>
-
-                <label className={`settings-toggle-option ${execSettings.orchestrator?.thinkingEnabled !== false ? "settings-toggle-option--active" : ""}`}
-                  style={{ marginTop: "var(--spacing-3)" }}>
-                  <input
-                    type="checkbox"
-                    checked={execSettings.orchestrator?.thinkingEnabled !== false}
-                    onChange={() => handleExecChange({
-                      orchestrator: {
-                        ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                        thinkingEnabled: execSettings.orchestrator?.thinkingEnabled === false,
-                      },
-                    })}
-                    className="settings-toggle-option__checkbox"
-                  />
-                  <div className="flex-1">
-                    <div className="settings-toggle-option__title">Thinking Mode</div>
-                    <div className="settings-toggle-option__description">
-                      Enable extended reasoning — the orchestrator thinks before delegating, improving plan quality.
-                    </div>
-                  </div>
-                </label>
-
-                {/* Distillation Config */}
-                <div style={{ marginTop: "var(--spacing-4)", paddingTop: "var(--spacing-3)", borderTop: "1px solid var(--border-secondary)" }}>
-                  <div style={{ marginBottom: "var(--spacing-2)" }}>
-                    <h3 className="settings-field-label" style={{ fontSize: "var(--font-size-sm)", fontWeight: 600 }}>Distillation</h3>
-                    <p className="page-subtitle" style={{ fontSize: "var(--font-size-xs)" }}>Override the model used for memory extraction. Inherits from orchestrator by default.</p>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="settings-field-label">Provider</label>
+                  <div className="cmd-card__panel">
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Provider</span>
                       <select
-                        className="form-input form-select"
+                        value={execSettings.orchestrator?.providerId || ""}
+                        onChange={(e) => handleExecChange({
+                          orchestrator: {
+                            ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                            providerId: e.target.value || null,
+                            model: null,
+                          },
+                        })}
+                      >
+                        <option value="">Default</option>
+                        {providers.filter((p) => p.verified).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Model</span>
+                      <select
+                        value={execSettings.orchestrator?.model || ""}
+                        onChange={(e) => handleExecChange({
+                          orchestrator: {
+                            ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                            model: e.target.value || null,
+                          },
+                        })}
+                      >
+                        <option value="">Default</option>
+                        {(providers.find((p) => p.id === (execSettings.orchestrator?.providerId || defaultProviderId))?.models || []).map((m) => (
+                          <option key={m} value={m}>{m}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="cmd-card__pills">
+                    <div className="cmd-card__pill">
+                      <div className="cmd-card__pill-label">Temp</div>
+                      <input
+                        type="number"
+                        min={0} max={2} step={0.1}
+                        value={execSettings.orchestrator?.temperature ?? 0.7}
+                        onChange={(e) => handleExecChange({
+                          orchestrator: {
+                            ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                            temperature: parseFloat(e.target.value) || 0.7,
+                          },
+                        })}
+                        style={{ textAlign: "center" }}
+                      />
+                    </div>
+                    <div className="cmd-card__pill">
+                      <div className="cmd-card__pill-label">Tokens</div>
+                      <input
+                        type="number"
+                        min={1024} step={1024}
+                        value={execSettings.orchestrator?.maxTokens ?? 16384}
+                        onChange={(e) => handleExecChange({
+                          orchestrator: {
+                            ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                            maxTokens: parseInt(e.target.value) || 16384,
+                          },
+                        })}
+                        style={{ textAlign: "center" }}
+                      />
+                    </div>
+                    <div className="cmd-card__pill">
+                      <div className="cmd-card__pill-label">Thinking</div>
+                      <div
+                        className="cmd-card__pill-value"
+                        style={{ color: execSettings.orchestrator?.thinkingEnabled !== false ? "#4ade80" : "#666", cursor: "pointer" }}
+                        onClick={() => handleExecChange({
+                          orchestrator: {
+                            ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                            thinkingEnabled: execSettings.orchestrator?.thinkingEnabled === false,
+                          },
+                        })}
+                      >
+                        {execSettings.orchestrator?.thinkingEnabled !== false ? "ON" : "OFF"}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Distillation Card ── */}
+                <div className="cmd-card">
+                  <div className="cmd-card__accent cmd-card__accent--purple" />
+                  <div className="cmd-card__header">
+                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #c084fc, #a855f7)" }}>
+                      <ChevronDown style={{ width: 16, height: 16, color: "#fff" }} />
+                    </div>
+                    <div>
+                      <div className="cmd-card__label" style={{ color: "#c084fc" }}>Distillation</div>
+                      <div className="cmd-card__sublabel">Memory extraction model</div>
+                    </div>
+                  </div>
+                  <div className="cmd-card__panel">
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Provider</span>
+                      <select
                         value={execSettings.distillation?.providerId || ""}
                         onChange={(e) => handleExecChange({
                           distillation: {
@@ -770,10 +715,9 @@ export function WebSettingsPanel() {
                         ))}
                       </select>
                     </div>
-                    <div>
-                      <label className="settings-field-label">Model</label>
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Model</span>
                       <select
-                        className="form-input form-select"
                         value={execSettings.distillation?.model || ""}
                         onChange={(e) => handleExecChange({
                           distillation: {
@@ -794,114 +738,132 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                   </div>
+                  <div className="cmd-card__help">Override to use a cheaper model for memory extraction</div>
+                </div>
+
+                {/* ── Multimodal Card ── */}
+                <div className="cmd-card">
+                  <div className="cmd-card__accent cmd-card__accent--teal" />
+                  <div className="cmd-card__header">
+                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #2dd4bf, #14b8a6)" }}>
+                      <Eye style={{ width: 16, height: 16, color: "#fff" }} />
+                    </div>
+                    <div>
+                      <div className="cmd-card__label" style={{ color: "#2dd4bf" }}>Multimodal</div>
+                      <div className="cmd-card__sublabel">Vision analysis model</div>
+                    </div>
+                  </div>
+                  <div className="cmd-card__panel">
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Provider</span>
+                      <select
+                        value={execSettings.multimodal?.providerId || ""}
+                        onChange={(e) => handleExecChange({
+                          multimodal: {
+                            ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                            providerId: e.target.value || null,
+                            model: null,
+                          },
+                        })}
+                      >
+                        <option value="">Select Provider</option>
+                        {providers.filter((p) => p.verified).map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Model</span>
+                      <select
+                        value={execSettings.multimodal?.model || ""}
+                        onChange={(e) => handleExecChange({
+                          multimodal: {
+                            ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                            model: e.target.value || null,
+                          },
+                        })}
+                      >
+                        <option value="">Select Vision Model</option>
+                        {(() => {
+                          const mmProviderId = execSettings.multimodal?.providerId || defaultProviderId;
+                          return (providers.find((p) => p.id === mmProviderId)?.models || []).map((m) => (
+                            <option key={m} value={m}>{m}</option>
+                          ));
+                        })()}
+                      </select>
+                    </div>
+                  </div>
+                  <div className="cmd-card__pills">
+                    <div className="cmd-card__pill">
+                      <div className="cmd-card__pill-label">Temp</div>
+                      <input
+                        type="number"
+                        min={0} max={2} step={0.1}
+                        value={execSettings.multimodal?.temperature ?? 0.3}
+                        onChange={(e) => handleExecChange({
+                          multimodal: {
+                            ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                            temperature: parseFloat(e.target.value) || 0.3,
+                          },
+                        })}
+                        style={{ textAlign: "center" }}
+                      />
+                    </div>
+                    <div className="cmd-card__pill">
+                      <div className="cmd-card__pill-label">Tokens</div>
+                      <input
+                        type="number"
+                        min={256} step={256}
+                        value={execSettings.multimodal?.maxTokens ?? 4096}
+                        onChange={(e) => handleExecChange({
+                          multimodal: {
+                            ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
+                            maxTokens: parseInt(e.target.value) || 4096,
+                          },
+                        })}
+                        style={{ textAlign: "center" }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* ── Execution Card ── */}
+                <div className="cmd-card">
+                  <div className="cmd-card__accent cmd-card__accent--orange" />
+                  <div className="cmd-card__header">
+                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #fb923c, #f97316)" }}>
+                      <Shield style={{ width: 16, height: 16, color: "#fff" }} />
+                    </div>
+                    <div>
+                      <div className="cmd-card__label" style={{ color: "#fb923c" }}>Execution</div>
+                      <div className="cmd-card__sublabel">Parallel agent control</div>
+                    </div>
+                  </div>
+                  <div className="cmd-card__panel">
+                    <div className="cmd-card__row">
+                      <span className="cmd-card__key">Max Parallel Agents</span>
+                      <input
+                        type="number"
+                        value={execSettings.maxParallelAgents}
+                        onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                        disabled={isSavingExec}
+                        min={1}
+                        max={10}
+                        style={{ textAlign: "center" }}
+                      />
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn--outline btn--sm"
+                    style={{ width: "100%", marginTop: 4 }}
+                    onClick={() => { window.location.href = "/setup"; }}
+                  >
+                    Re-run Setup Wizard
+                  </button>
                 </div>
               </div>
-            )}
-          </div>
-
-          {/* Multimodal (Vision) Configuration */}
-          <div>
-            {execSettings && (
-              <div className="card card__padding--lg">
-                <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
-                  <div className="card__icon card__icon--primary">
-                    <Eye style={{ width: 18, height: 18 }} />
-                  </div>
-                  <div>
-                    <h2 className="settings-section-header">Multimodal</h2>
-                    <p className="page-subtitle">Default vision model for analyzing images, PDFs, and visual content. Used by the <code>multimodal_analyze</code> tool.</p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className="settings-field-label">Provider</label>
-                    <select
-                      className="form-input form-select"
-                      value={execSettings.multimodal?.providerId || ""}
-                      onChange={(e) => handleExecChange({
-                        multimodal: {
-                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                          providerId: e.target.value || null,
-                          model: null,
-                        },
-                      })}
-                    >
-                      <option value="">Select Provider</option>
-                      {providers.filter((p) => p.verified).map((p) => (
-                        <option key={p.id} value={p.id}>{p.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="settings-field-label">Model</label>
-                    <select
-                      className="form-input form-select"
-                      value={execSettings.multimodal?.model || ""}
-                      onChange={(e) => handleExecChange({
-                        multimodal: {
-                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                          model: e.target.value || null,
-                        },
-                      })}
-                    >
-                      <option value="">Select Vision Model</option>
-                      {(() => {
-                        const mmProviderId = execSettings.multimodal?.providerId || defaultProviderId;
-                        return (providers.find((p) => p.id === mmProviderId)?.models || []).map((m) => (
-                          <option key={m} value={m}>{m}</option>
-                        ));
-                      })()}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="settings-field-label">Temperature</label>
-                    <input
-                      className="form-input"
-                      type="number"
-                      min={0}
-                      max={2}
-                      step={0.1}
-                      value={execSettings.multimodal?.temperature ?? 0.3}
-                      onChange={(e) => handleExecChange({
-                        multimodal: {
-                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                          temperature: parseFloat(e.target.value) || 0.3,
-                        },
-                      })}
-                    />
-                  </div>
-                  <div>
-                    <label className="settings-field-label">Max Output Tokens</label>
-                    <input
-                      className="form-input"
-                      type="number"
-                      min={256}
-                      step={256}
-                      value={execSettings.multimodal?.maxTokens ?? 4096}
-                      onChange={(e) => handleExecChange({
-                        multimodal: {
-                          ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                          maxTokens: parseInt(e.target.value) || 4096,
-                        },
-                      })}
-                    />
-                  </div>
-                </div>
-
-                {!execSettings.multimodal?.providerId && (
-                  <p style={{ marginTop: "var(--spacing-2)", fontSize: "var(--font-size-xs)", color: "var(--text-tertiary)" }}>
-                    Select a provider with a vision-capable model (e.g., GPT-4o) to enable multimodal analysis.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-
-          <HelpBox>
-            <strong>Advanced settings</strong> control low-level execution behavior.
-            Most users won't need to change these. Changes require a daemon restart.
-          </HelpBox>
+            </>
+          ) : null}
         </TabPanel>
       </div>
 

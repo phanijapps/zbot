@@ -4553,3 +4553,162 @@
 .trace-node-detail__section:last-child {
   margin-bottom: 0;
 }
+
+/* ============================================================================
+   COMMAND CENTER — Advanced Settings Grid
+   ============================================================================ */
+
+.cmd-center {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .cmd-center {
+    grid-template-columns: 1fr;
+  }
+}
+
+.cmd-card {
+  background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+  border: 1px solid #2a2a4a;
+  border-radius: 10px;
+  padding: 16px;
+  position: relative;
+  overflow: hidden;
+}
+
+.cmd-card__accent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+}
+
+.cmd-card__accent--indigo {
+  background: linear-gradient(90deg, #818cf8, #6366f1);
+}
+
+.cmd-card__accent--purple {
+  background: linear-gradient(90deg, #c084fc, #a855f7);
+}
+
+.cmd-card__accent--teal {
+  background: linear-gradient(90deg, #2dd4bf, #14b8a6);
+}
+
+.cmd-card__accent--orange {
+  background: linear-gradient(90deg, #fb923c, #f97316);
+}
+
+.cmd-card__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.cmd-card__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+}
+
+.cmd-card__label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-weight: 600;
+}
+
+.cmd-card__sublabel {
+  font-size: 9px;
+  color: #666;
+}
+
+.cmd-card__panel {
+  background: #0d0d1a;
+  border-radius: 6px;
+  padding: 10px;
+  margin-bottom: 8px;
+}
+
+.cmd-card__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.cmd-card__row:last-child {
+  margin-bottom: 0;
+}
+
+.cmd-card__key {
+  color: #999;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.cmd-card__pills {
+  display: flex;
+  gap: 8px;
+  font-size: 10px;
+}
+
+.cmd-card__pill {
+  flex: 1;
+  background: #0d0d1a;
+  border-radius: 4px;
+  padding: 6px 8px;
+  text-align: center;
+}
+
+.cmd-card__pill-label {
+  color: #666;
+}
+
+.cmd-card__pill-value {
+  color: var(--foreground);
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+.cmd-card__help {
+  font-size: 9px;
+  color: #555;
+  margin-top: 6px;
+}
+
+/* Style select/input elements inside cmd-card to match dark theme */
+.cmd-card select,
+.cmd-card input[type="number"] {
+  background: #0d0d1a;
+  border: 1px solid #2a2a4a;
+  border-radius: 4px;
+  color: var(--foreground);
+  font-size: 12px;
+  padding: 4px 8px;
+  width: 100%;
+  outline: none;
+}
+
+.cmd-card select:focus,
+.cmd-card input[type="number"]:focus {
+  border-color: #4a4a6a;
+}
+
+.cmd-card select option {
+  background: #0d0d1a;
+}
+
+.cmd-card__row select,
+.cmd-card__row input[type="number"] {
+  max-width: 60%;
+}
