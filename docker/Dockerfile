@@ -73,7 +73,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libstdc++6 \
     libonig5 \
     # Cleanup
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3 /usr/bin/python
 
 # Install Node.js 20
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
