@@ -110,9 +110,11 @@ export function TraceNodeComponent({ node, depth }: TraceNodeComponentProps) {
           <span className="trace-node__tool">{node.label}</span>
         )}
         {node.summary && (
-          <span className="trace-node__summary">
-            {" "}
-            — {node.summary}
+          <span className="trace-node__summary" title={node.summary}>
+            {" — "}
+            {isDelegation && node.summary.length > 60
+              ? node.summary.slice(0, 57) + "..."
+              : node.summary}
           </span>
         )}
         <span className="trace-node__duration">
