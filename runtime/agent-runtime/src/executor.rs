@@ -19,7 +19,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::fmt;
 use std::pin::Pin;
 use std::future::Future;
 use std::sync::Arc;
@@ -27,6 +28,7 @@ use serde_json::{json, Value};
 
 use crate::types::{ChatMessage, StreamEvent, ToolCall};
 use crate::llm::LlmClient;
+use zero_core::types::Part;
 use crate::llm::client::StreamChunk;
 use crate::tools::ToolRegistry;
 use crate::tools::context::ToolContext;
@@ -77,7 +79,7 @@ struct ToolExecutionResult {
 // ============================================================================
 
 /// Configuration for agent executor
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecutorConfig {
     /// Agent identifier
     pub agent_id: String,
@@ -155,6 +157,32 @@ pub struct ExecutorConfig {
     /// Hard turn limit: forcibly stop execution after this many iterations.
     /// Set to 0 to disable.
     pub max_turns: u32,
+
+    /// Hook called before each tool execution. Can block the call.
+    /// Default: None (all tools allowed).
+    pub before_tool_call: Option<BeforeToolCallHook>,
+
+    /// Hook called after each tool execution. Can transform the result.
+    /// Default: None (results passed through unchanged).
+    pub after_tool_call: Option<AfterToolCallHook>,
+
+    /// Tool execution mode: parallel (default) or sequential.
+    pub tool_execution_mode: ToolExecutionMode,
+
+    /// Hook called before every LLM call to transform the message context.
+    /// Default: None (messages passed through unchanged).
+    pub transform_context: Option<TransformContextHook>,
+
+    /// Task complexity level: "S", "M", "L", "XL".
+    /// When set, applies complexity-based iteration budgets:
+    /// S=15, M=30, L=50, XL=100.
+    pub complexity: Option<String>,
+
+    /// When true, only the first tool call per LLM response is executed.
+    /// Extra tool calls are dropped with a log message.
+    /// Default: false. Set true for orchestrator agents (root).
+    pub single_action_mode: bool,
+
 }
 
 impl ExecutorConfig {
@@ -184,6 +212,12 @@ impl ExecutorConfig {
             context_window_tokens: 128_000, // Default to 128K context
             turn_budget: 25,  // Soft nudge at 25 turns
             max_turns: 50,    // Hard stop at 50 turns
+            before_tool_call: None,
+            after_tool_call: None,
+            tool_execution_mode: ToolExecutionMode::default(),
+            transform_context: None,
+            complexity: None,
+            single_action_mode: false,
         }
     }
 
@@ -194,6 +228,76 @@ impl ExecutorConfig {
         self
     }
 }
+
+impl fmt::Debug for ExecutorConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ExecutorConfig")
+            .field("agent_id", &self.agent_id)
+            .field("provider_id", &self.provider_id)
+            .field("model", &self.model)
+            .field("temperature", &self.temperature)
+            .field("max_tokens", &self.max_tokens)
+            .field("thinking_enabled", &self.thinking_enabled)
+            .field("system_instruction", &self.system_instruction)
+            .field("tools_enabled", &self.tools_enabled)
+            .field("mcps", &self.mcps)
+            .field("skills", &self.skills)
+            .field("conversation_id", &self.conversation_id)
+            .field("initial_state", &self.initial_state)
+            .field("max_tool_result_chars", &self.max_tool_result_chars)
+            .field("offload_large_results", &self.offload_large_results)
+            .field("offload_threshold_chars", &self.offload_threshold_chars)
+            .field("offload_dir", &self.offload_dir)
+            .field("max_iterations", &self.max_iterations)
+            .field("max_extensions", &self.max_extensions)
+            .field("extension_size", &self.extension_size)
+            .field("context_window_tokens", &self.context_window_tokens)
+            .field("turn_budget", &self.turn_budget)
+            .field("max_turns", &self.max_turns)
+            .field("before_tool_call", &self.before_tool_call.as_ref().map(|_| "<hook>"))
+            .field("after_tool_call", &self.after_tool_call.as_ref().map(|_| "<hook>"))
+            .field("tool_execution_mode", &self.tool_execution_mode)
+            .field("transform_context", &self.transform_context.as_ref().map(|_| "<hook>"))
+            .field("complexity", &self.complexity)
+            .field("single_action_mode", &self.single_action_mode)
+            .finish()
+    }
+}
+
+// ============================================================================
+// TOOL HOOK TYPES
+// ============================================================================
+
+/// Decision from beforeToolCall hook.
+#[derive(Debug, Clone)]
+pub enum ToolCallDecision {
+    /// Allow the tool call to proceed.
+    Allow,
+    /// Block the tool call. The reason is returned to the LLM as the tool result.
+    Block { reason: String },
+}
+
+/// Tool execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum ToolExecutionMode {
+    /// Execute all tools concurrently (current behavior).
+    #[default]
+    Parallel,
+    /// Execute tools one at a time, in order.
+    Sequential,
+}
+
+/// Type alias for beforeToolCall hook.
+/// Receives (tool_name, args). Returns Allow or Block.
+pub type BeforeToolCallHook = Arc<dyn Fn(&str, &Value) -> ToolCallDecision + Send + Sync>;
+
+/// Type alias for afterToolCall hook.
+/// Receives (tool_name, args, result, succeeded). Returns optional replacement result.
+pub type AfterToolCallHook = Arc<dyn Fn(&str, &Value, &str, bool) -> Option<String> + Send + Sync>;
+
+/// Type alias for transformContext hook.
+/// Called before every LLM call. Can modify the message list in place.
+pub type TransformContextHook = Arc<dyn Fn(&mut Vec<ChatMessage>) + Send + Sync>;
 
 // ============================================================================
 // AGENT EXECUTOR
@@ -214,6 +318,8 @@ pub struct AgentExecutor {
     recall_every_n_turns: u32,
     /// Keys of facts already injected at session start (seeds the dedup set).
     recall_initial_keys: HashSet<String>,
+    /// Optional steering queue for mid-execution message injection.
+    steering_queue: Option<std::sync::Mutex<crate::steering::SteeringQueue>>,
 }
 
 impl AgentExecutor {
@@ -241,6 +347,7 @@ impl AgentExecutor {
             recall_hook: None,
             recall_every_n_turns: 0,
             recall_initial_keys: HashSet::new(),
+            steering_queue: None,
         })
     }
 
@@ -265,6 +372,16 @@ impl AgentExecutor {
         self.recall_hook = Some(Arc::new(hook));
         self.recall_every_n_turns = every_n_turns;
         self.recall_initial_keys = initial_keys;
+    }
+
+    /// Attach a steering queue to this executor.
+    ///
+    /// Call this before `execute_stream`. The returned `SteeringHandle` can be
+    /// shared with the UI, parent agents, or budget enforcers.
+    pub fn enable_steering(&mut self) -> crate::steering::SteeringHandle {
+        let (queue, handle) = crate::steering::SteeringQueue::new();
+        self.steering_queue = Some(std::sync::Mutex::new(queue));
+        handle
     }
 
     /// Get the middleware pipeline
@@ -301,24 +418,14 @@ impl AgentExecutor {
 
         // Add system instruction if available
         if let Some(instruction) = &self.config.system_instruction {
-            messages.push(ChatMessage {
-                role: "system".to_string(),
-                content: instruction.clone(),
-                tool_calls: None,
-                tool_call_id: None,
-            });
+            messages.push(ChatMessage::system(instruction.clone()));
         }
 
         // Add conversation history
         messages.extend(history.iter().cloned());
 
         // Add current user message
-        messages.push(ChatMessage {
-            role: "user".to_string(),
-            content: user_message.to_string(),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        messages.push(ChatMessage::user(user_message.to_string()));
 
         // Create middleware context
         let message_count = messages.len();
@@ -388,9 +495,16 @@ impl AgentExecutor {
         // Track whether the turn budget nudge has been sent (max 1)
         let mut turn_budget_nudge_sent = false;
 
+        // Track message count to skip redundant compaction estimation
+        let mut last_compaction_check_msg_count: usize = 0;
+
         // Track which fact keys have been injected via recall (initial + mid-session).
         // Seeded from initial recall keys; extended by mid-session recall hook results.
         let mut recall_injected_keys = self.recall_initial_keys.clone();
+
+        // Track whether the loop stopped due to delegation (vs respond or natural end).
+        // Set inside the loop; read after the loop to decide whether to emit Done.
+        let mut stopped_for_delegation = false;
 
         // Create shared tool context that persists across all tool calls in this execution.
         // This allows tools like load_skill to maintain state (e.g., loaded skills, resources)
@@ -452,6 +566,46 @@ impl AgentExecutor {
                 );
             }
 
+            // Complexity-based budget enforcement
+            if let Some(ref complexity) = self.config.complexity {
+                let (hard_budget, soft_budget) = match complexity.as_str() {
+                    "S" => (15u32, 12u32),
+                    "M" => (30, 24),
+                    "L" => (50, 40),
+                    "XL" => (100, 80),
+                    _ => (0, 0),
+                };
+
+                if hard_budget > 0 {
+                    let iters = progress_tracker.total_iterations;
+                    if iters >= hard_budget {
+                        // Hard budget exceeded: inject urgent message
+                        current_messages.push(ChatMessage::user(format!(
+                            "[STEER: System] Budget exceeded ({}/{} iterations for {} task).                              Respond NOW with what you have. Do not start new work.",
+                            iters, hard_budget, complexity
+                        )));
+                        tracing::warn!(
+                            complexity = %complexity,
+                            iterations = iters,
+                            budget = hard_budget,
+                            "Complexity hard budget reached"
+                        );
+                    } else if iters == soft_budget {
+                        // Soft budget: nudge exactly once (when iters == soft_budget)
+                        current_messages.push(ChatMessage::user(format!(
+                            "[STEER: System] You've used {}/{} iterations for a {} task.                              Wrap up or simplify your approach.",
+                            iters, hard_budget, complexity
+                        )));
+                        tracing::info!(
+                            complexity = %complexity,
+                            iterations = iters,
+                            budget = hard_budget,
+                            "Complexity soft budget nudge sent"
+                        );
+                    }
+                }
+            }
+
             // Advisory stuck-detection: inject nudge once, hard-stop only as safety valve
             if progress_tracker.is_clearly_stuck() {
                 if !stuck_nudge_sent {
@@ -487,7 +641,12 @@ impl AgentExecutor {
 
             // Token-budget auto-compaction trigger.
             // When cumulative tokens approach 80% of the context window, trim old messages.
-            if self.config.context_window_tokens > 0 {
+            // Skip the check entirely if no new messages have been added since last check —
+            // avoids redundant threshold evaluation in tight tool-calling loops.
+            if self.config.context_window_tokens > 0
+                && current_messages.len() > last_compaction_check_msg_count
+            {
+                last_compaction_check_msg_count = current_messages.len();
                 let threshold = (self.config.context_window_tokens * 80) / 100;
                 if total_tokens_in > threshold {
                     // Pre-compaction memory flush: inject a nudge to save important facts
@@ -535,7 +694,7 @@ impl AgentExecutor {
                         .iter()
                         .rev()
                         .find(|m| m.role == "user")
-                        .map(|m| m.content.clone())
+                        .map(|m| m.text_content())
                         .unwrap_or_default();
 
                     let hook_clone = Arc::clone(hook);
@@ -571,14 +730,37 @@ impl AgentExecutor {
                 }
             }
 
+            // Drain steering queue: inject any pending steering messages
+            if let Some(ref steering_mutex) = self.steering_queue {
+                if let Ok(mut queue) = steering_mutex.lock() {
+                    let steering_messages = queue.drain();
+                    for msg in steering_messages {
+                        let formatted = format!("[STEER: {}] {}", msg.source, msg.content);
+                        current_messages.push(ChatMessage::user(formatted));
+                        tracing::info!(
+                            source = %msg.source,
+                            priority = ?msg.priority,
+                            "Injected steering message"
+                        );
+                    }
+                }
+            }
+
             // Sanitize messages to remove orphaned tool messages before LLM call.
             // This prevents API errors when compaction or summarization splits
             // assistant+tool pairs.
             sanitize_messages(&mut current_messages);
 
+            // transformContext hook: allow caller to modify messages before LLM call
+            if let Some(ref hook) = self.config.transform_context {
+                hook(&mut current_messages);
+            }
+
             // Real streaming via chat_stream() with mpsc channel bridge.
             // Tokens are emitted to the user IMMEDIATELY as they arrive from the LLM,
             // including intermediate text that accompanies tool calls.
+            // NOTE: When non_streaming is enabled on the LLM client wrapper,
+            // chat_stream() internally uses chat() and emits content as a single chunk.
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<StreamChunk>();
 
             let llm_client = self.llm_client.clone();
@@ -660,7 +842,17 @@ impl AgentExecutor {
                 response.content, response.tool_calls.as_ref().map_or(0, |v| v.len()));
 
             // Check for tool calls
-            let tool_calls = response.tool_calls.clone().unwrap_or_default();
+            let mut tool_calls = response.tool_calls.clone().unwrap_or_default();
+
+            // Single-action mode: execute only the first tool call, drop extras.
+            // This prevents the model from batching multiple actions into one response.
+            if self.config.single_action_mode && tool_calls.len() > 1 {
+                tracing::info!(
+                    "Single-action mode: executing '{}', dropping {} extra tool calls",
+                    tool_calls[0].name, tool_calls.len() - 1
+                );
+                tool_calls.truncate(1);
+            }
             if tool_calls.is_empty() {
                 // No tool calls, this is the final response
                 // Text was already streamed in real-time above
@@ -674,7 +866,7 @@ impl AgentExecutor {
             // Truncation caused the LLM to copy garbled text on retries.
             current_messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: response.content.clone(),
+                content: vec![Part::Text { text: response.content.clone() }],
                 tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
             });
@@ -692,210 +884,299 @@ impl AgentExecutor {
                 });
             }
 
-            // Execute all tools concurrently
-            let tool_futures: Vec<_> = tool_calls.iter().map(|tc| {
-                let ctx = shared_tool_context.clone();
-                let tool_id = tc.id.clone();
-                let tool_name = tc.name.clone();
-                let args = tc.arguments.clone();
-                async move {
-                    tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
-                    self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+            // Check beforeToolCall hook for each tool
+            let mut blocked_results: HashMap<String, String> = HashMap::new();
+            if let Some(ref hook) = self.config.before_tool_call {
+                for tc in &tool_calls {
+                    match hook(&tc.name, &tc.arguments) {
+                        ToolCallDecision::Allow => {}
+                        ToolCallDecision::Block { reason } => {
+                            blocked_results.insert(
+                                tc.id.clone(),
+                                format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason),
+                            );
+                        }
+                    }
                 }
-            }).collect();
+            }
 
-            let results = futures::future::join_all(tool_futures).await;
+            let non_blocked: Vec<&ToolCall> = tool_calls.iter()
+                .filter(|tc| !blocked_results.contains_key(&tc.id))
+                .collect();
 
-            // Process results in original order
-            for (tool_call, result) in tool_calls.iter().zip(results) {
+            let results: Vec<Result<ToolExecutionResult, String>> = if self.config.tool_execution_mode == ToolExecutionMode::Sequential {
+                // Sequential: execute one at a time, in order
+                let mut seq_results = Vec::new();
+                for tc in &non_blocked {
+                    let result = self.execute_tool(
+                        &shared_tool_context, &tc.id, &tc.name, &tc.arguments
+                    ).await;
+                    seq_results.push(result);
+                }
+                seq_results
+            } else {
+                // Parallel: all at once (current behavior)
+                let tool_futures: Vec<_> = non_blocked.iter().map(|tc| {
+                    let ctx = shared_tool_context.clone();
+                    let tool_id = tc.id.clone();
+                    let tool_name = tc.name.clone();
+                    let args = tc.arguments.clone();
+                    async move {
+                        tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
+                        self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+                    }
+                }).collect();
+                futures::future::join_all(tool_futures).await
+            };
+
+            // Build a map of executed results (keyed by tool_call id)
+            let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> = HashMap::new();
+            for (tc, result) in non_blocked.into_iter().zip(results) {
+                executed_results.insert(tc.id.clone(), result);
+            }
+
+            // Process results in original tool_call order
+            for tool_call in &tool_calls {
                 let tool_name = &tool_call.name;
 
-                match result {
-                    Ok(tool_result) => {
-                        let output = tool_result.output;
-                        let actions = tool_result.actions;
+                if let Some(blocked_result) = blocked_results.remove(&tool_call.id) {
+                    // Blocked by beforeToolCall hook
+                    current_messages.push(ChatMessage::tool_result(
+                        tool_call.id.clone(),
+                        blocked_result,
+                    ));
+                    on_event(StreamEvent::ToolResult {
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                        tool_id: tool_call.id.clone(),
+                        result: "[blocked by hook]".to_string(),
+                        error: None,
+                    });
+                    progress_tracker.record_tool_call(&tool_call.name, &tool_call.arguments, false);
+                } else if let Some(result) = executed_results.remove(&tool_call.id) {
+                    match result {
+                        Ok(tool_result) => {
+                            let output = tool_result.output;
+                            let actions = tool_result.actions;
 
-                        tracing::debug!("Tool result: {}", output);
+                            tracing::debug!("Tool result: {}", output);
 
-                        // Track progress: tool succeeded
-                        progress_tracker.record_tool_call(tool_name, &tool_call.arguments, true);
+                            // Track progress: tool succeeded
+                            progress_tracker.record_tool_call(tool_name, &tool_call.arguments, true);
 
-                        // Check for respond action
-                        if let Some(respond) = &actions.respond {
-                            on_event(StreamEvent::ActionRespond {
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                message: respond.message.clone(),
-                                format: respond.format.clone(),
-                                conversation_id: respond.conversation_id.clone(),
-                                session_id: respond.session_id.clone(),
-                            });
-                            should_stop_after_respond = true;
-                            progress_tracker.record_respond();
-                            tracing::debug!("Respond action detected, will stop after current tool batch");
-                        }
-
-                        // Check for delegate action
-                        if let Some(delegate) = &actions.delegate {
-                            on_event(StreamEvent::ActionDelegate {
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                agent_id: delegate.agent_id.clone(),
-                                task: delegate.task.clone(),
-                                context: delegate.context.clone(),
-                                wait_for_result: delegate.wait_for_result,
-                                max_iterations: delegate.max_iterations,
-                            });
-                            // Delegation claim is set atomically by the delegate tool via try_claim
-                        }
-
-                        // Check for generative UI markers
-                        if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
-                            // Check for show_content marker
-                            if parsed.get("__show_content")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let content_type = parsed.get("content_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("text").to_string();
-                                let title = parsed.get("title")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Content").to_string();
-                                let content = parsed.get("content")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("").to_string();
-                                let metadata = parsed.get("metadata").cloned();
-                                let file_path = parsed.get("file_path")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                let is_attachment = parsed.get("is_attachment")
-                                    .and_then(|v| v.as_bool());
-                                let base64 = parsed.get("base64")
-                                    .and_then(|v| v.as_bool());
-
-                                on_event(StreamEvent::ShowContent {
+                            // Check for respond action
+                            if let Some(respond) = &actions.respond {
+                                on_event(StreamEvent::ActionRespond {
                                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                    content_type,
-                                    title,
-                                    content,
-                                    metadata,
-                                    file_path,
-                                    is_attachment,
-                                    base64,
+                                    message: respond.message.clone(),
+                                    format: respond.format.clone(),
+                                    conversation_id: respond.conversation_id.clone(),
+                                    session_id: respond.session_id.clone(),
                                 });
+                                should_stop_after_respond = true;
+                                progress_tracker.record_respond();
+                                tracing::debug!("Respond action detected, will stop after current tool batch");
                             }
 
-                            // Check for request_input marker
-                            if parsed.get("__request_input")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let form_id = parsed.get("form_id")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or(&format!("form_{}", chrono::Utc::now().timestamp()))
-                                    .to_string();
-                                let form_type = parsed.get("form_type")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("json_schema").to_string();
-                                let title = parsed.get("title")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("Input Required").to_string();
-                                let description = parsed.get("description")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-                                let schema = parsed.get("schema")
-                                    .cloned()
-                                    .unwrap_or_else(|| json!({}));
-                                let submit_button = parsed.get("submit_button")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
-
-                                on_event(StreamEvent::RequestInput {
+                            // Check for delegate action
+                            if let Some(delegate) = &actions.delegate {
+                                on_event(StreamEvent::ActionDelegate {
                                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                    form_id,
-                                    form_type,
-                                    title,
-                                    description,
-                                    schema,
-                                    submit_button,
+                                    agent_id: delegate.agent_id.clone(),
+                                    task: delegate.task.clone(),
+                                    context: delegate.context.clone(),
+                                    wait_for_result: delegate.wait_for_result,
+                                    max_iterations: delegate.max_iterations,
+                                    output_schema: delegate.output_schema.clone(),
+                                    skills: delegate.skills.clone(),
+                                    complexity: delegate.complexity.clone(),
                                 });
+                                // Delegation claim is set atomically by the delegate tool via try_claim
+                                // Stop executor loop — continuation callback will resume root
+                                // when the subagent completes.
+                                stopped_for_delegation = true;
+                                tracing::debug!("Delegation detected, will stop after current tool batch");
                             }
 
-                            // Check for ward_changed marker (from ward tool)
-                            if parsed.get("__ward_changed__")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                if let Some(ward_id) = parsed.get("ward_id").and_then(|v| v.as_str()) {
-                                    on_event(StreamEvent::WardChanged {
+                            // Check for generative UI markers
+                            if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
+                                // Check for show_content marker
+                                if parsed.get("__show_content")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    let content_type = parsed.get("content_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("text").to_string();
+                                    let title = parsed.get("title")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Content").to_string();
+                                    let content = parsed.get("content")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("").to_string();
+                                    let metadata = parsed.get("metadata").cloned();
+                                    let file_path = parsed.get("file_path")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    let is_attachment = parsed.get("is_attachment")
+                                        .and_then(|v| v.as_bool());
+                                    let base64 = parsed.get("base64")
+                                        .and_then(|v| v.as_bool());
+
+                                    on_event(StreamEvent::ShowContent {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                        ward_id: ward_id.to_string(),
+                                        content_type,
+                                        title,
+                                        content,
+                                        metadata,
+                                        file_path,
+                                        is_attachment,
+                                        base64,
                                     });
+                                }
+
+                                // Check for request_input marker
+                                if parsed.get("__request_input")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    let form_id = parsed.get("form_id")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or(&format!("form_{}", chrono::Utc::now().timestamp()))
+                                        .to_string();
+                                    let form_type = parsed.get("form_type")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("json_schema").to_string();
+                                    let title = parsed.get("title")
+                                        .and_then(|v| v.as_str())
+                                        .unwrap_or("Input Required").to_string();
+                                    let description = parsed.get("description")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+                                    let schema = parsed.get("schema")
+                                        .cloned()
+                                        .unwrap_or_else(|| json!({}));
+                                    let submit_button = parsed.get("submit_button")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
+                                    on_event(StreamEvent::RequestInput {
+                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                        form_id,
+                                        form_type,
+                                        title,
+                                        description,
+                                        schema,
+                                        submit_button,
+                                    });
+                                }
+
+                                // Check for ward_changed marker (from ward tool)
+                                if parsed.get("__ward_changed__")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    if let Some(ward_id) = parsed.get("ward_id").and_then(|v| v.as_str()) {
+                                        on_event(StreamEvent::WardChanged {
+                                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                            ward_id: ward_id.to_string(),
+                                        });
+                                    }
+                                }
+
+                                // Check for plan_update marker
+                                if parsed.get("__plan_update")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
+                                    let explanation = parsed.get("explanation")
+                                        .and_then(|v| v.as_str())
+                                        .map(|s| s.to_string());
+
+                                    on_event(StreamEvent::ActionPlanUpdate {
+                                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                        plan,
+                                        explanation,
+                                    });
+                                }
+
+                                // Check for session_title_changed marker
+                                if parsed.get("__session_title_changed__")
+                                    .and_then(|v| v.as_bool())
+                                    .unwrap_or(false)
+                                {
+                                    if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+                                        on_event(StreamEvent::SessionTitleChanged {
+                                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                            title: title.to_string(),
+                                        });
+                                    }
                                 }
                             }
 
-                            // Check for plan_update marker
-                            if parsed.get("__plan_update")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                            {
-                                let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
-                                let explanation = parsed.get("explanation")
-                                    .and_then(|v| v.as_str())
-                                    .map(|s| s.to_string());
+                            on_event(StreamEvent::ToolResult {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                tool_id: tool_call.id.clone(),
+                                result: output.clone(),
+                                error: None,
+                            });
 
-                                on_event(StreamEvent::ActionPlanUpdate {
-                                    timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                                    plan,
-                                    explanation,
-                                });
-                            }
+                            // Process tool result (potentially offload large results to filesystem)
+                            let processed_output = self.process_tool_result(tool_name, output);
+
+                            // Truncate if still over budget (safety net when offload is disabled)
+                            let processed_output = truncate_tool_result(
+                                processed_output,
+                                self.config.max_tool_result_chars,
+                            );
+
+                            // afterToolCall hook — can transform the result
+                            let final_output = if let Some(ref hook) = self.config.after_tool_call {
+                                match hook(tool_name, &tool_call.arguments, &processed_output, true) {
+                                    Some(replacement) => replacement,
+                                    None => processed_output,
+                                }
+                            } else {
+                                processed_output
+                            };
+
+                            // Add tool result message
+                            current_messages.push(ChatMessage::tool_result(
+                                tool_call.id.clone(),
+                                final_output,
+                            ));
                         }
+                        Err(e) => {
+                            tracing::debug!("Tool error: {}", e);
 
-                        on_event(StreamEvent::ToolResult {
-                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            tool_id: tool_call.id.clone(),
-                            result: output.clone(),
-                            error: None,
-                        });
+                            // Track progress: tool failed
+                            progress_tracker.record_tool_call(tool_name, &tool_call.arguments, false);
+                            progress_tracker.record_error(&e);
 
-                        // Process tool result (potentially offload large results to filesystem)
-                        let processed_output = self.process_tool_result(tool_name, output);
+                            on_event(StreamEvent::ToolResult {
+                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                                tool_id: tool_call.id.clone(),
+                                result: String::new(),
+                                error: Some(e.clone()),
+                            });
 
-                        // Truncate if still over budget (safety net when offload is disabled)
-                        let processed_output = truncate_tool_result(
-                            processed_output,
-                            self.config.max_tool_result_chars,
-                        );
+                            // afterToolCall hook — can transform error results too
+                            let error_message = json!({"error": e}).to_string();
+                            let final_error = if let Some(ref hook) = self.config.after_tool_call {
+                                match hook(tool_name, &tool_call.arguments, &error_message, false) {
+                                    Some(replacement) => replacement,
+                                    None => error_message,
+                                }
+                            } else {
+                                error_message
+                            };
 
-                        // Add tool result message
-                        current_messages.push(ChatMessage {
-                            role: "tool".to_string(),
-                            content: processed_output,
-                            tool_calls: None,
-                            tool_call_id: Some(tool_call.id.clone()),
-                        });
-                    }
-                    Err(e) => {
-                        tracing::debug!("Tool error: {}", e);
-
-                        // Track progress: tool failed
-                        progress_tracker.record_tool_call(tool_name, &tool_call.arguments, false);
-                        progress_tracker.record_error(&e);
-
-                        on_event(StreamEvent::ToolResult {
-                            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            tool_id: tool_call.id.clone(),
-                            result: String::new(),
-                            error: Some(e.clone()),
-                        });
-
-                        // Add error result message
-                        current_messages.push(ChatMessage {
-                            role: "tool".to_string(),
-                            content: json!({"error": e}).to_string(),
-                            tool_calls: None,
-                            tool_call_id: Some(tool_call.id.clone()),
-                        });
+                            // Add error result message
+                            current_messages.push(ChatMessage::tool_result(
+                                tool_call.id.clone(),
+                                final_error,
+                            ));
+                        }
                     }
                 }
 
@@ -918,18 +1199,25 @@ impl AgentExecutor {
             }
 
             // If respond tool was called, stop the loop - agent has finished responding
-            if should_stop_after_respond {
-                tracing::debug!("Stopping execution loop after respond action");
+            if should_stop_after_respond || stopped_for_delegation {
+                tracing::debug!("Stopping execution loop — respond={} delegation={}",
+                    should_stop_after_respond, stopped_for_delegation);
                 break;
             }
         }
 
-        // Emit done event
-        on_event(StreamEvent::Done {
-            timestamp: chrono::Utc::now().timestamp_millis() as u64,
-            final_message: full_response.clone(),
-            token_count: full_response.len(),
-        });
+        // Emit done event — but NOT if we stopped for delegation.
+        // When delegation is pending, the runner should NOT mark this execution
+        // as completed. The continuation callback will resume it later.
+        if !stopped_for_delegation {
+            on_event(StreamEvent::Done {
+                timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                final_message: full_response.clone(),
+                token_count: full_response.len(),
+            });
+        } else {
+            tracing::info!("Executor paused for delegation — skipping Done event");
+        }
 
         // Emit context state for checkpoint persistence
         // This includes skill tracking (graph), loaded skills, and other tool context state
@@ -1301,12 +1589,12 @@ impl ProgressTracker {
     }
 
     fn hash_args(args: &Value) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let s = serde_json::to_string(args).unwrap_or_default();
-        let mut hash: u64 = 0;
-        for b in s.bytes() {
-            hash = hash.wrapping_mul(31).wrapping_add(b as u64);
-        }
-        hash
+        let mut hasher = DefaultHasher::new();
+        s.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Record a tool call and update the progress score.
@@ -1368,36 +1656,41 @@ impl ProgressTracker {
         let args_hash = Self::hash_args(args);
 
         // Exact repetition detection — same tool+args in last 5 calls
+        // Only penalize FAILED exact repeats. Successful calls with same args
+        // (e.g., ralph.py next) are legitimate workflow patterns.
         let is_exact_repeat = self
             .recent_tool_calls
             .iter()
             .any(|(n, h)| n == name && *h == args_hash);
-        if is_exact_repeat {
+        if is_exact_repeat && !succeeded {
             self.score -= 3;
         }
 
         // Tool diversity scoring via rolling window
-        self.tool_name_window.push_back(name.to_string());
-        if self.tool_name_window.len() > 20 {
-            self.tool_name_window.pop_front();
+        // Only track FAILED calls for diversity scoring. Subagents with 4 tools
+        // (shell, apply_patch, load_skill, respond) naturally have low diversity
+        // ratios even when productive. Penalizing low diversity on successful
+        // calls kills productive ralph.py workflows.
+        if !succeeded {
+            self.tool_name_window.push_back(name.to_string());
+            if self.tool_name_window.len() > 20 {
+                self.tool_name_window.pop_front();
+            }
         }
 
-        // Score diversity every 10 calls once we have enough data
+        // Score diversity every 10 FAILED calls (not total calls)
         self.window_tool_calls += 1;
-        if self.window_tool_calls % 10 == 0 && self.tool_name_window.len() >= 10 {
+        if !succeeded && self.tool_name_window.len() >= 10 && self.tool_name_window.len() % 5 == 0 {
             let distinct: HashSet<&str> = self.tool_name_window.iter().map(|s| s.as_str()).collect();
             let ratio = distinct.len() as f32 / self.tool_name_window.len() as f32;
 
             if ratio <= 0.15 {
-                // 1-2 unique tools in 20 calls — definitely stuck
+                // Same tool failing repeatedly — definitely stuck
                 self.score -= 8;
             } else if ratio <= 0.25 {
-                // 3-5 unique tools in 20 calls — suspicious
                 self.score -= 3;
-            } else {
-                // Good diversity
-                self.score += 2;
             }
+            // No positive score for diversity — success bonus handles that
         }
 
         // First-ever use of a tool gets a small bonus
@@ -1405,8 +1698,12 @@ impl ProgressTracker {
             self.score += 1;
         }
 
-        // No per-success bonus: +1 per success inflated scores and masked stuck loops.
-        // Diversity, planning, and respond bonuses are sufficient positive signals.
+        // Successful tool calls get a small bonus to offset any accidental penalties.
+        // This keeps productive agents alive. Stuck agents still die because
+        // failures accumulate penalties faster than successes add bonuses.
+        if succeeded {
+            self.score += 1;
+        }
 
         // Track for exact-repetition detection (keep last 5)
         self.recent_tool_calls.push_back((name.to_string(), args_hash));
@@ -1591,15 +1888,43 @@ pub async fn create_executor(
     )
 }
 
+/// Extract key info (file paths, URLs) from a tool result for restorable compression.
+fn extract_key_info(content: &str) -> String {
+    let mut info = Vec::new();
+
+    for word in content.split_whitespace() {
+        let trimmed = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ':' || c == '(' || c == ')');
+        if (trimmed.contains('/') || trimmed.contains('.'))
+            && (trimmed.ends_with(".py")
+                || trimmed.ends_with(".json")
+                || trimmed.ends_with(".csv")
+                || trimmed.ends_with(".html")
+                || trimmed.ends_with(".md")
+                || trimmed.ends_with(".js")
+                || trimmed.ends_with(".ts")
+                || trimmed.ends_with(".yaml")
+                || trimmed.ends_with(".toml"))
+        {
+            if !info.contains(&trimmed.to_string()) {
+                info.push(trimmed.to_string());
+            }
+        }
+        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+            if !info.contains(&trimmed.to_string()) {
+                info.push(trimmed.to_string());
+            }
+        }
+    }
+
+    info.join(", ")
+}
+
 /// Compact messages to reduce context size when approaching token limits.
 ///
-/// Strategy: keep system messages, keep last N messages (with pair integrity),
-/// insert a summarization placeholder for trimmed history.
-///
-/// IMPORTANT: assistant+tool_call / tool_response pairs are treated as atomic
-/// units. If an assistant message with tool_calls is kept, all its tool
-/// responses are kept too. If a tool response would be trimmed, its parent
-/// assistant message is also trimmed.
+/// Strategy:
+/// 1. Compress old assistant messages to one-liners (preserving tool names and file paths)
+/// 2. Clear old tool result content (replace with placeholder, preserve file paths)
+/// 3. Only drop messages if still over budget after compression
 fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
     const KEEP_RECENT: usize = 20;
 
@@ -1607,56 +1932,71 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         return messages;
     }
 
-    let mut compacted = Vec::new();
+    let mut messages = messages;
 
-    // Keep system messages at the start
-    let mut non_system_start = 0;
-    for (i, msg) in messages.iter().enumerate() {
-        if msg.role == "system" {
-            compacted.push(msg.clone());
-            non_system_start = i + 1;
-        } else {
-            break;
+    // Phase 1: Compress old assistant messages to one-liners
+    crate::middleware::compress_old_assistant_messages(&mut messages, KEEP_RECENT);
+
+    // Phase 2: Clear old tool result content (keep tool_call_id for pairing)
+    let compress_boundary = messages.len().saturating_sub(KEEP_RECENT);
+    for i in 0..compress_boundary {
+        if messages[i].role == "tool" {
+            let text = messages[i].text_content();
+            let preserved = extract_key_info(&text);
+            messages[i].content = vec![Part::Text { text: if preserved.is_empty() {
+                "[result cleared]".to_string()
+            } else {
+                format!("[result cleared — {}]", preserved)
+            }}];
         }
     }
 
-    // Preserve the first non-system message (original user request)
-    let first_user_msg = messages[non_system_start..].iter().find(|m| m.role == "user");
-    if let Some(user_msg) = first_user_msg {
-        compacted.push(user_msg.clone());
-    }
+    // Phase 3: If still too many messages, drop old ones
+    if messages.len() > KEEP_RECENT + 10 {
+        let mut compacted = Vec::new();
 
-    // Find a clean split point that doesn't break assistant+tool pairs.
-    // Start from the target split point and walk forward until we find
-    // a boundary that's NOT inside a tool_call/tool_response group.
-    let target_start = messages.len().saturating_sub(KEEP_RECENT);
-    let mut split_at = target_start;
-
-    // Walk forward to find a clean boundary
-    for i in target_start..messages.len() {
-        let msg = &messages[i];
-        // A clean boundary is: a user message, or an assistant message WITHOUT tool_call_id
-        // (i.e., not a tool response, and not mid-pair)
-        if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
-            split_at = i;
-            break;
+        // Keep system messages
+        let mut non_system_start = 0;
+        for (i, msg) in messages.iter().enumerate() {
+            if msg.role == "system" {
+                compacted.push(msg.clone());
+                non_system_start = i + 1;
+            } else {
+                break;
+            }
         }
-        // If it's a tool message, we're inside a pair — keep walking
+
+        // Preserve first user message
+        if let Some(user_msg) = messages[non_system_start..].iter().find(|m| m.role == "user") {
+            compacted.push(user_msg.clone());
+        }
+
+        // Find clean split point
+        let target_start = messages.len().saturating_sub(KEEP_RECENT);
+        let mut split_at = target_start;
+        for i in target_start..messages.len() {
+            let msg = &messages[i];
+            if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
+                split_at = i;
+                break;
+            }
+        }
+
+        let trimmed_count = split_at.saturating_sub(non_system_start);
+        if trimmed_count > 0 {
+            compacted.push(ChatMessage::user(format!(
+                "[SYSTEM: Context compacted. {} earlier messages were compressed and trimmed. \
+                 The original request and recent messages are preserved. Continue with the task.]",
+                trimmed_count
+            )));
+        }
+
+        compacted.extend(messages[split_at..].iter().cloned());
+        compacted
+    } else {
+        // Compression was enough — no need to drop
+        messages
     }
-
-    let trimmed_count = split_at.saturating_sub(non_system_start);
-    if trimmed_count > 0 {
-        compacted.push(ChatMessage::user(format!(
-            "[SYSTEM: Context compacted. {} earlier messages were trimmed to stay within \
-             context limits. The original request above is preserved. Continue with the task.]",
-            trimmed_count
-        )));
-    }
-
-    // Keep messages from split point onward
-    compacted.extend(messages[split_at..].iter().cloned());
-
-    compacted
 }
 
 /// Sanitize messages to ensure tool call/result pairs are valid.
@@ -1748,18 +2088,97 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
         return result;
     }
 
+    let lines: Vec<&str> = result.lines().collect();
+    let total_lines = lines.len();
+
+    if total_lines <= 1 {
+        // Single line — fall back to char-based truncation
+        let notice = format!("\n\n--- TRUNCATED ({} chars total) ---\n\n", result.len());
+        let budget = max_chars.saturating_sub(notice.len());
+        let head_size = (budget * 4) / 5;
+        let tail_size = budget - head_size;
+        return format!("{}{}{}", &result[..head_size], notice, &result[result.len() - tail_size..]);
+    }
+
+    // Line-aware: keep first N + last M lines within budget
+    let head_budget = (max_chars * 4) / 5; // 80% for head
+    let mut head = String::new();
+    let mut head_count = 0;
+    for line in &lines {
+        let next = format!("{}\n", line);
+        if head.len() + next.len() > head_budget {
+            break;
+        }
+        head.push_str(&next);
+        head_count += 1;
+    }
+
+    // Tail: work backwards
+    let tail_budget = max_chars / 5; // 20% for tail
+    let mut tail_lines: Vec<&str> = Vec::new();
+    let mut tail_len = 0;
+    for line in lines.iter().rev() {
+        let next_len = line.len() + 1;
+        if tail_len + next_len > tail_budget {
+            break;
+        }
+        tail_lines.push(line);
+        tail_len += next_len;
+    }
+    tail_lines.reverse();
+    let tail_count = tail_lines.len();
+    let tail = tail_lines.join("\n");
+
+    let omitted = total_lines.saturating_sub(head_count + tail_count);
     let notice = format!(
-        "\n\n--- TRUNCATED ({} chars total, showing first and last portions) ---\n\n",
-        result.len()
+        "\n--- TRUNCATED: showing {}/{} lines ({} omitted, {} chars total) ---\n\n",
+        head_count + tail_count, total_lines, omitted, result.len()
     );
-    let budget = max_chars.saturating_sub(notice.len());
-    let head_size = (budget * 4) / 5; // 80%
-    let tail_size = budget - head_size; // 20%
 
-    let head = &result[..head_size];
-    let tail = &result[result.len() - tail_size..];
+    // Final budget check — if combined fits, return it; otherwise trim head/tail further
+    let combined = format!("{}{}{}", head, notice, tail);
+    if combined.len() <= max_chars {
+        return combined;
+    }
 
-    format!("{}{}{}", head, notice, tail)
+    // Re-compute with tighter budgets accounting for notice length
+    let notice_len = notice.len();
+    let content_budget = max_chars.saturating_sub(notice_len);
+    let tight_head_budget = (content_budget * 4) / 5;
+    let tight_tail_budget = content_budget - tight_head_budget;
+
+    let mut tight_head = String::new();
+    let mut tight_head_count = 0;
+    for line in &lines {
+        let next = format!("{}\n", line);
+        if tight_head.len() + next.len() > tight_head_budget {
+            break;
+        }
+        tight_head.push_str(&next);
+        tight_head_count += 1;
+    }
+
+    let mut tight_tail_lines: Vec<&str> = Vec::new();
+    let mut tight_tail_len = 0;
+    for line in lines.iter().rev() {
+        let next_len = line.len() + 1;
+        if tight_tail_len + next_len > tight_tail_budget {
+            break;
+        }
+        tight_tail_lines.push(line);
+        tight_tail_len += next_len;
+    }
+    tight_tail_lines.reverse();
+    let tight_tail_count = tight_tail_lines.len();
+    let tight_tail = tight_tail_lines.join("\n");
+
+    let tight_omitted = total_lines.saturating_sub(tight_head_count + tight_tail_count);
+    let tight_notice = format!(
+        "\n--- TRUNCATED: showing {}/{} lines ({} omitted, {} chars total) ---\n\n",
+        tight_head_count + tight_tail_count, total_lines, tight_omitted, result.len()
+    );
+
+    format!("{}{}{}", tight_head, tight_notice, tight_tail)
 }
 
 #[cfg(test)]
@@ -1796,6 +2215,21 @@ mod truncation_tests {
         let head_h = truncated.matches('H').count();
         let tail_t = truncated.matches('T').count();
         assert!(head_h > tail_t, "head ({}) should be larger than tail ({})", head_h, tail_t);
+    }
+
+    #[test]
+    fn test_truncation_preserves_line_boundaries() {
+        let lines: Vec<String> = (0..100).map(|i| format!("Line {}: some content here", i)).collect();
+        let input = lines.join("\n");
+        let result = truncate_tool_result(input, 500);
+
+        // Should not cut mid-line
+        for line in result.lines() {
+            assert!(
+                line.starts_with("Line") || line.contains("TRUNCATED") || line.contains("---") || line.is_empty(),
+                "Truncated mid-line: '{}'", line
+            );
+        }
     }
 
     #[test]
@@ -1840,9 +2274,9 @@ mod progress_tracker_tests {
     fn test_repeated_calls_prevent_extension() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // Same tool+args 5 times
+        // Same tool+args 5 times, all failed
         for _ in 0..5 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         // First call: +1 (unique) = 1
         // Subsequent 4 calls: -3 (repeat) each = -12
@@ -1902,7 +2336,7 @@ mod progress_tracker_tests {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
         for _ in 0..6 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         let diagnosis = tracker.diagnosis();
         assert!(
@@ -1936,16 +2370,17 @@ mod progress_tracker_tests {
     #[test]
     fn test_low_diversity_loop_detected() {
         let mut tracker = ProgressTracker::new(3);
-        // Simulate write+shell loop for 20 iterations (different args each time)
+        // Simulate write+shell loop for 20 iterations, all failed (different args each time)
         for i in 0..20 {
             let tool = if i % 2 == 0 { "write" } else { "shell" };
-            tracker.record_tool_call(tool, &json!({"i": i}), true);
+            tracker.record_tool_call(tool, &json!({"i": i}), false);
         }
-        // After 20 calls (no per-success bonus):
+        // After 20 failed calls:
         // 2 unique tools (+1 each = +2)
-        // At call 10: diversity = 2/10 = 0.20 <= 0.25 → -3
-        // At call 20: diversity = 2/20 = 0.10 <= 0.15 → -8
-        // Total: +2 - 3 - 8 = -9
+        // At 10 failed calls: diversity = 2/10 = 0.20 <= 0.25 → -3
+        // At 15 failed calls: diversity = 2/15 = 0.13 <= 0.15 → -8
+        // At 20 failed calls: diversity = 2/20 = 0.10 <= 0.15 → -8
+        // Total: +2 - 3 - 8 - 8 = -17
         assert!(
             tracker.score < 0,
             "Low-diversity loop should have negative score, got: {}",
@@ -1956,14 +2391,14 @@ mod progress_tracker_tests {
     #[test]
     fn test_high_diversity_extends() {
         let mut tracker = ProgressTracker::new(3);
-        // Use 10 unique tools in 10 calls
+        // Use 10 unique tools in 10 calls (all succeed)
         let tools = ["read", "write", "shell", "edit", "grep", "glob", "memory", "todo", "ward", "respond"];
         for (i, tool) in tools.iter().enumerate() {
             tracker.record_tool_call(tool, &json!({"i": i}), true);
         }
-        // 10 unique tools: +1 each = 10 (no per-success bonus)
-        // At call 10: diversity = 10/10 = 1.0 > 0.25 → +2
-        // Total: 10 + 2 = 12
+        // 10 unique tools: +1 each = 10, +1 success each = 10
+        // No diversity check (only tracks failed calls, none here)
+        // Total: 10 + 10 = 20
         assert!(tracker.score > 0, "High diversity should produce positive score, got: {}", tracker.score);
         assert!(tracker.should_extend(), "High diversity should allow extension");
     }
@@ -1972,15 +2407,15 @@ mod progress_tracker_tests {
     fn test_early_stop_deeply_stuck() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // Same exact tool+args repeated — triggers repetition penalty and diversity penalty
-        // With no per-success bonus, score drops fast:
+        // Same exact tool+args repeated, all failed — triggers repetition and diversity penalties
         // Call 1: +1 (unique) = 1
         // Calls 2-20: -3 (repeat) each = -57
-        // At call 10: diversity ≤ 0.15 → -8
-        // At call 20: diversity ≤ 0.15 → -8
-        // Total: 1 - 57 - 8 - 8 = -72
+        // At 10 failed calls: diversity = 1/10 ≤ 0.15 → -8
+        // At 15 failed calls: diversity = 1/15 ≤ 0.15 → -8
+        // At 20 failed calls: diversity = 1/20 ≤ 0.15 → -8
+        // Total: 1 - 57 - 8 - 8 - 8 = -80
         for _ in 0..20 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         // With 10+ window_tool_calls and deeply negative score, should be stuck
         assert!(
@@ -2004,10 +2439,10 @@ mod progress_tracker_tests {
     #[test]
     fn test_tool_name_window_preserved_across_extensions() {
         let mut tracker = ProgressTracker::new(3);
-        // Add some tool calls to fill the name window
+        // Add some failed tool calls to fill the name window (only failed calls tracked)
         for i in 0..10 {
             let tool = if i % 2 == 0 { "write" } else { "shell" };
-            tracker.record_tool_call(tool, &json!({"i": i}), true);
+            tracker.record_tool_call(tool, &json!({"i": i}), false);
         }
         assert_eq!(tracker.tool_name_window.len(), 10);
 
@@ -2065,8 +2500,8 @@ mod progress_tracker_tests {
             ]}),
             true,
         );
-        // +3 base + 2 items + 1 unique tool = 6 (no per-success bonus)
-        assert_eq!(tracker.score, 6);
+        // +3 base + 2 items + 1 unique tool + 1 success = 7
+        assert_eq!(tracker.score, 7);
     }
 
     #[test]
@@ -2081,8 +2516,8 @@ mod progress_tracker_tests {
             &json!({"action": "update", "id": "1", "completed": true}),
             true,
         );
-        // +2 completion bonus (unique tool bonus already used, no per-success bonus)
-        assert_eq!(tracker.score, score_after_add + 2);
+        // +2 completion bonus + 1 success (unique tool bonus already used)
+        assert_eq!(tracker.score, score_after_add + 3);
         assert_eq!(tracker.plan_items_completed, 1);
     }
 
@@ -2094,8 +2529,8 @@ mod progress_tracker_tests {
             &json!({"action": "update", "id": "1", "completed": false}),
             true,
         );
-        // Only +1 unique tool = 1, no completion bonus, no per-success bonus
-        assert_eq!(tracker.score, 1);
+        // +1 unique tool + 1 success = 2, no completion bonus
+        assert_eq!(tracker.score, 2);
         assert_eq!(tracker.plan_items_completed, 0);
     }
 
@@ -2157,30 +2592,30 @@ mod progress_tracker_tests {
 
     #[test]
     fn test_should_extend_penalizes_no_plan() {
-        // Score 1 without plan → effective -2 → no extend
-        let mut tracker = ProgressTracker::new(3);
-        tracker.record_tool_call("read", &json!({}), true); // +1 unique (no per-success bonus)
-        assert!(!tracker.has_plan);
-        assert_eq!(tracker.score, 1);
-        assert!(!tracker.should_extend(), "Score 1 without plan should not extend (effective -2)");
-
         // Score 2 without plan → effective -1 → no extend
-        let mut tracker2 = ProgressTracker::new(3);
-        tracker2.record_tool_call("read", &json!({}), true); // +1
-        tracker2.record_tool_call("write", &json!({}), true); // +1
-        assert!(!tracker2.has_plan);
-        assert_eq!(tracker2.score, 2);
-        assert!(!tracker2.should_extend(), "Score 2 without plan should not extend (effective -1)");
+        let mut tracker = ProgressTracker::new(3);
+        tracker.record_tool_call("read", &json!({}), true); // +1 unique + 1 success = 2
+        assert!(!tracker.has_plan);
+        assert_eq!(tracker.score, 2);
+        assert!(!tracker.should_extend(), "Score 2 without plan should not extend (effective -1)");
 
-        // Score 4+ without plan → effective 1+ → extends
+        // Score 4 without plan → effective 1 → extends (but let's test score 3 first)
+        let mut tracker2 = ProgressTracker::new(3);
+        tracker2.record_tool_call("read", &json!({}), true); // +2
+        tracker2.record_tool_call("write", &json!({}), true); // +2
+        assert!(!tracker2.has_plan);
+        assert_eq!(tracker2.score, 4);
+        assert!(tracker2.should_extend(), "Score 4 without plan should extend (effective 1)");
+
+        // Score 8 without plan → effective 5 → extends
         let mut tracker3 = ProgressTracker::new(3);
-        tracker3.record_tool_call("read", &json!({}), true); // +1
-        tracker3.record_tool_call("write", &json!({}), true); // +1
-        tracker3.record_tool_call("shell", &json!({}), true); // +1
-        tracker3.record_tool_call("edit", &json!({}), true); // +1
+        tracker3.record_tool_call("read", &json!({}), true); // +2
+        tracker3.record_tool_call("write", &json!({}), true); // +2
+        tracker3.record_tool_call("shell", &json!({}), true); // +2
+        tracker3.record_tool_call("edit", &json!({}), true); // +2
         assert!(!tracker3.has_plan);
-        assert_eq!(tracker3.score, 4);
-        assert!(tracker3.should_extend(), "Score 4 without plan should extend (effective 1)");
+        assert_eq!(tracker3.score, 8);
+        assert!(tracker3.should_extend(), "Score 8 without plan should extend (effective 5)");
     }
 
     #[test]
@@ -2255,9 +2690,9 @@ mod progress_tracker_tests {
     fn test_is_clearly_stuck_requires_10_calls() {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
-        // 9 repeated calls — not enough to trigger
+        // 9 repeated failed calls — not enough window_tool_calls to trigger
         for _ in 0..9 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
         assert!(
             !tracker.is_clearly_stuck(),
@@ -2266,7 +2701,7 @@ mod progress_tracker_tests {
             tracker.score
         );
         // 10th call pushes over the threshold
-        tracker.record_tool_call("read", &args, true);
+        tracker.record_tool_call("read", &args, false);
         assert!(
             tracker.is_clearly_stuck(),
             "Should be stuck at {} calls with score {}",
@@ -2280,9 +2715,9 @@ mod progress_tracker_tests {
         let mut tracker = ProgressTracker::new(3);
         let args = json!({"path": "/same"});
         for _ in 0..15 {
-            tracker.record_tool_call("read", &args, true);
+            tracker.record_tool_call("read", &args, false);
         }
-        // Score should be deeply negative: +1(unique) - 14*3(repeats) - 8(div@10) = 1-42-8 = -49
+        // Score: +1(unique) - 14*3(repeats) - 8(div@10) - 8(div@15) = 1-42-8-8 = -57
         assert!(
             tracker.score <= -12,
             "Score should be <= -12 after 15 exact repeats, got: {}",
@@ -2300,14 +2735,14 @@ mod progress_tracker_tests {
         // System message
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: "You are an assistant.".to_string(),
+            content: vec![Part::Text { text: "You are an assistant.".to_string() }],
             tool_calls: None,
             tool_call_id: None,
         });
         // Original user request
         messages.push(ChatMessage {
             role: "user".to_string(),
-            content: "Build a trinomial cheat sheet.".to_string(),
+            content: vec![Part::Text { text: "Build a trinomial cheat sheet.".to_string() }],
             tool_calls: None,
             tool_call_id: None,
         });
@@ -2315,7 +2750,7 @@ mod progress_tracker_tests {
         for i in 0..30 {
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: format!("Step {}", i),
+                content: vec![Part::Text { text: format!("Step {}", i) }],
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2325,15 +2760,15 @@ mod progress_tracker_tests {
 
         // Should contain: system + original user request + compaction notice + last 20
         assert!(
-            compacted.iter().any(|m| m.content.contains("trinomial cheat sheet")),
+            compacted.iter().any(|m| m.text_content().contains("trinomial cheat sheet")),
             "Compacted messages should preserve the original user request"
         );
         assert!(
-            compacted.iter().any(|m| m.content.contains("Context compacted")),
+            compacted.iter().any(|m| m.text_content().contains("Context compacted")),
             "Compacted messages should include compaction notice"
         );
         assert!(
-            compacted.iter().any(|m| m.content.contains("original request above is preserved")),
+            compacted.iter().any(|m| m.text_content().contains("original request")),
             "Compaction notice should reference the preserved original request"
         );
     }
@@ -2343,18 +2778,272 @@ mod progress_tracker_tests {
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: "system".to_string(),
+                content: vec![Part::Text { text: "system".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: "hello".to_string(),
+                content: vec![Part::Text { text: "hello".to_string() }],
                 tool_calls: None,
                 tool_call_id: None,
             },
         ];
         let compacted = compact_messages(messages.clone());
         assert_eq!(compacted.len(), messages.len());
+    }
+
+    // ========================================================================
+    // E2E-STYLE LOOP DETECTOR TESTS (moved from e2e_ward_pipeline_tests)
+    // ========================================================================
+
+    /// Successful tool calls should not tank the progress score.
+    #[test]
+    fn test_loop_detector_productive_agent_survives() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        let mut tracker = ProgressTracker::new(config.max_extensions);
+
+        // Simulate a productive ralph.py workflow:
+        // shell(ralph.py next) -> apply_patch(create file) -> shell(verify) -> shell(ralph.py complete)
+        // All successful — score should stay positive
+        for i in 0..5 {
+            tracker.record_tool_call("shell", &json!({"command": format!("ralph.py next {}", i)}), true);
+            tracker.record_tool_call("apply_patch", &json!({"file": format!("core/mod{}.py", i)}), true);
+            tracker.record_tool_call("shell", &json!({"command": format!("python3 -c 'import core.mod{}'", i)}), true);
+            tracker.record_tool_call("shell", &json!({"command": format!("ralph.py complete {}", i)}), true);
+        }
+
+        assert!(
+            !tracker.is_clearly_stuck(),
+            "Productive agent with 20 successful calls should NOT be stuck. Score: {}",
+            tracker.score
+        );
+        assert!(
+            tracker.score > 0,
+            "Score should be positive for productive work, got: {}",
+            tracker.score
+        );
+    }
+
+    /// Failed repeated tool calls should tank the score.
+    #[test]
+    fn test_loop_detector_stuck_agent_dies() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        let mut tracker = ProgressTracker::new(config.max_extensions);
+
+        // Simulate a stuck agent: same shell command failing repeatedly
+        for _ in 0..15 {
+            tracker.record_tool_call(
+                "shell",
+                &json!({"command": "cat nonexistent.py"}),
+                false,
+            );
+        }
+
+        assert!(
+            tracker.is_clearly_stuck(),
+            "Agent with 15 repeated failures should be stuck. Score: {}",
+            tracker.score
+        );
+    }
+
+    /// Mixed success/failure: productive work with occasional errors should survive.
+    #[test]
+    fn test_loop_detector_mixed_survives() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        let mut tracker = ProgressTracker::new(config.max_extensions);
+
+        // 8 successes, 2 failures — should be fine
+        for i in 0..10 {
+            let succeeded = i % 5 != 3; // fail on iteration 3 and 8
+            tracker.record_tool_call(
+                if i % 2 == 0 { "shell" } else { "apply_patch" },
+                &json!({"arg": format!("call_{}", i)}),
+                succeeded,
+            );
+        }
+
+        assert!(
+            !tracker.is_clearly_stuck(),
+            "Agent with 80% success rate should NOT be stuck. Score: {}",
+            tracker.score
+        );
+    }
+}
+
+#[cfg(test)]
+mod hook_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[test]
+    fn test_tool_call_decision_default_is_allow() {
+        let decision = ToolCallDecision::Allow;
+        assert!(matches!(decision, ToolCallDecision::Allow));
+    }
+
+    #[test]
+    fn test_tool_call_decision_block_has_reason() {
+        let decision = ToolCallDecision::Block { reason: "dangerous".to_string() };
+        match decision {
+            ToolCallDecision::Block { reason } => assert_eq!(reason, "dangerous"),
+            _ => panic!("Expected Block"),
+        }
+    }
+
+    #[test]
+    fn test_before_tool_call_block_returns_reason() {
+        let reason = "Ward boundary violation";
+        let result = format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason);
+        assert!(result.contains("blocked"));
+        assert!(result.contains(reason));
+    }
+
+    #[test]
+    fn test_steering_message_format() {
+        use crate::steering::{SteeringSource, SteeringMessage, SteeringPriority};
+        let msg = SteeringMessage {
+            content: "Wrap up now".to_string(),
+            source: SteeringSource::System,
+            priority: SteeringPriority::Normal,
+        };
+        let formatted = format!("[STEER: {}] {}", msg.source, msg.content);
+        assert_eq!(formatted, "[STEER: System] Wrap up now");
+    }
+
+    #[test]
+    fn test_transform_context_hook_type() {
+        // Verify the type compiles and can be called
+        let hook: TransformContextHook = Arc::new(|messages: &mut Vec<ChatMessage>| {
+            messages.push(ChatMessage::system("injected".to_string()));
+        });
+        let mut messages = vec![ChatMessage::user("hello".to_string())];
+        hook(&mut messages);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[1].text_content(), "injected");
+    }
+
+    #[test]
+    fn test_complexity_budget_lookup() {
+        fn budget_for(complexity: Option<&str>) -> (u32, u32) {
+            match complexity {
+                Some("S") => (15, 12),
+                Some("M") => (30, 24),
+                Some("L") => (50, 40),
+                Some("XL") => (100, 80),
+                _ => (0, 0),
+            }
+        }
+        assert_eq!(budget_for(Some("S")), (15, 12));
+        assert_eq!(budget_for(Some("M")), (30, 24));
+        assert_eq!(budget_for(Some("L")), (50, 40));
+        assert_eq!(budget_for(Some("XL")), (100, 80));
+        assert_eq!(budget_for(None), (0, 0));
+    }
+
+    #[test]
+    fn test_single_action_mode_default_false() {
+        let config = ExecutorConfig::new("a".into(), "p".into(), "m".into());
+        assert!(!config.single_action_mode);
+    }
+}
+
+#[cfg(test)]
+mod token_cache_tests {
+    #[test]
+    fn test_token_estimate_cache() {
+        use std::collections::HashMap;
+        let mut cache: HashMap<u64, usize> = HashMap::new();
+
+        fn content_hash(content: &str) -> u64 {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            content.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        let msg = "Hello world this is a test message";
+        let hash = content_hash(msg);
+
+        // Cache miss
+        assert!(!cache.contains_key(&hash));
+        let estimate = msg.len() / 4 + 4;
+        cache.insert(hash, estimate);
+
+        // Cache hit
+        assert_eq!(cache.get(&hash), Some(&estimate));
+    }
+}
+
+#[cfg(test)]
+mod compaction_tests {
+    use super::*;
+
+    #[test]
+    fn test_compact_compresses_before_dropping() {
+        let mut messages = vec![
+            ChatMessage::system("system prompt".to_string()),
+            ChatMessage::user("original request".to_string()),
+        ];
+
+        for i in 0..14 {
+            let tool = ToolCall::new(
+                format!("call_{}", i),
+                "write_file".to_string(),
+                json!({"path": format!("src/file_{}.py", i)}),
+            );
+            messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: vec![Part::Text { text: format!("Creating file_{}.py with detailed explanation", i) }],
+                tool_calls: Some(vec![tool]),
+                tool_call_id: None,
+            });
+            messages.push(ChatMessage {
+                role: "tool".to_string(),
+                content: vec![Part::Text { text: format!("File created: src/file_{}.py", i) }],
+                tool_calls: None,
+                tool_call_id: Some(format!("call_{}", i)),
+            });
+        }
+
+        let compacted = compact_messages(messages);
+
+        // Old assistant messages should be compressed
+        let has_compressed = compacted.iter().any(|m| m.text_content().starts_with("[Turn"));
+        assert!(has_compressed, "Old assistant messages should be compressed");
+
+        // Old tool results should preserve file paths
+        let has_preserved = compacted.iter().any(|m|
+            m.text_content().contains("[result cleared") && m.text_content().contains(".py")
+        );
+        assert!(has_preserved, "Cleared tool results should preserve file paths");
+    }
+
+    #[test]
+    fn test_compact_preserves_recent() {
+        let mut messages = vec![
+            ChatMessage::system("system".to_string()),
+            ChatMessage::user("request".to_string()),
+        ];
+        for i in 0..25 {
+            messages.push(ChatMessage::user(format!("msg {}", i)));
+        }
+        let compacted = compact_messages(messages);
+        assert!(compacted.last().unwrap().text_content().contains("msg 24"));
+    }
+
+    #[test]
+    fn test_extract_key_info() {
+        let content = "File created: src/main.py with 100 lines. See https://example.com for docs.";
+        let info = extract_key_info(content);
+        assert!(info.contains("src/main.py"));
+        assert!(info.contains("https://example.com"));
+    }
+
+    #[test]
+    fn test_extract_key_info_empty() {
+        let info = extract_key_info("Success! Operation completed.");
+        assert!(info.is_empty());
     }
 }

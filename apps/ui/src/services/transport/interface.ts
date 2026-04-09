@@ -31,6 +31,7 @@ import type {
   ToolSettings,
   LogSettings,
   UpdateLogSettingsRequest,
+  ExecutionSettings,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -70,6 +71,8 @@ import type {
   GraphSubgraphResponse,
   GraphNeighborOptions,
   GraphSubgraphOptions,
+  SetupStatus,
+  SessionState,
 } from "./types";
 
 // ============================================================================
@@ -148,6 +151,7 @@ export interface Transport {
 
   /** Test a provider connection */
   testProvider(provider: CreateProviderRequest): Promise<TransportResult<ProviderTestResult>>;
+  testProviderById(id: string): Promise<TransportResult<ProviderTestResult>>;
 
   /** Set a provider as the default */
   setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>>;
@@ -233,6 +237,22 @@ export interface Transport {
   /** Update log settings */
   updateLogSettings(settings: UpdateLogSettingsRequest): Promise<TransportResult<LogSettings & { restartRequired: boolean }>>;
 
+  /** Get execution settings */
+  getExecutionSettings(): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>>;
+
+  /** Update execution settings */
+  updateExecutionSettings(settings: ExecutionSettings): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>>;
+
+  // =========================================================================
+  // Setup Wizard Operations
+  // =========================================================================
+
+  /** Check if first-time setup is needed */
+  getSetupStatus(): Promise<TransportResult<SetupStatus>>;
+
+  /** Get sanitized MCP server templates for wizard */
+  getMcpDefaults(): Promise<TransportResult<McpServerConfig[]>>;
+
   // =========================================================================
   // Execution Log Operations
   // =========================================================================
@@ -242,6 +262,9 @@ export interface Transport {
 
   /** Get a session with its logs */
   getLogSession(sessionId: string): Promise<TransportResult<SessionDetail>>;
+
+  /** Get structured session state snapshot for reconnection */
+  getSessionState(sessionId: string): Promise<TransportResult<SessionState>>;
 
   /** Delete a log session */
   deleteLogSession(sessionId: string): Promise<TransportResult<void>>;
@@ -386,11 +409,24 @@ export interface Transport {
   /** Search memory facts for an agent */
   searchMemory(agentId: string, query: string, filter?: MemoryFilter): Promise<TransportResult<MemoryListResponse>>;
 
+  /** Search ALL memory facts across all agents (server-side FTS5) */
+  searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>>;
+
   /** Get a single memory fact */
   getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>>;
 
   /** Delete a memory fact */
   deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>>;
+
+  /** Create a memory fact (policy, instruction, or about-me) */
+  createMemory(agentId: string, fact: {
+    category: string;
+    key: string;
+    content: string;
+    confidence?: number;
+    ward_id?: string;
+    pinned?: boolean;
+  }): Promise<TransportResult<MemoryFact>>;
 
   // =========================================================================
   // Knowledge Graph Operations

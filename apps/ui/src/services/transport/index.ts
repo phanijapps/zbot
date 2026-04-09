@@ -43,6 +43,7 @@ export type {
   ToolSettings,
   LogSettings,
   UpdateLogSettingsRequest,
+  ExecutionSettings,
   LogLevel,
   LogCategory,
   SessionStatus,
@@ -61,6 +62,7 @@ export type {
   CreateCronJobRequest,
   UpdateCronJobRequest,
   CronTriggerResult,
+  SetupStatus,
 } from "./types";
 
 export { getProviderDefaultModel } from "./types";

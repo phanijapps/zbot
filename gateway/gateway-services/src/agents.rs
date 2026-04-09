@@ -344,16 +344,33 @@ impl AgentService {
 
     /// Seed default subagents if they don't exist.
     ///
-    /// Creates sample agents that can be delegated to by the root agent.
-    pub async fn seed_default_agents(&self, default_provider_id: &str) -> Result<(), String> {
-        let default_agents = vec![
-            ("research-agent", "Research Agent", "Specialized in gathering, analyzing, and synthesizing information from various sources.", RESEARCH_AGENT_INSTRUCTIONS),
-            ("code-agent", "Code Agent", "Specialized in code generation, review, debugging, and software engineering tasks.", CODE_AGENT_INSTRUCTIONS),
-            ("writing-agent", "Writing Agent", "Specialized in content creation, editing, and written communication.", WRITING_AGENT_INSTRUCTIONS),
-        ];
+    /// Accepts agent definitions as JSON (loaded from `default_agents.json` by caller).
+    /// Falls back to hardcoded defaults if `template_json` is None.
+    /// Seed default subagents if they don't exist.
+    ///
+    /// - `template_json`: Agent definitions from `default_agents.json`
+    /// - `instructions_loader`: Callback to load AGENTS.md from embedded templates by agent name
+    pub async fn seed_default_agents(
+        &self,
+        default_provider_id: &str,
+        default_model: &str,
+        template_json: Option<&[u8]>,
+        instructions_loader: impl Fn(&str) -> Option<String>,
+    ) -> Result<(), String> {
+        let template_agents: Vec<serde_json::Value> = template_json
+            .and_then(|data| serde_json::from_slice(data).ok())
+            .unwrap_or_else(|| {
+                serde_json::json!([
+                    {"name": "research-agent", "displayName": "Research Agent", "description": "Specialized in gathering, analyzing, and synthesizing information from various sources.", "temperature": 0.7, "maxTokens": 8192, "skills": [], "mcps": []},
+                    {"name": "code-agent", "displayName": "Code Agent", "description": "Specialized in code generation, review, debugging, and software engineering tasks.", "temperature": 0.7, "maxTokens": 8192, "skills": [], "mcps": []},
+                    {"name": "writing-agent", "displayName": "Writing Agent", "description": "Specialized in content creation, editing, and written communication.", "temperature": 0.7, "maxTokens": 8192, "skills": [], "mcps": []}
+                ]).as_array().cloned().unwrap_or_default()
+            });
 
-        for (name, display_name, description, instructions) in default_agents {
-            // Check if agent already exists
+        for entry in &template_agents {
+            let name = entry["name"].as_str().unwrap_or_default();
+            if name.is_empty() { continue; }
+
             if self.get(name).await.is_ok() {
                 tracing::debug!("Agent {} already exists, skipping seed", name);
                 continue;
@@ -361,22 +378,44 @@ impl AgentService {
 
             tracing::info!("Seeding default agent: {}", name);
 
+            let display_name = entry["displayName"].as_str().unwrap_or(name);
+            let description = entry["description"].as_str().unwrap_or("");
+            let agent_type = entry["agentType"].as_str().unwrap_or("specialist");
+            let temperature = entry["temperature"].as_f64().unwrap_or(0.7);
+            let max_tokens = entry["maxTokens"].as_u64().unwrap_or(8192) as u32;
+            let skills: Vec<String> = entry["skills"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                .unwrap_or_default();
+            let mcps: Vec<String> = entry["mcps"].as_array()
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+                .unwrap_or_default();
+
+            // Load instructions: try bundled template first, then hardcoded fallback
+            let instructions = instructions_loader(name)
+                .or_else(|| match name {
+                    "research-agent" => Some(RESEARCH_AGENT_INSTRUCTIONS.to_string()),
+                    "code-agent" => Some(CODE_AGENT_INSTRUCTIONS.to_string()),
+                    "writing-agent" => Some(WRITING_AGENT_INSTRUCTIONS.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "You are a helpful AI assistant.".to_string());
+
             let agent = Agent {
                 id: name.to_string(),
                 name: name.to_string(),
                 display_name: display_name.to_string(),
                 description: description.to_string(),
-                agent_type: Some("specialist".to_string()),
+                agent_type: Some(agent_type.to_string()),
                 provider_id: default_provider_id.to_string(),
-                model: "gpt-4o".to_string(),
-                temperature: 0.7,
-                max_tokens: 8192,
+                model: default_model.to_string(),
+                temperature,
+                max_tokens,
                 thinking_enabled: false,
                 voice_recording_enabled: false,
                 system_instruction: None,
-                instructions: instructions.to_string(),
-                mcps: vec![],
-                skills: vec![],
+                instructions,
+                mcps,
+                skills,
                 middleware: None,
                 created_at: None,
             };

@@ -22,3 +22,10 @@ thiserror = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
+
+# Multimodal helpers
+sha2 = "0.10"
+base64 = "0.22"
+
+[dev-dependencies]
+tempfile = "3.10"

@@ -17,9 +17,12 @@ mod models;
 mod openapi;
 mod plugins;
 mod providers;
+mod sessions;
 mod settings;
+mod setup;
 mod skills;
 mod tools;
+mod upload;
 mod webhooks;
 
 use crate::config::GatewayConfig;
@@ -138,12 +141,24 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/tools", put(settings::update_tool_settings))
         .route("/api/settings/logs", get(settings::get_log_settings))
         .route("/api/settings/logs", put(settings::update_log_settings))
+        .route("/api/settings/execution", get(settings::get_execution_settings))
+        .route("/api/settings/execution", put(settings::update_execution_settings))
+        // Setup wizard endpoints
+        .route("/api/setup/status", get(setup::get_setup_status))
+        .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
-        .route("/api/memory/:agent_id", get(memory::list_memory_facts))
+        .route("/api/memory/search", get(memory::search_all_memory_facts))
+        .route("/api/memory/:agent_id", get(memory::list_memory_facts).post(memory::create_memory_fact))
         .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
         .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
         .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
+        // Upload endpoint
+        .route("/api/upload", post(upload::upload_file))
+        // Session archive endpoints
+        .route("/api/sessions/archive", post(sessions::archive_sessions))
+        .route("/api/sessions/restore/:id", post(sessions::restore_session))
+        .route("/api/sessions/:id/state", get(sessions::get_session_state))
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))

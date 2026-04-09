@@ -27,7 +27,7 @@ pub struct ModelProfile {
 }
 
 /// Boolean capability flags for a model.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelCapabilities {
     #[serde(default)]
@@ -132,8 +132,8 @@ impl ModelRegistry {
                 video_generation: false,
             },
             context: ContextWindow {
-                input: 8192,
-                output: Some(4096),
+                input: 256_000,
+                output: Some(128_000),
             },
             embedding: None,
         };

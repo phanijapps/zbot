@@ -12,6 +12,7 @@ mod memory;
 mod introspection;
 mod ward;
 mod connectors;
+mod multimodal;
 pub(crate) mod guards;
 
 use std::sync::Arc;
@@ -24,12 +25,15 @@ use zero_core::MemoryFactStore;
 pub use file::{ReadTool, WriteTool, EditTool};
 pub use search::{GrepTool, GlobTool};
 pub use execution::ApplyPatchTool;
+pub use execution::EditFileTool;
 pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
+pub use execution::SetSessionTitleTool;
 pub use execution::ShellTool;
 pub use execution::skills::LoadSkillTool;
 pub use execution::TodoTool;
 pub use execution::UpdatePlanTool;
+pub use execution::WriteFileTool;
 pub use ui::{RequestInputTool, ShowContentTool};
 pub use agent::{CreateAgentTool, ListAgentsTool};
 pub use web::WebFetchTool;
@@ -37,6 +41,7 @@ pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
 pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
 pub use ward::WardTool;
 pub use connectors::QueryResourceTool;
+pub use multimodal::MultimodalAnalyzeTool;
 
 // ============================================================================
 // TOOL SETTINGS
@@ -137,14 +142,17 @@ pub fn core_tools(
     vec![
         // Primary execution tool
         Arc::new(ShellTool::new()),
-        // First-class file creation/editing/deletion via patch format
-        Arc::new(ApplyPatchTool::new(fs.clone())),
+        // File operations
+        Arc::new(WriteFileTool::new(fs.clone())),
+        Arc::new(EditFileTool::new(fs.clone())),
         // Persistent memory (with optional DB-backed fact store)
         Arc::new(MemoryTool::new(fs.clone(), fact_store.clone())),
         // Ward management (named project directories, with recall on entry)
         Arc::new(WardTool::new(fs.clone(), fact_store)),
         // Lightweight plan tracking
         Arc::new(UpdatePlanTool::new()),
+        // Session title (human-readable label for the UI)
+        Arc::new(SetSessionTitleTool::new()),
         // DAG workflow engine for multi-step orchestration
         Arc::new(ExecutionGraphTool::new()),
         // Skill discovery (high priority - encourages delegation)
@@ -196,6 +204,9 @@ pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -
         tools.push(Arc::new(ListToolsTool::new()));
         tools.push(Arc::new(ListMcpsTool::new(fs.clone())));
     }
+
+    // Multimodal analysis — always available as a vision fallback
+    tools.push(Arc::new(multimodal::MultimodalAnalyzeTool::new()));
 
     tools
 }

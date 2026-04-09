@@ -36,6 +36,8 @@ interface EditForm {
   baseUrl: string;
   models: string[];
   defaultModel: string;
+  rateLimitsRpm: string;
+  rateLimitsConcurrent: string;
 }
 
 // ============================================================================
@@ -55,7 +57,7 @@ export function ProviderSlideover({
   onSetActive,
 }: ProviderSlideoverProps) {
   const [isEditing, setIsEditing] = useState(mode === "create");
-  const [form, setForm] = useState<EditForm>({ name: "", description: "", apiKey: "", baseUrl: "", models: [], defaultModel: "" });
+  const [form, setForm] = useState<EditForm>({ name: "", description: "", apiKey: "", baseUrl: "", models: [], defaultModel: "", rateLimitsRpm: "30", rateLimitsConcurrent: "2" });
   const [isSaving, setIsSaving] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -78,6 +80,8 @@ export function ProviderSlideover({
         baseUrl: preset.baseUrl,
         models,
         defaultModel: models[0] || "",
+        rateLimitsRpm: "30",
+        rateLimitsConcurrent: "2",
       });
       setIsEditing(true);
       setIsDirty(false);
@@ -89,6 +93,8 @@ export function ProviderSlideover({
         baseUrl: provider.baseUrl,
         models: [...provider.models],
         defaultModel: provider.defaultModel || provider.models[0] || "",
+        rateLimitsRpm: String(provider?.rateLimits?.requestsPerMinute ?? 30),
+        rateLimitsConcurrent: String(provider?.rateLimits?.concurrentRequests ?? 2),
       });
       setIsEditing(false);
       setIsDirty(false);
@@ -158,15 +164,26 @@ export function ProviderSlideover({
     setTestResult(null);
     try {
       const transport = await getTransport();
-      const result = await transport.testProvider({
-        name: form.name,
-        description: form.description,
-        apiKey: form.apiKey,
-        baseUrl: form.baseUrl,
-        models: form.models,
-      });
+      let result;
+      if (provider?.id && mode === "view") {
+        // Existing provider — use ID-based test that persists verified + models
+        result = await transport.testProviderById(provider.id);
+      } else {
+        // New provider (create mode) — inline test
+        result = await transport.testProvider({
+          name: form.name,
+          description: form.description,
+          apiKey: form.apiKey,
+          baseUrl: form.baseUrl,
+          models: form.models,
+        });
+      }
       if (result.success && result.data) {
         setTestResult(result.data);
+        // Refresh parent to show updated verified status + models
+        if (result.data.success) {
+          onSaved();
+        }
       } else {
         setTestResult({ success: false, message: result.error || "Test failed" });
       }
@@ -206,6 +223,10 @@ export function ProviderSlideover({
           baseUrl: form.baseUrl,
           models: form.models,
           defaultModel: form.defaultModel || undefined,
+          rateLimits: {
+            requestsPerMinute: parseInt(form.rateLimitsRpm) || 30,
+            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 2,
+          },
         });
         if (!result.success) {
           setError(result.error || "Failed to create provider");
@@ -220,6 +241,10 @@ export function ProviderSlideover({
           baseUrl: form.baseUrl,
           models: form.models,
           defaultModel: form.defaultModel || undefined,
+          rateLimits: {
+            requestsPerMinute: parseInt(form.rateLimitsRpm) || 30,
+            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 2,
+          },
         });
         if (!result.success) {
           setError(result.error || "Failed to update provider");
@@ -388,6 +413,42 @@ export function ProviderSlideover({
             )}
           </div>
 
+          {/* Rate Limits */}
+          <div>
+            <div className="field-label">Rate Limits</div>
+            {isEditing ? (
+              <div className="provider-slideover__rate-grid">
+                <div>
+                  <div className="field-label">Requests/min</div>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    value={form.rateLimitsRpm}
+                    onChange={(e) => handleFormChange({ rateLimitsRpm: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <div className="field-label">Max concurrent</div>
+                  <input
+                    className="form-input"
+                    type="number"
+                    min="1"
+                    max="20"
+                    value={form.rateLimitsConcurrent}
+                    onChange={(e) => handleFormChange({ rateLimitsConcurrent: e.target.value })}
+                  />
+                </div>
+              </div>
+            ) : (
+              <div className="provider-slideover__rate-grid">
+                <div className="field-value">{provider?.rateLimits?.requestsPerMinute ?? 30} req/min</div>
+                <div className="field-value">{provider?.rateLimits?.concurrentRequests ?? 2} concurrent</div>
+              </div>
+            )}
+          </div>
+
           {/* Default Model */}
           <div>
             <div className="field-label">Default Model</div>
@@ -406,21 +467,56 @@ export function ProviderSlideover({
             )}
           </div>
 
-          {/* Models */}
-          <div>
-            <div className="field-label">Models ({form.models.length})</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-1-5)" }}>
-              {form.models.map((model) => (
-                <ModelChip
-                  key={model}
-                  modelId={model}
-                  profile={modelRegistry[model]}
-                  showContext
-                  removable={isEditing}
-                  onRemove={() => handleRemoveModel(model)}
-                />
-              ))}
-              {isEditing && (
+          {/* Models - View mode: enriched rows */}
+          {!isEditing && (
+            <div>
+              <div className="field-label">Models ({provider?.models?.length ?? 0})</div>
+              {provider?.models?.map((modelId) => {
+                const config = provider.modelConfigs?.[modelId];
+                const registryProfile = modelRegistry[modelId];
+                const caps = config?.capabilities ?? registryProfile?.capabilities;
+                const maxIn = config?.maxInput ?? registryProfile?.context?.input;
+                const maxOut = config?.maxOutput ?? registryProfile?.context?.output;
+                const isDefault = modelId === (provider.defaultModel || provider.models[0]);
+
+                return (
+                  <div key={modelId} className="provider-slideover__model-row">
+                    <div className="provider-slideover__model-header">
+                      <span className="provider-slideover__model-name">{modelId}</span>
+                      {isDefault && <span className="badge badge--success badge--xs">default</span>}
+                    </div>
+                    <div className="provider-slideover__model-meta">
+                      {caps?.tools && <span className="cap-badge cap-badge--tools">tools</span>}
+                      {caps?.vision && <span className="cap-badge cap-badge--vision">vision</span>}
+                      {caps?.thinking && <span className="cap-badge cap-badge--thinking">thinking</span>}
+                      {caps?.embeddings && <span className="cap-badge cap-badge--embed">embeddings</span>}
+                      {maxIn && (
+                        <span className="provider-slideover__model-context">
+                          {Math.round(maxIn / 1000)}K in{maxOut ? ` / ${Math.round(maxOut / 1000)}K out` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* Models - Edit mode: chips */}
+          {isEditing && (
+            <div>
+              <div className="field-label">Models ({form.models.length})</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--spacing-1-5)" }}>
+                {form.models.map((model) => (
+                  <ModelChip
+                    key={model}
+                    modelId={model}
+                    profile={modelRegistry[model]}
+                    showContext
+                    removable={isEditing}
+                    onRemove={() => handleRemoveModel(model)}
+                  />
+                ))}
                 <span className="model-chip model-chip--removable" style={{ border: "1px dashed var(--border)" }}>
                   <input
                     style={{ background: "transparent", border: "none", outline: "none", width: 80, fontSize: "var(--text-xs)", color: "var(--foreground)" }}
@@ -433,9 +529,9 @@ export function ProviderSlideover({
                     <Plus size={12} />
                   </button>
                 </span>
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
 
         {/* Footer */}

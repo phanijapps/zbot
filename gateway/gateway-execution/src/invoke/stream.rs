@@ -4,9 +4,11 @@
 
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
+use gateway_services::skills::{SkillFrontmatter, WardSetup};
 use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
 use agent_runtime::StreamEvent;
 use execution_state::{AgentExecution, DelegationType, StateService};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
@@ -42,6 +44,10 @@ pub struct StreamContext {
     pub delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
     /// Batch writer for non-blocking DB writes (token updates, logs)
     pub batch_writer: Option<BatchWriterHandle>,
+    /// Vault directory root — needed for ward scaffolding at creation time
+    pub vault_dir: PathBuf,
+    /// Skills recommended by intent analysis — used to scope ward scaffolding
+    pub recommended_skills: Vec<String>,
 }
 
 impl StreamContext {
@@ -55,6 +61,7 @@ impl StreamContext {
         log_service: Arc<LogService<DatabaseManager>>,
         state_service: Arc<StateService<DatabaseManager>>,
         delegation_tx: mpsc::UnboundedSender<DelegationRequest>,
+        vault_dir: PathBuf,
     ) -> Self {
         Self {
             agent_id,
@@ -66,12 +73,20 @@ impl StreamContext {
             state_service,
             delegation_tx,
             batch_writer: None,
+            vault_dir,
+            recommended_skills: Vec::new(),
         }
     }
 
     /// Attach a batch writer for non-blocking DB writes.
     pub fn with_batch_writer(mut self, writer: BatchWriterHandle) -> Self {
         self.batch_writer = Some(writer);
+        self
+    }
+
+    /// Set recommended skills from intent analysis — scopes ward scaffolding.
+    pub fn with_recommended_skills(mut self, skills: Vec<String>) -> Self {
+        self.recommended_skills = skills;
         self
     }
 }
@@ -238,6 +253,9 @@ pub fn handle_delegation(
     task: &str,
     context: &Option<serde_json::Value>,
     max_iterations: Option<u32>,
+    output_schema: &Option<serde_json::Value>,
+    skills: &[String],
+    complexity: &Option<String>,
 ) {
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
@@ -276,6 +294,13 @@ pub fn handle_delegation(
         }
     };
 
+    // Increment pending_delegations SYNCHRONOUSLY so the executor's Ok() path
+    // sees it before checking has_pending_delegations(). The spawn handler will
+    // NOT double-increment — register_delegation is idempotent (checks current count).
+    if let Err(e) = ctx.state_service.register_delegation(&ctx.session_id) {
+        tracing::warn!("Failed to register delegation synchronously: {}", e);
+    }
+
     // Send request with pre-created execution_id
     let _ = ctx.delegation_tx.send(DelegationRequest {
         parent_agent_id: ctx.agent_id.clone(),
@@ -286,6 +311,9 @@ pub fn handle_delegation(
         task: task.to_string(),
         context: context.clone(),
         max_iterations,
+        output_schema: output_schema.clone(),
+        skills: skills.to_vec(),
+        complexity: complexity.clone(),
     });
 
     log_delegation(ctx, child_agent, task);
@@ -309,10 +337,13 @@ pub fn process_stream_event(
         task,
         context,
         max_iterations,
+        output_schema,
+        skills,
+        complexity,
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context, *max_iterations);
+        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills, complexity);
     }
 
     // Log based on event type
@@ -347,6 +378,46 @@ pub fn process_stream_event(
             // Persist ward_id to session so it survives across continuations
             if let Err(e) = ctx.state_service.update_session_ward(&ctx.session_id, ward_id) {
                 tracing::warn!("Failed to update session ward: {}", e);
+            }
+
+            // Scaffold ward structure from RECOMMENDED skills only (not all skills on disk).
+            // This prevents life-os directories appearing in financial-analysis wards, etc.
+            let ward_dir = ctx.vault_dir.join("wards").join(ward_id);
+            if ward_dir.exists() {
+                let skills_dir = ctx.vault_dir.join("skills");
+                let setups = if ctx.recommended_skills.is_empty() {
+                    // No intent analysis (simple approach or fallback) — use coding skill only
+                    collect_ward_setup_for_skill(&skills_dir, "coding")
+                } else {
+                    collect_ward_setups_for_skills(&skills_dir, &ctx.recommended_skills)
+                };
+                if !setups.is_empty() {
+                    crate::middleware::ward_scaffold::scaffold_ward(&ward_dir, ward_id, &setups);
+                    tracing::info!(ward = %ward_id, skills = ?ctx.recommended_skills, "Ward scaffolded from recommended skills");
+                }
+
+                // Copy ralph.py (task runner) from shared ward if not already present
+                let ralph_src = ctx.vault_dir.join("wards").join("shared").join("ralph.py");
+                let ralph_dst = ward_dir.join("ralph.py");
+                if ralph_src.exists() && !ralph_dst.exists() {
+                    if let Err(e) = std::fs::copy(&ralph_src, &ralph_dst) {
+                        tracing::warn!("Failed to copy ralph.py to ward: {}", e);
+                    }
+                }
+
+                // Auto-update AGENTS.md so the agent sees conventions immediately
+                let lang_configs_dir = ctx.vault_dir.join("config").join("wards");
+                crate::runner::auto_update_agents_md_with_lang_configs(
+                    &ctx.vault_dir,
+                    ward_id,
+                    &lang_configs_dir,
+                );
+            }
+        }
+        StreamEvent::SessionTitleChanged { ref title, .. } => {
+            // Persist title to session
+            if let Err(e) = ctx.state_service.update_session_title(&ctx.session_id, title) {
+                tracing::warn!("Failed to update session title: {}", e);
             }
         }
         _ => {}
@@ -523,6 +594,55 @@ impl ToolCallAccumulator {
     pub fn len(&self) -> usize {
         self.calls.len()
     }
+}
+
+// ============================================================================
+// WARD SCAFFOLDING HELPERS
+// ============================================================================
+
+/// Read `ward_setup` from specific skills' SKILL.md files.
+///
+/// Only reads skills in `skill_names` — prevents life-os dirs in coding wards, etc.
+pub fn collect_ward_setups_for_skills(skills_dir: &Path, skill_names: &[String]) -> Vec<WardSetup> {
+    let mut setups = Vec::new();
+    for name in skill_names {
+        setups.extend(collect_ward_setup_for_skill(skills_dir, name));
+    }
+    setups
+}
+
+/// Read `ward_setup` from a single skill's SKILL.md.
+pub fn collect_ward_setup_for_skill(skills_dir: &Path, skill_name: &str) -> Vec<WardSetup> {
+    let skill_md = skills_dir.join(skill_name).join("SKILL.md");
+    if !skill_md.exists() {
+        return vec![];
+    }
+    let content = match std::fs::read_to_string(&skill_md) {
+        Ok(c) => c,
+        Err(_) => return vec![],
+    };
+    let yaml = match extract_yaml_frontmatter(&content) {
+        Some(y) => y,
+        None => return vec![],
+    };
+    match serde_yaml::from_str::<SkillFrontmatter>(yaml) {
+        Ok(fm) => fm.ward_setup.into_iter().collect(),
+        Err(_) => vec![],
+    }
+}
+
+/// Extract the YAML frontmatter block from a `---`-delimited document.
+///
+/// Returns the trimmed content between the first pair of `---` markers,
+/// or `None` if the document doesn't start with `---`.
+fn extract_yaml_frontmatter(content: &str) -> Option<&str> {
+    let content = content.trim_start();
+    if !content.starts_with("---") {
+        return None;
+    }
+    let after_first = &content[3..];
+    let end = after_first.find("\n---")?;
+    Some(after_first[..end].trim())
 }
 
 #[cfg(test)]

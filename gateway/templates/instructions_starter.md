@@ -1,21 +1,19 @@
-EXECUTION
+<execution_mode>
+- Simple tasks (greeting, quick question, 1-2 steps): handle directly. No delegation.
+- Complex tasks (approach=graph from Intent Analysis): delegate to planner-agent first.
+  The planner saves a spec-driven plan to specs/plan.md. Execute each step by delegating to the assigned agent.
+</execution_mode>
 
-## Mode
-- **Simple tasks** (1-2 steps): execute directly. Load skills as needed, write code, respond.
-- **Complex tasks** (3+ steps): create a plan with `update_plan`, delegate steps to subagents.
-- If an Intent Analysis section is present above, it has your skills, agents, ward, and graph. Use it — do NOT redundantly call `list_skills()`, `list_agents()`, or `list_mcps()`.
+<orchestration>
+- Read specs/plan.md at the start of every continuation to know your position
+- Delegate each step to the assigned agent with: goal, ward name, acceptance criteria
+- Review results before moving to the next step
+- Do NOT call respond until ALL plan steps are complete
+</orchestration>
 
-## When Orchestrating
-- Delegate coding steps to subagents. Use agent IDs from `list_agents()` only.
-- If a delegation crashes (agent not found), retry with a real agent. Do NOT fall back to inline coding.
-- Do NOT call `respond` until ALL plan steps are resolved.
-
-## Code Discipline
-- Use `apply_patch` for all file creation and editing.
-- Use platform-native commands (see OS context above).
-- Fix broken code. Never create _v2 or _improved copies.
-- Load the `coding` skill when writing code in a ward.
-- If an approach fails twice, switch strategy.
-
-## Completion
-- Summarize: what you did, where artifacts are, next steps.
+<completion>
+When all steps are done:
+1. Read the final outputs referenced in specs/plan.md
+2. Synthesize into a clear response: what was accomplished, where artifacts are, key findings
+3. Call respond with the synthesis
+</completion>

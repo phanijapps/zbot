@@ -35,6 +35,8 @@ import type {
   LogSettings,
   LogSettingsResponse,
   UpdateLogSettingsRequest,
+  ExecutionSettings,
+  ExecutionSettingsResponse,
   LogSession,
   SessionDetail,
   LogFilter,
@@ -79,6 +81,8 @@ import type {
   GraphSubgraphResponse,
   GraphNeighborOptions,
   GraphSubgraphOptions,
+  SetupStatus,
+  SessionState,
 } from "./types";
 
 // ============================================================================
@@ -232,6 +236,10 @@ export class HttpTransport implements Transport {
     return this.post<ProviderTestResult>("/api/providers/test", provider);
   }
 
+  async testProviderById(id: string): Promise<TransportResult<ProviderTestResult>> {
+    return this.post<ProviderTestResult>(`/api/providers/${encodeURIComponent(id)}/test`, {});
+  }
+
   async setDefaultProvider(id: string): Promise<TransportResult<ProviderResponse>> {
     return this.post<ProviderResponse>(`/api/providers/${encodeURIComponent(id)}/default`, {});
   }
@@ -346,6 +354,30 @@ export class HttpTransport implements Transport {
     return { success: false, error: result.error || result.data?.error || "Failed to update log settings" };
   }
 
+  async getExecutionSettings(): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>> {
+    const result = await this.get<ExecutionSettingsResponse>("/api/settings/execution");
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to get execution settings" };
+  }
+
+  async updateExecutionSettings(settings: ExecutionSettings): Promise<TransportResult<ExecutionSettings & { restartRequired: boolean }>> {
+    const result = await this.put<ExecutionSettingsResponse>("/api/settings/execution", settings);
+    if (result.success && result.data?.success && result.data.data) {
+      return { success: true, data: result.data.data };
+    }
+    return { success: false, error: result.error || result.data?.error || "Failed to update execution settings" };
+  }
+
+  async getSetupStatus(): Promise<TransportResult<SetupStatus>> {
+    return this.get<SetupStatus>("/api/setup/status");
+  }
+
+  async getMcpDefaults(): Promise<TransportResult<McpServerConfig[]>> {
+    return this.get<McpServerConfig[]>("/api/setup/mcp-defaults");
+  }
+
   // =========================================================================
   // Execution Log Operations
   // =========================================================================
@@ -358,7 +390,8 @@ export class HttpTransport implements Transport {
     if (filter?.to_time) params.set("to_time", filter.to_time);
     if (filter?.limit) params.set("limit", String(filter.limit));
     if (filter?.offset) params.set("offset", String(filter.offset));
-    
+    if (filter?.root_only) params.set("root_only", "true");
+
     const query = params.toString();
     const url = query ? `/api/logs/sessions?${query}` : "/api/logs/sessions";
     return this.get<LogSession[]>(url);
@@ -366,6 +399,10 @@ export class HttpTransport implements Transport {
 
   async getLogSession(sessionId: string): Promise<TransportResult<SessionDetail>> {
     return this.get<SessionDetail>(`/api/logs/sessions/${encodeURIComponent(sessionId)}`);
+  }
+
+  async getSessionState(sessionId: string): Promise<TransportResult<SessionState>> {
+    return this.get<SessionState>(`/api/sessions/${encodeURIComponent(sessionId)}/state`);
   }
 
   async deleteLogSession(sessionId: string): Promise<TransportResult<void>> {
@@ -1362,6 +1399,24 @@ export class HttpTransport implements Transport {
 
   async deleteMemory(agentId: string, factId: string): Promise<TransportResult<void>> {
     return this.delete(`/api/memory/${encodeURIComponent(agentId)}/facts/${encodeURIComponent(factId)}`);
+  }
+
+  async searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>> {
+    const params = new URLSearchParams({ q: query });
+    if (limit) params.set("limit", String(limit));
+    if (category) params.set("category", category);
+    return this.get(`/api/memory/search?${params.toString()}`);
+  }
+
+  async createMemory(agentId: string, fact: {
+    category: string;
+    key: string;
+    content: string;
+    confidence?: number;
+    ward_id?: string;
+    pinned?: boolean;
+  }): Promise<TransportResult<MemoryFact>> {
+    return this.post(`/api/memory/${encodeURIComponent(agentId)}`, fact);
   }
 
   // =========================================================================

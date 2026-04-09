@@ -25,7 +25,7 @@ use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
 use gateway_database::{ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact, MemoryRepository, SessionEpisode};
-use gateway_services::{ProviderService, VaultPaths};
+use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{GraphStorage, Entity, EntityType, Relationship, RelationshipType};
 use serde::Deserialize;
 
@@ -39,6 +39,7 @@ pub struct SessionDistiller {
     distillation_repo: Option<Arc<DistillationRepository>>,
     episode_repo: Option<Arc<EpisodeRepository>>,
     paths: Arc<VaultPaths>,
+    settings_service: Option<Arc<SettingsService>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -97,6 +98,53 @@ fn default_confidence() -> f64 {
     0.8
 }
 
+/// Verify a distilled fact against the session transcript's tool outputs.
+/// Grounded facts keep confidence; ungrounded get reduced; contradicted get discarded.
+fn verify_fact_confidence(
+    fact_content: &str,
+    fact_confidence: f64,
+    tool_outputs: &[String],
+) -> f64 {
+    // Extract key terms from the fact (words > 3 chars, skip stopwords)
+    let stopwords = ["that", "this", "with", "from", "have", "been", "were", "will",
+                     "should", "would", "could", "their", "there", "about", "which",
+                     "when", "into", "also", "than", "then", "them", "very", "just"];
+    let key_terms: Vec<&str> = fact_content.split_whitespace()
+        .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
+        .filter(|w| w.len() > 3)
+        .filter(|w| !stopwords.contains(&w.to_lowercase().as_str()))
+        .collect();
+
+    if key_terms.is_empty() {
+        return fact_confidence * 0.6;
+    }
+
+    // Check how many key terms appear in tool outputs
+    let mut matches = 0;
+    for term in &key_terms {
+        let term_lower = term.to_lowercase();
+        for output in tool_outputs {
+            if output.to_lowercase().contains(&term_lower) {
+                matches += 1;
+                break;
+            }
+        }
+    }
+
+    let match_ratio = matches as f64 / key_terms.len() as f64;
+
+    if match_ratio >= 0.5 {
+        // Well-grounded in tool outputs
+        fact_confidence
+    } else if match_ratio > 0.0 {
+        // Partially grounded
+        fact_confidence * 0.8
+    } else {
+        // Not grounded — reduce confidence significantly
+        fact_confidence * 0.5
+    }
+}
+
 /// Minimum number of messages in a session to trigger distillation.
 /// Set low to capture learnings from even short sessions.
 const MIN_MESSAGES_FOR_DISTILLATION: usize = 4;
@@ -119,6 +167,7 @@ impl SessionDistiller {
         distillation_repo: Option<Arc<DistillationRepository>>,
         episode_repo: Option<Arc<EpisodeRepository>>,
         paths: Arc<VaultPaths>,
+        settings_service: Option<Arc<SettingsService>>,
     ) -> Self {
         Self {
             provider_service,
@@ -129,7 +178,40 @@ impl SessionDistiller {
             distillation_repo,
             episode_repo,
             paths,
+            settings_service,
         }
+    }
+
+    /// Resolve the target provider ID and model for distillation.
+    ///
+    /// Resolution chain:
+    /// 1. distillation.provider_id / distillation.model (if set)
+    /// 2. orchestrator.provider_id / orchestrator.model (if set)
+    /// 3. None (falls through to default provider in extract_all)
+    fn resolve_distillation_target(&self) -> (Option<String>, Option<String>) {
+        let settings = self.settings_service.as_ref()
+            .and_then(|s| s.get_execution_settings().ok());
+
+        let settings = match settings {
+            Some(s) => s,
+            None => return (None, None),
+        };
+
+        let provider_id = settings.distillation.provider_id.clone()
+            .or_else(|| settings.orchestrator.provider_id.clone());
+
+        let model = settings.distillation.model.clone()
+            .or_else(|| settings.orchestrator.model.clone());
+
+        if provider_id.is_some() || model.is_some() {
+            tracing::debug!(
+                provider = ?provider_id,
+                model = ?model,
+                "Distillation using configured target"
+            );
+        }
+
+        (provider_id, model)
     }
 
     /// Load the distillation prompt from filesystem or use embedded default.
@@ -196,6 +278,12 @@ impl SessionDistiller {
         // Insert optimistic-failure record before attempting distillation
         self.record_pending(session_id);
 
+        // Collect tool outputs from transcript for fact verification
+        let tool_outputs: Vec<String> = messages.iter()
+            .filter(|m| m.role == "tool")
+            .map(|m| m.content.clone())
+            .collect();
+
         // 2. Build transcript for the LLM
         let transcript = build_transcript(&messages);
 
@@ -228,11 +316,52 @@ impl SessionDistiller {
             response.facts.len(), response.entities.len(), response.relationships.len()
         );
 
-        // 4. Upsert each fact with embedding
+        // 4. Upsert each fact with embedding — dedup against existing facts first
         let now = chrono::Utc::now().to_rfc3339();
         let mut upserted = 0;
 
+        // Load existing facts for content-similarity dedup
+        let existing_facts = self.memory_repo
+            .get_memory_facts(agent_id, None, 500)
+            .unwrap_or_default();
+        let existing_contents: Vec<(String, String)> = existing_facts.iter()
+            .map(|f: &gateway_database::MemoryFact| (f.key.clone(), f.content.clone()))
+            .collect();
+
+        // Reserved key prefixes — only created via UI, never by distillation
+        const RESERVED_PREFIXES: &[&str] = &["policy.", "instruction.", "user.profile"];
+
         for ef in &response.facts {
+            // Skip reserved keys — these are user-managed via the Memory UI
+            if RESERVED_PREFIXES.iter().any(|p| ef.key.starts_with(p)) {
+                tracing::debug!(key = %ef.key, "Skipping reserved key (user-managed)");
+                continue;
+            }
+
+            let verified_confidence = verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
+
+            // Skip facts with very low grounding
+            if verified_confidence < 0.2 {
+                tracing::debug!(key = %ef.key, confidence = verified_confidence, "Skipping ungrounded fact");
+                continue;
+            }
+
+            // Content-similarity dedup: skip if an existing fact has 60%+ word overlap
+            // (even with a different key). Prevents "user holds PTON" appearing 5 times.
+            let new_words: std::collections::HashSet<&str> = ef.content.split_whitespace().collect();
+            let is_duplicate = existing_contents.iter().any(|(existing_key, existing_content)| {
+                if existing_key == &ef.key { return false; } // Same key = upsert, not dedup
+                let existing_words: std::collections::HashSet<&str> = existing_content.split_whitespace().collect();
+                if new_words.is_empty() || existing_words.is_empty() { return false; }
+                let overlap = new_words.intersection(&existing_words).count();
+                let smaller = new_words.len().min(existing_words.len());
+                overlap as f64 / smaller as f64 > 0.6
+            });
+            if is_duplicate {
+                tracing::debug!(key = %ef.key, "Skipping duplicate fact (60%+ content overlap with existing)");
+                continue;
+            }
+
             let fact_id = format!("fact-{}", uuid::Uuid::new_v4());
 
             // Embed the fact content
@@ -246,7 +375,7 @@ impl SessionDistiller {
                 category: ef.category.clone(),
                 key: ef.key.clone(),
                 content: ef.content.clone(),
-                confidence: ef.confidence,
+                confidence: verified_confidence,
                 mention_count: 1,
                 source_summary: Some(format!("Distilled from session {}", session_id)),
                 embedding,
@@ -255,6 +384,7 @@ impl SessionDistiller {
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
+                pinned: false,
             };
 
             if let Err(e) = self.memory_repo.upsert_memory_fact(&fact) {
@@ -381,6 +511,27 @@ impl SessionDistiller {
             "Session distillation complete"
         );
 
+        // 8. Sync ward knowledge file (best-effort)
+        let ward_id = self
+            .conversation_repo
+            .get_session_ward_id(session_id)
+            .unwrap_or(None);
+
+        if let Some(ref wid) = ward_id {
+            if wid != "__global__" && wid != "scratch" {
+                let ward_path = self.paths.wards_dir().join(wid);
+                if ward_path.exists() {
+                    if let Err(e) = crate::ward_sync::generate_ward_knowledge_file(
+                        &ward_path,
+                        wid,
+                        &self.memory_repo,
+                    ) {
+                        tracing::warn!(ward = %wid, error = %e, "Ward file sync failed");
+                    }
+                }
+            }
+        }
+
         Ok(upserted)
     }
 
@@ -466,20 +617,44 @@ impl SessionDistiller {
             transcript
         );
 
-        // Order: default provider first, then the rest
+        // Resolve distillation provider/model from settings chain:
+        // distillation config → orchestrator config → default provider
+        let (target_provider_id, target_model) = self.resolve_distillation_target();
+
+        // Order providers: target first (if specified), then default, then rest
         let default_idx = providers.iter().position(|p| p.is_default);
-        let ordered_indices: Vec<usize> = match default_idx {
-            Some(idx) => std::iter::once(idx)
-                .chain((0..providers.len()).filter(move |&i| i != idx))
-                .collect(),
-            None => (0..providers.len()).collect(),
+        let target_idx = target_provider_id.as_ref().and_then(|tid| {
+            providers.iter().position(|p| p.id.as_deref() == Some(tid.as_str()))
+        });
+
+        let ordered_indices: Vec<usize> = {
+            let mut indices = Vec::new();
+            if let Some(idx) = target_idx {
+                indices.push(idx);
+            }
+            if let Some(idx) = default_idx {
+                if Some(idx) != target_idx {
+                    indices.push(idx);
+                }
+            }
+            for i in 0..providers.len() {
+                if !indices.contains(&i) {
+                    indices.push(i);
+                }
+            }
+            indices
         };
 
         let mut last_error = String::new();
 
-        for idx in ordered_indices {
+        for (attempt, &idx) in ordered_indices.iter().enumerate() {
             let provider = &providers[idx];
-            let model = provider.default_model();
+            // Use target model for first attempt (if configured), else provider default
+            let model = if attempt == 0 {
+                target_model.clone().unwrap_or_else(|| provider.default_model().to_string())
+            } else {
+                provider.default_model().to_string()
+            };
             let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
 
             let config = LlmConfig::new(
@@ -718,6 +893,7 @@ impl SessionDistiller {
             created_at: now.to_string(),
             updated_at: now.to_string(),
             expires_at: None,
+            pinned: false,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;
@@ -809,6 +985,7 @@ impl SessionDistiller {
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
+            pinned: false,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;

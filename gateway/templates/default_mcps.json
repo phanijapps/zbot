@@ -1,0 +1,82 @@
+[
+  {
+    "type": "stdio",
+    "id": "time",
+    "name": "Time",
+    "description": "Get current time and perform time calculations",
+    "command": "uvx",
+    "args": ["mcp-server-time"],
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "github",
+    "name": "GitHub",
+    "description": "Access GitHub repositories, issues, pull requests, and more",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-github"],
+    "env": {
+      "GITHUB_PERSONAL_ACCESS_TOKEN": ""
+    },
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "brave-search",
+    "name": "Brave Search",
+    "description": "Search the web using Brave Search API",
+    "command": "npx",
+    "args": ["-y", "@brave/brave-search-mcp-server", "--transport", "stdio"],
+    "env": {
+      "BRAVE_API_KEY": ""
+    },
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "google-maps",
+    "name": "Google Maps",
+    "description": "Search places, get directions, and location information",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-google-maps"],
+    "env": {
+      "GOOGLE_MAPS_API_KEY": ""
+    },
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "sequential-thinking",
+    "name": "Sequential Thinking",
+    "description": "Dynamic problem-solving through structured thought sequences",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "google-drive",
+    "name": "Google Drive",
+    "description": "Access and manage Google Drive files",
+    "command": "npx",
+    "args": ["-y", "@modelcontextprotocol/server-gdrive"],
+    "enabled": false
+  },
+  {
+    "type": "stdio",
+    "id": "drawio",
+    "name": "draw.io",
+    "description": "Build software and process diagrams",
+    "command": "npx",
+    "args": ["-y", "@drawio/mcp"],
+    "enabled": false
+  },
+  {
+    "type": "sse",
+    "id": "drawio-sse",
+    "name": "draw.io (SSE)",
+    "description": "Create software and process diagrams via server-sent events",
+    "url": "https://mcp.draw.io/mcp",
+    "enabled": false
+  }
+]

@@ -1,0 +1,12 @@
+target/
+dist/
+node_modules/
+.git/
+.superpowers/
+*.db
+*.db-wal
+*.db-shm
+docker/
+docs/
+memory-bank/
+.claude/

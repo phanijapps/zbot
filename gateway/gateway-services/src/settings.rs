@@ -23,6 +23,146 @@ pub struct AppSettings {
     /// Logging configuration (file logging, rotation, etc.)
     #[serde(default)]
     pub logs: LogSettings,
+
+    /// Execution settings (concurrency, delegation limits, etc.)
+    #[serde(default)]
+    pub execution: ExecutionSettings,
+}
+
+/// Execution settings for controlling agent concurrency and delegation behavior.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionSettings {
+    /// Maximum number of subagents that can run in parallel across all sessions.
+    /// Default: 2. Set lower for resource-constrained environments.
+    #[serde(default = "default_max_parallel_agents")]
+    pub max_parallel_agents: u32,
+    /// Whether the first-time setup wizard has been completed.
+    /// Default: false. Set to true after the wizard finishes.
+    #[serde(default)]
+    pub setup_complete: bool,
+    /// The user-chosen name for the root agent (e.g., "Brahmi", "Jarvis").
+    /// Used in SOUL.md and displayed in the UI.
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    /// Disable streaming (SSE) for subagents — use non-streaming requests instead.
+    /// Default: true. Subagents run in background, nobody watches their output in
+    /// real-time. Non-streaming is more reliable (no mid-stream decode errors).
+    #[serde(default = "default_true")]
+    pub subagent_non_streaming: bool,
+    /// Root agent (orchestrator) configuration.
+    #[serde(default)]
+    pub orchestrator: OrchestratorConfig,
+    /// Distillation model configuration (provider/model override).
+    #[serde(default)]
+    pub distillation: DistillationConfig,
+    /// Multimodal model configuration (vision analysis fallback).
+    #[serde(default)]
+    pub multimodal: MultimodalConfig,
+}
+
+/// Root agent (orchestrator) configuration.
+/// Stored in settings.json, NOT in agents/root/config.yaml.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrchestratorConfig {
+    /// Provider ID for the orchestrator. None = use default provider.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model for the orchestrator. None = use provider's default model.
+    #[serde(default)]
+    pub model: Option<String>,
+    /// Temperature (0.0 - 2.0). Default: 0.7.
+    #[serde(default = "default_temperature")]
+    pub temperature: f64,
+    /// Maximum output tokens. Default: 16384 (higher to accommodate thinking).
+    #[serde(default = "default_orchestrator_max_tokens")]
+    pub max_tokens: u32,
+    /// Enable extended thinking/reasoning. Default: true.
+    /// Orchestrator reasons before delegating — improves planning quality.
+    #[serde(default = "default_true")]
+    pub thinking_enabled: bool,
+}
+
+fn default_max_parallel_agents() -> u32 { 2 }
+fn default_true() -> bool { true }
+fn default_temperature() -> f64 { 0.7 }
+fn default_orchestrator_max_tokens() -> u32 { 16384 }
+
+impl Default for OrchestratorConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model: None,
+            temperature: default_temperature(),
+            max_tokens: default_orchestrator_max_tokens(),
+            thinking_enabled: true,
+        }
+    }
+}
+
+/// Distillation model configuration.
+/// Controls which provider/model is used for session distillation.
+/// Both fields default to None, inheriting from orchestrator config.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DistillationConfig {
+    /// Provider ID override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub provider_id: Option<String>,
+    /// Model override. None = inherit from orchestrator config.
+    #[serde(default)]
+    pub model: Option<String>,
+}
+
+impl Default for DistillationConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model: None,
+        }
+    }
+}
+
+/// Default multimodal model configuration.
+/// Used by the multimodal_analyze tool as a universal vision fallback.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MultimodalConfig {
+    pub provider_id: Option<String>,
+    pub model: Option<String>,
+    #[serde(default = "default_multimodal_temperature")]
+    pub temperature: f64,
+    #[serde(default = "default_multimodal_max_tokens")]
+    pub max_tokens: u32,
+}
+
+fn default_multimodal_temperature() -> f64 { 0.3 }
+fn default_multimodal_max_tokens() -> u32 { 4096 }
+
+impl Default for MultimodalConfig {
+    fn default() -> Self {
+        Self {
+            provider_id: None,
+            model: None,
+            temperature: default_multimodal_temperature(),
+            max_tokens: default_multimodal_max_tokens(),
+        }
+    }
+}
+
+impl Default for ExecutionSettings {
+    fn default() -> Self {
+        Self {
+            max_parallel_agents: default_max_parallel_agents(),
+            setup_complete: false,
+            agent_name: None,
+            subagent_non_streaming: true,
+            orchestrator: OrchestratorConfig::default(),
+            distillation: DistillationConfig::default(),
+            multimodal: MultimodalConfig::default(),
+        }
+    }
 }
 
 /// Service for managing application settings.
@@ -146,6 +286,24 @@ impl SettingsService {
         settings.logs = log_settings;
         self.save(&settings)
     }
+
+    /// Get execution settings.
+    pub fn get_execution_settings(&self) -> Result<ExecutionSettings, String> {
+        let settings = self.load()?;
+        Ok(settings.execution)
+    }
+
+    /// Update execution settings.
+    ///
+    /// Note: Changes to max_parallel_agents require a daemon restart to take effect.
+    pub fn update_execution_settings(&self, execution_settings: ExecutionSettings) -> Result<(), String> {
+        if execution_settings.max_parallel_agents == 0 {
+            return Err("max_parallel_agents must be at least 1".to_string());
+        }
+        let mut settings = self.load().unwrap_or_default();
+        settings.execution = execution_settings;
+        self.save(&settings)
+    }
 }
 
 #[cfg(test)]
@@ -162,8 +320,8 @@ mod tests {
         // Optional tools are disabled by default
         assert!(!settings.tools.python);
         assert!(!settings.tools.web_fetch);
-        // Logging is disabled by default
-        assert!(!settings.logs.enabled);
+        // Logging is enabled by default (quiet mode)
+        assert!(settings.logs.enabled);
     }
 
     #[test]
@@ -187,9 +345,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let service = SettingsService::new_legacy(dir.path().to_path_buf());
 
-        // Default: logging disabled
+        // Default: logging enabled with stdout suppressed
         let log_settings = service.get_log_settings().unwrap();
-        assert!(!log_settings.enabled);
+        assert!(log_settings.enabled);
 
         // Update: enable logging
         let mut new_log_settings = LogSettings::enabled();
@@ -236,5 +394,46 @@ mod tests {
 
         assert!(json_content.contains("maxFiles"));
         assert!(json_content.contains("suppressStdout"));
+    }
+
+    #[test]
+    fn test_distillation_config_defaults() {
+        let config = DistillationConfig::default();
+        assert!(config.provider_id.is_none());
+        assert!(config.model.is_none());
+    }
+
+    #[test]
+    fn test_distillation_config_in_execution_settings() {
+        let dir = tempdir().unwrap();
+        let service = SettingsService::new_legacy(dir.path().to_path_buf());
+
+        let mut settings = AppSettings::default();
+        settings.execution.distillation = DistillationConfig {
+            provider_id: Some("ollama".to_string()),
+            model: Some("llama3".to_string()),
+        };
+        service.save(&settings).unwrap();
+
+        service.invalidate_cache();
+        let loaded = service.get_execution_settings().unwrap();
+        assert_eq!(loaded.distillation.provider_id.as_deref(), Some("ollama"));
+        assert_eq!(loaded.distillation.model.as_deref(), Some("llama3"));
+    }
+
+    #[test]
+    fn test_distillation_config_absent_in_json() {
+        let dir = tempdir().unwrap();
+        let service = SettingsService::new_legacy(dir.path().to_path_buf());
+
+        let json = r#"{ "execution": { "maxParallelAgents": 3 } }"#;
+        let config_dir = dir.path().join("config");
+        std::fs::create_dir_all(&config_dir).unwrap();
+        std::fs::write(config_dir.join("settings.json"), json).unwrap();
+
+        service.invalidate_cache();
+        let loaded = service.get_execution_settings().unwrap();
+        assert!(loaded.distillation.provider_id.is_none());
+        assert!(loaded.distillation.model.is_none());
     }
 }

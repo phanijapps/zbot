@@ -263,6 +263,30 @@ pub enum GatewayEvent {
         #[serde(skip_serializing_if = "Option::is_none")]
         conversation_id: Option<String>,
     },
+
+    /// Session title changed via set_session_title tool.
+    SessionTitleChanged {
+        session_id: String,
+        title: String,
+    },
+
+    /// Intent analysis started for a root session (pre-execution)
+    IntentAnalysisStarted {
+        session_id: String,
+        execution_id: String,
+    },
+
+    /// Intent analysis completed for a root session
+    IntentAnalysisComplete {
+        session_id: String,
+        execution_id: String,
+        primary_intent: String,
+        hidden_intents: Vec<String>,
+        recommended_skills: Vec<String>,
+        recommended_agents: Vec<String>,
+        ward_recommendation: serde_json::Value,
+        execution_strategy: serde_json::Value,
+    },
 }
 
 impl GatewayEvent {
@@ -294,6 +318,9 @@ impl GatewayEvent {
             Self::WardChanged { .. } => None,
             Self::PlanUpdate { .. } => None,
             Self::IterationsExtended { .. } => None,
+            Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { .. } => None,
+            Self::IntentAnalysisComplete { .. } => None,
         }
     }
 
@@ -325,6 +352,9 @@ impl GatewayEvent {
             Self::WardChanged { session_id, .. } => Some(session_id),
             Self::PlanUpdate { session_id, .. } => Some(session_id),
             Self::IterationsExtended { session_id, .. } => Some(session_id),
+            Self::SessionTitleChanged { session_id, .. } => Some(session_id),
+            Self::IntentAnalysisStarted { session_id, .. } => Some(session_id),
+            Self::IntentAnalysisComplete { session_id, .. } => Some(session_id),
         }
     }
 
@@ -363,6 +393,9 @@ impl GatewayEvent {
             Self::WardChanged { execution_id, .. } => Some(execution_id),
             Self::PlanUpdate { execution_id, .. } => Some(execution_id),
             Self::IterationsExtended { execution_id, .. } => Some(execution_id),
+            Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { execution_id, .. } => Some(execution_id),
+            Self::IntentAnalysisComplete { execution_id, .. } => Some(execution_id),
         }
     }
 
@@ -398,6 +431,9 @@ impl GatewayEvent {
             Self::WardChanged { .. } => None,
             Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
             Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
+            Self::SessionTitleChanged { .. } => None,
+            Self::IntentAnalysisStarted { .. } => None,
+            Self::IntentAnalysisComplete { .. } => None,
         }
     }
 }

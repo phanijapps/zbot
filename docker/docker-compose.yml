@@ -1,0 +1,15 @@
+services:
+  zbot:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    network_mode: host
+    volumes:
+      - ${VAULT_PATH:-~/Documents/zbot}:/data/zbot
+      - fastembed-cache:/home/zbot/.cache/fastembed
+    environment:
+      - RUST_LOG=warn
+    restart: unless-stopped
+
+volumes:
+  fastembed-cache:

@@ -11,7 +11,7 @@ use tokio::sync::Mutex;
 
 /// SQLite storage for knowledge graph
 pub struct GraphStorage {
-    conn: Arc<Mutex<Connection>>,
+    pub(crate) conn: Arc<Mutex<Connection>>,
 }
 
 impl GraphStorage {
@@ -937,7 +937,39 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
         ).map_err(|e| GraphError::Database(e))?;
     }
 
+    // One-time migration: dedup existing relationships before adding unique index
+    // Keep the row with lowest rowid per (source, target, type) triple
+    conn.execute_batch("
+        DELETE FROM kg_relationships WHERE rowid NOT IN (
+            SELECT MIN(rowid) FROM kg_relationships
+            GROUP BY source_entity_id, target_entity_id, relationship_type
+        );
+    ").map_err(GraphError::Database)?;
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_rel_unique
+         ON kg_relationships(source_entity_id, target_entity_id, relationship_type)",
+        [],
+    ).map_err(GraphError::Database)?;
+
     Ok(())
+}
+
+/// Normalize entity name for dedup matching.
+/// For file entities, strip path prefixes to match on basename.
+fn normalize_entity_name(name: &str, entity_type: &str) -> String {
+    let trimmed = name.trim();
+
+    // For file entities, match on basename (strip directory prefixes)
+    if entity_type == "file" {
+        if let Some(basename) = trimmed.rsplit('/').next() {
+            if !basename.is_empty() {
+                return basename.to_string();
+            }
+        }
+    }
+
+    trimmed.to_string()
 }
 
 /// Store an entity with cross-agent dedup.
@@ -951,11 +983,35 @@ fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResu
         .unwrap_or_else(|_| "".to_string());
 
     // Check for existing entity with same name + type across ALL agents
-    if let Some(existing_id) = find_entity_by_name_global(conn, &entity.name, entity_type_str)? {
+    let normalized_name = normalize_entity_name(&entity.name, entity_type_str);
+    if let Some(existing_id) = find_entity_by_name_global(conn, &normalized_name, entity_type_str)? {
         // Bump existing entity — dedup
+        // Store full path as alias if different from matched name
+        let mut existing_props: serde_json::Value = conn.query_row(
+            "SELECT properties FROM kg_entities WHERE id = ?1",
+            params![existing_id],
+            |row| {
+                let s: String = row.get(0)?;
+                Ok(serde_json::from_str(&s).unwrap_or(serde_json::json!({})))
+            },
+        ).unwrap_or(serde_json::json!({}));
+
+        if entity.name != normalized_name {
+            if let Some(obj) = existing_props.as_object_mut() {
+                let aliases = obj.entry("aliases").or_insert(serde_json::json!([]));
+                if let Some(arr) = aliases.as_array_mut() {
+                    let full_name = serde_json::Value::String(entity.name.clone());
+                    if !arr.contains(&full_name) {
+                        arr.push(full_name);
+                    }
+                }
+            }
+        }
+        let updated_props = serde_json::to_string(&existing_props).unwrap_or_default();
+
         conn.execute(
             "UPDATE kg_entities SET mention_count = mention_count + 1, last_seen_at = ?1, properties = ?2 WHERE id = ?3",
-            params![entity.last_seen_at.to_rfc3339(), properties_json, existing_id],
+            params![entity.last_seen_at.to_rfc3339(), updated_props, existing_id],
         ).map_err(GraphError::Database)?;
         return Ok(existing_id);
     }
@@ -986,15 +1042,32 @@ fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResu
 
 /// Find an existing entity by name + type across ALL agents (case-insensitive).
 fn find_entity_by_name_global(conn: &Connection, name: &str, entity_type: &str) -> GraphResult<Option<String>> {
+    // Exact match first (case-insensitive)
     let mut stmt = conn.prepare(
         "SELECT id FROM kg_entities WHERE name = ?1 COLLATE NOCASE AND entity_type = ?2 LIMIT 1"
     ).map_err(GraphError::Database)?;
 
     match stmt.query_row(params![name, entity_type], |row| row.get::<_, String>(0)) {
-        Ok(id) => Ok(Some(id)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-        Err(e) => Err(GraphError::Database(e)),
+        Ok(id) => return Ok(Some(id)),
+        Err(rusqlite::Error::QueryReturnedNoRows) => {},
+        Err(e) => return Err(GraphError::Database(e)),
     }
+
+    // For file entities, also try matching against the basename of existing full paths
+    if entity_type == "file" {
+        let like_pattern = format!("%/{}", name);
+        let mut stmt2 = conn.prepare(
+            "SELECT id FROM kg_entities WHERE name LIKE ?1 COLLATE NOCASE AND entity_type = ?2 LIMIT 1"
+        ).map_err(GraphError::Database)?;
+
+        match stmt2.query_row(params![like_pattern, entity_type], |row| row.get::<_, String>(0)) {
+            Ok(id) => return Ok(Some(id)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => {},
+            Err(e) => return Err(GraphError::Database(e)),
+        }
+    }
+
+    Ok(None)
 }
 
 /// Find an existing entity by agent_id + name (case-insensitive).
@@ -1029,7 +1102,7 @@ fn store_relationship(conn: &Connection, agent_id: &str, relationship: Relations
     conn.execute(
         "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT(id) DO UPDATE SET
+         ON CONFLICT(source_entity_id, target_entity_id, relationship_type) DO UPDATE SET
             last_seen_at = excluded.last_seen_at,
             mention_count = mention_count + 1,
             properties = excluded.properties",

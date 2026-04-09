@@ -24,7 +24,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 
 /// Estimate token count for a single message
 pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
-    let mut tokens = estimate_tokens(&message.content);
+    let mut tokens = estimate_tokens(&message.text_content());
 
     // Add overhead for tool calls
     if let Some(tool_calls) = &message.tool_calls {

@@ -98,12 +98,7 @@ impl SummarizationMiddleware {
         let response = self
             .summary_client
             .chat(
-                vec![ChatMessage {
-                    role: "user".to_string(),
-                    content: prompt,
-                    tool_calls: None,
-                    tool_call_id: None,
-                }],
+                vec![ChatMessage::user(prompt)],
                 None, // No tools needed for summarization
             )
             .await
@@ -117,7 +112,7 @@ impl SummarizationMiddleware {
         messages
             .iter()
             .map(|msg| {
-                format!("{}: {}", msg.role, msg.content)
+                format!("{}: {}", msg.role, msg.text_content())
             })
             .collect::<Vec<_>>()
             .join("\n\n")
@@ -248,15 +243,10 @@ impl PreProcessMiddleware for SummarizationMiddleware {
         let mut new_messages = Vec::new();
 
         // Add summary as a system-like message at the beginning
-        new_messages.push(ChatMessage {
-            role: "system".to_string(),
-            content: format!(
-                "{}\n\nSummary of previous conversation:\n{}",
-                self.config.summary_prefix, summary
-            ),
-            tool_calls: None,
-            tool_call_id: None,
-        });
+        new_messages.push(ChatMessage::system(format!(
+            "{}\n\nSummary of previous conversation:\n{}",
+            self.config.summary_prefix, summary
+        )));
 
         // Add the messages we wanted to keep
         new_messages.extend(keep_messages);
@@ -276,24 +266,9 @@ mod tests {
 
     fn create_test_messages() -> Vec<ChatMessage> {
         vec![
-            ChatMessage {
-                role: "system".to_string(),
-                content: "You are a helpful assistant.".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-            },
-            ChatMessage {
-                role: "user".to_string(),
-                content: "Hello!".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-            },
-            ChatMessage {
-                role: "assistant".to_string(),
-                content: "Hi there!".to_string(),
-                tool_calls: None,
-                tool_call_id: None,
-            },
+            ChatMessage::system("You are a helpful assistant.".to_string()),
+            ChatMessage::user("Hello!".to_string()),
+            ChatMessage::assistant("Hi there!".to_string()),
         ]
     }
 

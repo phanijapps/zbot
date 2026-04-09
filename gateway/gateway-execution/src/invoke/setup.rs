@@ -106,6 +106,7 @@ pub struct AgentLoader<'a> {
     agent_service: &'a AgentService,
     provider_resolver: ProviderResolver<'a>,
     paths: SharedVaultPaths,
+    settings: Option<&'a SettingsService>,
 }
 
 impl<'a> AgentLoader<'a> {
@@ -119,7 +120,14 @@ impl<'a> AgentLoader<'a> {
             agent_service,
             provider_resolver: ProviderResolver::new(provider_service),
             paths,
+            settings: None,
         }
+    }
+
+    /// Set settings service for reading orchestrator config.
+    pub fn with_settings(mut self, settings: &'a SettingsService) -> Self {
+        self.settings = Some(settings);
+        self
     }
 
     /// Load an agent by ID.
@@ -137,7 +145,7 @@ impl<'a> AgentLoader<'a> {
 
         // Append OS context and shards to agent instructions
         // so subagents know platform commands and tool syntax
-        agent.instructions = append_system_context(&agent.instructions, &self.paths);
+        agent.instructions = append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
 
         let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
 
@@ -155,10 +163,33 @@ impl<'a> AgentLoader<'a> {
                 Ok((agent, provider))
             }
             Err(_) if agent_id == "root" => {
-                // Create a default root agent using the default provider
-                let provider = self.provider_resolver.get_default()?;
+                // Read orchestrator config from settings.json
+                let orch = self.settings
+                    .and_then(|s| s.get_execution_settings().ok())
+                    .map(|s| s.orchestrator)
+                    .unwrap_or_default();
 
-                let model = provider.default_model().to_string();
+                // Resolve provider: orchestrator config → default provider
+                let provider = match &orch.provider_id {
+                    Some(id) if !id.is_empty() => {
+                        self.provider_resolver.get_or_default(id)?
+                    }
+                    _ => self.provider_resolver.get_default()?,
+                };
+
+                // Resolve model: orchestrator config → provider default
+                let model = orch.model
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| provider.default_model().to_string());
+
+                tracing::info!(
+                    provider = %provider.name,
+                    model = %model,
+                    temperature = orch.temperature,
+                    max_tokens = orch.max_tokens,
+                    thinking = orch.thinking_enabled,
+                    "Creating root agent from orchestrator config"
+                );
 
                 let agent = gateway_services::agents::Agent {
                     id: "root".to_string(),
@@ -168,9 +199,9 @@ impl<'a> AgentLoader<'a> {
                     agent_type: Some("orchestrator".to_string()),
                     provider_id: provider.id.clone().unwrap_or_default(),
                     model,
-                    temperature: 0.7,
-                    max_tokens: 8192,
-                    thinking_enabled: false,
+                    temperature: orch.temperature,
+                    max_tokens: orch.max_tokens,
+                    thinking_enabled: orch.thinking_enabled,
                     voice_recording_enabled: false,
                     system_instruction: None,
                     instructions: gateway_templates::load_system_prompt_from_paths(&self.paths),
@@ -197,7 +228,7 @@ impl<'a> AgentLoader<'a> {
             Ok(mut agent) => {
                 // Append OS context and shards so pre-configured agents
                 // also know platform commands (PowerShell vs bash, etc.)
-                agent.instructions = append_system_context(&agent.instructions, &self.paths);
+                agent.instructions = append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
                 Ok((agent, provider))
             }
@@ -248,34 +279,80 @@ impl<'a> AgentLoader<'a> {
 // SPECIALIST AGENT HELPERS
 // ============================================================================
 
+/// Subagent execution role — determines which rules are injected.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SubagentRole {
+    /// Write code, build things, run scripts. Strict rules.
+    Executor,
+    /// Review code, validate output, evaluate quality. Relaxed rules.
+    Reviewer,
+}
+
+/// Detect subagent role from task description.
+pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
+    let task_lower = task.to_lowercase();
+    let review_signals = [
+        "review", "validate", "verify", "evaluate",
+        "check quality", "assess", "qa", "audit",
+    ];
+    if review_signals.iter().any(|s| task_lower.contains(s)) {
+        SubagentRole::Reviewer
+    } else {
+        SubagentRole::Executor
+    }
+}
+
+pub fn subagent_rules(role: SubagentRole) -> &'static str {
+    match role {
+        SubagentRole::Executor => "\n\n# RULES\n\
+            First: enter ward, read AGENTS.md + memory-bank/core_docs.md. Reuse core/ — never recreate.\n\
+            Execute with write_file + edit_file + shell. Extract reusable functions to core/ when done.\n\
+            Respond with: files created, commands run, errors.\n",
+        SubagentRole::Reviewer => "\n\n# --- SUBAGENT RULES ---\n\
+            You are reviewing work produced by another agent. Think critically and independently.\n\
+            1. Read the specs and the implementation carefully before forming opinions.\n\
+            2. Run the code and examine actual output — don't trust claims.\n\
+            3. Evaluate with domain expertise — are values reasonable? Is data complete?\n\
+            4. Report your findings in structured format.\n\n\
+            ## Report Format\n\
+            End your response with EXACTLY one of:\n\
+            RESULT: APPROVED\n\
+            or\n\
+            RESULT: DEFECTS\n\
+            - {file_or_output}: {issue} (severity: high|medium|low)\n",
+    }
+}
+
 /// Build specialist instructions from OS.md + tooling shard + role preamble.
 /// Does NOT include orchestration/planning instructions — specialists execute, they don't orchestrate.
 /// Append OS context and tooling shard to agent instructions.
 /// This ensures ALL agents (pre-configured and auto-created) know:
 /// - Platform commands (PowerShell vs bash)
-/// - Tool syntax (apply_patch, shell, etc.)
-fn append_system_context(instructions: &str, paths: &SharedVaultPaths) -> String {
+/// - Tool syntax (write_file/edit_file, shell, etc.)
+pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role: SubagentRole) -> String {
+    // OS context: platform-correct commands (bash vs PowerShell). ~500B.
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
         .unwrap_or_default();
 
-    let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
-        .map(|f| String::from_utf8_lossy(&f.data).to_string())
-        .unwrap_or_default();
+    // Rules: only append if not already present (delegated agents prepend rules in spawn.rs)
+    let rules = if instructions.contains("# RULES") {
+        "" // Already prepended by spawn.rs
+    } else {
+        subagent_rules(role)
+    };
 
-    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
-        .map(|f| String::from_utf8_lossy(&f.data).to_string())
-        .unwrap_or_default();
-
-    // Subagent discipline: execute directly, don't over-plan
-    let subagent_note = "\n\n# --- SUBAGENT RULES ---\n\
-        You are a specialist executing a specific task. Do NOT create complex plans.\n\
-        Execute your task directly in as few tool calls as possible.\n\
-        Use apply_patch for ALL file creation and editing.\n\
-        If your task fails after 2 attempts, respond with what you accomplished and what failed.\n";
+    // Memory shard only for root agents (subagents don't have memory tool)
+    let memory_shard = if instructions.contains("# RULES") {
+        String::new() // Delegated subagent — no memory tool, no shard needed
+    } else {
+        gateway_templates::Templates::get("shards/memory_learning.md")
+            .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            .unwrap_or_default()
+    };
 
     format!(
-        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}{}",
-        instructions, os_context, tooling, memory_shard, subagent_note
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}{}",
+        instructions, os_context, memory_shard, rules
     )
 }
 
@@ -286,7 +363,7 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
     let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
         .unwrap_or_default();
 
-    // Load tooling shard for apply_patch syntax and tool docs
+    // Load tooling shard for write_file/edit_file syntax and tool docs
     let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
@@ -303,7 +380,7 @@ fn generate_role_preamble(agent_id: &str) -> String {
 
     let role_description = if name_lower.contains("coder") || name_lower.contains("code") || name_lower.contains("developer") || name_lower.contains("programmer") {
         "You are a coding specialist. Write clean, modular, reusable code.\n\
-         Use apply_patch for all file creation and editing.\n\
+         Use write_file/edit_file for all file creation and editing.\n\
          Follow the coding skill protocol: explore ward, plan, build core/ first, then task scripts.\n\
          Fix broken code — never create _v2 or _improved copies.\n\
          Load the 'coding' skill for detailed instructions."
@@ -314,7 +391,7 @@ fn generate_role_preamble(agent_id: &str) -> String {
          Cite sources and cross-reference facts."
     } else if name_lower.contains("writ") || name_lower.contains("report") {
         "You are a writing specialist. Create clear, professional documents and reports.\n\
-         Use apply_patch to create well-formatted HTML, markdown, or text files.\n\
+         Use write_file/edit_file to create well-formatted HTML, markdown, or text files.\n\
          Put all output in the output/ directory of the ward.\n\
          Focus on clarity, structure, and visual presentation."
     } else if name_lower.contains("analy") || name_lower.contains("data") {
@@ -324,7 +401,7 @@ fn generate_role_preamble(agent_id: &str) -> String {
          Load the 'coding' skill for file organization guidelines."
     } else {
         "You are a specialist agent. Execute the task you are given precisely.\n\
-         Use apply_patch for file operations. Work in the ward specified in your task.\n\
+         Use write_file/edit_file for file operations. Work in the ward specified in your task.\n\
          Read AGENTS.md before writing code. Follow existing patterns."
     };
 

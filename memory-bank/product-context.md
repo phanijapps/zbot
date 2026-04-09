@@ -2,63 +2,76 @@
 
 ## Why z-Bot Exists
 
-z-Bot is a local-first AI agent platform that puts you in control. It's a creative hub where agents self-improve through persistent code, shared environments, and cross-session learning.
+z-Bot is a **goal-oriented AI agent** that lives on your desktop. It is not a chatbot — it is an autonomous execution engine. Give it a goal, and it analyzes intent, plans an approach, delegates to specialist agents, executes tools, learns from results, and persists knowledge for future sessions.
 
-Most AI platforms lock you into a cloud provider, take your data off-machine, and give you no way to extend the system. z-Bot exists to solve this: run sophisticated AI assistants on your own machine with full data ownership, multi-provider flexibility, and unlimited extensibility.
+The core insight: most AI tools are designed around **control** (you tell it exactly what to do, step by step). z-Bot is designed around **goals** (you tell it what you want to achieve, and it figures out how). This enables long-running autonomous sessions where agents iterate, recover from failures, and coordinate with each other — without constant human steering.
 
 ## Problems It Solves
 
-1. **Data sovereignty** — Cloud AI platforms store your conversations, code, and context on their servers. z-Bot keeps everything on your machine in plain files and SQLite.
+1. **AI tools require constant steering** — Most assistants need you to drive every step. z-Bot's intent analysis, planning, and delegation mean you set a goal and walk away. The agent figures out the approach, delegates to specialists, and iterates until the goal is achieved.
 
-2. **No unified local platform** — Running local AI today means cobbling together CLI tools, model servers, and shell scripts. z-Bot provides a single daemon with web UI, CLI, sessions, tools, skills, and multi-agent delegation.
+2. **No cross-session learning** — Most AI assistants forget everything between sessions. z-Bot automatically distills session transcripts into structured facts (corrections, strategies, domain knowledge), then recalls relevant facts at the start of new sessions via hybrid semantic + keyword search. The agent learns without manual effort.
 
-3. **No persistent project context** — Session-based AI assistants start from scratch every time. z-Bot's Code Wards give agents persistent project directories they create, name, and navigate autonomously. Code survives across sessions.
+3. **Single-agent limitations** — Complex tasks need different skills (planning, coding, research, documentation). z-Bot's multi-agent delegation lets a root orchestrator break work into pieces and assign them to specialist subagents, each with their own tools, context, and instructions.
 
-4. **No cross-session learning** — Most AI assistants forget everything between sessions. z-Bot automatically distills session transcripts into structured facts, then recalls relevant facts at the start of new sessions via hybrid semantic + keyword search. The agent learns without manual effort.
+4. **Provider lock-in** — Most platforms work with one LLM provider. z-Bot is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or **any OpenAI-compatible API**. Configure different models for orchestration, distillation, and multimodal analysis independently.
 
-5. **Provider lock-in** — Most platforms work with one LLM provider. z-Bot is provider-agnostic: OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API.
+5. **Data sovereignty** — Cloud AI platforms store your conversations, code, and context on their servers. z-Bot keeps everything on your machine in plain files and SQLite. Embeddings run locally via ONNX (zero API cost).
 
-6. **Limited extensibility** — z-Bot supports Skills (reusable instruction packages), MCP servers (external tool integration), and Bridge Workers (bidirectional connectors to external services like Slack, Discord, CRMs) as first-class concepts.
+6. **No persistent project context** — Session-based AI assistants start from scratch every time. z-Bot's Code Wards give agents persistent project directories they create, name, and navigate autonomously. Code survives across sessions.
 
 ## Core Principles
 
-1. **Local-First** — Your data stays on your machine. No cloud lock-in.
-2. **Provider-Agnostic** — Use any LLM: OpenAI, Anthropic, DeepSeek, Ollama, self-hosted.
-3. **Extensible** — Skills and MCP servers let you add any capability.
-4. **Open Standards** — Built on Agent Skills and Model Context Protocol specifications.
-5. **Simple Deployment** — Single daemon binary + static web files.
+1. **Goal-Oriented** — The agent's job is to achieve your goal, not to wait for instructions. Intent analysis, planning, and autonomous execution are the defaults.
+2. **Self-Learning** — Every session teaches the agent something. Distillation extracts facts; recall injects them. Corrections are surfaced first so the agent never repeats the same mistake.
+3. **Local-First** — Your data stays on your machine. No cloud lock-in. Embeddings run locally.
+4. **Provider-Agnostic** — Use any LLM: OpenAI, Anthropic, DeepSeek, Ollama, self-hosted. Mix providers across orchestration, distillation, and vision.
+5. **Extensible** — Skills, MCP servers, and Bridge Workers let you add any capability without touching core code.
 
 ## Target Users
 
 | User | Use Case |
 |------|----------|
-| **Developers** | Building AI-powered workflows, automation, code assistants |
-| **Power Users** | Creating specialized assistants for research, writing, analysis |
-| **Teams** | Managing multiple agents with different capabilities and contexts |
+| **Developers** | Autonomous coding assistants that plan, implement, test, and iterate on their own |
+| **Power Users** | Long-running research, analysis, and content creation workflows |
+| **Teams** | Managing multiple specialist agents with different capabilities and project contexts |
 | **Privacy-Conscious** | Running AI locally without sending data to third parties |
 
 ## How It Should Work
 
-1. **Start the daemon** — Single binary (`zerod`) serves HTTP API, WebSocket, and static web files
-2. **Configure providers** — Add API keys for your preferred LLM providers (or point to local Ollama)
-3. **Create agents** — Define agents with custom instructions (AGENTS.md), model selection, and tool access
-4. **Agents create wards** — When given a coding task, the agent autonomously creates or selects a Code Ward (persistent project directory)
-5. **Persistent code** — Code persists across sessions. Ward memory stores project context (tech stack, build commands)
-6. **Delegation** — Root agent orchestrates by delegating tasks to specialized subagents, who execute in parallel and report back
-7. **Skills & MCP** — Load instruction packages on demand; connect to external tool servers for filesystem, databases, APIs
+1. **Set a goal** — Type what you want to achieve (not step-by-step instructions)
+2. **Agent analyzes intent** — Determines complexity, selects specialist agents, identifies relevant skills and wards
+3. **Agent plans** — For non-trivial tasks, creates a structured plan before executing
+4. **Agent delegates** — Root orchestrator dispatches tasks to specialist subagents (planner, coder, researcher, tutor)
+5. **Subagents execute** — Each subagent works autonomously with tools (shell, file editing, web search, memory)
+6. **Agents iterate** — If tests fail, the agent fixes and retries. Complexity budgets prevent infinite loops.
+7. **Results collected** — Subagent results flow back to root via callbacks. Root can delegate further or respond.
+8. **Memory distilled** — After session completes, facts, entities, and relationships are extracted into persistent memory
+9. **Next session starts smarter** — Relevant corrections, strategies, and domain knowledge are recalled automatically
+
+## Token Usage Warning
+
+z-Bot is **token-intensive by design**. A single user request can trigger:
+- Intent analysis (1 LLM call)
+- Planning (1 LLM call per subagent)
+- Subagent execution (5-50+ LLM calls per subagent, depending on task complexity)
+- Post-session distillation (1-2 LLM calls)
+- Memory recall with graph expansion
+
+A complex coding task with 3 subagents can easily consume 100+ LLM calls and 200k+ tokens in a single session. This is the cost of autonomy — the agent is doing the work that a human developer would otherwise do manually. Monitor your provider usage dashboard and configure rate limits in Settings.
 
 ## Differentiators
 
 | Feature | z-Bot | Cloud AI Platforms |
 |---------|-------|-------------------|
+| Execution Model | Goal-oriented, autonomous | Request-response, human-steered |
+| Multi-Agent | Built-in orchestration + delegation | Rare / manual |
+| Memory | Auto-distillation + semantic recall + knowledge graph | None / session-scoped |
 | Data Location | Local machine | Cloud servers |
-| Provider Lock-in | None | Usually locked |
+| Provider Lock-in | None — any OpenAI-compatible API | Usually locked |
+| Multimodal | Configurable vision model (any provider) | Platform-specific |
 | Offline Capable | Yes (with Ollama) | No |
-| Cost | API costs only | Subscription + API |
-| Customization | Unlimited | Limited |
-| Privacy | Full control | Varies |
-| Multi-Agent | Built-in delegation | Rare |
-| External Connectors | Bridge Workers (WebSocket + STDIO) | Limited/None |
-| Persistent Code | Code Wards | Session-scoped |
-| Cross-Session Learning | Auto-distillation + hybrid recall | None |
-| Embedding Cost | Local ONNX (zero cost) default | API-only |
+| Cost | API costs only (embeddings free via local ONNX) | Subscription + API |
+| Customization | Agents, skills, MCP servers, bridge workers | Limited |
+| Persistent Code | Code Wards (survive across sessions) | Session-scoped |
+| Observability | Timeline tree with full tool call visibility | Limited logs |

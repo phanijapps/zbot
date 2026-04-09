@@ -142,7 +142,7 @@ impl<D: StateDbProvider> StateService<D> {
         let session = self.repo.get_session(session_id)?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
-        if session.status != SessionStatus::Paused {
+        if session.status != SessionStatus::Paused && session.status != SessionStatus::Crashed {
             return Err(format!("Cannot resume session in {} state", session.status.as_str()));
         }
 
@@ -236,6 +236,11 @@ impl<D: StateDbProvider> StateService<D> {
         Ok(())
     }
 
+    /// Update the session title.
+    pub fn update_session_title(&self, session_id: &str, title: &str) -> Result<(), String> {
+        self.repo.update_session_title(session_id, title)
+    }
+
     /// Update the active ward for a session.
     pub fn update_session_ward(&self, session_id: &str, ward_id: &str) -> Result<(), String> {
         self.repo.update_session_ward(session_id, ward_id)
@@ -311,6 +316,11 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.get_child_executions(parent_execution_id)
     }
 
+    /// Cancel a single execution by marking it as cancelled.
+    pub fn cancel_execution(&self, execution_id: &str) -> Result<(), String> {
+        self.repo.cancel_execution(execution_id)
+    }
+
     /// Check if a session has any pending executions (running or queued).
     ///
     /// This checks for both RUNNING and QUEUED executions. QUEUED executions
@@ -364,6 +374,17 @@ impl<D: StateDbProvider> StateService<D> {
     /// Complete an execution.
     pub fn complete_execution(&self, execution_id: &str) -> Result<(), String> {
         self.repo.update_execution_status(execution_id, ExecutionStatus::Completed)
+    }
+
+    /// Set child_session_id on an execution (for smart resume).
+    pub fn set_child_session_id(&self, execution_id: &str, child_session_id: &str) -> Result<(), String> {
+        self.repo.set_child_session_id(execution_id, child_session_id)
+    }
+
+    /// Find the most recently crashed subagent execution for a session.
+    /// Returns None if only the root execution crashed or no crashes exist.
+    pub fn get_last_crashed_subagent(&self, session_id: &str) -> Result<Option<AgentExecution>, String> {
+        self.repo.get_last_crashed_subagent(session_id)
     }
 
     /// Mark an execution as crashed.
@@ -652,6 +673,7 @@ mod tests {
                     checkpoint TEXT,
                     error TEXT,
                     log_path TEXT,
+                    child_session_id TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
 
@@ -1045,5 +1067,126 @@ mod tests {
         // Should return only researcher agent's messages (2)
         assert_eq!(messages.len(), 2);
         assert!(messages.iter().all(|m| m.agent_id == "researcher"));
+    }
+
+    // ========================================================================
+    // Smart Resume Tests
+    // ========================================================================
+
+    #[test]
+    fn test_get_last_crashed_subagent() {
+        let service = setup_service();
+        let (session, root_exec) = service.create_session("root").unwrap();
+
+        // Create completed subagent
+        let sub1 = AgentExecution::new_delegated(
+            &session.id, "planner", &root_exec.id, DelegationType::Sequential, "Plan task",
+        );
+        service.create_execution(&sub1).unwrap();
+        service.complete_execution(&sub1.id).unwrap();
+
+        // Create crashed subagent with child_session_id
+        let child_session = Session::new_child("researcher", &session.id);
+        service.create_session_from(&child_session).unwrap();
+
+        let sub2 = AgentExecution::new_delegated(
+            &session.id, "researcher", &root_exec.id, DelegationType::Sequential, "Research task",
+        );
+        service.create_execution(&sub2).unwrap();
+        service.set_child_session_id(&sub2.id, &child_session.id).unwrap();
+        service.start_execution(&sub2.id).unwrap();
+        service.crash_execution(&sub2.id, "LLM 500 error").unwrap();
+
+        let crashed = service.get_last_crashed_subagent(&session.id).unwrap();
+        assert!(crashed.is_some());
+        let crashed = crashed.unwrap();
+        assert_eq!(crashed.agent_id, "researcher");
+        assert_eq!(crashed.child_session_id, Some(child_session.id));
+    }
+
+    #[test]
+    fn test_get_last_crashed_subagent_none_when_root_only() {
+        let service = setup_service();
+        let (session, root_exec) = service.create_session("root").unwrap();
+
+        service.crash_execution(&root_exec.id, "LLM 500 error").unwrap();
+
+        let crashed = service.get_last_crashed_subagent(&session.id).unwrap();
+        assert!(crashed.is_none());
+    }
+
+    #[test]
+    fn test_smart_resume_state_transitions() {
+        let service = setup_service();
+
+        // 1. Create root session (running) with root execution
+        let (session, root_exec) = service.create_session("root").unwrap();
+        service.start_execution(&root_exec.id).unwrap();
+
+        // 2. Register a delegation and create subagent with child session
+        service.register_delegation(&session.id).unwrap();
+        let child_session = Session::new_child("researcher", &session.id);
+        service.create_session_from(&child_session).unwrap();
+
+        let sub_exec = AgentExecution::new_delegated(
+            &session.id, "researcher", &root_exec.id,
+            DelegationType::Sequential, "Research task",
+        );
+        service.create_execution(&sub_exec).unwrap();
+        service.set_child_session_id(&sub_exec.id, &child_session.id).unwrap();
+        service.start_execution(&sub_exec.id).unwrap();
+
+        // 3. Complete root execution (it has pending delegations)
+        service.complete_execution(&root_exec.id).unwrap();
+        service.request_continuation(&session.id).unwrap();
+
+        // 4. Crash the subagent
+        service.crash_execution(&sub_exec.id, "LLM 500 error").unwrap();
+        service.crash_session(&session.id).unwrap();
+
+        // Verify crashed state
+        let s = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(s.status, SessionStatus::Crashed);
+
+        // 5. Find crashed subagent
+        let crashed = service.get_last_crashed_subagent(&session.id).unwrap().unwrap();
+        assert_eq!(crashed.agent_id, "researcher");
+        assert_eq!(crashed.child_session_id.as_ref().unwrap(), &child_session.id);
+
+        // 6. Simulate what resume_crashed_subagent does:
+        service.reactivate_session(&session.id).unwrap();
+        service.reactivate_execution(&root_exec.id).unwrap();
+        service.cancel_execution(&sub_exec.id).unwrap();
+        service.reactivate_session(&child_session.id).unwrap();
+        service.register_delegation(&session.id).unwrap();
+        service.request_continuation(&session.id).unwrap();
+
+        // Verify post-resume state
+        let s = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(s.status, SessionStatus::Running);
+        assert!(s.pending_delegations >= 1);
+        assert!(s.continuation_needed);
+
+        let old_exec = service.get_execution(&sub_exec.id).unwrap().unwrap();
+        assert_eq!(old_exec.status, ExecutionStatus::Cancelled);
+    }
+
+    #[test]
+    fn test_resume_crashed_session() {
+        let service = setup_service();
+        let (session, root_exec) = service.create_session("root").unwrap();
+
+        // Crash the session
+        service.crash_execution(&root_exec.id, "LLM error").unwrap();
+        service.crash_session(&session.id).unwrap();
+
+        let session_state = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(session_state.status, SessionStatus::Crashed);
+
+        // Resume should work for crashed sessions now
+        service.resume_session(&session.id).unwrap();
+
+        let session_state = service.get_session(&session.id).unwrap().unwrap();
+        assert_eq!(session_state.status, SessionStatus::Running);
     }
 }

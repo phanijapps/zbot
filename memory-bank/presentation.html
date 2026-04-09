@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>z-Bot — Goal-Oriented AI Agent</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --surface: #12121a;
+    --surface-2: #1a1a26;
+    --border: #2a2a3a;
+    --text: #e2e8f0;
+    --text-muted: #94a3b8;
+    --text-dim: #64748b;
+    --indigo: #818cf8;
+    --purple: #c084fc;
+    --teal: #2dd4bf;
+    --orange: #fb923c;
+    --green: #4ade80;
+    --red: #f87171;
+    --blue: #60a5fa;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+    line-height: 1.6;
+    overflow-x: hidden;
+  }
+
+  /* Slide system */
+  .slide {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    padding: 60px 80px;
+    position: relative;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .slide--hero {
+    align-items: center;
+    text-align: center;
+  }
+
+  .slide__number {
+    position: absolute;
+    top: 24px;
+    right: 32px;
+    font-size: 13px;
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Typography */
+  h1 {
+    font-size: 56px;
+    font-weight: 700;
+    letter-spacing: -1.5px;
+    line-height: 1.1;
+    margin-bottom: 16px;
+  }
+
+  h2 {
+    font-size: 40px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    line-height: 1.2;
+    margin-bottom: 32px;
+  }
+
+  h3 {
+    font-size: 20px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .subtitle {
+    font-size: 22px;
+    color: var(--text-muted);
+    max-width: 700px;
+    line-height: 1.5;
+  }
+
+  .hero-subtitle {
+    font-size: 24px;
+    color: var(--text-muted);
+    max-width: 800px;
+    margin: 0 auto 40px;
+  }
+
+  .accent { color: var(--indigo); }
+  .accent-teal { color: var(--teal); }
+  .accent-purple { color: var(--purple); }
+  .accent-orange { color: var(--orange); }
+  .accent-green { color: var(--green); }
+
+  /* Warning banner */
+  .warning {
+    background: #f9731618;
+    border: 1px solid #f9731644;
+    border-radius: 10px;
+    padding: 16px 24px;
+    color: var(--orange);
+    font-size: 14px;
+    max-width: 600px;
+    margin: 0 auto;
+    text-align: center;
+  }
+
+  /* Grid layouts */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; }
+  .grid-4 { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 16px; }
+
+  /* Cards */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .card--accent {
+    border-top: 2px solid var(--indigo);
+  }
+
+  .card__icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 20px;
+    margin-bottom: 16px;
+  }
+
+  .card__title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 8px;
+  }
+
+  .card__desc {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  /* Flow diagram */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: center;
+    margin: 32px 0;
+  }
+
+  .flow__step {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 14px 20px;
+    text-align: center;
+    min-width: 140px;
+  }
+
+  .flow__step-num {
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+
+  .flow__step-label {
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .flow__arrow {
+    color: var(--text-dim);
+    font-size: 20px;
+  }
+
+  /* Timeline */
+  .timeline {
+    font-family: 'SF Mono', 'Fira Code', monospace;
+    font-size: 14px;
+    line-height: 2.2;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px 28px;
+    max-width: 700px;
+  }
+
+  .timeline__root { color: var(--text); font-weight: 600; }
+  .timeline__agent { font-weight: 600; }
+  .timeline__tool { color: var(--text-muted); }
+  .timeline__meta { color: var(--text-dim); font-size: 12px; }
+  .timeline__error { color: var(--red); }
+
+  /* Provider logos */
+  .providers {
+    display: flex;
+    gap: 32px;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    margin: 32px 0;
+  }
+
+  .provider-badge {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 24px;
+    font-size: 15px;
+    font-weight: 500;
+    color: var(--text-muted);
+    transition: border-color 0.2s;
+  }
+
+  /* Stats */
+  .stat {
+    text-align: center;
+  }
+
+  .stat__value {
+    font-size: 48px;
+    font-weight: 700;
+    letter-spacing: -1px;
+  }
+
+  .stat__label {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-top: 4px;
+  }
+
+  /* Memory loop */
+  .memory-loop {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 14px;
+  }
+
+  .memory-loop:last-child { border-bottom: none; }
+
+  .memory-loop__num {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+
+  .memory-loop__text { color: var(--text-muted); }
+  .memory-loop__text strong { color: var(--text); }
+
+  /* Comparison table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+  }
+
+  th {
+    text-align: left;
+    padding: 12px 16px;
+    border-bottom: 2px solid var(--border);
+    color: var(--text-dim);
+    text-transform: uppercase;
+    font-size: 11px;
+    letter-spacing: 1px;
+  }
+
+  td {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+  }
+
+  td:first-child { color: var(--text); font-weight: 500; }
+
+  .check { color: var(--green); }
+  .cross { color: var(--red); opacity: 0.5; }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 60px;
+    color: var(--text-dim);
+    font-size: 14px;
+  }
+
+  @media (max-width: 768px) {
+    .slide { padding: 40px 24px; }
+    h1 { font-size: 36px; }
+    h2 { font-size: 28px; }
+    .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+    .flow { flex-direction: column; }
+    .flow__arrow { transform: rotate(90deg); }
+  }
+</style>
+</head>
+<body>
+
+<!-- SLIDE 1: Hero -->
+<div class="slide slide--hero">
+  <h1>z-Bot</h1>
+  <p class="hero-subtitle">
+    A <span class="accent">goal-oriented AI agent</span> that lives on your desktop.<br>
+    Set a goal. Walk away. It figures out the rest.
+  </p>
+  <div class="warning">
+    ⚡ Token-intensive by design — a single task can consume 100+ LLM calls across multiple agents
+  </div>
+</div>
+
+<!-- SLIDE 2: The Problem -->
+<div class="slide">
+  <span class="slide__number">01</span>
+  <h2>Most AI tools are built around <span class="accent-orange">control</span></h2>
+  <p class="subtitle" style="margin-bottom:40px;">
+    You tell them what to do, step by step. Every action needs your approval. Every failure needs your intervention.
+  </p>
+  <div class="grid-3">
+    <div class="card">
+      <h3>Constant Steering</h3>
+      <p class="card__desc">You drive every step. The AI waits for instructions instead of solving problems.</p>
+    </div>
+    <div class="card">
+      <h3>No Memory</h3>
+      <p class="card__desc">Every session starts from scratch. Past mistakes are repeated. Lessons are lost.</p>
+    </div>
+    <div class="card">
+      <h3>Single-Agent</h3>
+      <p class="card__desc">One model tries to do everything. No specialization. No delegation. No parallelism.</p>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 3: The Solution -->
+<div class="slide">
+  <span class="slide__number">02</span>
+  <h2>z-Bot is built around <span class="accent-green">goals</span></h2>
+  <p class="subtitle" style="margin-bottom:40px;">
+    Tell it what you want to achieve. It analyzes intent, plans an approach, delegates to specialists, and learns from every session.
+  </p>
+  <div class="flow">
+    <div class="flow__step">
+      <div class="flow__step-num">Step 1</div>
+      <div class="flow__step-label" style="color:var(--indigo);">Analyze Intent</div>
+    </div>
+    <span class="flow__arrow">→</span>
+    <div class="flow__step">
+      <div class="flow__step-num">Step 2</div>
+      <div class="flow__step-label" style="color:var(--purple);">Plan</div>
+    </div>
+    <span class="flow__arrow">→</span>
+    <div class="flow__step">
+      <div class="flow__step-num">Step 3</div>
+      <div class="flow__step-label" style="color:var(--teal);">Delegate</div>
+    </div>
+    <span class="flow__arrow">→</span>
+    <div class="flow__step">
+      <div class="flow__step-num">Step 4</div>
+      <div class="flow__step-label" style="color:var(--orange);">Execute</div>
+    </div>
+    <span class="flow__arrow">→</span>
+    <div class="flow__step">
+      <div class="flow__step-num">Step 5</div>
+      <div class="flow__step-label" style="color:var(--green);">Learn</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 4: Example Trace -->
+<div class="slide">
+  <span class="slide__number">03</span>
+  <h2>What a session looks like</h2>
+  <p class="subtitle" style="margin-bottom:32px;">
+    You say: <em>"Build an auth system with JWT and role-based access"</em>
+  </p>
+  <div class="timeline">
+    <div><span class="timeline__root">🤖 root</span> — analyzes intent, selects agents <span class="timeline__meta">2.1s</span></div>
+    <div style="padding-left:24px;"><span style="color:var(--green);">▶ <span class="timeline__agent">planner-agent</span></span> — "Create implementation plan" <span class="timeline__meta">8.4s · 3,200 tok</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">🔧 shell — <code>ls src/</code> <span class="timeline__meta">0.2s</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">👁 read — <code>src/main.rs</code> <span class="timeline__meta">0.1s</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">💬 respond — "Plan: 4 steps..." <span class="timeline__meta">0.0s</span></div>
+    <div style="padding-left:24px;"><span style="color:var(--blue);">▶ <span class="timeline__agent">code-agent</span></span> — "Implement auth middleware" <span class="timeline__meta">22.6s · 9,800 tok</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">✏️ edit — <code>src/auth.rs</code> <span class="timeline__meta">0.1s</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">🔧 shell — <code>cargo test</code> <span class="timeline__meta timeline__error">FAIL 1.8s</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">✏️ edit — <code>src/auth.rs</code> <span class="timeline__meta">0.1s</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">🔧 shell — <code>cargo test</code> <span class="timeline__meta" style="color:var(--green);">PASS 1.6s</span></div>
+    <div style="padding-left:24px;"><span style="color:var(--purple);">▶ <span class="timeline__agent">tutor-agent</span></span> — "Document the API" <span class="timeline__meta">6.2s · 2,100 tok</span></div>
+    <div style="padding-left:48px;" class="timeline__tool">✏️ write — <code>docs/auth-api.md</code> <span class="timeline__meta">0.1s</span></div>
+    <div style="margin-top:8px; color:var(--purple);">💎 distill — 4 facts learned, 2 entities extracted <span class="timeline__meta">3.1s</span></div>
+  </div>
+</div>
+
+<!-- SLIDE 5: Self-Learning Memory -->
+<div class="slide">
+  <span class="slide__number">04</span>
+  <h2>It <span class="accent-purple">learns</span> from every session</h2>
+  <p class="subtitle" style="margin-bottom:32px;">
+    Five memory loops run automatically. No manual knowledge management.
+  </p>
+  <div style="max-width:700px;">
+    <div class="memory-loop">
+      <div class="memory-loop__num" style="background:var(--indigo)22; color:var(--indigo);">1</div>
+      <div class="memory-loop__text"><strong>System Recall</strong> — relevant facts injected at session start</div>
+    </div>
+    <div class="memory-loop">
+      <div class="memory-loop__num" style="background:var(--purple)22; color:var(--purple);">2</div>
+      <div class="memory-loop__text"><strong>Intent Enrichment</strong> — corrections and strategies inform intent analysis</div>
+    </div>
+    <div class="memory-loop">
+      <div class="memory-loop__num" style="background:var(--teal)22; color:var(--teal);">3</div>
+      <div class="memory-loop__text"><strong>Subagent Priming</strong> — relevant memory injected when spawning subagents</div>
+    </div>
+    <div class="memory-loop">
+      <div class="memory-loop__num" style="background:var(--orange)22; color:var(--orange);">4</div>
+      <div class="memory-loop__text"><strong>Mid-Session Refresh</strong> — new facts injected every N turns during long runs</div>
+    </div>
+    <div class="memory-loop">
+      <div class="memory-loop__num" style="background:var(--green)22; color:var(--green);">5</div>
+      <div class="memory-loop__text"><strong>Post-Session Distillation</strong> — LLM extracts facts, entities, relationships</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 6: Any Provider -->
+<div class="slide slide--hero">
+  <span class="slide__number">05</span>
+  <h2>Works with <span class="accent-teal">any provider</span></h2>
+  <p class="subtitle" style="margin-bottom:32px; text-align:center;">
+    Any OpenAI-compatible API. Mix providers across orchestration, distillation, and vision.
+  </p>
+  <div class="providers">
+    <div class="provider-badge">OpenAI</div>
+    <div class="provider-badge">Anthropic</div>
+    <div class="provider-badge">DeepSeek</div>
+    <div class="provider-badge">Groq</div>
+    <div class="provider-badge">Ollama</div>
+    <div class="provider-badge">Any OpenAI-compatible</div>
+  </div>
+  <div class="grid-4" style="max-width:700px; margin:32px auto 0;">
+    <div class="stat">
+      <div class="stat__value" style="color:var(--indigo);">🧠</div>
+      <div class="stat__label">Orchestrator<br>model</div>
+    </div>
+    <div class="stat">
+      <div class="stat__value" style="color:var(--purple);">💎</div>
+      <div class="stat__label">Distillation<br>model</div>
+    </div>
+    <div class="stat">
+      <div class="stat__value" style="color:var(--teal);">👁️</div>
+      <div class="stat__label">Multimodal<br>model</div>
+    </div>
+    <div class="stat">
+      <div class="stat__value" style="color:var(--orange);">⚡</div>
+      <div class="stat__label">Subagent<br>models</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 7: Features Grid -->
+<div class="slide">
+  <span class="slide__number">06</span>
+  <h2>Everything you need</h2>
+  <div class="grid-3">
+    <div class="card">
+      <div class="card__icon" style="background:var(--indigo)22;">🎯</div>
+      <div class="card__title">Intent Analysis</div>
+      <div class="card__desc">LLM analyzes your message to determine complexity, select agents, and choose skills — before any work begins.</div>
+    </div>
+    <div class="card">
+      <div class="card__icon" style="background:var(--green)22;">🤖</div>
+      <div class="card__title">Multi-Agent Delegation</div>
+      <div class="card__desc">Root orchestrator delegates to planner, coder, researcher, tutor — each with their own tools and context.</div>
+    </div>
+    <div class="card">
+      <div class="card__icon" style="background:var(--purple)22;">🧠</div>
+      <div class="card__title">Persistent Memory</div>
+      <div class="card__desc">Auto-distills facts from sessions. Recalls corrections, strategies, and domain knowledge. Knowledge graph for entity relationships.</div>
+    </div>
+    <div class="card">
+      <div class="card__icon" style="background:var(--teal)22;">📁</div>
+      <div class="card__title">Code Wards</div>
+      <div class="card__desc">Persistent project directories. Agents create, name, and navigate them. Code survives across sessions.</div>
+    </div>
+    <div class="card">
+      <div class="card__icon" style="background:var(--orange)22;">🔌</div>
+      <div class="card__title">Skills &amp; MCP</div>
+      <div class="card__desc">Reusable instruction packages. Model Context Protocol for external tools — filesystem, databases, APIs.</div>
+    </div>
+    <div class="card">
+      <div class="card__icon" style="background:var(--blue)22;">📊</div>
+      <div class="card__title">Observability</div>
+      <div class="card__desc">Timeline tree showing root → subagent → tool calls. See exactly what happened, how long it took, and what it cost.</div>
+    </div>
+  </div>
+</div>
+
+<!-- SLIDE 8: Comparison -->
+<div class="slide">
+  <span class="slide__number">07</span>
+  <h2>How it compares</h2>
+  <table>
+    <thead>
+      <tr><th>Feature</th><th>z-Bot</th><th>Cloud AI Platforms</th></tr>
+    </thead>
+    <tbody>
+      <tr><td>Execution Model</td><td class="check">Goal-oriented, autonomous</td><td>Request-response</td></tr>
+      <tr><td>Multi-Agent</td><td class="check">Built-in orchestration</td><td class="cross">Rare / manual</td></tr>
+      <tr><td>Memory</td><td class="check">Auto-distill + recall + graph</td><td class="cross">Session-scoped</td></tr>
+      <tr><td>Provider Lock-in</td><td class="check">None — any OpenAI-compatible</td><td class="cross">Usually locked</td></tr>
+      <tr><td>Data Location</td><td class="check">Local machine</td><td class="cross">Cloud servers</td></tr>
+      <tr><td>Multimodal</td><td class="check">Any vision model</td><td>Platform-specific</td></tr>
+      <tr><td>Offline</td><td class="check">Yes (with Ollama)</td><td class="cross">No</td></tr>
+      <tr><td>Persistent Code</td><td class="check">Code Wards</td><td class="cross">Session-scoped</td></tr>
+      <tr><td>Embeddings</td><td class="check">Local ONNX (free)</td><td class="cross">API-only</td></tr>
+      <tr><td>Observability</td><td class="check">Full trace trees</td><td>Limited logs</td></tr>
+    </tbody>
+  </table>
+</div>
+
+<!-- SLIDE 9: Get Started -->
+<div class="slide slide--hero">
+  <span class="slide__number">08</span>
+  <h2>Get started in 3 steps</h2>
+  <div class="grid-3" style="max-width:800px; margin-top:20px;">
+    <div class="card" style="text-align:center;">
+      <div style="font-size:36px; margin-bottom:12px;">1</div>
+      <h3>Clone &amp; Build</h3>
+      <p class="card__desc"><code>git clone</code>, <code>npm install</code>, <code>npm run daemon</code></p>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div style="font-size:36px; margin-bottom:12px;">2</div>
+      <h3>Add a Provider</h3>
+      <p class="card__desc">Settings → Add your OpenAI, Anthropic, or any compatible API key</p>
+    </div>
+    <div class="card" style="text-align:center;">
+      <div style="font-size:36px; margin-bottom:12px;">3</div>
+      <h3>Set a Goal</h3>
+      <p class="card__desc">Tell it what to build. Watch it plan, delegate, and deliver.</p>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  Built with Rust and React. Designed for autonomy.<br>
+  <span style="color:var(--text-dim);">MIT License</span>
+</div>
+
+</body>
+</html>

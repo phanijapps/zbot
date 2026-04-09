@@ -396,8 +396,9 @@ impl<D: StateDbProvider> StateRepository<D> {
                     id, session_id, agent_id, parent_execution_id,
                     delegation_type, task, status,
                     started_at, completed_at,
-                    tokens_in, tokens_out, checkpoint, error, log_path
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                    tokens_in, tokens_out, checkpoint, error, log_path,
+                    child_session_id
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     execution.id,
                     execution.session_id,
@@ -413,6 +414,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                     execution.checkpoint.as_ref().map(|c| serde_json::to_string(c).ok()).flatten(),
                     execution.error,
                     execution.log_path,
+                    execution.child_session_id,
                 ],
             )?;
             Ok(())
@@ -430,7 +432,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, session_id, agent_id, parent_execution_id,
                         delegation_type, task, status,
                         started_at, completed_at,
-                        tokens_in, tokens_out, checkpoint, error, log_path
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
                  FROM agent_executions WHERE id = ?",
             )?;
 
@@ -449,7 +452,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, session_id, agent_id, parent_execution_id,
                         delegation_type, task, status,
                         started_at, completed_at,
-                        tokens_in, tokens_out, checkpoint, error, log_path
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
                  FROM agent_executions WHERE 1=1",
             );
 
@@ -512,7 +516,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 "SELECT id, session_id, agent_id, parent_execution_id,
                         delegation_type, task, status,
                         started_at, completed_at,
-                        tokens_in, tokens_out, checkpoint, error, log_path
+                        tokens_in, tokens_out, checkpoint, error, log_path,
+                        child_session_id
                  FROM agent_executions
                  WHERE session_id = ? AND delegation_type = 'root'",
             )?;
@@ -556,6 +561,17 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    /// Cancel a single execution by marking it as cancelled with a completed_at timestamp.
+    pub fn cancel_execution(&self, execution_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET status = 'cancelled', completed_at = ?1 WHERE id = ?2",
+                params![chrono::Utc::now().to_rfc3339(), execution_id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// Update execution tokens.
     pub fn update_execution_tokens(&self, id: &str, tokens_in: u64, tokens_out: u64) -> Result<(), String> {
         self.db.with_connection(|conn| {
@@ -578,6 +594,40 @@ impl<D: StateDbProvider> StateRepository<D> {
                 params![json, id],
             )?;
             Ok(())
+        })
+    }
+
+    /// Set child_session_id on an execution (for smart resume).
+    pub fn set_child_session_id(&self, execution_id: &str, child_session_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE agent_executions SET child_session_id = ?1 WHERE id = ?2",
+                params![child_session_id, execution_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Find the most recently crashed subagent execution for a session.
+    /// Returns None if only the root execution crashed or no crashes exist.
+    pub fn get_last_crashed_subagent(&self, session_id: &str) -> Result<Option<AgentExecution>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, parent_execution_id,
+                        delegation_type, task, status,
+                        started_at, completed_at,
+                        tokens_in, tokens_out, checkpoint, error, log_path, child_session_id
+                 FROM agent_executions
+                 WHERE session_id = ? AND status = 'crashed' AND parent_execution_id IS NOT NULL
+                 ORDER BY started_at DESC
+                 LIMIT 1",
+            )?;
+
+            let execution = stmt
+                .query_row(params![session_id], |row| Self::row_to_execution(row))
+                .optional()?;
+
+            Ok(execution)
         })
     }
 
@@ -844,6 +894,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             checkpoint: checkpoint_json.and_then(|s| serde_json::from_str(&s).ok()),
             error: row.get(12)?,
             log_path: row.get(13)?,
+            child_session_id: row.get(14)?,
         })
     }
 
@@ -925,6 +976,7 @@ mod tests {
                     checkpoint TEXT,
                     error TEXT,
                     log_path TEXT,
+                    child_session_id TEXT,
                     FOREIGN KEY (session_id) REFERENCES sessions(id)
                 );
 

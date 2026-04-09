@@ -243,6 +243,41 @@ Every crate directory has an AGENTS.md describing what it does, its key files, a
 **Decision**: Fire distillation after both `invoke()` and `invoke_continuation()`. Lower min messages threshold from 10 to 4.
 **Rationale**: Many useful sessions are short (4-6 messages). Continuation sessions often contain important follow-up decisions. Distillation prompt is customizable via `config/distillation_prompt.md`.
 
+### Recall: Tool-Call Based, Not Hidden Injection
+**Problem**: Hidden memory injection is invisible — agents can't learn when or what to recall, and developers can't debug what was injected.
+**Decision**: Recall is an explicit tool call (`memory recall`). The agent decides when and what to recall. Results appear in the conversation as tool output.
+**Rationale**: Visible in transcripts, debuggable in logs, learnable by the agent (it sees what works). Nudges at session start, ward entry, and post-delegation prompt the agent to recall without forcing it.
+
+### Corrections as Rules (NEVER/ALWAYS)
+**Problem**: LLMs treat "correction: don't do X" as a suggestion. They follow "NEVER do X" more reliably.
+**Decision**: Top correction facts are formatted as imperative rules ("NEVER use `rm -rf` without confirmation", "ALWAYS check ward before file operations") and injected first in recall results.
+**Rationale**: Rule-formatted corrections have higher compliance in practice. Filtered by query relevance so only applicable corrections appear.
+
+### Graph Traversal via SQLite Recursive CTE
+**Problem**: Knowledge graph expansion for recall needs graph traversal. Neo4j is the standard but adds an external dependency.
+**Decision**: 2-hop BFS via SQLite recursive CTE behind a `GraphTraversal` trait. Trait-based so Neo4j can be swapped in later.
+**Rationale**: Pi 4 safe (<10ms for 2-hop expansion), zero extra dependencies. SQLite CTE handles the current graph size (198+ entities, 333+ relationships) easily. Neo4j swap is a trait implementation change, not a redesign.
+
+### Temporal Decay with Per-Category Half-Lives
+**Problem**: Not all facts stale at the same rate. Domain knowledge ("project uses React 19") stales faster than corrections ("NEVER skip tests").
+**Decision**: Per-category half-lives configured in `recall_config.json`: domain facts (30d), preferences (60d), corrections (90d), strategies (90d). Facts past their half-life decay exponentially in recall scoring; past 2x half-life they move to `memory_facts_archive`.
+**Rationale**: Keeps recall fresh without losing corrections. Archive preserves audit trail.
+
+### Session Offload to JSONL.gz
+**Problem**: Session transcripts are the largest data in SQLite. After distillation, raw transcripts are dead weight.
+**Decision**: `zero sessions archive --older-than N` compresses transcripts to JSONL.gz files. `sessions.archived` column tracks state. `zero sessions restore <id>` reverses the process.
+**Rationale**: Keeps SQLite lean for Pi 4. Transcripts are already distilled — the extracted facts, episodes, and entities survive independently. Restorable if needed.
+
+### Entity Dedup as __global__
+**Problem**: The same entity (e.g., "React") was duplicated per agent — "React" x4 across root, researcher, coder, reviewer.
+**Decision**: Entities are stored under `__global__` agent scope. Cross-agent dedup during distillation merges identical entities.
+**Rationale**: Single source of truth. Graph queries return one "React" node with all relationships, not four disconnected copies.
+
+### Execution Intelligence Dashboard Over Flat Logs
+**Problem**: The log viewer was 845 lines of flat session/log rendering. No visual structure, no execution shape, no interactivity.
+**Decision**: Visual observability dashboard with KPI sparkline cards, inline mini waterfalls in the session list, expandable full waterfall timelines with delegation spans and tool dots, hover tooltips, click-through detail panels, and auto-refresh for running sessions.
+**Rationale**: Operators need to see execution shape at a glance — which delegations happened, where time was spent, what tools were called. Flat logs require scrolling and mental reconstruction.
+
 ## Patterns We Did NOT Adopt
 
 These were considered during the Codex gap analysis and explicitly rejected:
@@ -267,3 +302,129 @@ Distilled patterns from building z-Bot:
 4. **Test each phase** — `cargo check --workspace` after Rust changes, `npm run build` after TypeScript. Don't batch all testing at the end.
 5. **Read before write** — Check existing patterns, understand current state, avoid duplicating functionality.
 6. **Anti-patterns**: Starting without reading context. Solving problems not asked. Ignoring existing patterns. Plans without data models. Skipping root cause analysis.
+
+## Setup Wizard Decisions
+
+### Dedicated Route Over Settings Enhancement
+**Problem**: New users land on an empty app with no guidance.
+**Decision**: Full-page `/setup` wizard at a dedicated route, outside the app shell (no sidebar). Not a modal inside Settings.
+**Rationale**: The wizard is a distinct user journey with its own lifecycle. Coupling it to Settings would make both harder to maintain. The wizard calls the same transport APIs — it just has its own UI flow.
+
+### Hybrid Trigger (Auto-Redirect + Manual Re-Run)
+**Problem**: First-time users need guidance, but the wizard should also be accessible later.
+**Decision**: Auto-redirect to `/setup` if no providers AND `setupComplete === false`. Re-run button in Settings > Advanced. `SetupGuard` checks `GET /api/setup/status` (lightweight) and caches result in sessionStorage.
+**Rationale**: Catches new users without locking out the wizard for reconfiguration.
+
+### Providers Persisted Immediately, Everything Else at Launch
+**Problem**: Step 5 (agent config) needs real provider IDs and discovered model lists from Step 2.
+**Decision**: Provider create + test happens in real-time during Step 2. All other changes (name, agent configs, MCPs) are held in React state and submitted on Launch.
+**Rationale**: Model discovery requires a real API call. If user abandons mid-wizard, they keep configured providers (useful work preserved).
+
+### Delta-Only Updates on Re-Run
+**Problem**: Re-running the wizard could overwrite customized agent configs, duplicate MCPs, or reset the agent name.
+**Decision**: Wizard hydrates from current state on mount. Launch only applies changes: agent configs updated only where different, MCPs created only if new, root renamed only if name changed.
+**Rationale**: Users customize agents over time. A re-run that resets everything would destroy their work.
+
+### Agent Name in settings.json + SOUL.md
+**Problem**: The root agent's name needs to persist across restarts and appear in the system prompt.
+**Decision**: Store `agentName` in `settings.json` (source of truth). When updated, gateway also writes it to `config/SOUL.md` first line (`You are **Name**`).
+**Rationale**: settings.json is the API-accessible config. SOUL.md is what the LLM sees. Both must stay in sync.
+
+### Bundled Agent Templates Over Hardcoded Constants
+**Problem**: Only 3 agents were hardcoded in Rust. User had 7 custom agents that wouldn't ship to new installs.
+**Decision**: `default_agents.json` template with all 7 agents (temps, maxTokens, skill/MCP refs). Seed function reads template, falls back to hardcoded 3 if missing.
+**Rationale**: Templates are editable without recompilation. New agents added by editing JSON, not Rust code.
+
+### Skills Not Bundled
+**Problem**: 28 skills with scripts, assets, and ONNX models are too large for binary embedding.
+**Decision**: Skills remain disk-only. Wizard shows "No skills installed" on fresh install. Users install skills separately.
+**Rationale**: Skills have external dependencies (npm packages, Python scripts, browser binaries). Bundling would bloat the binary and create a maintenance burden. The skill ecosystem is designed for independent installation.
+
+## Memory Brain Decisions
+
+### FTS5 Query Sanitization
+**Problem**: Raw user messages passed to FTS5 MATCH contain commas, parens, dashes that break FTS5 syntax. Multi-word queries used implicit AND — requiring ALL terms in one fact (never matches).
+**Decision**: `sanitize_fts_query()` extracts alphanumeric words (>2 chars), filters stopwords, joins with OR.
+**Rationale**: "portfolio risk PTON NVDA" → "portfolio OR risk OR PTON OR NVDA" matches any fact with any term. This was THE fix that unblocked the entire memory brain.
+
+### Subagents Get WardTool + MemoryTool + GrepTool
+**Problem**: Subagents (planner, code-agent, etc.) had only Shell, WriteFile, EditFile, LoadSkill, Respond. They couldn't enter wards, recall memory, or search code efficiently. Planner was planning blind.
+**Decision**: Add WardTool, MemoryTool, GrepTool to ALL subagents.
+**Rationale**: Every subagent benefits from ward context (AGENTS.md, core_docs), memory (corrections, strategies), and grep (find functions without cat-ing files). Read-only awareness tools have no downside.
+
+### Fact Dedup by Content Similarity
+**Problem**: Distillation creates near-duplicate facts under different keys ("user.portfolio.holdings" vs "domain.finance.portfolio_holdings"). Same content appears 3-5 times.
+**Decision**: Before upserting, check if any existing fact has 60%+ word overlap with the new fact. Skip if duplicate.
+**Rationale**: Better to miss a slightly-different fact than to waste recall slots on 5 copies of the same information.
+
+### Failed Episodes as Warnings
+**Problem**: 43 episodes, many failed/crashed. Agents repeated failed strategies because failures weren't surfaced.
+**Decision**: Recall now has a "Warnings (past failures)" section that surfaces failed/crashed episodes BEFORE successful experiences.
+**Rationale**: Knowing what NOT to do is as important as knowing what worked. Failed strategies with key_learnings prevent the same mistake twice.
+
+### Ward.md Curated, Not Dumped
+**Problem**: ward.md was auto-dumped with all distillation facts — 40+ items, 6x duplicates, 3KB noise.
+**Decision**: Max 5 corrections, 3 strategies, 2 warnings. Deduped by 60% word overlap. No domain knowledge dump.
+**Rationale**: ward.md is what the agent reads FIRST — it must be concise and actionable. Domain knowledge stays in memory_facts (queryable via recall).
+
+### core_docs.md Scans All Code Files
+**Problem**: core_docs.md only scanned `core/` directory. 80% of code (analysis.py, task-specific scripts) was invisible.
+**Decision**: Recursive scan of ALL `.py/.js/.ts/.rs` files in the ward, excluding node_modules, .venv, __pycache__.
+**Rationale**: Agents need to know what code exists ANYWHERE in the ward, not just in a conventional `core/` directory.
+
+### Policies as Memory Facts
+**Problem**: Need to inject persistent rules (e.g., "always use research-agent for factual data") without prompt changes.
+**Decision**: Policies are memory facts with category=correction, confidence=1.0, ward_id=__global__, mention_count=5.
+**Rationale**: Corrections have 1.5x recall weight, highest priority. Global scope means they apply everywhere. High mention_count ensures high ranking. No new tables, no code changes — just a fact with the right metadata.
+
+### Stream Decode Fallback
+**Problem**: Z.AI/GLM returns malformed HTTP chunks during streaming, causing "error decoding response body" crashes.
+**Decision**: On stream error before any content emitted, silently retry as non-streaming (single JSON). On stream error after content emitted, break gracefully and return partial response.
+**Rationale**: Non-streaming is more reliable (single JSON, no SSE parsing). Automatic fallback is transparent to the executor.
+
+### Reserved Key Prefixes for User-Managed Facts
+**Problem**: Distillation creates competing facts under similar keys to user-authored policies (e.g., user sets `policy.research_first`, distillation creates `correction.always_research` with overlapping content).
+**Decision**: Keys starting with `policy.`, `instruction.`, or `user.profile` are reserved — distillation skips them entirely. Three protection layers: reserved prefixes (distillation skip), pinned flag (SQL content guard), content dedup (60% word overlap).
+**Rationale**: User-authored policies are the source of truth for agent behavior rules. The system should learn around them, not compete with them.
+
+### Z.AI Rate Limit Detection
+**Problem**: Z.AI returns 500 with code 1234 for rate limits (not 429). Our retry logic didn't recognize it.
+**Decision**: RetryingLlmClient treats error codes 1234 (network error), 1302 (rate limit), 1303 (frequency limit) as retryable. Z.AI concurrent limit set to 1 in provider config.
+**Rationale**: GLM Coding Plan has a documented concurrent request limit of 1. Two simultaneous requests = instant 500.
+
+### Orchestrator Config in settings.json (Not agents/root/)
+**Problem**: Root agent was auto-created with hardcoded settings (temp 0.7, max_tokens 8192, thinking=false). No UI to configure. No config.yaml on disk.
+**Decision**: Store orchestrator config in `settings.json` > `execution.orchestrator` — NOT in `agents/root/config.yaml`. Root is a system agent, not a user-created agent.
+**Rationale**: Root lives in config/ alongside providers.json and settings.json. Creating agents/root/ would confuse it with specialist agents. Settings.json is the single source of truth for system config.
+
+### Thinking Mode Default ON for Orchestrator
+**Problem**: Root agent delegated without reasoning, leading to suboptimal agent selection and planning.
+**Decision**: `thinkingEnabled: true` by default for the orchestrator. Extended thinking via OpenAI-compatible `{"thinking": {"type": "enabled"}}`.
+**Rationale**: The orchestrator's job is to think BEFORE delegating — which agent, which ward, which approach. Thinking mode improves planning quality. Max tokens raised to 16384 to accommodate reasoning output.
+
+### Single Action Mode Stays Hardcoded
+**Problem**: Should `single_action_mode` (one tool call per LLM turn) be configurable for root?
+**Decision**: Keep hardcoded `true` for root. Not exposed in UI.
+**Rationale**: Architectural enforcement — root orchestrates one delegation at a time. Multiple simultaneous delegations would confuse the delegation queue, race for the semaphore, and produce unpredictable ordering. If root needs parallel delegation, it should be via the delegation semaphore (maxParallelAgents), not via parallel tool calls.
+
+### Smart Session Resume — Subagent-Level Retry (2026-04-08)
+**Problem**: When a subagent crashes (LLM 500/429 errors), hitting Resume restarts from the root agent, re-evaluating intent, re-planning, and re-delegating all subagents — wasting tokens and duplicating completed work.
+**Decision**: Resume detects the most recently crashed subagent execution via `child_session_id` on `agent_executions`, and re-spawns only that subagent using its child session's message history. Root agent stays in `running` state waiting for the retried subagent's callback.
+**Rationale**: All the infrastructure exists — child sessions have full message history, the delegation completion flow (`complete_delegation` → `SessionContinuationReady`) handles the callback. Only the resume entry point needed to be smarter.
+**Scope limitation**: If multiple subagents crash (parallel delegations), only the most recently started one is retried. This is acceptable since delegations are sequential per-session today.
+
+### Distillation Config Promoted to Own Settings Card (2026-04-08)
+**Problem**: Distillation model settings were buried inside the Orchestrator card on Settings > Advanced, and a backend bug (`UpdateExecutionSettingsRequest` missing `distillation` field) silently dropped the config on save.
+**Decision**: Fixed the backend API to persist distillation config. Promoted Distillation to its own card in a 2x2 grid layout on the Advanced tab, alongside Orchestrator, Multimodal, and Execution.
+**Rationale**: Distillation (memory extraction) is a distinct subsystem from the orchestrator. Users may want a cheaper model for distillation while keeping a powerful orchestrator model. Separate card makes it discoverable and independently configurable.
+
+### Observability Dashboard Replaces Logs Page (2026-04-08)
+**Problem**: The Logs page used a waterfall visualization that didn't show subagent tool calls. Users couldn't see the full execution narrative (root → subagent → tool calls).
+**Decision**: Replace `/logs` with a List+Detail split layout. Left panel: filterable session list. Right panel: Timeline Tree showing root → delegation → tool call hierarchy with lucide icons per tool type. Real-time updates via 3-second polling for running sessions.
+**Rationale**: All data already existed in `execution_logs` table and the `/api/logs/sessions` API. The gap was purely presentation. WebSocket `scope: "all"` delivers subagent events with `execution_id` for tagging. Polling chosen over WebSocket subscription because the subscription API uses `conversationId` (not `sessionId`) and the dashboard doesn't need sub-second latency.
+**Key detail**: Delegation logs in `stream.rs` use metadata key `"child_agent"` (not `"child_agent_id"` as in `service.rs`). The trace builder checks both keys with a fallback to parsing the message text.
+
+### Tool Result Offloading Already Exists (2026-04-08)
+**Problem**: Investigated whether to build JS/shell hooks for intercepting large tool call responses.
+**Decision**: No new work needed. The `offload_large_results` feature is already implemented, enabled by default, and fully wired: results > 20k chars saved to `{config_dir}/temp/`, agent receives a reference message with instructions to use `read`/`grep`.
+**Rationale**: Explored the executor pipeline: offload → truncate (30k safety net) → afterToolCall hook → send to LLM. All stages working. Per-tool thresholds or external hook scripts could be future enhancements if needed.

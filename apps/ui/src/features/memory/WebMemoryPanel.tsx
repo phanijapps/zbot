@@ -8,22 +8,27 @@ import type {
   AgentResponse,
 } from "@/services/transport/types";
 import { MemoryFactCard } from "./MemoryFactCard";
-import { GraphView } from "./GraphView";
-import { Loader2, Database, FileText, Network } from "lucide-react";
+import { Slideover } from "@/components/Slideover";
+import { Loader2, Database, Plus, Shield, Lightbulb, User, Brain } from "lucide-react";
 
 const CATEGORIES: MemoryCategory[] = [
-  "preference",
-  "decision",
-  "pattern",
-  "entity",
-  "instruction",
   "correction",
+  "instruction",
+  "user",
+  "strategy",
+  "domain",
+  "pattern",
+  "skill",
+  "agent",
+  "ward",
+  "preference",
+  "entity",
+  "decision",
 ];
 
 const SCOPES: MemoryScope[] = ["agent", "shared", "ward"];
 
 export function WebMemoryPanel() {
-  const [activeView, setActiveView] = useState<"facts" | "graph">("facts");
   const [agents, setAgents] = useState<AgentResponse[]>([]);
   const [selectedAgentId, setSelectedAgentId] = useState<string>("");
   const [facts, setFacts] = useState<MemoryFact[]>([]);
@@ -33,6 +38,12 @@ export function WebMemoryPanel() {
   const [loading, setLoading] = useState(true);
   const [agentsLoading, setAgentsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addType, setAddType] = useState<"correction" | "instruction" | "user">("correction");
+  const [addContent, setAddContent] = useState("");
+  const [addSaving, setAddSaving] = useState(false);
+  // Existing facts by type — for pre-populating the slideover
+  const [existingByType, setExistingByType] = useState<Record<string, MemoryFact[]>>({});
 
   // Load ALL facts with optional agent filter
   const fetchFacts = useCallback(async (filterParams: MemoryFilter) => {
@@ -112,31 +123,58 @@ export function WebMemoryPanel() {
       fetchFacts(filter);
       return;
     }
-    // Search requires agent ID - use selected agent or first available
-    const searchAgentId = selectedAgentId || (agents.length > 0 ? agents[0].id : "");
-    if (!searchAgentId) {
-      setError("Select an agent to search memories");
-      return;
-    }
 
     setLoading(true);
     setError(null);
     try {
       const transport = await getTransport();
-      const response = await transport.searchMemory(searchAgentId, searchQuery, {
-        category: filter.category,
-        limit: filter.limit,
-      });
-      if (response.success && response.data) {
-        setFacts(response.data.facts);
+
+      if (selectedAgentId) {
+        // Agent-specific search (server-side FTS5)
+        const response = await transport.searchMemory(selectedAgentId, searchQuery, {
+          category: filter.category,
+          limit: filter.limit,
+        });
+        if (response.success && response.data) {
+          setFacts(response.data.facts);
+        } else {
+          setError(response.error || "Search failed");
+        }
       } else {
-        setError(response.error || "Search failed");
+        // Global search across all agents (server-side FTS5)
+        const response = await transport.searchAllMemory(
+          searchQuery,
+          filter.limit || 50,
+          filter.category,
+        );
+        if (response.success && response.data) {
+          setFacts(response.data.facts);
+        } else {
+          setError(response.error || "Search failed");
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Search failed");
     } finally {
       setLoading(false);
     }
+  };
+
+  // Load existing facts by type when slideover opens
+  const openAddForm = async () => {
+    setShowAddForm(true);
+    try {
+      const transport = await getTransport();
+      const res = await transport.listAllMemory({ limit: 200 });
+      if (res.success && res.data) {
+        const byType: Record<string, MemoryFact[]> = {
+          correction: res.data.facts.filter((f) => f.category === "correction"),
+          instruction: res.data.facts.filter((f) => f.category === "instruction"),
+          user: res.data.facts.filter((f) => f.category === "user"),
+        };
+        setExistingByType(byType);
+      }
+    } catch { /* ignore */ }
   };
 
   const handleDelete = async (fact: MemoryFact) => {
@@ -154,6 +192,39 @@ export function WebMemoryPanel() {
     }
   };
 
+  const handleCreate = async () => {
+    if (!addContent.trim()) return;
+    setAddSaving(true);
+    try {
+      const transport = await getTransport();
+      const typeConfig = {
+        correction: { confidence: 1.0, prefix: "policy" },
+        instruction: { confidence: 0.9, prefix: "instruction" },
+        user: { confidence: 0.95, prefix: "user.profile" },
+      }[addType];
+      const key = `${typeConfig.prefix}.${Date.now()}`;
+      const result = await transport.createMemory("root", {
+        category: addType,
+        key,
+        content: addContent.trim(),
+        confidence: typeConfig.confidence,
+        pinned: true,
+      });
+      if (result.success) {
+        setAddContent("");
+        setShowAddForm(false);
+        fetchFacts(filter);
+        fetchStats();
+      } else {
+        setError(result.error || "Failed to create");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create");
+    } finally {
+      setAddSaving(false);
+    }
+  };
+
   // Group facts by agent for display
   const agentMap = new Map(agents.map(a => [a.id, a.name || a.id]));
 
@@ -166,68 +237,116 @@ export function WebMemoryPanel() {
             <h1 className="page-title">Memory Explorer</h1>
             <p className="page-subtitle">View and manage agent memory facts</p>
           </div>
+          <button className="btn btn--primary btn--sm" onClick={openAddForm}>
+            <Plus size={14} /> Add
+          </button>
         </div>
 
-        {/* Tab switcher */}
-        <div
-          style={{
-            display: "flex",
-            gap: "var(--spacing-1)",
-            marginBottom: "var(--spacing-4)",
-            padding: "var(--spacing-1)",
-            backgroundColor: "var(--muted)",
-            borderRadius: "var(--radius-md)",
-            width: "fit-content",
-          }}
+        {/* Add Memory Slideover */}
+        <Slideover
+          open={showAddForm}
+          onClose={() => { setShowAddForm(false); setAddContent(""); }}
+          title="Add Memory"
+          subtitle="Teach z-Bot something it should always remember"
+          icon={<Brain size={20} />}
+          footer={
+            <div className="flex gap-2">
+              <button className="btn btn--primary btn--sm" onClick={handleCreate} disabled={!addContent.trim() || addSaving}>
+                {addSaving ? "Saving..." : "Save"}
+              </button>
+              <button className="btn btn--ghost btn--sm" onClick={() => { setShowAddForm(false); setAddContent(""); }}>
+                Cancel
+              </button>
+            </div>
+          }
         >
-          <button
-            onClick={() => setActiveView("facts")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--spacing-2)",
-              padding: "var(--spacing-2) var(--spacing-4)",
-              backgroundColor: activeView === "facts" ? "var(--background)" : "transparent",
-              border: "none",
-              borderRadius: "var(--radius-sm)",
-              cursor: "pointer",
-              fontSize: "var(--text-sm)",
-              fontWeight: activeView === "facts" ? 500 : 400,
-              color: activeView === "facts" ? "var(--foreground)" : "var(--muted-foreground)",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <FileText style={{ width: 16, height: 16 }} />
-            Facts
-          </button>
-          <button
-            onClick={() => setActiveView("graph")}
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "var(--spacing-2)",
-              padding: "var(--spacing-2) var(--spacing-4)",
-              backgroundColor: activeView === "graph" ? "var(--background)" : "transparent",
-              border: "none",
-              borderRadius: "var(--radius-sm)",
-              cursor: "pointer",
-              fontSize: "var(--text-sm)",
-              fontWeight: activeView === "graph" ? 500 : 400,
-              color: activeView === "graph" ? "var(--foreground)" : "var(--muted-foreground)",
-              transition: "all 0.15s ease",
-            }}
-          >
-            <Network style={{ width: 16, height: 16 }} />
-            Knowledge Graph
-          </button>
-        </div>
+          <section className="slideover__section">
+            <div className="field-label">Type</div>
+            <div className="flex gap-2" style={{ marginBottom: "var(--spacing-4)" }}>
+              <button
+                className={`btn btn--sm ${addType === "correction" ? "btn--primary" : "btn--outline"}`}
+                onClick={() => setAddType("correction")}
+              >
+                <Shield size={14} /> Policy
+              </button>
+              <button
+                className={`btn btn--sm ${addType === "instruction" ? "btn--primary" : "btn--outline"}`}
+                onClick={() => setAddType("instruction")}
+              >
+                <Lightbulb size={14} /> Instruction
+              </button>
+              <button
+                className={`btn btn--sm ${addType === "user" ? "btn--primary" : "btn--outline"}`}
+                onClick={() => setAddType("user")}
+              >
+                <User size={14} /> About Me
+              </button>
+            </div>
+            <p className="settings-hint">
+              {addType === "correction"
+                ? "Policies are hard rules agents MUST follow. They surface at the top of every recall with highest priority."
+                : addType === "instruction"
+                ? "Instructions are soft preferences that guide agent behavior. They surface as recommendations."
+                : "About Me facts tell z-Bot who you are. Agents use this to personalize their work for you."}
+            </p>
+          </section>
 
-        {/* Graph View */}
-        {activeView === "graph" && <GraphView agentId={selectedAgentId} />}
+          <section className="slideover__section">
+            <div className="field-label">New Entry</div>
+            <textarea
+              className="form-input"
+              rows={4}
+              placeholder={
+                addType === "correction"
+                  ? "Add a rule agents MUST follow (e.g., 'Always use research-agent for factual data')"
+                  : addType === "instruction"
+                  ? "Add a preference or guideline (e.g., 'Prefer interactive HTML outputs with Tailwind CSS')"
+                  : "Tell z-Bot about yourself (e.g., 'I'm a data engineer who prefers Python and visual dashboards')"
+              }
+              value={addContent}
+              onChange={(e) => setAddContent(e.target.value)}
+              autoFocus
+            />
+          </section>
 
-        {/* Facts View */}
-        {activeView === "facts" && (
-          <>
+          {/* Existing entries for the selected type */}
+          {(existingByType[addType] || []).length > 0 && (
+            <section className="slideover__section">
+              <div className="field-label">
+                Existing {addType === "correction" ? "Policies" : addType === "instruction" ? "Instructions" : "About Me"} ({(existingByType[addType] || []).length})
+              </div>
+              <div className="flex flex-col gap-2">
+                {(existingByType[addType] || []).map((fact) => (
+                  <div key={fact.id} className="card card__padding" style={{ fontSize: "var(--text-sm)" }}>
+                    <div style={{ color: "var(--foreground)", marginBottom: "var(--spacing-1)" }}>{fact.content}</div>
+                    <div className="flex items-center gap-2">
+                      <span className="badge badge--xs" style={{ opacity: 0.7 }}>{fact.key}</span>
+                      <button
+                        className="btn btn--ghost btn--sm"
+                        style={{ marginLeft: "auto", fontSize: "var(--text-xs)" }}
+                        onClick={async () => {
+                          try {
+                            const transport = await getTransport();
+                            await transport.deleteMemory(fact.agent_id, fact.id);
+                            setExistingByType((prev) => ({
+                              ...prev,
+                              [addType]: (prev[addType] || []).filter((f) => f.id !== fact.id),
+                            }));
+                            fetchFacts(filter);
+                            fetchStats();
+                          } catch { /* ignore */ }
+                        }}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+        </Slideover>
+
         {/* Agent selector and stats */}
         <div
           style={{
@@ -338,7 +457,7 @@ export function WebMemoryPanel() {
           <div style={{ flex: 1, display: "flex", gap: "var(--spacing-2)", minWidth: 200 }}>
             <input
               type="text"
-              placeholder="Search memories (requires agent filter)..."
+              placeholder="Search memories..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={(e) => e.key === "Enter" && handleSearch()}
@@ -494,8 +613,6 @@ export function WebMemoryPanel() {
               Next
             </button>
           </div>
-        )}
-          </>
         )}
       </div>
     </div>

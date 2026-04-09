@@ -3,11 +3,12 @@
 </p>
 
 <p align="center">
-  <strong>Local-first AI agent platform</strong><br>
-  Build, customize, and run AI assistants entirely on your machine.
+  <strong>Goal-oriented AI agent that learns, adapts, and gets things done</strong><br>
+  Long-running autonomous agents with intent analysis, self-learning memory, and multi-agent delegation.
 </p>
 
 <p align="center">
+  <a href="#how-it-works">How It Works</a> •
   <a href="#features">Features</a> •
   <a href="#quick-start">Quick Start</a> •
   <a href="#documentation">Documentation</a> •
@@ -16,26 +17,51 @@
 
 ---
 
-## Why z-Bot?
+> **Token Usage Warning**: z-Bot runs autonomous, long-running agents that make multiple LLM calls per task — intent analysis, planning, delegation to subagents, tool execution, memory recall, and post-session distillation. A single user request can result in dozens of API calls across multiple agents. Monitor your provider usage and set appropriate rate limits in Settings.
 
-Most AI platforms lock you into their cloud, their pricing, and their rules. z-Bot is different:
+## What is z-Bot?
 
-- **Your data stays local** — Conversations, memory, and configs live on your machine
-- **Any LLM provider** — OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API
-- **Fully extensible** — Add skills, tools, and MCP servers without touching core code
-- **Open architecture** — Rust backend + React frontend, designed for hackability
+z-Bot is a **goal-oriented AI agent** that lives on your desktop. Give it a goal, and it figures out how to achieve it — analyzing intent, selecting the right specialist agents, executing tools, learning from results, and persisting knowledge across sessions.
+
+It is **not** a chatbot. It is an autonomous execution engine that:
+
+- **Analyzes intent** before acting — understands what you actually need, not just what you typed
+- **Plans and delegates** — breaks complex goals into tasks, assigns them to specialist agents
+- **Self-learns** — automatically distills sessions into structured memory, recalls relevant knowledge for future tasks
+- **Runs long** — agents execute for minutes or hours, using tools, writing code, searching the web, iterating on failures
+- **Stays local** — your data, conversations, and memory never leave your machine
+
+## How It Works
+
+```
+You: "Build an auth system with JWT tokens and role-based access"
+
+z-Bot:
+  1. Analyzes intent → coding task, needs planning + implementation
+  2. Recalls memory → "Last time used jsonwebtoken crate, had issues with refresh tokens"
+  3. Delegates to planner-agent → creates implementation plan
+  4. Delegates to code-agent → writes code, runs tests, fixes failures
+  5. Delegates to tutor-agent → documents the API
+  6. Distills session → learns patterns for next time
+```
+
+Each subagent works in isolation with its own conversation, tools, and context. The root orchestrator coordinates everything and collects results.
 
 ## Features
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Provider** | Switch between LLM providers without changing your agents |
-| **Skills System** | Reusable instruction sets that extend agent capabilities |
-| **MCP Integration** | Connect external tools via Model Context Protocol |
-| **Agent Delegation** | Agents can spawn and coordinate with specialized subagents |
-| **Persistent Memory** | Per-agent key-value storage for facts and preferences |
-| **Real-time Streaming** | WebSocket-based event streaming for responsive UX |
-| **Execution Logs** | Full visibility into agent reasoning and tool calls |
+| **Goal-Oriented Execution** | Intent analysis → planning → delegation → execution → learning |
+| **Multi-Agent Delegation** | Root orchestrator delegates to specialist agents (planner, coder, researcher, etc.) |
+| **Self-Learning Memory** | Auto-distills sessions into facts, recalls corrections and strategies in future sessions |
+| **Any LLM Provider** | OpenAI, Anthropic, DeepSeek, Groq, Ollama, or any OpenAI-compatible API |
+| **Multimodal Analysis** | Vision capabilities via configurable multimodal model (GPT-4o, Claude, etc.) |
+| **Skills System** | Reusable instruction packages that extend agent capabilities |
+| **MCP Integration** | Connect external tools via Model Context Protocol servers |
+| **Code Wards** | Persistent project directories — code survives across sessions |
+| **Knowledge Graph** | Entities, relationships, and connections extracted from every session |
+| **Observability** | Timeline tree showing root → subagent → tool call hierarchy with real-time updates |
+| **Local-First** | Everything runs on your machine — conversations, memory, embeddings (ONNX) |
 
 ## Quick Start
 
@@ -73,9 +99,9 @@ cargo run -p daemon --release -- --static-dir ./dist
 
 ### First Run
 
-1. Navigate to **Integrations** → Add your LLM provider
+1. Navigate to **Settings** → Add your LLM provider (any OpenAI-compatible API)
 2. Click **Set as Default** on your preferred provider
-3. Start chatting with the root agent
+3. Start chatting — z-Bot will analyze your intent and get to work
 
 ## Architecture
 
@@ -98,18 +124,44 @@ cargo run -p daemon --release -- --static-dir ./dist
 │  ┌────────────────────────────────────────────────────┐ │
 │  │  Agent Runtime  │  Tool Registry  │  MCP Manager  │ │
 │  └────────────────────────────────────────────────────┘ │
+│  ┌────────────────────────────────────────────────────┐ │
+│  │  Memory (Distill + Recall)  │  Knowledge Graph    │ │
+│  └────────────────────────────────────────────────────┘ │
 └──────────────────────────┬──────────────────────────────┘
                            │
 ┌──────────────────────────┴──────────────────────────────┐
 │                      DATA LAYER                         │
 │  ~/Documents/zbot/                                      │
-│  ├── conversations.db     # SQLite database             │
+│  ├── config/                                            │
+│  │   ├── providers.json   # LLM provider configs        │
+│  │   ├── settings.json    # System configuration        │
+│  │   ├── mcps.json        # MCP server configs          │
+│  │   ├── SOUL.md          # Root agent personality      │
+│  │   └── INSTRUCTIONS.md  # Root agent instructions     │
+│  ├── data/                                              │
+│  │   ├── conversations.db # Sessions, messages, memory  │
+│  │   └── knowledge_graph.db # Entities & relationships  │
 │  ├── agents/{name}/       # Agent configurations        │
 │  ├── skills/{name}/       # Skill definitions           │
-│  ├── providers.json       # LLM provider configs        │
-│  └── mcps.json            # MCP server configs          │
+│  ├── wards/{name}/        # Persistent project dirs     │
+│  ├── plugins/             # Bridge workers & extensions  │
+│  ├── temp/                # Offloaded tool results      │
+│  └── logs/                # Execution logs              │
 └─────────────────────────────────────────────────────────┘
 ```
+
+## Execution Model
+
+z-Bot uses a **goal-oriented execution model** — not a simple request-response chat:
+
+1. **Intent Analysis** — LLM analyzes your message to determine intent, complexity, recommended agents and skills
+2. **Planning** — For complex tasks, creates a structured plan before executing
+3. **Delegation** — Root orchestrator delegates to specialist subagents (planner, coder, researcher, etc.)
+4. **Tool Execution** — Agents use shell, file editing, web fetch, grep, memory, and custom MCP tools
+5. **Iteration** — Agents iterate on failures (test fails → fix → retest) with complexity-based budgets
+6. **Continuation** — When subagents complete, root processes results and may delegate further
+7. **Distillation** — After session completes, LLM extracts facts, entities, and relationships into persistent memory
+8. **Recall** — Next session, relevant facts are recalled and injected as context
 
 ## Commands
 
@@ -122,28 +174,23 @@ cargo run -p daemon --release -- --static-dir ./dist
 | `cargo run -p cli` | Run terminal UI client |
 | `cargo check --workspace` | Type-check all Rust code |
 
-## Ports
-
-| Port | Service |
-|------|---------|
-| 18791 | HTTP API + Web UI |
-| 18790 | WebSocket streaming |
-| 3000 | Vite dev server (development only) |
-
 ## Documentation
 
 | Document | Description |
 |----------|-------------|
 | [AGENTS.md](AGENTS.md) | Code organization and layer structure |
 | [memory-bank/architecture.md](memory-bank/architecture.md) | Technical architecture details |
-| [memory-bank/product.md](memory-bank/product.md) | Product vision and features |
+| [memory-bank/product.md](memory-bank/product.md) | Product features and roadmap |
+| [memory-bank/product-context.md](memory-bank/product-context.md) | Vision, principles, and differentiators |
+| [memory-bank/decisions.md](memory-bank/decisions.md) | Technology choices and architecture decisions |
 
 ## Tech Stack
 
 | Layer | Technology |
 |-------|------------|
-| Frontend | React 19, TypeScript, Vite, Tailwind CSS v4 |
+| Frontend | React 19, TypeScript, Vite |
 | Backend | Rust, Axum, tokio, SQLite |
+| Embeddings | Local ONNX (fastembed) — zero API cost |
 | Protocol | HTTP REST, WebSocket, MCP |
 
 ## License
@@ -153,5 +200,5 @@ MIT
 ---
 
 <p align="center">
-  <sub>Built with Rust and React</sub>
+  <sub>Built with Rust and React. Designed for autonomy.</sub>
 </p>

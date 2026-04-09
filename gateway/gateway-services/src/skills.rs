@@ -4,7 +4,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -22,15 +22,39 @@ pub struct Skill {
     pub created_at: Option<String>,
 }
 
-/// Skill frontmatter stored in SKILL.md
+/// Ward setup configuration from skill frontmatter.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-struct SkillFrontmatter {
-    name: String,
-    #[serde(rename = "displayName", default)]
-    display_name: Option<String>,
-    description: String,
+pub struct WardSetup {
     #[serde(default)]
-    category: Option<String>,
+    pub directories: Vec<String>,
+    /// Referenced language skills (informational — not auto-loaded).
+    #[serde(default)]
+    pub language_skills: Vec<String>,
+    #[serde(default)]
+    pub spec_guidance: Option<String>,
+    #[serde(default)]
+    pub agents_md: Option<WardAgentsMdConfig>,
+}
+
+/// Seed content for AGENTS.md in a new ward.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WardAgentsMdConfig {
+    pub purpose: String,
+    #[serde(default)]
+    pub conventions: Vec<String>,
+}
+
+/// Skill frontmatter stored in SKILL.md.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillFrontmatter {
+    pub name: String,
+    #[serde(rename = "displayName", default)]
+    pub display_name: Option<String>,
+    pub description: String,
+    #[serde(default)]
+    pub category: Option<String>,
+    #[serde(default)]
+    pub ward_setup: Option<WardSetup>,
 }
 
 pub struct SkillService {
@@ -184,13 +208,29 @@ impl SkillService {
         Ok(())
     }
 
+    /// Get ward_setup config for a skill by ID, if it has one.
+    pub async fn get_ward_setup(&self, id: &str) -> Result<Option<WardSetup>, String> {
+        let skill_dir = self.skills_dir.join(id);
+        let skill_md_path = skill_dir.join("SKILL.md");
+
+        if !skill_md_path.exists() {
+            return Err(format!("Skill not found: {}", id));
+        }
+
+        let content = std::fs::read_to_string(&skill_md_path)
+            .map_err(|e| format!("Failed to read SKILL.md: {}", e))?;
+
+        let (frontmatter, _) = self.parse_frontmatter(&content)?;
+        Ok(frontmatter.ward_setup)
+    }
+
     /// Invalidate the skill cache.
     pub async fn invalidate_cache(&self) {
         let mut cache = self.cache.write().await;
         *cache = None;
     }
 
-    fn read_skill_folder(&self, skill_dir: &PathBuf) -> Result<Skill, String> {
+    fn read_skill_folder(&self, skill_dir: &Path) -> Result<Skill, String> {
         let skill_md_path = skill_dir.join("SKILL.md");
 
         if !skill_md_path.exists() {
@@ -224,7 +264,22 @@ impl SkillService {
         })
     }
 
-    fn write_skill_md(&self, skill_dir: &PathBuf, skill: &Skill) -> Result<(), String> {
+    fn write_skill_md(&self, skill_dir: &Path, skill: &Skill) -> Result<(), String> {
+        // Preserve existing ward_setup from the current SKILL.md, if any.
+        // The Skill struct does not carry ward_setup, so a naive write would silently
+        // strip it.  Read the existing file and extract the field before overwriting.
+        let existing_ward_setup = {
+            let path = skill_dir.join("SKILL.md");
+            if path.exists() {
+                std::fs::read_to_string(&path)
+                    .ok()
+                    .and_then(|content| self.parse_frontmatter(&content).ok())
+                    .and_then(|(fm, _)| fm.ward_setup)
+            } else {
+                None
+            }
+        };
+
         let frontmatter = SkillFrontmatter {
             name: skill.name.clone(),
             display_name: if skill.display_name.is_empty() {
@@ -238,6 +293,7 @@ impl SkillService {
             } else {
                 Some(skill.category.clone())
             },
+            ward_setup: existing_ward_setup,
         };
 
         let content = format!(
@@ -283,5 +339,74 @@ impl SkillService {
             })
             .collect::<Vec<_>>()
             .join(" ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    fn make_service(dir: &TempDir) -> SkillService {
+        SkillService::new(dir.path().to_path_buf())
+    }
+
+    /// Writing a skill back (simulating an update) must not strip ward_setup.
+    #[tokio::test]
+    async fn test_write_skill_preserves_ward_setup() {
+        let tmp = TempDir::new().expect("tempdir");
+        let service = make_service(&tmp);
+
+        // Create skill directory and an initial SKILL.md that contains ward_setup.
+        let skill_dir = tmp.path().join("my-skill");
+        fs::create_dir_all(&skill_dir).expect("create skill dir");
+
+        let initial_md = r#"---
+name: my-skill
+description: A test skill
+ward_setup:
+  directories:
+    - src
+  language_skills:
+    - rust
+---
+
+Do something useful.
+"#;
+        fs::write(skill_dir.join("SKILL.md"), initial_md).expect("write initial SKILL.md");
+
+        // Build a Skill struct (no ward_setup field — mirrors what the API provides).
+        let skill = Skill {
+            id: "my-skill".to_string(),
+            name: "my-skill".to_string(),
+            display_name: "My Skill".to_string(),
+            description: "A test skill".to_string(),
+            category: "general".to_string(),
+            instructions: "Do something useful.".to_string(),
+            created_at: None,
+        };
+
+        // Simulate an update write.
+        service
+            .write_skill_md(&skill_dir, &skill)
+            .expect("write_skill_md");
+
+        // Read back and verify ward_setup survived.
+        let written = fs::read_to_string(skill_dir.join("SKILL.md")).expect("read back");
+        let (fm, _body) = service
+            .parse_frontmatter(&written)
+            .expect("parse written frontmatter");
+
+        let ward_setup = fm.ward_setup.expect("ward_setup must be preserved");
+        assert!(
+            ward_setup.directories.contains(&"src".to_string()),
+            "directories must be preserved; got {:?}",
+            ward_setup.directories
+        );
+        assert!(
+            ward_setup.language_skills.contains(&"rust".to_string()),
+            "language_skills must be preserved; got {:?}",
+            ward_setup.language_skills
+        );
     }
 }

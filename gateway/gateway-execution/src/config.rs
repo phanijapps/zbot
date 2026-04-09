@@ -123,7 +123,7 @@ impl ExecutionConfig {
             agent_id,
             conversation_id,
             config_dir,
-            max_iterations: 25,
+            max_iterations: 1000,
             hook_context: None,
             session_id: None,
             respond_to: None,

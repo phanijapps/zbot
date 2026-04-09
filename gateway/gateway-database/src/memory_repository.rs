@@ -10,6 +10,24 @@ use std::sync::Arc;
 use crate::DatabaseManager;
 
 // ============================================================================
+// FTS5 QUERY SANITIZATION
+// ============================================================================
+
+/// Sanitize a raw user message for FTS5 MATCH queries.
+/// Extracts alphanumeric words (>2 chars), joins with OR.
+/// Raw messages contain commas, parens, dashes, dollar signs that break FTS5 syntax.
+pub fn sanitize_fts_query(raw: &str) -> String {
+    let words: Vec<&str> = raw.split(|c: char| !c.is_alphanumeric() && c != '_')
+        .map(|w| w.trim())
+        .filter(|w| w.len() > 2)
+        .filter(|w| !["the", "and", "for", "with", "that", "this", "from", "have",
+                      "been", "will", "should", "would", "could", "their", "there",
+                      "not", "are", "was", "can", "all", "has", "its", "than"].contains(w))
+        .collect();
+    words.join(" OR ")
+}
+
+// ============================================================================
 // TYPES
 // ============================================================================
 
@@ -36,6 +54,9 @@ pub struct MemoryFact {
     pub created_at: String,
     pub updated_at: String,
     pub expires_at: Option<String>,
+    /// Pinned facts can't be overwritten by distillation. User-authored facts are pinned.
+    #[serde(default)]
+    pub pinned: bool,
 }
 
 /// A memory fact with a computed relevance score from hybrid search.
@@ -73,14 +94,14 @@ impl MemoryRepository {
 
         self.db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, pinned)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
                  ON CONFLICT(agent_id, scope, ward_id, key) DO UPDATE SET
-                    content = excluded.content,
-                    confidence = MAX(memory_facts.confidence, excluded.confidence),
+                    content = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.content ELSE excluded.content END,
+                    confidence = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.confidence ELSE MAX(memory_facts.confidence, excluded.confidence) END,
                     mention_count = memory_facts.mention_count + 1,
                     source_summary = COALESCE(excluded.source_summary, memory_facts.source_summary),
-                    embedding = COALESCE(excluded.embedding, memory_facts.embedding),
+                    embedding = CASE WHEN memory_facts.pinned = 1 AND memory_facts.embedding IS NOT NULL THEN memory_facts.embedding ELSE COALESCE(excluded.embedding, memory_facts.embedding) END,
                     updated_at = excluded.updated_at,
                     session_id = COALESCE(excluded.session_id, memory_facts.session_id)",
                 params![
@@ -100,6 +121,7 @@ impl MemoryRepository {
                     fact.created_at,
                     fact.updated_at,
                     fact.expires_at,
+                    fact.pinned as i32,
                 ],
             )?;
             Ok(())
@@ -286,6 +308,26 @@ impl MemoryRepository {
         })
     }
 
+    /// Archive a fact by moving it from `memory_facts` to `memory_facts_archive`.
+    ///
+    /// Performs an atomic INSERT-then-DELETE within a single connection so the
+    /// fact is never lost. Used by the pruning subsystem to keep the active
+    /// store lean without discarding data.
+    pub fn archive_fact(&self, fact_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO memory_facts_archive
+                 SELECT id, agent_id, scope, category, key, content, confidence, ward_id,
+                        mention_count, source_summary, embedding, contradicted_by,
+                        created_at, updated_at, datetime('now')
+                 FROM memory_facts WHERE id = ?1",
+                params![fact_id],
+            )?;
+            conn.execute("DELETE FROM memory_facts WHERE id = ?1", params![fact_id])?;
+            Ok(())
+        })
+    }
+
     /// Search for facts similar to the given embedding, filtered by minimum similarity threshold.
     ///
     /// Returns facts with cosine similarity >= `min_similarity`. Used for contradiction detection.
@@ -311,6 +353,69 @@ impl MemoryRepository {
     /// When `ward_id` is `Some(w)`, results are filtered to facts belonging to
     /// the `__global__` ward **or** the specified ward. When `None`, all wards
     /// are returned (no ward filtering).
+    /// FTS5 keyword search across ALL agents (no agent_id filter).
+    pub fn search_all_memory_facts_fts(
+        &self,
+        query: &str,
+        limit: usize,
+        category: Option<&str>,
+    ) -> Result<Vec<ScoredFact>, String> {
+        let sanitized_query = sanitize_fts_query(query);
+        if sanitized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = &sanitized_query;
+
+        self.db.with_connection(|conn| {
+            let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(cat) = category {
+                (
+                    "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
+                            mf.content, mf.confidence, mf.mention_count, mf.source_summary,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            rank
+                     FROM memory_facts_fts fts
+                     JOIN memory_facts mf ON mf.rowid = fts.rowid
+                     WHERE memory_facts_fts MATCH ?1 AND mf.category = ?2
+                     ORDER BY rank
+                     LIMIT ?3".to_string(),
+                    vec![
+                        Box::new(query.to_string()),
+                        Box::new(cat.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            } else {
+                (
+                    "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
+                            mf.content, mf.confidence, mf.mention_count, mf.source_summary,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            rank
+                     FROM memory_facts_fts fts
+                     JOIN memory_facts mf ON mf.rowid = fts.rowid
+                     WHERE memory_facts_fts MATCH ?1
+                     ORDER BY rank
+                     LIMIT ?2".to_string(),
+                    vec![
+                        Box::new(query.to_string()),
+                        Box::new(limit as i64),
+                    ],
+                )
+            };
+
+            let mut stmt = conn.prepare(&sql)?;
+            let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
+            let rows = stmt.query_map(param_refs.as_slice(), |row| {
+                let fact = row_to_memory_fact(row)?;
+                let bm25: f64 = row.get(17)?;
+                Ok(ScoredFact { fact, score: -bm25 })
+            })?;
+
+            let results: Vec<ScoredFact> = rows.filter_map(|r| r.ok()).collect();
+            Ok(results)
+        })
+    }
+
+    /// FTS5 keyword search for a specific agent.
     pub fn search_memory_facts_fts(
         &self,
         query: &str,
@@ -318,12 +423,21 @@ impl MemoryRepository {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
+        // Sanitize query for FTS5: extract alphanumeric words, join with OR.
+        // Raw user messages contain commas, parens, dashes that break FTS5 syntax.
+        // Using OR ensures any matching term contributes to results.
+        let sanitized_query = sanitize_fts_query(query);
+        if sanitized_query.is_empty() {
+            return Ok(Vec::new());
+        }
+        let query = &sanitized_query;
+
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = ward_id {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -342,7 +456,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -609,6 +723,35 @@ impl MemoryRepository {
         })
     }
 
+    /// Get top facts for a specific category, ordered by confidence then recency.
+    ///
+    /// Used to always-inject corrections into recall (regardless of query
+    /// similarity) and for capability gap detection (skill/agent categories).
+    pub fn get_facts_by_category(
+        &self,
+        agent_id: &str,
+        category: &str,
+        limit: usize,
+    ) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                 FROM memory_facts
+                 WHERE agent_id = ?1 AND category = ?2
+                   AND (expires_at IS NULL OR expires_at > datetime('now'))
+                 ORDER BY confidence DESC, updated_at DESC
+                 LIMIT ?3"
+            )?;
+
+            let rows = stmt.query_map(
+                params![agent_id, category, limit as i64],
+                |row| row_to_memory_fact(row),
+            )?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Count total memory facts for an agent.
     pub fn count_memory_facts(&self, agent_id: &str) -> Result<usize, String> {
         self.db.with_connection(|conn| {
@@ -797,6 +940,7 @@ fn row_to_memory_fact(row: &rusqlite::Row) -> Result<MemoryFact, rusqlite::Error
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
         expires_at: row.get(15)?,
+        pinned: row.get::<_, i32>(16).unwrap_or(0) != 0,
     })
 }
 
@@ -806,14 +950,14 @@ fn f32_vec_to_blob(vec: &[f32]) -> Vec<u8> {
 }
 
 /// Convert raw bytes (little-endian) back to f32 vector.
-fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
+pub fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
     blob.chunks_exact(4)
         .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
         .collect()
 }
 
 /// Compute cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
+pub fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
@@ -875,6 +1019,7 @@ mod tests {
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
             expires_at: None,
+            pinned: false,
         }
     }
 
@@ -1027,6 +1172,15 @@ mod tests {
         for (a, b) in original.iter().zip(recovered.iter()) {
             assert!((a - b).abs() < 0.0001);
         }
+    }
+
+    #[test]
+    fn test_sanitize_fts_query() {
+        assert_eq!(sanitize_fts_query("hello world"), "hello OR world");
+        assert_eq!(sanitize_fts_query("PTON, NVDA, TSLA"), "PTON OR NVDA OR TSLA");
+        assert_eq!(sanitize_fts_query("portfolio risk (VaR 95%)"), "portfolio OR risk OR VaR");
+        assert_eq!(sanitize_fts_query(""), "");
+        assert_eq!(sanitize_fts_query("a b"), ""); // words <= 2 chars filtered
     }
 
     #[test]

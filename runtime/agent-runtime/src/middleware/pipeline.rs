@@ -81,16 +81,21 @@ impl MiddlewarePipeline {
                 continue;
             }
 
+            // Clone before passing to middleware — if it returns Proceed,
+            // the original messages are preserved. If it returns Modified/EmitAndModify,
+            // we use the new messages (clone is discarded).
+            let backup = current_messages.clone();
             match middleware.process(std::mem::take(&mut current_messages), context).await? {
                 super::traits::MiddlewareEffect::ModifiedMessages(msgs) => {
                     current_messages = msgs;
                 }
                 super::traits::MiddlewareEffect::Proceed => {
-                    // Keep messages as-is - but we took them, so need to restore
-                    // This shouldn't happen since we take ownership
+                    // Middleware didn't modify — restore from backup
+                    current_messages = backup;
                 }
                 super::traits::MiddlewareEffect::EmitEvent(event) => {
                     on_event(event);
+                    current_messages = backup;
                 }
                 super::traits::MiddlewareEffect::EmitAndModify { event, messages: msgs } => {
                     on_event(event);

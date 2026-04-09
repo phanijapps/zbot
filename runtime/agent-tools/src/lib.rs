@@ -11,7 +11,17 @@
 
 mod tools;
 
-pub use tools::{builtin_tools_with_fs, core_tools, optional_tools, ListAgentsTool, MemoryEntry, MemoryStore, QueryResourceTool, ToolSettings};
+pub use tools::{
+    builtin_tools_with_fs, core_tools, optional_tools,
+    // Composite re-exports
+    ListAgentsTool, MemoryEntry, MemoryStore, QueryResourceTool, ToolSettings,
+    // Individual tools for lean subagent registries
+    ShellTool, ApplyPatchTool, WriteFileTool, EditFileTool, MemoryTool, LoadSkillTool, GrepTool, ReadTool, GlobTool,
+    // Orchestrator tools
+    WardTool, UpdatePlanTool, SetSessionTitleTool,
+    // Multimodal vision fallback
+    MultimodalAnalyzeTool,
+};
 
 // Re-export from zero-core
 pub use zero_core::{Tool, FileSystemContext};

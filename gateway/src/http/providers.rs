@@ -11,8 +11,9 @@ use axum::{
     Json, Router,
 };
 
-use crate::services::providers::Provider;
+use crate::services::providers::{ModelConfig, Provider};
 use crate::state::AppState;
+use gateway_services::models::ModelRegistry;
 
 // ============================================================================
 // Routes
@@ -31,13 +32,50 @@ pub fn routes() -> Router<AppState> {
 }
 
 // ============================================================================
+// Helpers
+// ============================================================================
+
+/// Enrich a provider's model list with capabilities from the model registry.
+/// Only populates model_configs if it's None (doesn't overwrite user data).
+fn enrich_provider(provider: &mut Provider, registry: &ModelRegistry) {
+    // Inject default rate limits so UI always sees them
+    if provider.rate_limits.is_none() {
+        provider.rate_limits = Some(provider.effective_rate_limits());
+    }
+
+    if provider.model_configs.is_some() {
+        return; // Already enriched or user-configured
+    }
+
+    let mut configs = std::collections::HashMap::new();
+    for model_id in &provider.models {
+        let profile = registry.get(model_id);
+        configs.insert(model_id.clone(), ModelConfig {
+            capabilities: profile.capabilities.clone(),
+            max_input: Some(profile.context.input),
+            max_output: profile.context.output,
+            source: "registry".to_string(),
+        });
+    }
+
+    if !configs.is_empty() {
+        provider.model_configs = Some(configs);
+    }
+}
+
+// ============================================================================
 // Handlers
 // ============================================================================
 
 /// List all providers
 async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
     match state.provider_service.list() {
-        Ok(providers) => Json(providers).into_response(),
+        Ok(mut providers) => {
+            for p in &mut providers {
+                enrich_provider(p, &state.model_registry);
+            }
+            Json(providers).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
 }
@@ -48,7 +86,10 @@ async fn get_provider(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.provider_service.get(&id) {
-        Ok(provider) => Json(provider).into_response(),
+        Ok(mut provider) => {
+            enrich_provider(&mut provider, &state.model_registry);
+            Json(provider).into_response()
+        }
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),
     }
 }
@@ -104,8 +145,25 @@ async fn test_provider(
     Path(id): Path<String>,
 ) -> impl IntoResponse {
     match state.provider_service.get(&id) {
-        Ok(provider) => {
+        Ok(mut provider) => {
             let result = state.provider_service.test(&provider).await;
+
+            // Persist verified status + merge discovered models back to providers.json
+            if result.success {
+                provider.verified = Some(true);
+                // Only populate models if the provider had none (empty list).
+                // If the provider already has a curated model list (from preset),
+                // keep it — don't pollute with every model the API discovers.
+                if let Some(ref discovered) = result.models {
+                    if !discovered.is_empty() && provider.models.is_empty() {
+                        provider.models = discovered.clone();
+                    }
+                }
+                // Enrich with registry capabilities
+                enrich_provider(&mut provider, &state.model_registry);
+                let _ = state.provider_service.update(&id, provider);
+            }
+
             Json(result).into_response()
         }
         Err(e) => (StatusCode::NOT_FOUND, e).into_response(),

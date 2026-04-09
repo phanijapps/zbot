@@ -9,7 +9,7 @@ use axum::{
     http::StatusCode,
     Json,
 };
-use gateway_services::LogSettings;
+use gateway_services::{ExecutionSettings, LogSettings};
 use serde::{Deserialize, Serialize};
 
 /// Response for settings endpoints.
@@ -221,6 +221,137 @@ pub async fn update_log_settings(
         Ok(()) => Ok(Json(SettingsResponse {
             success: true,
             data: Some(LogSettingsResponse {
+                settings,
+                restart_required: true,
+            }),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::BAD_REQUEST,
+            Json(SettingsResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            }),
+        )),
+    }
+}
+
+// ============================================================================
+// EXECUTION SETTINGS ENDPOINTS
+// ============================================================================
+
+/// Response wrapper for execution settings with restart warning.
+#[derive(Debug, Serialize)]
+pub struct ExecutionSettingsResponse {
+    /// The current execution settings
+    #[serde(flatten)]
+    pub settings: ExecutionSettings,
+    /// Changes require daemon restart to take effect
+    pub restart_required: bool,
+}
+
+/// GET /api/settings/execution - Get execution settings.
+pub async fn get_execution_settings(
+    State(state): State<AppState>,
+) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
+    match state.settings.get_execution_settings() {
+        Ok(settings) => Ok(Json(SettingsResponse {
+            success: true,
+            data: Some(ExecutionSettingsResponse {
+                settings,
+                restart_required: false,
+            }),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(SettingsResponse {
+                success: false,
+                data: None,
+                error: Some(e),
+            }),
+        )),
+    }
+}
+
+/// Request for updating execution settings.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateExecutionSettingsRequest {
+    /// Maximum parallel subagents (default: 2)
+    #[serde(default = "default_max_parallel")]
+    pub max_parallel_agents: u32,
+    /// Whether the first-time setup wizard has been completed (default: false)
+    #[serde(default)]
+    pub setup_complete: bool,
+    /// The user-chosen name for the root agent
+    #[serde(default)]
+    pub agent_name: Option<String>,
+    /// Disable streaming for subagents (default: true)
+    #[serde(default = "default_non_streaming")]
+    pub subagent_non_streaming: bool,
+    /// Orchestrator (root agent) configuration
+    #[serde(default)]
+    pub orchestrator: Option<gateway_services::OrchestratorConfig>,
+    /// Distillation (memory extraction) model configuration
+    #[serde(default)]
+    pub distillation: Option<gateway_services::DistillationConfig>,
+    /// Default multimodal (vision) model configuration
+    #[serde(default)]
+    pub multimodal: Option<gateway_services::MultimodalConfig>,
+}
+
+fn default_max_parallel() -> u32 { 2 }
+fn default_non_streaming() -> bool { true }
+
+impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
+    fn from(req: UpdateExecutionSettingsRequest) -> Self {
+        ExecutionSettings {
+            max_parallel_agents: req.max_parallel_agents,
+            setup_complete: req.setup_complete,
+            agent_name: req.agent_name,
+            subagent_non_streaming: req.subagent_non_streaming,
+            orchestrator: req.orchestrator.unwrap_or_default(),
+            distillation: req.distillation.unwrap_or_default(),
+            multimodal: req.multimodal.unwrap_or_default(),
+        }
+    }
+}
+
+/// PUT /api/settings/execution - Update execution settings.
+///
+/// Changes to max_parallel_agents require a daemon restart.
+/// When agent_name is set, also updates SOUL.md with the new identity.
+pub async fn update_execution_settings(
+    State(state): State<AppState>,
+    Json(request): Json<UpdateExecutionSettingsRequest>,
+) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
+    let settings: ExecutionSettings = request.into();
+
+    // Update SOUL.md if agent_name is provided
+    if let Some(ref name) = settings.agent_name {
+        let soul_path = state.paths.vault_dir().join("config").join("SOUL.md");
+        let current = std::fs::read_to_string(&soul_path).unwrap_or_default();
+        // Replace the first line "You are **OldName**" with the new name
+        let updated = if let Some(rest) = current.strip_prefix("You are **") {
+            if let Some(after_name) = rest.find("**") {
+                format!("You are **{}**{}", name, &rest[after_name + 2..])
+            } else {
+                format!("You are **{}**, an autonomous agent.\n\n{}", name, current)
+            }
+        } else {
+            format!("You are **{}**, an autonomous agent.\n\n{}", name, current)
+        };
+        if let Err(e) = std::fs::write(&soul_path, &updated) {
+            tracing::warn!("Failed to update SOUL.md: {}", e);
+        }
+    }
+
+    match state.settings.update_execution_settings(settings.clone()) {
+        Ok(()) => Ok(Json(SettingsResponse {
+            success: true,
+            data: Some(ExecutionSettingsResponse {
                 settings,
                 restart_required: true,
             }),

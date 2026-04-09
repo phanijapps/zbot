@@ -190,6 +190,8 @@ export interface ProviderResponse {
   verified?: boolean;
   isDefault?: boolean;
   createdAt?: string;
+  rateLimits?: RateLimits;
+  modelConfigs?: Record<string, ModelConfig>;
 }
 
 export interface CreateProviderRequest {
@@ -201,6 +203,8 @@ export interface CreateProviderRequest {
   models: string[];
   embeddingModels?: string[];
   defaultModel?: string;
+  rateLimits?: RateLimits;
+  modelConfigs?: Record<string, ModelConfig>;
 }
 
 export interface UpdateProviderRequest {
@@ -211,6 +215,8 @@ export interface UpdateProviderRequest {
   models?: string[];
   embeddingModels?: string[];
   defaultModel?: string;
+  rateLimits?: RateLimits;
+  modelConfigs?: Record<string, ModelConfig>;
 }
 
 /** Get the default model for a provider response. */
@@ -244,6 +250,18 @@ export interface ModelCapabilities {
   voice: boolean;
   imageGeneration: boolean;
   videoGeneration: boolean;
+}
+
+export interface RateLimits {
+  requestsPerMinute: number;
+  concurrentRequests: number;
+}
+
+export interface ModelConfig {
+  capabilities: ModelCapabilities;
+  maxInput?: number;
+  maxOutput?: number;
+  source: "registry" | "discovered" | "user";
 }
 
 export interface ContextWindow {
@@ -374,6 +392,112 @@ export interface UpdateLogSettingsRequest {
   suppressStdout?: boolean;
 }
 
+/** Orchestrator (root agent) configuration */
+export interface OrchestratorConfig {
+  /** Provider ID. null = use default provider */
+  providerId?: string | null;
+  /** Model. null = use provider's default model */
+  model?: string | null;
+  /** Temperature (0-2). Default: 0.7 */
+  temperature: number;
+  /** Max output tokens. Default: 16384 */
+  maxTokens: number;
+  /** Enable extended thinking/reasoning. Default: true */
+  thinkingEnabled: boolean;
+}
+
+/** Distillation model configuration (provider/model override) */
+export interface DistillationConfig {
+  /** Provider ID override. null = inherit from orchestrator */
+  providerId?: string | null;
+  /** Model override. null = inherit from orchestrator */
+  model?: string | null;
+}
+
+// ============================================================================
+// Session State (snapshot API for reconnection)
+// ============================================================================
+
+export type SessionPhase = "intent" | "planning" | "executing" | "responding" | "completed" | "error";
+
+export interface SessionState {
+  session: {
+    id: string;
+    title: string | null;
+    status: "running" | "completed" | "error" | "stopped";
+    startedAt: string;
+    durationMs: number;
+    tokenCount: number;
+    model: string | null;
+  };
+  userMessage: string | null;
+  phase: SessionPhase;
+  response: string | null;
+  intentAnalysis: Record<string, unknown> | null;
+  ward: { name: string; content: string } | null;
+  recalledFacts: Array<Record<string, unknown>>;
+  plan: Array<{ text: string; status: string }>;
+  subagents: SubagentStateData[];
+  isLive: boolean;
+}
+
+export interface SubagentStateData {
+  agentId: string;
+  executionId: string;
+  task: string;
+  status: "queued" | "running" | "completed" | "error";
+  durationMs: number | null;
+  tokenCount: number | null;
+  toolCalls: ToolCallEntryData[];
+}
+
+export interface ToolCallEntryData {
+  toolName: string;
+  status: "running" | "completed" | "error";
+  durationMs: number | null;
+  summary: string | null;
+}
+
+/** Default multimodal (vision) model configuration */
+export interface MultimodalConfig {
+  /** Provider ID. null = not configured */
+  providerId?: string | null;
+  /** Vision-capable model. null = not configured */
+  model?: string | null;
+  /** Temperature for analysis calls (default: 0.3) */
+  temperature: number;
+  /** Max output tokens (default: 4096) */
+  maxTokens: number;
+}
+
+/** Execution settings for controlling agent concurrency */
+export interface ExecutionSettings {
+  /** Maximum parallel subagents across all sessions (default: 2) */
+  maxParallelAgents: number;
+  /** Whether the first-time setup wizard has been completed (default: false) */
+  setupComplete: boolean;
+  /** The user-chosen name for the root agent */
+  agentName?: string;
+  /** Orchestrator (root agent) configuration */
+  orchestrator?: OrchestratorConfig;
+  /** Distillation model configuration (inherits from orchestrator by default) */
+  distillation?: DistillationConfig;
+  /** Default multimodal (vision) model for the multimodal_analyze tool */
+  multimodal?: MultimodalConfig;
+}
+
+export interface ExecutionSettingsResponse {
+  success: boolean;
+  data?: ExecutionSettings & { restartRequired: boolean };
+  error?: string;
+}
+
+/** Setup wizard status check */
+export interface SetupStatus {
+  setupComplete: boolean;
+  hasProviders: boolean;
+}
+
 // ============================================================================
 // Event Types
 // ============================================================================
@@ -392,7 +516,7 @@ export type UnsubscribeFn = () => void;
 // ============================================================================
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system";
+export type LogCategory = "session" | "token" | "tool_call" | "tool_result" | "delegation" | "error" | "thinking" | "system" | "response" | "intent";
 export type SessionStatus = "running" | "completed" | "error" | "stopped";
 
 /** A single execution log entry (snake_case from API) */
@@ -416,6 +540,8 @@ export interface LogSession {
   conversation_id: string;
   agent_id: string;
   agent_name: string;
+  /** Title derived from the first user message in the session */
+  title?: string;
   parent_session_id?: string;
   started_at: string;
   ended_at?: string;
@@ -441,6 +567,7 @@ export interface LogFilter {
   to_time?: string;
   limit?: number;
   offset?: number;
+  root_only?: boolean;
 }
 
 // ============================================================================
@@ -495,6 +622,7 @@ export interface AgentExecution {
   tokens_in: number;
   tokens_out: number;
   error?: string;
+  child_session_id?: string;
 }
 
 /** Session with all its executions (V2 API response) */
@@ -793,7 +921,13 @@ export type MemoryCategory =
   | "pattern"
   | "entity"
   | "instruction"
-  | "correction";
+  | "correction"
+  | "user"
+  | "domain"
+  | "strategy"
+  | "skill"
+  | "agent"
+  | "ward";
 
 /** A memory fact stored in the agent's memory system */
 export interface MemoryFact {
@@ -809,6 +943,8 @@ export interface MemoryFact {
   contradicted_by?: string;
   created_at: string;
   updated_at: string;
+  /** Pinned facts can't be overwritten by distillation. User-authored facts are pinned. */
+  pinned?: boolean;
 }
 
 /** Filter options for listing memory facts */

@@ -268,8 +268,16 @@ impl<D: DbProvider> LogService<D> {
     pub fn list_sessions(&self, filter: &LogFilter) -> Result<Vec<LogSession>, String> {
         let mut sessions = self.repo.list_sessions(filter)?;
 
-        // Enrich with child session IDs
+        // Batch-fetch titles from first user message
+        let session_ids: Vec<String> = sessions.iter().map(|s| s.session_id.clone()).collect();
+        let titles = self.repo.get_session_titles(&session_ids).unwrap_or_default();
+
+        // Enrich with child session IDs and titles
         for session in &mut sessions {
+            if let Some(title) = titles.get(&session.session_id) {
+                session.title = Some(title.clone());
+            }
+
             if let Ok(children) = self.repo.get_child_sessions(&session.session_id) {
                 session.child_session_ids = children;
             }
@@ -311,9 +319,25 @@ impl<D: DbProvider> LogService<D> {
                     session.child_session_ids = children;
                 }
 
-                // Compute status
-                if session.error_count > 0 {
+                // Enrich title from first user message
+                if let Ok(titles) =
+                    self.repo.get_session_titles(&[session_id.to_string()])
+                {
+                    if let Some(title) = titles.get(session_id) {
+                        session.title = Some(title.clone());
+                    }
+                }
+
+                // Compute status — check sessions table first for crash state
+                let db_status = self.repo.get_session_status_from_sessions_table(
+                    &session.conversation_id
+                );
+                if matches!(db_status.as_deref(), Some("crashed") | Some("error")) {
                     session.status = SessionStatus::Error;
+                } else if session.error_count > 0 {
+                    session.status = SessionStatus::Error;
+                } else if matches!(db_status.as_deref(), Some("running")) {
+                    session.status = SessionStatus::Running;
                 } else if session.ended_at.is_some() {
                     session.status = SessionStatus::Completed;
                 } else {
@@ -336,6 +360,13 @@ impl<D: DbProvider> LogService<D> {
             }
             None => Ok(None),
         }
+    }
+
+    /// Check whether a session already has an intent analysis log.
+    pub fn has_intent_log(&self, session_id: &str) -> bool {
+        self.repo
+            .has_category_log(session_id, "intent")
+            .unwrap_or(false)
     }
 
     /// Delete a session and its logs.

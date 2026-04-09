@@ -105,6 +105,7 @@ pub fn mock_execution(id: &str, session_id: &str, agent_id: &str) -> AgentExecut
         checkpoint: None,
         error: None,
         log_path: None,
+        child_session_id: None,
     }
 }
 
@@ -131,6 +132,7 @@ pub fn mock_subagent_execution(
         checkpoint: None,
         error: None,
         log_path: None,
+        child_session_id: None,
     }
 }
 
@@ -152,6 +154,7 @@ pub fn mock_completed_execution(id: &str, session_id: &str, agent_id: &str) -> A
         checkpoint: None,
         error: None,
         log_path: None,
+        child_session_id: None,
     }
 }
 

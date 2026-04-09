@@ -1,9 +1,11 @@
 # z-Bot — Product Definition
 
+z-Bot is a goal-oriented AI agent that lives on your desktop. It analyzes intent, plans autonomously, delegates to specialist subagents, self-learns across sessions, and works with any OpenAI-compatible provider. It is token-intensive by design — the agent does the work so you don't have to.
+
 ## Interfaces
 
 ### Web Dashboard
-Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, and conversations.
+Browser-based interface served by the daemon at `http://localhost:18791`. Full-featured management of agents, providers, skills, conversations, and observability.
 
 ### CLI (zero)
 Command-line interface for scripting, automation, and terminal-based workflows. Connects to the same daemon as the web dashboard.
@@ -66,35 +68,40 @@ Connect to external tools via Model Context Protocol servers. Configure in `mcps
 }
 ```
 
-### 6. Persistent Memory & Learning
+### 6. Memory Brain — Persistent Intelligence
 
-Hybrid memory system combining key-value storage, semantic search, and automatic session distillation.
+The memory layer is z-Bot's cognitive system. Every session teaches it something. Agents learn from experience, avoid past mistakes, and reuse existing work. See [components/memory-layer/overview.md](components/memory-layer/overview.md) for full architecture.
 
-**Manual Memory** (key-value store):
-```
-memory set user_name "Alice"           # agent-scoped
-memory get user_name
-memory search preferences
-memory set scope=ward key=purpose ...  # ward-scoped
-```
+**Five Memory Loops** (all active):
+1. **System recall** — facts, episodes, graph entities injected as system message on every first message
+2. **Intent + memory** — corrections and strategies enriches intent analysis before planning
+3. **Subagent priming** — corrections, skills, ward context injected when spawning subagents
+4. **Mid-session refresh** — new relevant facts injected every N turns during long sessions
+5. **Post-session distillation** — LLM extracts facts, entities, relationships, episodes with verification
 
-**Structured Facts** (automatic + manual):
-```
-memory save_fact category=preference key=user.language content="User prefers Rust"
-memory recall query="language preferences" limit=5
-memory graph query="zbot"              # knowledge graph entities
-```
+**Agent Tools**: All agents (root + subagents) have WardTool, MemoryTool, GrepTool — they can enter wards, recall memory, and search code.
 
-**Tiers**: Global shared → Agent → Ward → Session (ephemeral)
+**Recall Output** (priority order):
+- Rules (corrections — ALWAYS followed)
+- Warnings (past failures — avoid these)
+- Preferences & instructions
+- Past experiences (with outcome + strategy)
+- Domain knowledge
 
-**Memory Evolution Features**:
-- **Hybrid Search**: FTS5 BM25 keyword search (30%) + cosine vector similarity (70%) with confidence, recency, and mention-count boosting
-- **Embedding Providers**: Configurable backends — local ONNX (fastembed, default, zero cost), OpenAI-compatible APIs (Ollama, OpenAI, Voyage)
-- **Embedding Cache**: SHA-256 hash-based dedup prevents re-embedding unchanged content
-- **Session Distillation**: After sessions complete, an LLM automatically extracts durable facts (preferences, decisions, patterns, entities, instructions, corrections) and stores them with embeddings
-- **Smart Recall**: At session start, relevant facts are retrieved via hybrid search and injected as context
-- **Pre-Compaction Flush**: Before context window trimming, the agent gets a warning turn to save important facts
-- **Knowledge Graph**: Distillation extracts entities and relationships (person, project, tool, concept, file) into a graph store for structured queries
+**Accuracy Layer**:
+- Fact verification: distilled facts grounded against tool outputs (confidence scaled by match ratio)
+- Fact dedup: 60% word overlap check prevents near-duplicates under different keys
+- Entity normalization: file basename matching, alias tracking
+- Relationship dedup: unique index on (source, target, type)
+
+**Policies**: High-priority rules injected as memory facts (correction category, confidence 1.0, global scope). Surface at top of every recall. Currently via SQL; UI planned.
+
+**Ward Knowledge** (auto-generated after each session):
+- `ward.md` — curated rules only (max 5 corrections, 3 strategies, 2 warnings, deduped)
+- `core_docs.md` — all code files with function signatures (scans entire ward recursively)
+- `structure.md` — directory tree
+
+**Storage**: SQLite (memory_facts, episodes, recall_log, embeddings) + Knowledge Graph (entities, relationships)
 - **Fact Dedup**: UNIQUE constraint on (agent_id, scope, key) — repeated mentions update content and bump mention_count
 
 ### 7. Code Wards
@@ -108,25 +115,25 @@ Agent-managed persistent project directories. The agent autonomously creates, na
 - Ward memory for project context (tech stack, build commands)
 - `scratch` ward for quick one-off tasks
 
-### 8. Operations Dashboard
-Real-time monitoring and management of agent sessions:
+### 8. Observability Dashboard
+Full execution visibility via a List + Detail split layout:
 
-**Statistics Panel:**
-- Active sessions count (running, queued)
-- Completed/crashed session counts
-- Sessions by trigger source (web, cli, api, cron, plugin)
+**Session List (left panel):**
+- Filterable list of root sessions with status badges
+- Agent count, duration, token usage per session
+- Real-time polling for running sessions
 
-**Session List:**
-- All sessions with status indicators
-- Execution hierarchy (root agent + subagents)
-- Turn counts and timing information
-- Filter by source and status
-- Auto-refresh every 5 seconds
+**Timeline Tree (right panel):**
+- Hierarchical narrative: root → subagent → tool calls
+- Contextual icons per tool type (Terminal, FileEdit, Brain, Globe, etc.)
+- Click to expand nodes and see full arguments/results
+- Subagent delegations collapsible with task description
+- Error nodes highlighted in red
 
-**Session Management:**
-- View session details and execution tree
-- Cancel running sessions
-- Track subagent delegation in real-time
+**Operations Dashboard:**
+- Real-time session monitoring and management
+- Pause, resume, cancel running sessions
+- Resume crashed sessions at the subagent level (smart resume)
 
 ### 9. Multi-Turn Session Management
 Conversations persist across multiple turns within a session:

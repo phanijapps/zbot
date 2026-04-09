@@ -4,17 +4,23 @@
 // ============================================================================
 
 pub mod apply_patch;
+pub mod edit_file;
 pub mod graph;
+pub mod session_title;
 pub mod skills;
 pub mod shell;
 pub mod todos;
 pub mod update_plan;
+pub mod write_file;
 
 pub use apply_patch::ApplyPatchTool;
+pub use edit_file::EditFileTool;
 pub use graph::ExecutionGraphTool;
+pub use session_title::SetSessionTitleTool;
 pub use shell::ShellTool;
 pub use todos::TodoTool;
 pub use update_plan::UpdatePlanTool;
+pub use write_file::WriteFileTool;
 
 use std::sync::Arc;
 

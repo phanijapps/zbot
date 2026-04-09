@@ -73,6 +73,10 @@ pub enum LogCategory {
     System,
     /// Errors
     Error,
+    /// Agent's final response content
+    Response,
+    /// Intent analysis results
+    Intent,
 }
 
 impl LogCategory {
@@ -86,6 +90,8 @@ impl LogCategory {
             Self::Delegation => "delegation",
             Self::System => "system",
             Self::Error => "error",
+            Self::Response => "response",
+            Self::Intent => "intent",
         }
     }
 }
@@ -109,6 +115,8 @@ impl std::str::FromStr for LogCategory {
             "delegation" => Ok(Self::Delegation),
             "system" => Ok(Self::System),
             "error" => Ok(Self::Error),
+            "response" => Ok(Self::Response),
+            "intent" => Ok(Self::Intent),
             _ => Err(format!("Invalid log category: {}", s)),
         }
     }
@@ -252,6 +260,9 @@ pub struct LogSession {
     pub agent_id: String,
     /// Agent display name
     pub agent_name: String,
+    /// Title derived from the first user message in the session
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
     /// Session start time (RFC3339)
     pub started_at: String,
     /// Session end time (RFC3339)
@@ -317,6 +328,9 @@ pub struct LogFilter {
     /// Offset for pagination
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
+    /// Only return root sessions (no parent)
+    #[serde(default)]
+    pub root_only: bool,
 }
 
 // ============================================================================

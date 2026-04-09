@@ -4,12 +4,12 @@
 
 use api_logs::LogService;
 use execution_state::StateService;
-use knowledge_graph::{GraphStorage, GraphService};
+use knowledge_graph::{GraphStorage, GraphService, SqliteGraphTraversal};
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
-use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionDistiller, WorkspaceCache};
+use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller, WorkspaceCache};
 use crate::hooks::HookRegistry;
 use crate::services::{AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
 use agent_runtime::llm::LocalEmbeddingClient;
@@ -17,7 +17,7 @@ use agent_runtime::llm::EmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use chrono::Utc;
-use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository};
+use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -94,6 +94,9 @@ pub struct AppState {
 
     /// Plugin manager for STDIO plugin lifecycle.
     pub plugin_manager: Arc<gateway_bridge::PluginManager>,
+
+    /// Session archiver for offloading old transcripts to compressed files.
+    pub session_archiver: Option<Arc<SessionArchiver>>,
 
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
@@ -179,22 +182,24 @@ impl AppState {
                 }
             };
 
-        let embedding_client: Option<Arc<dyn EmbeddingClient>> = match LocalEmbeddingClient::new() {
-            Ok(client) => {
-                tracing::info!(
-                    "Local embedding client initialized ({}d)",
-                    client.dimensions()
-                );
-                Some(Arc::new(client))
-            }
-            Err(e) => {
-                tracing::warn!("Local embedding unavailable, FTS5-only recall: {}", e);
-                None
-            }
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = {
+            let client = LocalEmbeddingClient::new();
+            tracing::info!(
+                "Local embedding client created (lazy, {}d)",
+                client.dimensions()
+            );
+            Some(Arc::new(client))
         };
 
         // Load recall configuration (compiled defaults merged with optional user overrides)
         let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(paths.vault_dir()));
+
+        // Create session archiver for offloading old transcripts to compressed files
+        let archive_path = paths.data_dir().join(&recall_config.session_offload.archive_path);
+        let session_archiver = Arc::new(SessionArchiver::new(
+            db_manager.clone(),
+            archive_path,
+        ));
 
         // Create memory recall with optional graph enrichment and episodic recall
         let mut memory_recall_inner = match &graph_service {
@@ -215,6 +220,20 @@ impl AppState {
             }
         };
         memory_recall_inner.set_episode_repo(episode_repo.clone());
+
+        // Wire recall log for tracking recalled facts per session (enables predictive recall)
+        let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
+        memory_recall_inner.set_recall_log(recall_log);
+
+        // Wire graph traversal engine for graph-driven expansion in recall
+        if let Some(ref gs) = graph_storage {
+            let traversal = Arc::new(SqliteGraphTraversal::new(
+                gs.clone(),
+                recall_config.graph_traversal.hop_decay,
+            ));
+            memory_recall_inner.set_traversal(traversal);
+        }
+
         let memory_recall = Arc::new(memory_recall_inner);
 
         // Clone embedding client before it's moved into distiller — the runner
@@ -222,6 +241,9 @@ impl AppState {
         let runner_embedding_client = embedding_client.clone();
 
         let episode_repo_ref = episode_repo.clone();
+
+        // Create settings service (before distiller & runtime, so we can read execution settings)
+        let settings = Arc::new(SettingsService::new(paths.clone()));
 
         let distiller = Arc::new(SessionDistiller::new(
             provider_service.clone(),
@@ -232,10 +254,16 @@ impl AppState {
             Some(distillation_repo.clone()),
             Some(episode_repo),
             paths.clone(), // For loading distillation_prompt.md
+            Some(settings.clone()),
         ));
 
         // Keep a handle for on-demand distillation (backfill, trigger)
         let distiller_ref = distiller.clone();
+        let max_parallel_agents = settings
+            .get_execution_settings()
+            .map(|s| s.max_parallel_agents)
+            .unwrap_or(2);
+        tracing::info!(max_parallel_agents, "Execution settings loaded");
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -256,6 +284,7 @@ impl AppState {
             Some(bridge_registry.clone()),
             Some(bridge_outbox.clone()),
             runner_embedding_client,
+            max_parallel_agents,
         ));
 
         // Create hook registry
@@ -263,9 +292,6 @@ impl AppState {
 
         // Create delegation registry
         let delegation_registry = Arc::new(DelegationRegistry::new());
-
-        // Create settings service
-        let settings = Arc::new(SettingsService::new(paths.clone()));
 
         // Create plugin manager
         let plugin_manager = Arc::new(gateway_bridge::PluginManager::new(
@@ -293,6 +319,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None, // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
+            session_archiver: Some(session_archiver),
             plugin_manager,
             model_registry,
             workspace_cache,
@@ -360,6 +387,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            session_archiver: None,
             model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
@@ -430,6 +458,7 @@ impl AppState {
             bridge_outbox,
             bridge_bus: None,
             cron_scheduler: None,
+            session_archiver: None,
             model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
@@ -468,10 +497,40 @@ impl AppState {
             })
             .unwrap_or_else(|| "default".to_string());
 
-        // Seed default agents
-        if let Err(e) = self.agents.seed_default_agents(&default_provider_id).await {
+        // Resolve default model from default provider (first model in list)
+        let default_model = self
+            .provider_service
+            .list()
+            .ok()
+            .and_then(|providers| {
+                providers.iter()
+                    .find(|p| p.is_default)
+                    .or_else(|| providers.first())
+                    .and_then(|p| p.default_model().to_string().into())
+            })
+            .unwrap_or_else(|| "gpt-4o".to_string());
+
+        // Seed default agents from bundled templates (configs + AGENTS.md instructions)
+        let agent_template = gateway_templates::Templates::get("default_agents.json")
+            .map(|f| f.data.to_vec());
+        if let Err(e) = self.agents.seed_default_agents(
+            &default_provider_id,
+            &default_model,
+            agent_template.as_deref(),
+            |name| {
+                let path = format!("agents/{}.md", name);
+                gateway_templates::Templates::get(&path)
+                    .map(|f| String::from_utf8_lossy(&f.data).to_string())
+            },
+        ).await {
             tracing::warn!("Failed to seed default agents: {}", e);
         }
+
+        // Seed default skills from bundled templates if skills dir is empty
+        self.seed_default_skills();
+
+        // Seed default policies from bundled template if no policies exist
+        self.seed_default_policies();
 
         // Preload skills into cache
         if let Err(e) = self.skills.preload().await {
@@ -503,6 +562,117 @@ impl AppState {
             Err(e) => {
                 tracing::warn!("Failed to discover plugins: {}", e);
             }
+        }
+    }
+
+    /// Seed default skills from bundled templates if skills directory is empty.
+    fn seed_default_skills(&self) {
+        let skills_dir = self.paths.vault_dir().join("skills");
+
+        // Only seed if skills dir is empty or doesn't exist
+        let has_skills = skills_dir.exists() && std::fs::read_dir(&skills_dir)
+            .map(|mut entries| entries.next().is_some())
+            .unwrap_or(false);
+
+        if has_skills {
+            tracing::debug!("Skills directory not empty, skipping seed");
+            return;
+        }
+
+        tracing::info!("Seeding default skills from bundled templates");
+        std::fs::create_dir_all(&skills_dir).ok();
+
+        // Iterate all embedded files under skills/
+        for path in gateway_templates::Templates::iter() {
+            let path_str = path.as_ref();
+            if !path_str.starts_with("skills/") { continue; }
+
+            // path_str is like "skills/coding/SKILL.md" or "skills/yf-data/scripts/run.py"
+            let dest = self.paths.vault_dir().join(path_str);
+            if let Some(parent) = dest.parent() {
+                std::fs::create_dir_all(parent).ok();
+            }
+
+            if let Some(file) = gateway_templates::Templates::get(path_str) {
+                if let Err(e) = std::fs::write(&dest, &file.data) {
+                    tracing::warn!("Failed to seed skill file {}: {}", path_str, e);
+                }
+            }
+        }
+
+        let count = std::fs::read_dir(&skills_dir)
+            .map(|entries| entries.count())
+            .unwrap_or(0);
+        tracing::info!("Seeded {} default skills", count);
+    }
+
+    /// Seed default policies from bundled template if no policies/corrections exist.
+    fn seed_default_policies(&self) {
+        let memory_repo = match &self.memory_repo {
+            Some(repo) => repo,
+            None => return,
+        };
+
+        // Check if any correction facts already exist
+        let existing = memory_repo.get_facts_by_category("root", "correction", 1)
+            .unwrap_or_default();
+        if !existing.is_empty() {
+            tracing::debug!("Policies already exist, skipping seed");
+            return;
+        }
+
+        let template = match gateway_templates::Templates::get("default_policies.json") {
+            Some(f) => f.data.to_vec(),
+            None => return,
+        };
+
+        let policies: Vec<serde_json::Value> = match serde_json::from_slice(&template) {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!("Failed to parse default_policies.json: {}", e);
+                return;
+            }
+        };
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let mut count = 0;
+
+        for policy in &policies {
+            let category = policy["category"].as_str().unwrap_or("correction");
+            let key = policy["key"].as_str().unwrap_or_default();
+            let content = policy["content"].as_str().unwrap_or_default();
+            let confidence = policy["confidence"].as_f64().unwrap_or(1.0);
+            let pinned = policy["pinned"].as_bool().unwrap_or(true);
+
+            if key.is_empty() || content.is_empty() { continue; }
+
+            let fact = gateway_database::MemoryFact {
+                id: format!("policy-{}", uuid::Uuid::new_v4()),
+                session_id: None,
+                agent_id: "root".to_string(),
+                scope: "agent".to_string(),
+                category: category.to_string(),
+                key: key.to_string(),
+                content: content.to_string(),
+                confidence,
+                mention_count: 5,
+                source_summary: Some("Default policy".to_string()),
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: now.clone(),
+                updated_at: now.clone(),
+                expires_at: None,
+                pinned,
+            };
+
+            if memory_repo.upsert_memory_fact(&fact).is_ok() {
+                count += 1;
+            }
+        }
+
+        if count > 0 {
+            tracing::info!("Seeded {} default policies/instructions", count);
         }
     }
 

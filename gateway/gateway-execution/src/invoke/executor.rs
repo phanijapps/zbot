@@ -5,12 +5,23 @@
 use gateway_services::agents::Agent;
 use gateway_services::models::ModelRegistry;
 use gateway_services::providers::Provider;
-use gateway_services::{McpService, SkillService};
+use gateway_services::{McpService, SettingsService, SkillService};
 use agent_runtime::{
-    AgentExecutor, DelegateTool, ExecutorConfig, LlmConfig, McpManager, MiddlewarePipeline,
-    OpenAiClient, RespondTool, RetryPolicy, RetryingLlmClient, ToolRegistry,
+    AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
+    LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, RespondTool, RetryPolicy,
+    RetryingLlmClient, ToolCallDecision, ToolRegistry,
 };
-use agent_tools::{core_tools, optional_tools, ListAgentsTool, QueryResourceTool, ToolSettings};
+use agent_tools::{
+    ListAgentsTool, QueryResourceTool, ToolSettings,
+    // Subagent tools
+    ShellTool, LoadSkillTool, WriteFileTool, EditFileTool,
+    // Root orchestrator tools
+    MemoryTool, WardTool, UpdatePlanTool, SetSessionTitleTool, GrepTool,
+    // Optional file reading tools
+    ReadTool, GlobTool,
+    // Multimodal vision fallback
+    MultimodalAnalyzeTool,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -40,9 +51,10 @@ pub struct ExecutorBuilder {
     workspace_cache: Option<WorkspaceCache>,
     fact_store: Option<Arc<dyn MemoryFactStore>>,
     connector_provider: Option<Arc<dyn ConnectorResourceProvider>>,
-    llm_throttle: Option<Arc<tokio::sync::Semaphore>>,
+    rate_limiter: Option<Arc<agent_runtime::ProviderRateLimiter>>,
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
+    subagent_non_streaming: bool,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
 }
 
@@ -55,9 +67,10 @@ impl ExecutorBuilder {
             workspace_cache: None,
             fact_store: None,
             connector_provider: None,
-            llm_throttle: None,
+            rate_limiter: None,
             model_registry: None,
             is_delegated: false,
+            subagent_non_streaming: true,
             extra_initial_state: None,
         }
     }
@@ -80,15 +93,24 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Set the LLM throttle semaphore (shared per provider across all executors).
-    pub fn with_llm_throttle(mut self, semaphore: Arc<tokio::sync::Semaphore>) -> Self {
-        self.llm_throttle = Some(semaphore);
+    /// Set the shared rate limiter for this executor's provider.
+    ///
+    /// The limiter is shared across all executors using the same provider,
+    /// so root and subagents respect the same concurrent-request and RPM limits.
+    pub fn with_rate_limiter(mut self, limiter: Arc<agent_runtime::ProviderRateLimiter>) -> Self {
+        self.rate_limiter = Some(limiter);
         self
     }
 
     /// Mark this executor as a delegated subagent (enables plan step cap).
     pub fn with_delegated(mut self, is_delegated: bool) -> Self {
         self.is_delegated = is_delegated;
+        self
+    }
+
+    /// Set whether subagents use non-streaming requests.
+    pub fn with_subagent_non_streaming(mut self, non_streaming: bool) -> Self {
+        self.subagent_non_streaming = non_streaming;
         self
     }
 
@@ -189,6 +211,40 @@ impl ExecutorBuilder {
             }
         }
 
+        // Inject multimodal config for the multimodal_analyze tool
+        let settings_service = SettingsService::new_legacy(self.config_dir.clone());
+        if let Ok(settings) = settings_service.load() {
+            let mm = &settings.execution.multimodal;
+            if let (Some(provider_id), Some(model)) = (&mm.provider_id, &mm.model) {
+                // Resolve the provider to get base_url and api_key
+                let providers_path = self.config_dir.join("config/providers.json");
+                let provider_creds = std::fs::read_to_string(&providers_path)
+                    .ok()
+                    .and_then(|content| serde_json::from_str::<Vec<serde_json::Value>>(&content).ok())
+                    .and_then(|providers| {
+                        providers.into_iter().find(|p| {
+                            p.get("id").and_then(|v| v.as_str()) == Some(provider_id)
+                        })
+                    });
+
+                if let Some(prov) = provider_creds {
+                    let base_url = prov.get("baseUrl").and_then(|v| v.as_str()).unwrap_or("");
+                    let api_key = prov.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
+                    executor_config = executor_config.with_initial_state(
+                        "multimodal_config",
+                        serde_json::json!({
+                            "providerId": provider_id,
+                            "model": model,
+                            "temperature": mm.temperature,
+                            "maxTokens": mm.max_tokens,
+                            "baseUrl": base_url,
+                            "apiKey": api_key,
+                        }),
+                    );
+                }
+            }
+        }
+
         // Validate thinking capability against model registry
         let thinking_enabled = if agent.thinking_enabled {
             if let Some(ref registry) = self.model_registry {
@@ -228,12 +284,14 @@ impl ExecutorBuilder {
         let retrying_client: Arc<dyn agent_runtime::LlmClient> =
             Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
 
-        // Wrap with throttle if configured (limits concurrent calls per provider)
-        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref sem) = self.llm_throttle {
-            Arc::new(agent_runtime::ThrottledLlmClient::new(retrying_client, sem.clone()))
+        // Wrap with shared rate limiter if configured (limits concurrent calls and RPM per provider)
+        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
+            Arc::new(agent_runtime::RateLimitedLlmClient::new(retrying_client, limiter.clone()))
         } else {
             retrying_client
         };
+        // Stream decode errors are handled by openai.rs fallback (stream error → retry non-streaming).
+        // All agents stream — no NonStreamingLlmClient wrapper needed.
 
         // Create file system context for tools
         let fs_context: Arc<dyn FileSystemContext> =
@@ -245,14 +303,48 @@ impl ExecutorBuilder {
         // Build MCP manager
         let mcp_manager = self.build_mcp_manager(agent, mcp_service).await;
 
-        // Create empty middleware pipeline
-        let middleware_pipeline = Arc::new(MiddlewarePipeline::new());
-
         // Build final executor config with system instruction
         executor_config.system_instruction = Some(agent.instructions.clone());
         executor_config.conversation_id = Some(conversation_id.to_string());
         executor_config.temperature = agent.temperature;
         executor_config.max_tokens = agent.max_tokens;
+
+        // Clamp max_tokens to model's actual output limit (prevents API errors)
+        // Priority: provider model config → model registry → no clamping
+        let mut clamped = false;
+
+        // Check provider-level model config (user overrides)
+        if let Some(provider_max) = provider.effective_max_output(&agent.model) {
+            if provider_max > 0 && (executor_config.max_tokens as u64) > provider_max {
+                tracing::warn!(
+                    agent = %agent.id,
+                    model = %agent.model,
+                    requested = executor_config.max_tokens,
+                    clamped_to = provider_max,
+                    "Clamped max_tokens to provider model config limit"
+                );
+                executor_config.max_tokens = provider_max as u32;
+                clamped = true;
+            }
+        }
+
+        // Check model registry (bundled + local overrides)
+        if !clamped {
+            if let Some(ref registry) = self.model_registry {
+                let model_output = registry.context_window(&agent.model).resolved_output();
+                if model_output > 0 && (executor_config.max_tokens as u64) > model_output {
+                    tracing::warn!(
+                        agent = %agent.id,
+                        model = %agent.model,
+                        requested = executor_config.max_tokens,
+                        clamped_to = model_output,
+                        "Clamped max_tokens to model registry output limit"
+                    );
+                    executor_config.max_tokens = model_output as u32;
+                }
+            }
+        }
+
         // Resolve context window: provider override > model registry > default 8192
         executor_config.context_window_tokens = provider.context_window.unwrap_or_else(|| {
             self.model_registry.as_ref()
@@ -260,6 +352,76 @@ impl ExecutorBuilder {
                 .unwrap_or(8192)
         });
         executor_config.mcps = agent.mcps.clone();
+
+        // Create middleware pipeline with context editing
+        // Must be after context_window_tokens is resolved (above)
+        let middleware_pipeline = {
+            let pipeline = MiddlewarePipeline::new();
+            let pipeline = if executor_config.context_window_tokens > 0 {
+                pipeline.add_pre_processor(Box::new(
+                    ContextEditingMiddleware::new(
+                        ContextEditingConfig {
+                            enabled: true,
+                            trigger_tokens: (executor_config.context_window_tokens as usize * 70) / 100,
+                            keep_tool_results: 8,
+                            min_reclaim: 500,
+                            clear_tool_inputs: true,
+                            cascade_unload: true,
+                            skill_aware_placeholders: true,
+                            ..Default::default()
+                        }
+                    )
+                ))
+            } else {
+                pipeline
+            };
+            Arc::new(pipeline)
+        };
+
+        // Root is an orchestrator — enforce single action per turn
+        if !self.is_delegated {
+            executor_config.single_action_mode = true;
+        }
+
+        // Wire execution hooks for subagents (code-agent, research-agent, etc.)
+        if self.is_delegated {
+            // beforeToolCall: block shell-as-file-writer bypass
+            executor_config.before_tool_call = Some(Arc::new(|tool_name, args| {
+                if tool_name == "shell" {
+                    let cmd = args.get("command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    // Block shell commands that create/write files — use write_file instead
+                    if cmd.contains("> ") || cmd.contains("cat <<") || cmd.contains("heredoc")
+                        || cmd.contains("echo \"") && cmd.contains("> ")
+                        || cmd.contains("printf") && cmd.contains("> ")
+                        || cmd.contains("tee ") {
+                        return ToolCallDecision::Block {
+                            reason: "Use write_file to create files, not shell redirects. Shell is for running commands and reading output.".to_string()
+                        };
+                    }
+                }
+                ToolCallDecision::Allow
+            }));
+
+            // afterToolCall: inject guidance after errors to reduce fix-retry loops
+            executor_config.after_tool_call = Some(Arc::new(|tool_name, _args, result, succeeded| {
+                if !succeeded && tool_name == "shell" {
+                    Some(format!(
+                        "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
+                         not the symptom. Do not retry the same command — fix the file first with edit_file.]",
+                        result
+                    ))
+                } else if !succeeded {
+                    Some(format!(
+                        "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
+                        result
+                    ))
+                } else {
+                    None // Pass through unchanged
+                }
+            }));
+        }
 
         // Configure tool result offload settings
         executor_config.offload_large_results = self.tool_settings.offload_large_results;
@@ -280,20 +442,45 @@ impl ExecutorBuilder {
     fn build_tool_registry(&self, fs_context: Arc<dyn FileSystemContext>) -> Arc<ToolRegistry> {
         let mut tool_registry = ToolRegistry::new();
 
-        // Load core tools (always enabled, with optional DB-backed fact store)
-        tool_registry.register_all(core_tools(fs_context.clone(), self.fact_store.clone()));
+        if self.is_delegated {
+            // Subagents: execute + context awareness + respond.
+            tool_registry.register(Arc::new(ShellTool::new()));
+            tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(GrepTool));
+            tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(RespondTool::new()));
+            tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+        } else {
+            // Root agent: orchestrator tools only.
+            // Root delegates — it doesn't do specialist work.
+            // Excluded: load_skill, list_skills, apply_patch, list_agents, execution_graph
 
-        // Load optional tools based on settings
-        tool_registry.register_all(optional_tools(fs_context, &self.tool_settings));
+            // Orchestrator essentials
+            tool_registry.register(Arc::new(ShellTool::new()));
+            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(UpdatePlanTool::new()));
+            tool_registry.register(Arc::new(SetSessionTitleTool::new()));
+            tool_registry.register(Arc::new(GrepTool));
 
-        // Register action tools (respond, delegate, list_agents)
-        tool_registry.register(Arc::new(RespondTool::new()));
-        tool_registry.register(Arc::new(DelegateTool::new()));
-        tool_registry.register(Arc::new(ListAgentsTool::new()));
+            // Delegation + response
+            tool_registry.register(Arc::new(RespondTool::new()));
+            tool_registry.register(Arc::new(DelegateTool::new()));
+            tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
 
-        // Register connector resource query tool (if provider available)
-        if let Some(provider) = &self.connector_provider {
-            tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+            // Optional file reading (root may need to review delegation results)
+            if self.tool_settings.file_tools {
+                tool_registry.register(Arc::new(ReadTool));
+                tool_registry.register(Arc::new(GlobTool));
+            }
+
+            // Connector query (if provider available)
+            if let Some(provider) = &self.connector_provider {
+                tool_registry.register(Arc::new(QueryResourceTool::new(provider.clone())));
+            }
         }
 
         Arc::new(tool_registry)

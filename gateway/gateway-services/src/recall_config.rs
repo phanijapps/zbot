@@ -33,6 +33,97 @@ impl Default for MidSessionRecallConfig {
     }
 }
 
+/// Graph traversal configuration — controls how related facts are discovered
+/// by walking knowledge-graph edges outward from directly recalled nodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GraphTraversalConfig {
+    pub enabled: bool,
+    pub max_hops: u8,
+    pub hop_decay: f64,
+    pub max_graph_facts: usize,
+}
+
+impl Default for GraphTraversalConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_hops: 2,
+            hop_decay: 0.6,
+            max_graph_facts: 5,
+        }
+    }
+}
+
+/// Temporal decay configuration — controls how fact relevance diminishes over
+/// time, with per-category half-lives and pruning thresholds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TemporalDecayConfig {
+    pub enabled: bool,
+    pub half_life_days: HashMap<String, f64>,
+    pub prune_threshold: f64,
+    pub prune_after_days: u32,
+}
+
+impl Default for TemporalDecayConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            half_life_days: HashMap::from([
+                ("correction".to_string(), 90.0),
+                ("strategy".to_string(), 60.0),
+                ("domain".to_string(), 30.0),
+                ("user".to_string(), 180.0),
+                ("pattern".to_string(), 45.0),
+                ("instruction".to_string(), 120.0),
+            ]),
+            prune_threshold: 0.05,
+            prune_after_days: 30,
+        }
+    }
+}
+
+/// Predictive recall configuration — controls whether the system proactively
+/// recalls facts based on patterns observed in similar past episodes.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PredictiveRecallConfig {
+    pub enabled: bool,
+    pub min_similar_successes: usize,
+    pub predictive_boost: f64,
+    pub max_episodes_to_check: usize,
+}
+
+impl Default for PredictiveRecallConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            min_similar_successes: 2,
+            predictive_boost: 1.3,
+            max_episodes_to_check: 5,
+        }
+    }
+}
+
+/// Session offload configuration — controls when and how old session data is
+/// archived to keep the active store lean.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionOffloadConfig {
+    pub enabled: bool,
+    pub offload_after_days: u32,
+    pub keep_session_metadata: bool,
+    pub archive_path: String,
+}
+
+impl Default for SessionOffloadConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            offload_after_days: 7,
+            keep_session_metadata: true,
+            archive_path: "data/archive".to_string(),
+        }
+    }
+}
+
 /// Recall priority configuration — weights, limits, and thresholds that
 /// control how memory facts and episodes are scored and retrieved.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,6 +139,10 @@ pub struct RecallConfig {
     /// Multiplier applied to the recall score of contradicted facts (0.0–1.0).
     pub contradiction_penalty: f64,
     pub mid_session_recall: MidSessionRecallConfig,
+    pub graph_traversal: GraphTraversalConfig,
+    pub temporal_decay: TemporalDecayConfig,
+    pub predictive_recall: PredictiveRecallConfig,
+    pub session_offload: SessionOffloadConfig,
 }
 
 impl Default for RecallConfig {
@@ -75,6 +170,10 @@ impl Default for RecallConfig {
             high_confidence_threshold: 0.9,
             contradiction_penalty: 0.7,
             mid_session_recall: MidSessionRecallConfig::default(),
+            graph_traversal: GraphTraversalConfig::default(),
+            temporal_decay: TemporalDecayConfig::default(),
+            predictive_recall: PredictiveRecallConfig::default(),
+            session_offload: SessionOffloadConfig::default(),
         }
     }
 }
@@ -292,6 +391,43 @@ mod tests {
         assert_eq!(config.max_recall_tokens, 3000);
         assert_eq!(config.max_facts, 10);
         assert_eq!(config.category_weights.len(), 9);
+    }
+
+    #[test]
+    fn test_default_config_has_new_sections() {
+        let config = RecallConfig::default();
+        assert!(config.graph_traversal.enabled);
+        assert_eq!(config.graph_traversal.max_hops, 2);
+        assert_eq!(config.graph_traversal.hop_decay, 0.6);
+        assert!(config.temporal_decay.enabled);
+        assert_eq!(
+            *config
+                .temporal_decay
+                .half_life_days
+                .get("correction")
+                .unwrap(),
+            90.0
+        );
+        assert!(config.predictive_recall.enabled);
+        assert_eq!(config.predictive_recall.predictive_boost, 1.3);
+        assert!(config.session_offload.enabled);
+        assert_eq!(config.session_offload.offload_after_days, 7);
+    }
+
+    #[test]
+    fn test_partial_override_new_sections() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::create_dir_all(&path).unwrap();
+        std::fs::write(
+            path.join("recall_config.json"),
+            r#"{"graph_traversal": {"max_hops": 3}}"#,
+        )
+        .unwrap();
+        let config = RecallConfig::load_from_path(dir.path());
+        assert_eq!(config.graph_traversal.max_hops, 3); // overridden
+        assert_eq!(config.graph_traversal.hop_decay, 0.6); // default preserved
+        assert!(config.temporal_decay.enabled); // entirely default
     }
 
     #[test]

@@ -1,0 +1,79 @@
+[
+  {
+    "category": "correction",
+    "key": "policy.research_first",
+    "content": "Never rely on LLM training data for factual content. Always delegate to research-agent to pull real data from the web before building data-driven outputs (dashboards, reports, educational content with statistics, financial analysis).",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.code_modularity",
+    "content": "Keep all code files under 3KB. Split into modules if larger. Read core_docs.md before writing — import existing functions, never rewrite what exists.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.web_research_tools",
+    "content": "Use duckduckgo-search and light-panda-browser skills for web research. Never use raw shell curl or wget for web scraping.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.atomic_delegation",
+    "content": "Each delegation task must produce ONE output file. Never ask an agent to generate content for multiple topics in one step. One topic = one step.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.ward_first",
+    "content": "Always enter the ward before starting work. Read AGENTS.md and core_docs.md to understand existing code and conventions.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.planner_discover_agents",
+    "content": "Planner agent must call list_agents before creating any plan. Never hardcode agent assignments — discover available agents and match by description.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.update_docs_after_code",
+    "content": "After writing or modifying code, update memory-bank/core_docs.md with function signatures. After creating directories, update memory-bank/structure.md. This is mandatory.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "correction",
+    "key": "policy.delegation_full_spec",
+    "content": "When delegating a task, include the full step specification from the plan: Goal, Input file paths, Output file path and format, Acceptance criteria. Never delegate with just a brief description.",
+    "confidence": 1.0,
+    "pinned": true
+  },
+  {
+    "category": "instruction",
+    "key": "instruction.output_format",
+    "content": "Prefer interactive HTML outputs with modern design. Use Tailwind CSS CDN for styling web outputs. Include responsive design for mobile viewing.",
+    "confidence": 0.9,
+    "pinned": true
+  },
+  {
+    "category": "instruction",
+    "key": "instruction.documentation_quality",
+    "content": "Update memory-bank/core_docs.md with SDK-quality documentation after writing code: full signatures, params with types, return types, one usage example per function.",
+    "confidence": 0.9,
+    "pinned": true
+  },
+  {
+    "category": "user",
+    "key": "user.profile",
+    "content": "I am a private person, just call me Mr Z.",
+    "confidence": 0.95,
+    "pinned": true
+  }
+]

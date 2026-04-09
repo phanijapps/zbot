@@ -16,10 +16,16 @@ use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPat
 use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 
-use crate::middleware::intent_analysis::{analyze_intent, inject_intent_context};
+/// Callback invoked after session creation but before any events are emitted.
+/// Receives the session_id so the caller can set up subscriptions before events fire.
+pub type OnSessionReady = Box<dyn FnOnce(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+
+use crate::middleware::intent_analysis::{analyze_intent, format_intent_injection, index_resources};
 
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
@@ -94,6 +100,8 @@ pub struct ExecutionRunner {
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     /// Model capabilities registry for context window and capability lookups
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    /// Per-provider rate limiters — shared across all executors using the same provider.
+    rate_limiters: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>>>,
 }
 
 impl ExecutionRunner {
@@ -130,6 +138,7 @@ impl ExecutionRunner {
             None,
             None,
             None,
+            2, // default max_parallel_agents
         )
     }
 
@@ -152,6 +161,7 @@ impl ExecutionRunner {
         bridge_registry: Option<Arc<gateway_bridge::BridgeRegistry>>,
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
+        max_parallel_agents: u32,
     ) -> Self {
         // Create channel for delegation requests
         let (delegation_tx, delegation_rx) = mpsc::unbounded_channel::<DelegationRequest>();
@@ -176,9 +186,10 @@ impl ExecutionRunner {
             memory_repo,
             distiller,
             memory_recall,
-            delegation_semaphore: Arc::new(Semaphore::new(2)),
+            delegation_semaphore: Arc::new(Semaphore::new(max_parallel_agents as usize)),
             embedding_client,
             model_registry: None,
+            rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
         };
 
         // Spawn delegation handler task
@@ -193,6 +204,35 @@ impl ExecutionRunner {
     /// Set the model capabilities registry.
     pub fn set_model_registry(&mut self, registry: Arc<gateway_services::models::ModelRegistry>) {
         self.model_registry = Some(registry);
+    }
+
+    /// Get or create a shared rate limiter for a provider.
+    ///
+    /// Rate limiters are created once per provider and shared across all executors
+    /// (root and subagents) so they share the same concurrent-request and RPM buckets.
+    fn get_rate_limiter(&self, provider: &gateway_services::providers::Provider) -> std::sync::Arc<agent_runtime::ProviderRateLimiter> {
+        let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());
+        let rate_limits = provider.effective_rate_limits();
+
+        // Check if exists (fast path — read lock)
+        if let Ok(guard) = self.rate_limiters.read() {
+            if let Some(limiter) = guard.get(&provider_id) {
+                return limiter.clone();
+            }
+        }
+
+        // Create new limiter and insert (write lock)
+        let limiter = std::sync::Arc::new(agent_runtime::ProviderRateLimiter::new(
+            rate_limits.concurrent_requests,
+            rate_limits.requests_per_minute,
+        ));
+
+        if let Ok(mut guard) = self.rate_limiters.write() {
+            // Use entry API to avoid overwriting if another thread raced us
+            guard.entry(provider_id).or_insert_with(|| limiter.clone());
+        }
+
+        limiter
     }
 
     /// Spawn a background task that processes delegation requests.
@@ -218,6 +258,7 @@ impl ExecutionRunner {
         let memory_repo = self.memory_repo.clone();
         let embedding_client = self.embedding_client.clone();
         let memory_recall = self.memory_recall.clone();
+        let rate_limiters = self.rate_limiters.clone();
 
         tokio::spawn(async move {
             // Per-session tracking: only one delegation active per session at a time
@@ -259,6 +300,7 @@ impl ExecutionRunner {
                     Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>,
                 >,
                 memory_recall: &Option<Arc<super::recall::MemoryRecall>>,
+                rate_limiters: &Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>>>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -281,6 +323,7 @@ impl ExecutionRunner {
                 let memory_repo = memory_repo.clone();
                 let embedding_client = embedding_client.clone();
                 let memory_recall = memory_recall.clone();
+                let rate_limiters = rate_limiters.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -305,6 +348,7 @@ impl ExecutionRunner {
                         memory_repo,
                         embedding_client,
                         memory_recall,
+                        rate_limiters,
                     )
                     .await;
 
@@ -352,7 +396,7 @@ impl ExecutionRunner {
                                 &delegation_tx, &log_service, &state_service,
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
-                                &memory_recall,
+                                &memory_recall, &rate_limiters,
                                 done_tx.clone(),
                             );
                         }
@@ -379,7 +423,7 @@ impl ExecutionRunner {
                                     &delegation_tx, &log_service, &state_service,
                                     &workspace_cache, &delegation_semaphore,
                                     &memory_repo, &embedding_client,
-                                    &memory_recall,
+                                    &memory_recall, &rate_limiters,
                                     done_tx.clone(),
                                 );
                             }
@@ -506,6 +550,20 @@ impl ExecutionRunner {
         config: ExecutionConfig,
         message: String,
     ) -> Result<(ExecutionHandle, String), String> {
+        self.invoke_with_callback(config, message, None).await
+    }
+
+    /// Invoke an agent with an optional session-ready callback.
+    ///
+    /// The callback fires after session creation but before any events are
+    /// emitted, allowing the caller to set up subscriptions before intent
+    /// analysis events fire.
+    pub async fn invoke_with_callback(
+        &self,
+        config: ExecutionConfig,
+        message: String,
+        on_session_ready: Option<OnSessionReady>,
+    ) -> Result<(ExecutionHandle, String), String> {
         let handle = ExecutionHandle::new(config.max_iterations);
         let handle_clone = handle.clone();
 
@@ -547,6 +605,11 @@ impl ExecutionRunner {
             handles.insert(config.conversation_id.clone(), handle.clone());
         }
 
+        // Notify caller so it can subscribe before events fire
+        if let Some(callback) = on_session_ready {
+            callback(session_id.clone()).await;
+        }
+
         // Emit start event
         emit_agent_started(
             &self.event_bus,
@@ -558,7 +621,9 @@ impl ExecutionRunner {
         .await;
 
         // Load agent configuration (or create default for "root" agent)
-        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone());
+        let settings_for_loader = gateway_services::SettingsService::new(self.paths.clone());
+        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone())
+            .with_settings(&settings_for_loader);
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -574,6 +639,47 @@ impl ExecutionRunner {
             .map(|messages| self.conversation_repo.session_messages_to_chat_format(&messages))
             .unwrap_or_default();
 
+        // Graph-powered recall for first message — inject remembered facts, episodes, and
+        // entity context before the agent sees the user's message.
+        if let Some(recall) = &self.memory_recall {
+            match recall.recall_with_graph(
+                &config.agent_id,
+                &message,
+                5,
+                setup.ward_id.as_deref(),
+                Some(&session_id),
+            ).await {
+                Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+                    history.insert(0, ChatMessage::system(result.formatted));
+                    tracing::info!(
+                        facts = result.facts.len(),
+                        episodes = result.episodes.len(),
+                        "Recalled memory context for first message"
+                    );
+                }
+                Ok(_) => {
+                    tracing::debug!("First-message recall returned empty — no relevant facts/episodes");
+                }
+                Err(e) => {
+                    tracing::warn!("First-message graph recall failed: {}, falling back to basic recall", e);
+                    // Fallback: try basic recall without graph
+                    match recall.recall(&config.agent_id, &message, 5, setup.ward_id.as_deref()).await {
+                        Ok(facts) if !facts.is_empty() => {
+                            let formatted: Vec<String> = facts.iter()
+                                .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                                .collect();
+                            history.insert(0, ChatMessage::system(
+                                format!("## Recalled Context\n{}", formatted.join("\n"))
+                            ));
+                            tracing::info!(facts = facts.len(), "Fallback recall injected facts");
+                        }
+                        Ok(_) => {}
+                        Err(e2) => tracing::warn!("Fallback recall also failed: {}", e2),
+                    }
+                }
+            }
+        }
+
         // Nudge the agent to use memory.recall tool at session start (visible, agent-driven)
         if history.is_empty() {
             history.push(ChatMessage::system(
@@ -583,8 +689,8 @@ impl ExecutionRunner {
         }
 
         // Create executor (restore ward_id from existing session if available)
-        let executor = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message)).await {
-            Ok(e) => e,
+        let (executor, recommended_skills) = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message), &execution_id).await {
+            Ok(result) => result,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
                     .await;
@@ -636,6 +742,7 @@ impl ExecutionRunner {
             session_id.clone(),
             execution_id,
             history,
+            recommended_skills,
         );
 
         Ok((handle, session_id))
@@ -651,6 +758,7 @@ impl ExecutionRunner {
         session_id: String,
         execution_id: String,
         history: Vec<ChatMessage>,
+        recommended_skills: Vec<String>,
     ) {
         let event_bus = self.event_bus.clone();
         let agent_id = config.agent_id.clone();
@@ -668,6 +776,7 @@ impl ExecutionRunner {
         let paths = self.paths.clone();
         let delegation_registry = self.delegation_registry.clone();
         let handles = self.handles.clone();
+        let skill_service = self.skill_service.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -687,8 +796,10 @@ impl ExecutionRunner {
                 log_service.clone(),
                 state_service.clone(),
                 delegation_tx,
+                paths.vault_dir().clone(),
             )
-            .with_batch_writer(batch_writer.clone());
+            .with_batch_writer(batch_writer.clone())
+            .with_recommended_skills(recommended_skills.clone());
 
             let mut response_acc = ResponseAccumulator::new();
             let mut tool_acc = ToolCallAccumulator::new();
@@ -811,39 +922,71 @@ impl ExecutionRunner {
                     None,
                     None,
                 );
+
+                // Log the response for session replay
+                let response_log = api_logs::ExecutionLog::new(
+                    &execution_id,
+                    &session_id,
+                    &agent_id,
+                    api_logs::LogLevel::Info,
+                    api_logs::LogCategory::Response,
+                    &accumulated_response,
+                );
+                batch_writer.log(response_log);
             }
 
             // Handle completion
             match result {
                 Ok(()) => {
-                    // Complete execution and emit events
-                    complete_execution(
-                        &state_service,
-                        &log_service,
-                        &event_bus,
-                        &execution_id,
-                        &session_id,
-                        &agent_id,
-                        &conversation_id,
-                        Some(accumulated_response),
-                        connector_registry.as_ref(),
-                        respond_to.as_ref(),
-                        thread_id.as_deref(),
-                        bridge_registry.as_ref(),
-                        bridge_outbox.as_ref(),
-                    )
-                    .await;
+                    // Check if this execution spawned delegations that are still active.
+                    // Use session.pending_delegations (set synchronously in handle_delegation)
+                    // rather than delegation_registry (populated asynchronously by spawn).
+                    let has_active_delegations = state_service
+                        .get_session(&session_id)
+                        .ok()
+                        .flatten()
+                        .map(|s| s.has_pending_delegations())
+                        .unwrap_or(false);
 
-                    // Cancel any orphaned delegations for this session
-                    cancel_session_delegations(
-                        &session_id,
-                        &delegation_registry,
-                        &handles,
-                        &state_service,
-                    )
-                    .await;
+                    if has_active_delegations {
+                        // Root paused for delegation — do NOT complete execution.
+                        // The continuation callback will handle completion.
+                        tracing::info!(
+                            session_id = %session_id,
+                            "Root paused for delegation — skipping execution completion"
+                        );
+
+                        // Request continuation so the session resumes when delegations complete
+                        if let Err(e) = state_service.request_continuation(&session_id) {
+                            tracing::warn!("Failed to request continuation: {}", e);
+                        }
+
+                        // Aggregate tokens so UI shows progress
+                        if let Err(e) = state_service.aggregate_session_tokens(&session_id) {
+                            tracing::warn!("Failed to aggregate session tokens: {}", e);
+                        }
+                    } else {
+                        // Normal completion — no active delegations
+                        complete_execution(
+                            &state_service,
+                            &log_service,
+                            &event_bus,
+                            &execution_id,
+                            &session_id,
+                            &agent_id,
+                            &conversation_id,
+                            Some(accumulated_response),
+                            connector_registry.as_ref(),
+                            respond_to.as_ref(),
+                            thread_id.as_deref(),
+                            bridge_registry.as_ref(),
+                            bridge_outbox.as_ref(),
+                        )
+                        .await;
+                    }
 
                     // Auto-update ward AGENTS.md after root execution completes
+                    // (scaffolding now happens at ward creation time in the WardChanged handler)
                     let session_ward = state_service
                         .get_session(&session_id)
                         .ok()
@@ -851,6 +994,7 @@ impl ExecutionRunner {
                         .and_then(|s| s.ward_id);
                     if let Some(ref ward_id) = session_ward {
                         auto_update_agents_md(paths.vault_dir(), ward_id);
+                        auto_update_memory_bank(paths.vault_dir(), ward_id);
                     }
 
                     // Fire-and-forget session distillation
@@ -951,16 +1095,122 @@ impl ExecutionRunner {
         Ok(())
     }
 
-    /// Resume a paused execution by session ID.
+    /// Resume a paused or crashed execution by session ID.
+    ///
+    /// For crashed sessions with a crashed subagent: re-spawns only the crashed
+    /// subagent using its child session's message history, avoiding root re-evaluation.
+    /// For paused sessions or root-only crashes: falls through to current behavior.
     pub async fn resume(&self, session_id: &str) -> Result<(), String> {
-        // First update the database state
+        // Check for crashed subagent first
+        if let Ok(Some(crashed_exec)) = self.state_service.get_last_crashed_subagent(session_id) {
+            if crashed_exec.child_session_id.is_some() {
+                tracing::info!(
+                    session_id = %session_id,
+                    crashed_agent = %crashed_exec.agent_id,
+                    child_session = ?crashed_exec.child_session_id,
+                    "Smart resume: re-spawning crashed subagent instead of root"
+                );
+                return self.resume_crashed_subagent(session_id, &crashed_exec).await;
+            }
+        }
+
+        // Fallback: standard resume (paused sessions or root-only crashes)
         self.state_service.resume_session(session_id)?;
 
-        // Then resume any paused execution
         let handles = self.handles.read().await;
         for handle in handles.values() {
             handle.resume();
         }
+
+        Ok(())
+    }
+
+    /// Re-spawn a crashed subagent without re-running the root agent.
+    async fn resume_crashed_subagent(
+        &self,
+        session_id: &str,
+        crashed_exec: &execution_state::AgentExecution,
+    ) -> Result<(), String> {
+        let child_session_id = crashed_exec.child_session_id.as_ref()
+            .ok_or("No child_session_id on crashed execution")?;
+
+        // 1. Reactivate root session and execution
+        self.state_service.reactivate_session(session_id)?;
+        if let Ok(Some(root_exec)) = self.state_service.get_root_execution(session_id) {
+            self.state_service.reactivate_execution(&root_exec.id)?;
+        }
+
+        // 2. Cancel the old crashed execution
+        self.state_service.cancel_execution(&crashed_exec.id)?;
+
+        // 3. Reactivate the child session
+        self.state_service.reactivate_session(child_session_id)?;
+
+        // 4. Ensure pending_delegations is at least 1
+        self.state_service.register_delegation(session_id)?;
+
+        // 5. Request continuation so root agent processes the callback when subagent finishes
+        self.state_service.request_continuation(session_id)?;
+
+        // 6. Build DelegationRequest from crashed execution's data
+        let parent_execution_id = crashed_exec.parent_execution_id.as_ref()
+            .ok_or("No parent_execution_id on crashed execution")?;
+
+        let task = crashed_exec.task.as_ref()
+            .ok_or("No task on crashed execution")?;
+
+        // Get root agent ID for parent_agent_id
+        let root_agent_id = self.state_service.get_root_execution(session_id)?
+            .map(|e| e.agent_id)
+            .unwrap_or_else(|| "root".to_string());
+
+        // Create new child execution
+        let new_exec = execution_state::AgentExecution::new_delegated(
+            session_id,
+            &crashed_exec.agent_id,
+            parent_execution_id,
+            crashed_exec.delegation_type,
+            task,
+        );
+        self.state_service.create_execution(&new_exec)?;
+        self.state_service.set_child_session_id(&new_exec.id, child_session_id)?;
+
+        let request = DelegationRequest {
+            parent_agent_id: root_agent_id,
+            session_id: session_id.to_string(),
+            parent_execution_id: parent_execution_id.clone(),
+            child_agent_id: crashed_exec.agent_id.clone(),
+            child_execution_id: new_exec.id.clone(),
+            task: task.clone(),
+            context: None,
+            max_iterations: None,
+            output_schema: None,
+            skills: vec![],
+            complexity: None,
+        };
+
+        // 7. Re-spawn the subagent
+        spawn_delegated_agent(
+            &request,
+            self.event_bus.clone(),
+            self.agent_service.clone(),
+            self.provider_service.clone(),
+            self.mcp_service.clone(),
+            self.skill_service.clone(),
+            self.paths.clone(),
+            self.conversation_repo.clone(),
+            self.handles.clone(),
+            self.delegation_registry.clone(),
+            self.delegation_tx.clone(),
+            self.log_service.clone(),
+            self.state_service.clone(),
+            self.workspace_cache.clone(),
+            None, // No delegation permit needed for resume
+            self.memory_repo.clone(),
+            self.embedding_client.clone(),
+            self.memory_recall.clone(),
+            self.rate_limiters.clone(),
+        ).await?;
 
         Ok(())
     }
@@ -1092,6 +1342,9 @@ impl ExecutionRunner {
     }
 
     /// Create an executor for the agent using the ExecutorBuilder.
+    ///
+    /// Returns the executor and any recommended skill IDs from intent analysis
+    /// (empty when analysis is skipped or fails).
     async fn create_executor(
         &self,
         agent: &gateway_services::agents::Agent,
@@ -1101,7 +1354,8 @@ impl ExecutionRunner {
         ward_id: Option<&str>,
         is_root: bool,
         user_message: Option<&str>,
-    ) -> Result<AgentExecutor, String> {
+        execution_id: &str,
+    ) -> Result<(AgentExecutor, Vec<String>), String> {
         // Collect available agents and skills for executor state
         let available_agents = collect_agents_summary(&self.agent_service).await;
         let available_skills = collect_skills_summary(&self.skill_service).await;
@@ -1121,8 +1375,8 @@ impl ExecutionRunner {
             Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), self.embedding_client.clone()))
                 as Arc<dyn zero_core::MemoryFactStore>
         });
-        // Clone for intent analysis (before fact_store is moved into builder)
-        let fact_store_for_analysis = fact_store.clone();
+        // Clone for resource indexing (before fact_store is moved into builder)
+        let fact_store_for_indexing = fact_store.clone();
 
         // Build connector resource provider (HTTP + bridge composite)
         let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
@@ -1145,15 +1399,14 @@ impl ExecutionRunner {
                 None
             };
 
-        // Create LLM throttle semaphore from provider config
-        let max_concurrent = provider.max_concurrent_requests.unwrap_or(3);
-        let llm_throttle = Arc::new(tokio::sync::Semaphore::new(max_concurrent as usize));
-        tracing::debug!(max_concurrent = max_concurrent, provider = %provider.name, "LLM throttle configured");
+        // Get or create shared rate limiter for this provider
+        let rate_limiter = self.get_rate_limiter(provider);
+        tracing::debug!(provider = %provider.name, "Using shared rate limiter for provider");
 
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone())
-            .with_llm_throttle(llm_throttle);
+            .with_rate_limiter(rate_limiter);
         if let Some(ref registry) = self.model_registry {
             builder = builder.with_model_registry(registry.clone());
         }
@@ -1164,103 +1417,172 @@ impl ExecutionRunner {
             builder = builder.with_connector_provider(cp);
         }
 
-        // Intent analysis enrichment (root agent first turn only)
-        let mut ward_purpose: Option<String> = None;
-        let mut ward_structure: Option<serde_json::Value> = None;
-        let enriched_agent = if is_root {
-            if let Some(msg) = user_message {
-                // Intent analysis: same model/config as agent but thinking disabled
-                // (reasoning tokens would corrupt JSON parsing)
-                let llm_config = agent_runtime::LlmConfig::new(
-                    provider.base_url.clone(),
-                    provider.api_key.clone(),
-                    agent.model.clone(),
-                    provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+        // Intent analysis for root agent first turns only.
+        // Note: execution_logs stores execution_id in the session_id column,
+        // so we query by execution_id to find prior intent logs.
+        let mut agent_for_build = agent.clone();
+        let mut recommended_skills: Vec<String> = Vec::new();
+        let already_analyzed = if is_root {
+            self.log_service.has_intent_log(execution_id)
+        } else {
+            false
+        };
+        if is_root && !already_analyzed {
+            if let Some(ref fs) = fact_store_for_indexing {
+                // Index resources (fast DB upsert — no LLM call)
+                index_resources(
+                    fs.as_ref(),
+                    &self.skill_service,
+                    &self.agent_service,
+                    &self.paths,
                 )
-                .with_temperature(agent.temperature)
-                .with_max_tokens(agent.max_tokens)
-                .with_thinking(false);
-                match agent_runtime::OpenAiClient::new(llm_config) {
-                    Ok(raw_client) => {
-                        let retry_client = agent_runtime::RetryingLlmClient::new(
-                            std::sync::Arc::new(raw_client),
-                            agent_runtime::RetryPolicy::default(),
-                        );
-                        let llm_client: std::sync::Arc<dyn agent_runtime::LlmClient> =
-                            std::sync::Arc::new(retry_client);
+                .await;
+                tracing::info!("Resource indexing complete (skills, agents, wards)");
 
-                        if let Some(ref fs) = fact_store_for_analysis {
+                // Run intent analysis if user message is present
+                if let Some(msg) = user_message {
+                    // Emit started event so UI can show "Analyzing..."
+                    self.event_bus
+                        .publish(gateway_events::GatewayEvent::IntentAnalysisStarted {
+                            session_id: session_id.to_string(),
+                            execution_id: execution_id.to_string(),
+                        })
+                        .await;
+
+                    // Build temporary LLM client for analysis
+                    let llm_config = agent_runtime::LlmConfig::new(
+                        provider.base_url.clone(),
+                        provider.api_key.clone(),
+                        agent.model.clone(),
+                        provider.id.clone().unwrap_or_else(|| provider.name.clone()),
+                    )
+                    .with_max_tokens(2048); // Intent analysis JSON is 1-2KB — keep max_tokens low for speed
+                    match agent_runtime::OpenAiClient::new(llm_config) {
+                        Ok(raw_client) => {
+                            let retrying = agent_runtime::RetryingLlmClient::new(
+                                std::sync::Arc::new(raw_client),
+                                agent_runtime::RetryPolicy::default(),
+                            );
+
                             match analyze_intent(
-                                llm_client.as_ref(),
+                                &retrying,
                                 msg,
                                 fs.as_ref(),
-                                &self.skill_service,
-                                &self.agent_service,
-                                &self.paths,
+                                self.memory_recall.as_ref().map(|r| r.as_ref()),
                             )
                             .await
                             {
                                 Ok(analysis) => {
-                                    let mut enriched = agent.clone();
-                                    inject_intent_context(&mut enriched.instructions, &analysis);
-
-                                    // Set up ward with blueprint and specs
-                                    setup_ward_from_analysis(
-                                        self.paths.vault_dir(),
-                                        &analysis,
-                                    );
-
                                     tracing::info!(
                                         primary_intent = %analysis.primary_intent,
-                                        hidden_intents = analysis.hidden_intents.len(),
-                                        ward = %analysis.ward_recommendation.ward_name,
-                                        "Intent analysis enrichment complete"
+                                        approach = %analysis.execution_strategy.approach,
+                                        "Intent analysis succeeded"
                                     );
-                                    // Save ward context for AGENTS.md creation
-                                    ward_purpose = Some(analysis.ward_recommendation.reason.clone());
-                                    ward_structure = if analysis.ward_recommendation.structure.is_empty() {
-                                        None
-                                    } else {
-                                        Some(serde_json::to_value(&analysis.ward_recommendation.structure).unwrap_or_default())
+
+                                    // Emit IntentAnalysisComplete event
+                                    self.event_bus
+                                        .publish(GatewayEvent::IntentAnalysisComplete {
+                                            session_id: session_id.to_string(),
+                                            execution_id: execution_id.to_string(),
+                                            primary_intent: analysis.primary_intent.clone(),
+                                            hidden_intents: analysis.hidden_intents.clone(),
+                                            recommended_skills: analysis.recommended_skills.clone(),
+                                            recommended_agents: analysis.recommended_agents.clone(),
+                                            ward_recommendation: serde_json::to_value(&analysis.ward_recommendation).unwrap_or_default(),
+                                            execution_strategy: serde_json::to_value(&analysis.execution_strategy).unwrap_or_default(),
+                                        })
+                                        .await;
+
+                                    // Log for session replay
+                                    if let Ok(meta) = serde_json::to_value(&analysis) {
+                                        let log_entry = api_logs::ExecutionLog::new(
+                                            execution_id,
+                                            session_id,
+                                            &config.agent_id,
+                                            api_logs::LogLevel::Info,
+                                            api_logs::LogCategory::Intent,
+                                            format!("Intent: {}", analysis.primary_intent),
+                                        )
+                                        .with_metadata(meta);
+                                        let _ = self.log_service.log(log_entry);
+                                    }
+
+                                    // Capture recommended skills for post-execution scaffolding
+                                    recommended_skills = analysis.recommended_skills.clone();
+
+                                    // Collect spec guidance from recommended skills' ward_setup
+                                    let spec_guidance = {
+                                        let mut guidances = Vec::new();
+                                        for skill_name in &analysis.recommended_skills {
+                                            if let Ok(Some(ws)) = self.skill_service.get_ward_setup(skill_name).await {
+                                                if let Some(ref g) = ws.spec_guidance {
+                                                    guidances.push(g.clone());
+                                                }
+                                            }
+                                        }
+                                        if guidances.is_empty() { None } else { Some(guidances.join("\n\n")) }
                                     };
-                                    Some(enriched)
+
+                                    // Inject intent analysis into agent instructions
+                                    // so the agent can follow ward/skill/strategy recommendations
+                                    agent_for_build.instructions.push_str(
+                                        &format_intent_injection(&analysis, spec_guidance.as_deref(), user_message),
+                                    );
                                 }
                                 Err(e) => {
-                                    tracing::warn!(
-                                        "Intent analysis failed, proceeding without enrichment: {}",
-                                        e
-                                    );
-                                    None
+                                    tracing::warn!("Intent analysis failed (non-fatal): {}", e);
+                                    // Fallback: emit minimal analysis so UI gets a block
+                                    // and agent receives ward naming guidance
+                                    self.event_bus
+                                        .publish(GatewayEvent::IntentAnalysisComplete {
+                                            session_id: session_id.to_string(),
+                                            execution_id: execution_id.to_string(),
+                                            primary_intent: "general".to_string(),
+                                            hidden_intents: vec![],
+                                            recommended_skills: vec![],
+                                            recommended_agents: vec![],
+                                            ward_recommendation: serde_json::json!({
+                                                "action": "create_new",
+                                                "ward_name": "scratch",
+                                                "subdirectory": null,
+                                                "reason": "Intent analysis failed — using scratch ward"
+                                            }),
+                                            execution_strategy: serde_json::json!({
+                                                "approach": "simple",
+                                                "explanation": "Intent analysis unavailable"
+                                            }),
+                                        })
+                                        .await;
                                 }
                             }
-                        } else {
-                            tracing::warn!("No fact store available — skipping intent analysis");
-                            None
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
+                            // Fallback: emit minimal analysis event
+                            self.event_bus
+                                .publish(GatewayEvent::IntentAnalysisComplete {
+                                    session_id: session_id.to_string(),
+                                    execution_id: execution_id.to_string(),
+                                    primary_intent: "general".to_string(),
+                                    hidden_intents: vec![],
+                                    recommended_skills: vec![],
+                                    recommended_agents: vec![],
+                                    ward_recommendation: serde_json::json!({
+                                        "action": "create_new",
+                                        "ward_name": "scratch",
+                                        "subdirectory": null,
+                                        "reason": "LLM client creation failed — using scratch ward"
+                                    }),
+                                    execution_strategy: serde_json::json!({
+                                        "approach": "simple",
+                                        "explanation": "Intent analysis unavailable (no LLM client)"
+                                    }),
+                                })
+                                .await;
                         }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Failed to create LLM client for intent analysis: {}",
-                            e
-                        );
-                        None
-                    }
                 }
-            } else {
-                None
             }
-        } else {
-            None
-        };
-
-        let agent_for_build = enriched_agent.as_ref().unwrap_or(agent);
-
-        // Inject ward context into executor state for AGENTS.md creation
-        if let Some(purpose) = &ward_purpose {
-            builder = builder.with_initial_state("ward_purpose", serde_json::Value::String(purpose.clone()));
-        }
-        if let Some(structure) = &ward_structure {
-            builder = builder.with_initial_state("ward_structure", structure.clone());
         }
 
         // Flag if placeholder specs exist — delegate tool uses this to block ad-hoc delegations
@@ -1281,9 +1603,9 @@ impl ExecutionRunner {
             }
         }
 
-        builder
+        let mut executor = builder
             .build(
-                agent_for_build,
+                &agent_for_build,
                 provider,
                 &config.conversation_id,
                 session_id,
@@ -1293,7 +1615,59 @@ impl ExecutionRunner {
                 &self.mcp_service,
                 ward_id,
             )
-            .await
+            .await?;
+
+        // Wire mid-session recall hook so the executor refreshes memory every N turns.
+        if let Some(recall) = &self.memory_recall {
+            let mid_cfg = &recall.config().mid_session_recall;
+            if mid_cfg.enabled {
+                let recall = Arc::clone(recall);
+                let agent_id = agent.id.clone();
+                let ward = ward_id.map(String::from);
+                let min_novelty = mid_cfg.min_novelty_score;
+                let every_n = mid_cfg.every_n_turns as u32;
+
+                executor.set_recall_hook(
+                    Box::new(move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                        let recall = Arc::clone(&recall);
+                        let agent_id = agent_id.clone();
+                        let ward = ward.clone();
+                        let query = query.to_string();
+                        let already_injected = already_injected.clone();
+                        Box::pin(async move {
+                            let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                            // Filter out already-injected facts and low-novelty results
+                            let novel: Vec<_> = facts.into_iter()
+                                .filter(|f| !already_injected.contains(&f.fact.key))
+                                .filter(|f| f.score >= min_novelty)
+                                .collect();
+                            if novel.is_empty() {
+                                return Ok(agent_runtime::RecallHookResult {
+                                    system_message: String::new(),
+                                    fact_keys: Vec::new(),
+                                });
+                            }
+                            let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
+                            let lines: Vec<String> = novel.iter().map(|f| {
+                                format!("- [{}] {}", f.fact.category, f.fact.content)
+                            }).collect();
+                            Ok(agent_runtime::RecallHookResult {
+                                system_message: format!(
+                                    "[Memory Refresh] Relevant facts for current context:\n{}",
+                                    lines.join("\n")
+                                ),
+                                fact_keys: keys,
+                            })
+                        })
+                    }),
+                    every_n,
+                    std::collections::HashSet::new(),
+                );
+                tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired");
+            }
+        }
+
+        Ok((executor, recommended_skills))
     }
 
     /// Emit an error event.
@@ -1387,8 +1761,10 @@ async fn invoke_continuation(
     // Emit agent started event
     emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
 
-    // Load agent and provider
-    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
+    // Load agent and provider (with orchestrator config from settings)
+    let settings_for_loader = gateway_services::SettingsService::new(paths.clone());
+    let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone())
+        .with_settings(&settings_for_loader);
     let (agent, provider) = agent_loader.load_or_create_root(root_agent_id).await?;
 
     // Load full session conversation (includes tool calls, results, and callbacks)
@@ -1411,11 +1787,11 @@ async fn invoke_continuation(
         .iter()
         .rev()
         .find(|m| m.role == "user")
-        .map(|m| m.content.clone())
+        .map(|m| m.text_content())
         .unwrap_or_else(|| "continuation recall".to_string());
 
     if let Some(recall) = &memory_recall {
-        match recall.recall_with_graph(root_agent_id, &continuation_recall_query, 5, session_ward_id.as_deref()).await {
+        match recall.recall_with_graph(root_agent_id, &continuation_recall_query, 5, session_ward_id.as_deref(), Some(session_id)).await {
             Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
                 history.insert(0, ChatMessage::system(result.formatted));
                 tracing::info!(
@@ -1447,6 +1823,7 @@ async fn invoke_continuation(
     // Auto-update ward AGENTS.md before continuation
     if let Some(ref ward_id) = session_ward_id {
         auto_update_agents_md(paths.vault_dir(), ward_id);
+        auto_update_memory_bank(paths.vault_dir(), ward_id);
     }
 
     // Build executor
@@ -1465,7 +1842,7 @@ async fn invoke_continuation(
         builder = builder.with_fact_store(fs);
     }
 
-    let executor = builder
+    let mut executor = builder
         .build(
             &agent,
             &provider,
@@ -1479,11 +1856,75 @@ async fn invoke_continuation(
         )
         .await?;
 
-    // The continuation message prompts the agent to process subagent results
-    let continuation_message =
-        "[All delegated tasks have completed. Review the results above and continue your orchestration. \
-         You may respond to the user, delegate to more agents, or take other actions as needed.]\n\n\
-         [Recall] Delegation completed. Consider recalling to absorb any new learnings.";
+    // Wire mid-session recall hook for continuation executor.
+    if let Some(recall) = &memory_recall {
+        let mid_cfg = &recall.config().mid_session_recall;
+        if mid_cfg.enabled {
+            let recall = Arc::clone(recall);
+            let agent_id = root_agent_id.to_string();
+            let ward = session_ward_id.clone();
+            let min_novelty = mid_cfg.min_novelty_score;
+            let every_n = mid_cfg.every_n_turns as u32;
+
+            executor.set_recall_hook(
+                Box::new(move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                    let recall = Arc::clone(&recall);
+                    let agent_id = agent_id.clone();
+                    let ward = ward.clone();
+                    let query = query.to_string();
+                    let already_injected = already_injected.clone();
+                    Box::pin(async move {
+                        let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                        let novel: Vec<_> = facts.into_iter()
+                            .filter(|f| !already_injected.contains(&f.fact.key))
+                            .filter(|f| f.score >= min_novelty)
+                            .collect();
+                        if novel.is_empty() {
+                            return Ok(agent_runtime::RecallHookResult {
+                                system_message: String::new(),
+                                fact_keys: Vec::new(),
+                            });
+                        }
+                        let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
+                        let lines: Vec<String> = novel.iter().map(|f| {
+                            format!("- [{}] {}", f.fact.category, f.fact.content)
+                        }).collect();
+                        Ok(agent_runtime::RecallHookResult {
+                            system_message: format!(
+                                "[Memory Refresh] Relevant facts for current context:\n{}",
+                                lines.join("\n")
+                            ),
+                            fact_keys: keys,
+                        })
+                    })
+                }),
+                every_n,
+                std::collections::HashSet::new(),
+            );
+            tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired (continuation)");
+        }
+    }
+
+    // Build a focused continuation message with the plan injected.
+    // Search specs/**/plan.md (planner saves to specs/{domain_task}/plan.md).
+    let continuation_message = {
+        let plan_hint = session_ward_id.as_ref().and_then(|ward_id| {
+            let specs_dir = paths.vault_dir().join("wards").join(ward_id).join("specs");
+            find_latest_plan(&specs_dir)
+        });
+
+        if let Some(plan) = plan_hint {
+            format!(
+                "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
+                 DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
+                 Just find the next step that hasn't been done and delegate it NOW.\n\
+                 One action only: delegate_to_agent.]\n\n{}", plan
+            )
+        } else {
+            "[Delegation completed. Delegate the next step in your plan immediately. \
+             Do NOT read files or analyze — just delegate.]".to_string()
+        }
+    };
 
     // Spawn execution task
     let session_id_clone = session_id.to_string();
@@ -1506,6 +1947,7 @@ async fn invoke_continuation(
             log_service.clone(),
             state_service.clone(),
             delegation_tx,
+            paths.vault_dir().clone(),
         )
         .with_batch_writer(batch_writer.clone());
 
@@ -1517,7 +1959,7 @@ async fn invoke_continuation(
             &session_id_clone,
             &execution_id,
             "system",
-            continuation_message,
+            &continuation_message,
             None,
             None,
         );
@@ -1529,7 +1971,7 @@ async fn invoke_continuation(
         let mut turn_text = String::new();
 
         let result = executor
-            .execute_stream(continuation_message, &history, |event| {
+            .execute_stream(&continuation_message, &history, |event| {
                 if handle.is_stop_requested() {
                     return;
                 }
@@ -1618,23 +2060,45 @@ async fn invoke_continuation(
 
         match result {
             Ok(()) => {
-                // Continuation turns don't dispatch to connectors (they're internal)
-                complete_execution(
-                    &state_service,
-                    &log_service,
-                    &event_bus,
-                    &execution_id,
-                    &session_id_clone,
-                    &agent_id_clone,
-                    &conversation_id,
-                    Some(accumulated_response),
-                    None,
-                    None,
-                    None, // No thread_id for continuation turns
-                    None, // No bridge dispatch for continuation turns
-                    None,
-                )
-                .await;
+                // Check if this continuation spawned new delegations
+                let has_active_delegations = state_service
+                    .get_session(&session_id_clone)
+                    .ok()
+                    .flatten()
+                    .map(|s| s.has_pending_delegations())
+                    .unwrap_or(false);
+
+                if has_active_delegations {
+                    // Root delegated again — wait for subagent, don't complete
+                    tracing::info!(
+                        session_id = %session_id_clone,
+                        "Continuation paused for delegation — skipping execution completion"
+                    );
+                    if let Err(e) = state_service.request_continuation(&session_id_clone) {
+                        tracing::warn!("Failed to request continuation: {}", e);
+                    }
+                    if let Err(e) = state_service.aggregate_session_tokens(&session_id_clone) {
+                        tracing::warn!("Failed to aggregate session tokens: {}", e);
+                    }
+                } else {
+                    // No more delegations — complete normally
+                    complete_execution(
+                        &state_service,
+                        &log_service,
+                        &event_bus,
+                        &execution_id,
+                        &session_id_clone,
+                        &agent_id_clone,
+                        &conversation_id,
+                        Some(accumulated_response),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                    .await;
+                }
 
                 // Fire-and-forget session distillation
                 if let Some(distiller) = distiller {
@@ -1729,6 +2193,54 @@ async fn cancel_session_delegations(
 // ============================================================================
 
 /// Auto-update ward AGENTS.md by scanning the directory structure.
+/// Find the most recent plan.md under a specs/ directory.
+/// Planner saves to specs/{domain_task}/plan.md — we glob for it.
+fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
+    if !specs_dir.exists() {
+        return None;
+    }
+
+    let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
+
+    // Search specs/*/plan.md and specs/plan.md
+    if let Ok(entries) = std::fs::read_dir(specs_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            // Direct specs/plan.md
+            if path.is_file() && path.file_name().map(|f| f == "plan.md").unwrap_or(false) {
+                if let Ok(meta) = path.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                            newest = Some((modified, path));
+                        }
+                    }
+                }
+            } else if path.is_dir() {
+            // specs/{subdir}/plan.md
+                let plan_path = path.join("plan.md");
+                if plan_path.exists() {
+                    if let Ok(meta) = plan_path.metadata() {
+                        if let Ok(modified) = meta.modified() {
+                            if newest.as_ref().map(|(t, _)| modified > *t).unwrap_or(true) {
+                                newest = Some((modified, plan_path));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if let Some((_, path)) = newest {
+        let content = std::fs::read_to_string(&path).ok()?;
+        if content.trim().is_empty() { return None; }
+        tracing::info!(path = %path.display(), "Injecting plan into continuation message");
+        Some(content)
+    } else {
+        None
+    }
+}
+
 /// Called by the system after delegations complete, before continuation.
 /// Extract Python function signatures from a .py file.
 /// Returns lines like `def fetch_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame`
@@ -1852,6 +2364,28 @@ fn extract_purpose_section(agents_md_path: &std::path::Path, ward_id: &str) -> S
     format!("Domain workspace for {} projects.", ward_id)
 }
 
+fn extract_conventions_section(agents_md_path: &std::path::Path) -> Option<Vec<String>> {
+    let content = std::fs::read_to_string(agents_md_path).ok()?;
+    let mut in_conventions = false;
+    let mut conventions = Vec::new();
+    for line in content.lines() {
+        if line.starts_with("## Conventions") {
+            in_conventions = true;
+            continue;
+        }
+        if in_conventions {
+            if line.starts_with("## ") {
+                break;
+            }
+            let trimmed = line.trim();
+            if trimmed.starts_with("- ") {
+                conventions.push(trimmed.to_string());
+            }
+        }
+    }
+    if conventions.is_empty() { None } else { Some(conventions) }
+}
+
 /// Format a byte count as a human-readable size string (e.g. "125 KB", "8 KB", "1.2 MB").
 fn format_file_size(bytes: u64) -> String {
     if bytes >= 1_048_576 {
@@ -1915,13 +2449,30 @@ fn collect_data_files_recursive(
     }
 }
 
-fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
+/// Auto-update AGENTS.md using language configs for core module indexing.
+///
+/// This is the primary implementation. It accepts a `lang_configs_dir` path so that
+/// callers (and integration tests) can supply a custom config directory. Language
+/// configs are loaded from that directory; files whose extension matches a config use
+/// the config's `extract_signatures` / `extract_first_docstring` methods. Files with
+/// no matching config fall back to the hardcoded Python extraction helpers.
+pub fn auto_update_agents_md_with_lang_configs(
+    vault_dir: &std::path::Path,
+    ward_id: &str,
+    lang_configs_dir: &std::path::Path,
+) {
     let ward_dir = vault_dir.join("wards").join(ward_id);
     let agents_md_path = ward_dir.join("AGENTS.md");
 
     if !ward_dir.exists() || ward_id == "scratch" {
         return;
     }
+
+    let lang_configs = {
+        let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
+            .unwrap_or_default();
+        gateway_services::lang_config::compile_all(&raw)
+    };
 
     let mut sections = Vec::new();
 
@@ -1932,13 +2483,39 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     let purpose = extract_purpose_section(&agents_md_path, ward_id);
     sections.push(format!("\n## Purpose\n{}\n", purpose));
 
-    // ── Ward Documentation ──
-    let memory_dir_exists = ward_dir.join("memory").exists();
-    if memory_dir_exists {
-        sections.push("## Ward Documentation\n".to_string());
-        sections.push("- [memory/ward.md](memory/ward.md) — Domain history and session log\n".to_string());
-        sections.push("- [memory/structure.md](memory/structure.md) — Code organization conventions\n".to_string());
-        sections.push("- [memory/techstack.md](memory/techstack.md) — Runtime environment and packages\n\n".to_string());
+    // ── Read These First ──
+    let memory_bank_exists = ward_dir.join("memory-bank").exists();
+    if memory_bank_exists {
+        sections.push("## Read These First\n".to_string());
+        sections.push("Before writing any code, read these files to understand the ward:\n".to_string());
+
+        sections.push("- [memory-bank/ward.md](memory-bank/ward.md) — Domain knowledge, patterns, and session learnings\n".to_string());
+
+        if ward_dir.join("memory-bank").join("structure.md").exists() {
+            sections.push("- [memory-bank/structure.md](memory-bank/structure.md) — Directory layout and tech stack\n".to_string());
+        }
+
+        if ward_dir.join("memory-bank").join("core_docs.md").exists() {
+            sections.push("- [memory-bank/core_docs.md](memory-bank/core_docs.md) — Core module functions and usage\n".to_string());
+        }
+
+        // List any other docs in memory-bank/
+        if let Ok(entries) = std::fs::read_dir(ward_dir.join("memory-bank")) {
+            let mut docs: Vec<_> = entries
+                .filter_map(|e| e.ok())
+                .filter(|e| {
+                    let name = e.file_name().to_string_lossy().to_string();
+                    e.path().is_file() && name.ends_with(".md")
+                        && name != "ward.md" && name != "structure.md" && name != "core_docs.md"
+                })
+                .collect();
+            docs.sort_by_key(|e| e.file_name());
+            for entry in &docs {
+                let name = entry.file_name().to_string_lossy().to_string();
+                sections.push(format!("- [memory-bank/{}](memory-bank/{}) \n", name, name));
+            }
+        }
+        sections.push("\n".to_string());
     }
 
     // ── Core Modules with function signatures ──
@@ -1947,34 +2524,63 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
         if let Ok(entries) = std::fs::read_dir(&core_dir) {
             let mut modules: Vec<_> = entries
                 .filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().map(|ext| ext == "py").unwrap_or(false))
+                .filter(|e| {
+                    let path = e.path();
+                    if !path.is_file() {
+                        return false;
+                    }
+                    let name = e.file_name().to_string_lossy().to_string();
+                    if name.starts_with('.') || name == "__init__.py" {
+                        return false;
+                    }
+                    let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
+                    // Accept if any lang config matches, or if it's .py (hardcoded fallback)
+                    gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext).is_some()
+                        || ext == "py"
+                })
                 .collect();
             modules.sort_by_key(|e| e.file_name());
 
             if !modules.is_empty() {
                 sections.push("\n## Core Modules\n".to_string());
                 for entry in &modules {
+                    let path = entry.path();
                     let name = entry.file_name().to_string_lossy().to_string();
-                    let desc = extract_first_docstring(&entry.path());
+                    let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
 
                     sections.push(format!("### core/{}\n", name));
-                    if !desc.is_empty() {
-                        sections.push(format!("{}\n", desc));
-                    }
 
-                    let sigs = extract_function_signatures(&entry.path());
-                    for sig in &sigs {
-                        // Strip the leading `def ` for display as callable signature
-                        let display = if let Some(rest) = sig.strip_prefix("def ") {
-                            rest.to_string()
-                        } else {
-                            sig.clone()
-                        };
-                        sections.push(format!("- `{}`\n", display));
+                    if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
+                        // Language config path: use config's extraction methods
+                        let desc = config.extract_first_docstring(&path).unwrap_or_default();
+                        if !desc.is_empty() {
+                            sections.push(format!("{}\n", desc));
+                        }
+                        for sig in config.extract_signatures(&path) {
+                            sections.push(format!("- `{}`\n", sig));
+                        }
+                    } else {
+                        // Fallback: hardcoded Python extraction (only reached for .py without a lang config)
+                        let desc = extract_first_docstring(&path);
+                        if !desc.is_empty() {
+                            sections.push(format!("{}\n", desc));
+                        }
+                        for sig in extract_function_signatures(&path) {
+                            let display = sig.strip_prefix("def ").unwrap_or(&sig).to_string();
+                            sections.push(format!("- `{}`\n", display));
+                        }
                     }
                     sections.push("\n".to_string());
                 }
             }
+        }
+    }
+
+    // ── Conventions (preserved from existing AGENTS.md) ──
+    if let Some(conventions) = extract_conventions_section(&agents_md_path) {
+        sections.push("\n## Conventions\n".to_string());
+        for item in &conventions {
+            sections.push(format!("{}\n", item));
         }
     }
 
@@ -2165,17 +2771,25 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
         })
         .unwrap_or_else(|| "tasks/{name}/".to_string());
 
+    // ── Task Runner ──
+    let ralph_exists = ward_dir.join("ralph.py").exists();
+    if ralph_exists {
+        sections.push("## Task Runner (ralph.py)\n".to_string());
+        sections.push("Use `ralph.py` to process `tasks.json` files in specs/:\n".to_string());
+        sections.push("```\n".to_string());
+        sections.push("python3 ralph.py next <tasks.json>       # Get next pending task\n".to_string());
+        sections.push("python3 ralph.py complete <tasks.json> N  # Mark task N complete\n".to_string());
+        sections.push("python3 ralph.py fail <tasks.json> N msg  # Mark task N failed\n".to_string());
+        sections.push("python3 ralph.py status <tasks.json>      # Show progress summary\n".to_string());
+        sections.push("```\n\n".to_string());
+    }
+
+    // ── How to Code ──
     sections.push("## How to Code\n".to_string());
-    sections.push("1. Write Python scripts with apply_patch, run with: `python path/to/script.py`\n".to_string());
-    sections.push(format!("2. Import from core/: {}\n", import_example));
-    sections.push(
-        "3. Never use `python -c` for multi-line code — always write a .py file first\n"
-            .to_string(),
-    );
-    sections.push(format!(
-        "4. Data files go in `{}/data/`, output files in `output/`\n",
-        task_dir_hint.trim_end_matches('/')
-    ));
+    sections.push("1. Reusable functions → core/. Task scripts → task subdirectories.\n".to_string());
+    sections.push("2. Import from core/ — never duplicate existing modules.\n".to_string());
+    sections.push("3. Use write_file to create files, edit_file for changes. Keep files under 3KB.\n".to_string());
+    sections.push("4. Update memory-bank/core_docs.md with full function signatures after creating core modules.\n".to_string());
 
     // ── Timestamp ──
     sections.push(format!(
@@ -2191,306 +2805,185 @@ fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
     }
 }
 
-// ============================================================================
-// WARD SETUP FROM INTENT ANALYSIS
-// ============================================================================
+fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
+    let lang_configs_dir = vault_dir.join("config").join("wards");
+    auto_update_agents_md_with_lang_configs(vault_dir, ward_id, &lang_configs_dir);
+}
 
-/// Set up ward directory, AGENTS.md blueprint, and per-node spec files
-/// from the intent analysis results. Called once before root agent starts.
-fn setup_ward_from_analysis(
-    vault_dir: &std::path::Path,
-    analysis: &crate::middleware::intent_analysis::IntentAnalysis,
-) {
-    let ward = &analysis.ward_recommendation;
-    let ward_dir = vault_dir.join("wards").join(&ward.ward_name);
+/// Auto-generate memory-bank/structure.md and core_docs.md for a ward.
+pub fn auto_update_memory_bank(vault_dir: &std::path::Path, ward_id: &str) {
+    let ward_dir = vault_dir.join("wards").join(ward_id);
+    let memory_bank_dir = ward_dir.join("memory-bank");
 
-    // Skip scratch ward
-    if ward.ward_name == "scratch" {
+    if !ward_dir.exists() || ward_id == "scratch" {
         return;
     }
 
-    // Create ward directory structure
-    let is_new = !ward_dir.exists();
-    std::fs::create_dir_all(&ward_dir).ok();
+    let _ = std::fs::create_dir_all(&memory_bank_dir);
+    generate_structure_md(&ward_dir, &memory_bank_dir.join("structure.md"));
 
-    // Create subdirectories from ward structure
-    for dir_name in ward.structure.keys() {
-        let dir_path = ward_dir.join(dir_name.trim_end_matches('/'));
-        std::fs::create_dir_all(&dir_path).ok();
-    }
+    let lang_configs_dir = vault_dir.join("config").join("wards");
+    generate_core_docs_md(&ward_dir, &memory_bank_dir.join("core_docs.md"), &lang_configs_dir);
+}
 
-    // Also create core/ and output/ if not in structure
-    std::fs::create_dir_all(ward_dir.join("core")).ok();
-    std::fs::create_dir_all(ward_dir.join("output")).ok();
+fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Path) {
+    let mut content = String::from("# Ward Structure\n\n## Directory Layout\n\n```\n");
+    generate_tree(ward_dir, ward_dir, 0, 3, &mut content);
+    content.push_str("```\n");
 
-    // Create subdirectory from ward_recommendation
-    if let Some(ref subdir) = ward.subdirectory {
-        let subdir_data = ward_dir.join(subdir).join("data");
-        std::fs::create_dir_all(&subdir_data).ok();
-    }
+    // Tech stack detection
+    let mut tech = Vec::new();
+    if ward_dir.join("requirements.txt").exists() { tech.push("Python (requirements.txt)"); }
+    if ward_dir.join("package.json").exists() { tech.push("Node.js (package.json)"); }
+    if ward_dir.join("Cargo.toml").exists() { tech.push("Rust (Cargo.toml)"); }
 
-    // Create memory/ folder with documentation templates
-    let memory_dir = ward_dir.join("memory");
-    std::fs::create_dir_all(&memory_dir).ok();
-
-    // ward.md — domain purpose and history
-    let ward_md_path = memory_dir.join("ward.md");
-    if !ward_md_path.exists() {
-        let ward_md_content = format!(
-r#"# {name}
-
-## Domain
-{reason}
-
-## Purpose
-{reason}
-
-## Session History
-- {today}: Ward created
-"#,
-            name = ward.ward_name,
-            reason = ward.reason,
-            today = chrono::Utc::now().format("%Y-%m-%d"),
-        );
-        std::fs::write(&ward_md_path, ward_md_content).ok();
-    }
-
-    // structure.md — code organization conventions
-    let structure_md_path = memory_dir.join("structure.md");
-    if !structure_md_path.exists() {
-        let structure_content = r#"# Code Structure
-
-## Conventions
-- One concern per file, max 100 lines
-- Functions with docstrings and typed parameters
-- `if __name__ == "__main__":` guard for scripts
-- Data saved as JSON/CSV, never print-only
-
-## Directory Rules
-- `core/` — Reusable across all topics. Import, don't copy.
-- `{task}/` — Topic-specific scripts and data
-- `{task}/data/` — Raw and computed data files
-- `output/` — Final deliverables only
-- `specs/` — Task specifications (archived)
-- `plans/` — Implementation plans (archived)
-- `memory/` — Ward documentation
-- No files in ward root except AGENTS.md
-"#;
-        std::fs::write(&structure_md_path, structure_content).ok();
-    }
-
-    // techstack.md — runtime environment
-    let techstack_md_path = memory_dir.join("techstack.md");
-    if !techstack_md_path.exists() {
-        let python_cmd = if cfg!(windows) { "python" } else { "python3" };
-        let activate_cmd = if cfg!(windows) {
-            ".\\venv\\Scripts\\Activate.ps1"
-        } else {
-            "source venv/bin/activate"
-        };
-        let techstack_content = format!(
-r#"# Tech Stack
-
-## Python
-- Command: `{python_cmd}`
-- Virtual env: Check ward root or system venv
-- Activate: `{activate_cmd}`
-
-## How to Run
-```
-{python_cmd} stocks/{{ticker}}/collect_data.py
-```
-"#,
-            python_cmd = python_cmd,
-            activate_cmd = activate_cmd,
-        );
-        std::fs::write(&techstack_md_path, techstack_content).ok();
-    }
-
-    // Write AGENTS.md blueprint (only if new)
-    if is_new {
-        write_agents_md_blueprint(&ward_dir, &ward.ward_name, &ward.reason, &ward.structure, analysis);
-    }
-
-    // Create spec files for each graph node
-    if let Some(ref graph) = analysis.execution_strategy.graph {
-        // Determine the topic directory (e.g., "spy" from subdirectory "stocks/spy")
-        let topic = ward.subdirectory.as_deref()
-            .and_then(|s| s.split('/').last())
-            .unwrap_or("session");
-
-        let today = chrono::Utc::now().format("%Y%m%d").to_string();
-        let specs_dir = ward_dir.join("specs").join(topic);
-        std::fs::create_dir_all(&specs_dir).ok();
-
-        let plans_dir = ward_dir.join("plans").join(topic);
-        std::fs::create_dir_all(&plans_dir).ok();
-
-        for node in &graph.nodes {
-            let spec_filename = format!("{}_{}.md",
-                node.id,
-                sanitize_filename(&node.task, 30)
-            );
-            let spec_path = specs_dir.join(&spec_filename);
-
-            // Don't overwrite existing specs (they may have been updated with results)
-            if spec_path.exists() {
-                continue;
-            }
-
-            let skills_str = if node.skills.is_empty() {
-                "none".to_string()
-            } else {
-                node.skills.join(", ")
-            };
-
-            // Find edges TO this node to determine dependencies
-            let depends_on: Vec<&str> = graph.edges.iter()
-                .filter_map(|edge| {
-                    match edge {
-                        crate::middleware::intent_analysis::GraphEdge::Direct { from, to } if to == &node.id => Some(from.as_str()),
-                        _ => None,
+    let core_dir = ward_dir.join("core");
+    if core_dir.exists() {
+        if let Ok(entries) = std::fs::read_dir(&core_dir) {
+            for entry in entries.filter_map(|e| e.ok()) {
+                if entry.path().extension().and_then(|e| e.to_str()) == Some("py") {
+                    if let Ok(src) = std::fs::read_to_string(entry.path()) {
+                        if src.contains("import yfinance") && !tech.iter().any(|t| *t == "yfinance") {
+                            tech.push("yfinance");
+                        }
+                        if src.contains("import pandas") && !tech.iter().any(|t| *t == "pandas") {
+                            tech.push("pandas");
+                        }
+                        if src.contains("import numpy") && !tech.iter().any(|t| *t == "numpy") {
+                            tech.push("numpy");
+                        }
                     }
-                })
-                .collect();
-
-            let deps_str = if depends_on.is_empty() {
-                "None (first step)".to_string()
-            } else {
-                depends_on.iter().map(|d| format!("Node {}", d)).collect::<Vec<_>>().join(", ")
-            };
-
-            let spec_content = format!(
-r#"# {id}: {task}
-Date: {date}
-Status: placeholder
-Agent: {agent}
-Skills: {skills}
-
-## Dependencies
-{deps}
-
-## Objective
-<!-- FILL: One sentence — what does this step produce? -->
-
-## Inputs
-<!-- FILL: What data/files are available from previous steps? What core/ functions to import? -->
-
-## Task
-{task}
-
-## Output
-<!-- FILL: Exact file paths, column names / JSON schema, data formats -->
-
-## Success Criteria
-<!-- FILL: How to verify — file exists, has N rows, specific fields present -->
-
-## Implementation Plan
-<!-- FILL: Step-by-step tool calls (apply_patch, shell) to complete this task -->
-"#,
-                id = node.id,
-                task = node.task,
-                date = today,
-                agent = node.agent,
-                skills = skills_str,
-                deps = deps_str,
-            );
-
-            if let Err(e) = std::fs::write(&spec_path, &spec_content) {
-                tracing::debug!("Failed to write spec {}: {}", spec_filename, e);
+                }
             }
         }
+    }
+    if !tech.is_empty() {
+        content.push_str(&format!("\n## Tech Stack\n\n{}\n", tech.join(", ")));
+    }
 
-        tracing::info!(
-            ward = %ward.ward_name,
-            nodes = graph.nodes.len(),
-            topic = topic,
-            "Created ward specs"
-        );
+    if let Err(e) = std::fs::write(output_path, &content) {
+        tracing::warn!("Failed to write structure.md: {}", e);
     }
 }
 
-/// Write the initial AGENTS.md blueprint from intent analysis.
-fn write_agents_md_blueprint(
-    ward_dir: &std::path::Path,
-    ward_name: &str,
-    purpose: &str,
-    structure: &std::collections::HashMap<String, String>,
-    analysis: &crate::middleware::intent_analysis::IntentAnalysis,
+fn generate_tree(
+    dir: &std::path::Path,
+    base: &std::path::Path,
+    depth: usize,
+    max_depth: usize,
+    output: &mut String,
 ) {
-    let agents_md_path = ward_dir.join("AGENTS.md");
+    if depth > max_depth { return; }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return,
+    };
+    let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
+    items.sort_by_key(|e| e.file_name());
 
-    // Don't overwrite if it already has real content (not just auto-generated)
-    if agents_md_path.exists() {
-        if let Ok(existing) = std::fs::read_to_string(&agents_md_path) {
-            // Check if it has actual content beyond the template
-            if existing.contains("## Core Modules") && existing.contains("- `") {
-                return; // Already has substance, don't overwrite
+    for entry in &items {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') || name == "__pycache__" || name == "node_modules"
+            || name == ".venv" || name == "data"
+        {
+            continue;
+        }
+        let indent = "  ".repeat(depth);
+        let path = entry.path();
+        if path.is_dir() {
+            output.push_str(&format!("{}{}/ \n", indent, name));
+            generate_tree(&path, base, depth + 1, max_depth, output);
+        } else if depth < 2 || name.ends_with(".py") || name.ends_with(".md")
+            || name.ends_with(".json") || name.ends_with(".yaml")
+        {
+            output.push_str(&format!("{}{}\n", indent, name));
+        }
+    }
+}
+
+fn generate_core_docs_md(
+    ward_dir: &std::path::Path,
+    output_path: &std::path::Path,
+    lang_configs_dir: &std::path::Path,
+) {
+    let lang_configs = {
+        let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
+            .unwrap_or_default();
+        gateway_services::lang_config::compile_all(&raw)
+    };
+
+    // Scan ALL code files in the ward (not just core/) — recursively
+    let code_extensions = ["py", "js", "ts", "rs", "go", "rb", "sh"];
+    let skip_dirs = ["node_modules", ".venv", "__pycache__", ".git", "memory-bank", "specs"];
+
+    let mut all_files: Vec<std::path::PathBuf> = Vec::new();
+    fn walk_dir(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>, exts: &[&str], skip: &[&str]) {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name.starts_with('.') { continue; }
+            if path.is_dir() {
+                if !skip.contains(&name.as_str()) {
+                    walk_dir(&path, files, exts, skip);
+                }
+            } else if path.is_file() {
+                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+                    if exts.contains(&ext) && name != "__init__.py" {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+    }
+    walk_dir(ward_dir, &mut all_files, &code_extensions, &skip_dirs);
+    all_files.sort();
+
+    if all_files.is_empty() { return; }
+
+    let mut content = String::from("# Code Inventory\n\n*Auto-generated. Lists all code files with function signatures.*\n\n");
+
+    for path in &all_files {
+        let relative = path.strip_prefix(ward_dir).unwrap_or(path);
+        let rel_str = relative.to_string_lossy();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+
+        // File size
+        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+        let size_str = if size > 1024 { format!("{:.1}KB", size as f64 / 1024.0) } else { format!("{}B", size) };
+
+        content.push_str(&format!("## {} ({})\n\n", rel_str, size_str));
+
+        // Extract signatures
+        if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
+            let desc = config.extract_first_docstring(path).unwrap_or_default();
+            if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
+            let sigs = config.extract_signatures(path);
+            if !sigs.is_empty() {
+                content.push_str("**Functions:**\n");
+                for sig in &sigs { content.push_str(&format!("- `{}`\n", sig)); }
+                content.push('\n');
+            }
+        } else {
+            let desc = extract_first_docstring(path);
+            if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
+            let sigs = extract_function_signatures(path);
+            if !sigs.is_empty() {
+                content.push_str("**Functions:**\n");
+                for sig in &sigs {
+                    let display = sig.strip_prefix("def ").unwrap_or(sig);
+                    content.push_str(&format!("- `{}`\n", display));
+                }
+                content.push('\n');
             }
         }
     }
 
-    let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-    let mut content = format!("# {}\n\n## Purpose\n{}\n\n", ward_name, purpose);
-
-    // Directory layout from structure
-    if !structure.is_empty() {
-        content.push_str("## Directory Layout\n");
-        let mut dirs: Vec<_> = structure.iter().collect();
-        dirs.sort_by_key(|(k, _)| k.as_str());
-        for (dir, desc) in &dirs {
-            content.push_str(&format!("- `{}` -- {}\n", dir, desc));
-        }
-        content.push('\n');
-    }
-
-    // Ward Documentation references
-    content.push_str("## Ward Documentation\n");
-    content.push_str("- [memory/ward.md](memory/ward.md) — Domain history\n");
-    content.push_str("- [memory/structure.md](memory/structure.md) — Code conventions\n");
-    content.push_str("- [memory/techstack.md](memory/techstack.md) — Runtime environment\n\n");
-
-    // Planned execution from graph
-    if let Some(ref graph) = analysis.execution_strategy.graph {
-        content.push_str("## Execution Plan\n");
-        for node in &graph.nodes {
-            let skills = if node.skills.is_empty() {
-                String::new()
-            } else {
-                format!(" ({})", node.skills.join(", "))
-            };
-            content.push_str(&format!("- **{}**: {} -> `{}`{}\n",
-                node.id, node.task, node.agent, skills));
-        }
-        content.push('\n');
-    }
-
-    // How to Code section
-    content.push_str("## How to Code\n");
-    content.push_str("1. Write Python scripts with apply_patch, run with: `python path/to/script.py`\n");
-    content.push_str("2. Import from core/: `from core.<module> import <function>`\n");
-    content.push_str("3. Never use `python -c` for multi-line code -- always write a .py file first\n");
-    content.push_str("4. Read existing data files before fetching -- avoid duplicate work\n");
-    content.push_str("5. Check specs/ folder for your task specification\n\n");
-
-    content.push_str(&format!("*Blueprint created: {}*\n", today));
-
-    if let Err(e) = std::fs::write(&agents_md_path, &content) {
-        tracing::warn!("Failed to write AGENTS.md blueprint: {}", e);
+    if let Err(e) = std::fs::write(output_path, &content) {
+        tracing::warn!("Failed to write core_docs.md: {}", e);
     }
 }
 
-/// Sanitize a string for use as a filename (lowercase, replace spaces with underscores, limit length).
-fn sanitize_filename(s: &str, max_len: usize) -> String {
-    s.to_lowercase()
-        .chars()
-        .map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' })
-        .collect::<String>()
-        .trim_matches('_')
-        .chars()
-        .take(max_len)
-        .collect::<String>()
-        .trim_end_matches('_')
-        .to_string()
-}

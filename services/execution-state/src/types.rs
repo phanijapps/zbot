@@ -478,6 +478,10 @@ pub struct AgentExecution {
     /// Relative path to log file
     #[serde(skip_serializing_if = "Option::is_none")]
     pub log_path: Option<String>,
+
+    /// Child session ID (for delegated executions only)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub child_session_id: Option<String>,
 }
 
 impl AgentExecution {
@@ -498,6 +502,7 @@ impl AgentExecution {
             checkpoint: None,
             error: None,
             log_path: None,
+            child_session_id: None,
         }
     }
 
@@ -524,6 +529,7 @@ impl AgentExecution {
             checkpoint: None,
             error: None,
             log_path: None,
+            child_session_id: None,
         }
     }
 

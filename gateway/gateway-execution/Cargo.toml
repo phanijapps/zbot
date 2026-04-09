@@ -35,6 +35,7 @@ tokio-stream = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+serde_yaml = { workspace = true }
 
 # Error handling
 anyhow = { workspace = true }
@@ -44,6 +45,12 @@ tracing = { workspace = true }
 
 # HTTP (for resource queries)
 reqwest = { workspace = true }
+
+# Compression
+flate2 = "1"
+
+# Database (direct queries in archiver)
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Utilities
 uuid = { workspace = true }

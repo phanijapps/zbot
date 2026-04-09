@@ -20,9 +20,9 @@ use agent_runtime::ChatMessage;
 
 use crate::handle::ExecutionHandle;
 use crate::invoke::{
-    broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    WorkspaceCache,
+    broadcast_event, collect_agents_summary, collect_skills_summary, detect_subagent_role,
+    process_stream_event, spawn_batch_writer_with_repo, subagent_rules, AgentLoader,
+    ExecutorBuilder, ResponseAccumulator, StreamContext, SubagentRole, WorkspaceCache,
 };
 use crate::recall::MemoryRecall;
 use crate::lifecycle::{
@@ -61,6 +61,7 @@ pub async fn spawn_delegated_agent(
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     memory_recall: Option<Arc<MemoryRecall>>,
+    rate_limiters: Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session = execution_state::Session::new_child(
@@ -91,6 +92,11 @@ pub async fn spawn_delegated_agent(
     let execution_id = request.child_execution_id.clone();
     let session_id = request.session_id.clone();
 
+    // Link the pre-created execution to its child session (for smart resume)
+    if let Err(e) = state_service.set_child_session_id(&execution_id, &child_session_id) {
+        tracing::warn!("Failed to set child_session_id on execution: {}", e);
+    }
+
     // Start execution (QUEUED → RUNNING) and log
     start_execution(
         &state_service,
@@ -114,12 +120,15 @@ pub async fn spawn_delegated_agent(
     } else {
         delegation_context
     };
+    let delegation_context = if let Some(schema) = request.output_schema.clone() {
+        delegation_context.with_output_schema(schema)
+    } else {
+        delegation_context
+    };
     delegation_registry.register(&execution_id, delegation_context);
 
-    // Track delegation for continuation
-    if let Err(e) = state_service.register_delegation(&session_id) {
-        tracing::warn!("Failed to register delegation: {}", e);
-    }
+    // Note: pending_delegations is incremented synchronously in handle_delegation (stream.rs).
+    // Do NOT increment again here — would double-count and break continuation.
 
     // Emit delegation started event
     emit_delegation_started(
@@ -135,7 +144,7 @@ pub async fn spawn_delegated_agent(
 
     // Load agent and provider using AgentLoader
     let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
-    let (agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
+    let (mut agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
         Ok(result) => result,
         Err(e) => {
             // Mark the pre-created execution as crashed so session can complete
@@ -144,6 +153,42 @@ pub async fn spawn_delegated_agent(
             return Err(e);
         }
     };
+
+    // Detect subagent role
+    let role = detect_subagent_role(
+        &request.child_agent_id,
+        &request.task,
+    );
+    tracing::info!(
+        child_agent = %request.child_agent_id,
+        role = ?role,
+        "Subagent role detected"
+    );
+
+    // PREPEND rules as the FIRST thing in instructions.
+    // Rules must come before agent AGENTS.md, ward context, specs — everything.
+    // The agent reads rules first, then context. Rules frame all decisions.
+    let rules = subagent_rules(role);
+    let original_instructions = std::mem::take(&mut agent.instructions);
+    agent.instructions = format!("{}\n\n{}", rules, original_instructions);
+
+    // Skill hints (one line)
+    if !request.skills.is_empty() {
+        let skill_names = request.skills.join(", ");
+        agent.instructions.push_str(&format!(
+            "\nRecommended skills: {}. Use load_skill to load any you need.\n",
+            skill_names
+        ));
+    }
+
+    // Inject output contract into child agent instructions when schema is provided
+    if let Some(ref schema) = request.output_schema {
+        let schema_str = serde_json::to_string_pretty(schema).unwrap_or_default();
+        agent.instructions.push_str(&format!(
+            "\n\n## Output Contract\nYour response MUST be a JSON object matching this schema:\n```json\n{}\n```\nRespond with ONLY the JSON object. No explanation before or after the JSON.",
+            schema_str
+        ));
+    }
 
     // Collect available agents and skills for executor state
     let available_agents = collect_agents_summary(&agent_service).await;
@@ -160,6 +205,55 @@ pub async fn spawn_delegated_agent(
         .flatten()
         .and_then(|s| s.ward_id);
 
+    // Inject ward context so subagent starts with complete knowledge
+    if let Some(ref ward_id) = session_ward_id {
+        let ward_dir = paths.vault_dir().join("wards").join(ward_id);
+        let agents_md_path = ward_dir.join("AGENTS.md");
+
+        if let Ok(agents_md) = std::fs::read_to_string(&agents_md_path) {
+            agent.instructions.push_str(&format!(
+                "\n# Ward Context ({})\n{}\n",
+                ward_id, agents_md
+            ));
+        }
+
+        // Inject core module docs so subagent knows available functions
+        let core_docs_path = ward_dir.join("memory-bank").join("core_docs.md");
+        if let Ok(core_docs) = std::fs::read_to_string(&core_docs_path) {
+            // Only inject if reasonably sized (< 4KB to avoid context bloat)
+            if core_docs.len() < 4096 {
+                agent.instructions.push_str(&format!(
+                    "\n# Available Core Modules\n{}\n",
+                    core_docs
+                ));
+            } else {
+                agent.instructions.push_str(
+                    "\n# Core Modules\nSee memory-bank/core_docs.md for available functions. Read it before writing new code.\n"
+                );
+            }
+        }
+
+        // List active spec PATHS (not content) — agent can cat if needed.
+        // Content injection was 8-12KB per delegation — too much context bloat.
+        let specs_dir = ward_dir.join("specs");
+        if specs_dir.exists() {
+            let mut spec_files = Vec::new();
+            collect_spec_files(&specs_dir, &specs_dir, &mut spec_files);
+            if !spec_files.is_empty() {
+                agent.instructions.push_str("\n# Specs\n");
+                for rel_path in &spec_files {
+                    agent.instructions.push_str(&format!("- {}\n", rel_path));
+                }
+            }
+        }
+
+        tracing::info!(
+            child_agent = %request.child_agent_id,
+            ward_id = %ward_id,
+            "Injected ward context for subagent"
+        );
+    }
+
     // Build model registry for capability lookups
     let bundled_models = gateway_templates::Templates::get("models_registry.json")
         .map(|f| f.data.to_vec())
@@ -169,11 +263,22 @@ pub async fn spawn_delegated_agent(
         &paths.vault_dir(),
     ));
 
+    // Get shared rate limiter for the child's provider
+    let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());
+    let rate_limiter = {
+        let guard = rate_limiters.read().unwrap_or_else(|e| e.into_inner());
+        guard.get(&provider_id).cloned()
+    };
+
     // Build executor using ExecutorBuilder
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
         .with_workspace_cache(workspace_cache)
         .with_model_registry(model_registry)
         .with_delegated(true);
+
+    if let Some(limiter) = rate_limiter {
+        builder = builder.with_rate_limiter(limiter);
+    }
 
     // Build fact store for subagent (so save_fact uses DB, not file fallback)
     let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {
@@ -209,27 +314,27 @@ pub async fn spawn_delegated_agent(
 
     // Delegation recall: inject relevant knowledge for the child agent
     let initial_history = if let Some(recall) = &memory_recall {
-        match recall.recall_with_graph(
+        let ward_id = session_ward_id.as_deref();
+        match recall.recall_for_delegation(
             &request.child_agent_id,
             &request.task,
-            5,
-            session_ward_id.as_deref(),
+            ward_id,
+            8,
         ).await {
-            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+            Ok(context) if !context.is_empty() => {
                 tracing::info!(
-                    child_agent = %request.child_agent_id,
-                    fact_count = result.facts.len(),
-                    episode_count = result.episodes.len(),
-                    "Injected recalled knowledge for delegated agent"
+                    agent = %request.child_agent_id,
+                    context_len = context.len(),
+                    "Primed subagent with recalled memory context"
                 );
-                vec![ChatMessage::system(result.formatted)]
+                vec![ChatMessage::system(context)]
             }
             Ok(_) => Vec::new(),
             Err(e) => {
                 tracing::warn!(
-                    child_agent = %request.child_agent_id,
+                    agent = %request.child_agent_id,
                     error = %e,
-                    "Delegation recall failed"
+                    "Delegation recall failed, proceeding without priming"
                 );
                 Vec::new()
             }
@@ -239,7 +344,14 @@ pub async fn spawn_delegated_agent(
     };
 
     // Create execution handle
-    let max_iter = request.max_iterations.unwrap_or(25);
+    // Complexity-based iteration budget (overrides default if complexity is set)
+    let max_iter = match request.complexity.as_deref() {
+        Some("S") => request.max_iterations.unwrap_or(15),
+        Some("M") => request.max_iterations.unwrap_or(30),
+        Some("L") => request.max_iterations.unwrap_or(50),
+        Some("XL") => request.max_iterations.unwrap_or(100),
+        _ => request.max_iterations.unwrap_or(1000),
+    };
     let handle = ExecutionHandle::new(max_iter);
     let handle_clone = handle.clone();
 
@@ -326,6 +438,7 @@ fn spawn_execution_task(
             log_service.clone(),
             state_service.clone(),
             delegation_tx,
+            paths.vault_dir().clone(),
         )
         .with_batch_writer(batch_writer.clone());
 
@@ -744,6 +857,47 @@ fn build_crash_report(
         report.push_str("\nPARTIAL WORK COMPLETED:\nNo plan was created\n");
     }
 
+    // Check ralph.py tasks.json status if available in the ward
+    if let Ok(Some(session)) = state_service.get_session(parent_session_id) {
+        if let Some(ward_id) = &session.ward_id {
+            let ward_dir = paths.ward_dir(ward_id);
+            let ralph = ward_dir.join("ralph.py");
+            if ralph.exists() {
+                // Find any tasks.json files in specs/
+                let specs_dir = ward_dir.join("specs");
+                if specs_dir.exists() {
+                    if let Ok(entries) = std::fs::read_dir(&specs_dir) {
+                        for entry in entries.flatten() {
+                            let tasks_json = entry.path().join("tasks.json");
+                            if tasks_json.exists() {
+                                // Run ralph.py status to get task completion state
+                                if let Ok(output) = std::process::Command::new("python3")
+                                    .arg(&ralph)
+                                    .arg("status")
+                                    .arg(&tasks_json)
+                                    .current_dir(&ward_dir)
+                                    .output()
+                                {
+                                    let status = String::from_utf8_lossy(&output.stdout);
+                                    if !status.trim().is_empty() {
+                                        let rel_path = tasks_json.strip_prefix(&ward_dir)
+                                            .map(|p| p.display().to_string())
+                                            .unwrap_or_else(|_| tasks_json.display().to_string());
+                                        report.push_str(&format!(
+                                            "\nTASK RUNNER STATUS ({}):\n  {}\n\
+                                             \nTO RESUME: Re-delegate with \"Continue processing {}\" — ralph.py tracks completion state.\n",
+                                            rel_path, status.trim(), rel_path
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // List files in the ward (if one is active for this session)
     if let Ok(Some(session)) = state_service.get_session(parent_session_id) {
         if let Some(ward_id) = &session.ward_id {
@@ -772,6 +926,26 @@ fn build_crash_report(
          Existing files can be reused.\n",
     );
     report
+}
+
+/// Recursively collect .md spec file paths relative to specs_root.
+fn collect_spec_files(dir: &std::path::Path, specs_root: &std::path::Path, out: &mut Vec<String>) {
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                // Skip archive directory
+                if path.file_name().map(|n| n == "archive").unwrap_or(false) {
+                    continue;
+                }
+                collect_spec_files(&path, specs_root, out);
+            } else if path.extension().map(|e| e == "md").unwrap_or(false) {
+                if let Ok(rel) = path.strip_prefix(specs_root) {
+                    out.push(format!("specs/{}", rel.display()));
+                }
+            }
+        }
+    }
 }
 
 /// Simple recursive directory listing that skips hidden files and common noise.

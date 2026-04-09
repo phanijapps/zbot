@@ -68,6 +68,7 @@
 │  │   ├── INSTRUCTIONS.md       #   Execution rules                     │
 │  │   ├── OS.md                 #   Platform-specific commands (auto)    │
 │  │   ├── distillation_prompt.md#   Customizable distillation prompt     │
+│  │   ├── recall_config.json    #   Recall tuning: weights, decay, graph │
 │  │   ├── mcps.json             #   MCP server configurations            │
 │  │   └── shards/               #   Overridable prompt shards            │
 │  │       ├── tooling_skills.md #     Skills-first approach              │
@@ -261,7 +262,266 @@ zerod --log-level debug
 | `gateway/gateway-services/src/settings.rs` | `AppSettings` with `logs` field, CRUD methods |
 | `gateway/src/http/settings.rs` | HTTP endpoints for log settings |
 | `apps/daemon/src/main.rs` | Logging initialization with settings.json + CLI merge |
-| `apps/ui/src/features/settings/WebSettingsPanel.tsx` | Settings page (context protection, logging) |
+| `apps/ui/src/features/settings/WebSettingsPanel.tsx` | Settings page (context protection, logging, advanced) |
+
+## Execution Settings
+
+Controls agent concurrency and first-time setup state. Stored in `settings.json` under `execution`.
+
+### ExecutionSettings Structure
+
+```json
+{
+  "execution": {
+    "maxParallelAgents": 2,
+    "setupComplete": false,
+    "agentName": "Brahmi",
+    "orchestrator": {
+      "providerId": null,
+      "model": null,
+      "temperature": 0.7,
+      "maxTokens": 16384,
+      "thinkingEnabled": true
+    },
+    "multimodal": {
+      "providerId": null,
+      "model": null,
+      "temperature": 0.3,
+      "maxTokens": 4096
+    }
+  }
+}
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `maxParallelAgents` | number | `2` | Max subagents running concurrently (global semaphore) |
+| `setupComplete` | bool | `false` | Whether setup wizard has been completed |
+| `agentName` | string\|null | `null` | User-chosen root agent name (also written to SOUL.md) |
+| `orchestrator.providerId` | string\|null | `null` | Provider for root agent (null = default provider) |
+| `orchestrator.model` | string\|null | `null` | Model for root agent (null = provider's default) |
+| `orchestrator.temperature` | number | `0.7` | Temperature (0-2) |
+| `orchestrator.maxTokens` | number | `16384` | Max output tokens (higher for thinking) |
+| `orchestrator.thinkingEnabled` | bool | `true` | Extended reasoning before delegating |
+| `multimodal.providerId` | string\|null | `null` | Provider for default vision model |
+| `multimodal.model` | string\|null | `null` | Vision-capable model (e.g., GPT-4o, gemma4) |
+| `multimodal.temperature` | number | `0.3` | Temperature for analysis (lower = deterministic) |
+| `multimodal.maxTokens` | number | `4096` | Max output tokens for vision responses |
+
+### HTTP API Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/settings/execution` | Get execution settings |
+| PUT | `/api/settings/execution` | Update (also writes SOUL.md if agentName changes) |
+| GET | `/api/setup/status` | Lightweight check: `{ setupComplete, hasProviders }` |
+| GET | `/api/setup/mcp-defaults` | Sanitized MCP templates for wizard |
+
+## Provider Management
+
+Providers are LLM API connections stored in `providers.json`. Each provider has rate limits, model configs enriched from the bundled registry, and a verified status.
+
+### Rate Limiting
+
+Default: 30 RPM / 2 concurrent (configurable per provider). Shared across all executors using the same provider via `ProviderRateLimiter`.
+
+```
+OpenAiClient → RetryingLlmClient → RateLimitedLlmClient
+```
+
+| Layer | Purpose | File |
+|-------|---------|------|
+| `OpenAiClient` | Raw OpenAI-compatible API calls | `runtime/agent-runtime/src/llm/openai.rs` |
+| `RetryingLlmClient` | Automatic retry on transient errors | `runtime/agent-runtime/src/llm/retry.rs` |
+| `RateLimitedLlmClient` | Per-provider semaphore + sliding window RPM | `runtime/agent-runtime/src/llm/rate_limiter.rs` |
+
+### Model Enrichment
+
+API responses (`GET /api/providers`) enrich each provider's model list with capabilities and token limits from the bundled model registry. `enrich_provider()` also injects default rate limits if none are explicitly set.
+
+## LLM Client — Text and Multimodal Content
+
+The LLM client layer supports multimodal content (images, files) alongside text. Content flows through typed `Part` variants and gets encoded to OpenAI-compatible format at the provider boundary.
+
+### Content Model
+
+Messages carry content as `Vec<Part>` where each Part is one of:
+
+| Part | Fields | Wire Format |
+|------|--------|-------------|
+| `Text` | `text: String` | `{ "type": "text", "text": "..." }` |
+| `Image` | `source: ContentSource, mime_type, detail` | `{ "type": "image_url", "image_url": { "url": "data:...;base64,...", "detail": "high" } }` |
+| `File` | `source: ContentSource, mime_type, filename` | `{ "type": "file", "file": { "url": "data:...;base64,..." } }` |
+| `FunctionCall` | `name, args, id` | Handled separately as tool_calls |
+| `FunctionResponse` | `id, response` | Handled separately as tool results |
+
+`ContentSource` has three variants:
+- `Url(String)` — remote URL, stored as-is
+- `Base64(String)` — inline encoded bytes, ephemeral (never persisted to DB)
+- `FileRef(String)` — local file path, what DB stores after flushing Base64 to disk
+
+### Backward Compatibility
+
+`ChatMessage` has custom serde: text-only messages serialize `content` as a plain string (backward compat with all providers), multimodal messages serialize as a content array. Deserialization accepts both formats.
+
+### Provider Encoding
+
+`ProviderEncoder` trait with `OpenAiEncoder` implementation. Capability-aware — rejects Image/File parts for non-vision models with `EncodingError::UnsupportedContentType`. The planning agent handles the error and routes to a vision-capable model.
+
+### Content Persistence
+
+Base64 blobs are flushed to content-addressed files (SHA-256 hash) before DB persistence. On rehydration (before LLM call), `FileRef` sources are read from disk and re-encoded to Base64.
+
+```
+Inbound: Part::Image { Base64("...") }
+  → flush_part_to_disk() → Part::Image { FileRef("/attachments/abc123.png") }
+  → DB stores FileRef
+  → rehydrate_source() → Part::Image { Base64("...") }
+  → OpenAiEncoder encodes to API format
+```
+
+### Multimodal Processing Paths
+
+1. **Native** — agent runs on a vision model, multimodal Parts flow directly in messages
+2. **Specialist** — delegate to a domain-expert agent (doc-shard, vision-analyzer)
+3. **Tool fallback** — `multimodal_analyze` tool makes a one-shot call to the default vision model from settings
+4. **No capability** — clear error, user configures a vision model
+
+### `multimodal_analyze` Tool
+
+Universal vision fallback available to all agents (root + subagents). Makes a direct HTTP call to the configured multimodal provider. Any agent on any model can process visual content.
+
+```
+Agent calls multimodal_analyze({ content: [{ type: "image", source: "/path/to/img.png" }], prompt: "..." })
+  → Tool reads multimodal_config from executor state (baseUrl, apiKey, model)
+  → Resolves file to base64, builds OpenAI content array
+  → POST {baseUrl}/chat/completions
+  → Returns { "analysis": "..." }
+```
+
+Configured via Settings > Advanced > Multimodal (provider + model with vision capability).
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `framework/zero-core/src/types.rs` | Part enum (Text, Image, File), ContentSource, ImageDetail |
+| `framework/zero-core/src/multimodal.rs` | flush_part_to_disk, rehydrate_source, MIME utils |
+| `framework/zero-llm/src/encoding.rs` | ProviderEncoder trait, EncodingError |
+| `framework/zero-llm/src/openai_encoder.rs` | OpenAiEncoder — encodes Parts to OpenAI content blocks |
+| `runtime/agent-runtime/src/types/messages.rs` | ChatMessage with Vec<Part> content, custom serde |
+| `runtime/agent-runtime/src/llm/openai.rs` | OpenAiClient with FileRef rehydration |
+| `runtime/agent-tools/src/tools/multimodal.rs` | multimodal_analyze tool |
+| `gateway/gateway-services/src/settings.rs` | MultimodalConfig in ExecutionSettings |
+| `gateway/gateway-execution/src/invoke/executor.rs` | Injects multimodal_config into executor state |
+
+## First-Time Setup Wizard
+
+A 6-step onboarding wizard at `/setup` that configures a fresh z-Bot installation.
+
+### Trigger
+
+On app load, `SetupGuard` calls `GET /api/setup/status`. If `setupComplete === false` AND no providers exist, redirects to `/setup`. Result cached in sessionStorage.
+
+### Steps
+
+| Step | Name | Required | Persisted When |
+|------|------|----------|----------------|
+| 1 | Name Your Agent | Yes | On Launch (Step 6) |
+| 2 | Connect Providers | Yes (≥1 verified) | Immediately (test & add) |
+| 3 | Enable Skills | No (skippable) | Informational only |
+| 4 | MCP Servers | No (skippable) | On Launch (Step 6) |
+| 5 | Configure Agents | Yes | On Launch (Step 6) |
+| 6 | Review & Launch | — | Submits all deltas |
+
+### Delta-Only Updates
+
+On re-run, the wizard hydrates from current state (providers, agent configs, MCPs, agent name). Launch only applies changes:
+- Root agent renamed only if name changed
+- Agent configs updated only where provider/model/temp/tokens differ from original
+- MCP servers created only if not already existing
+- `setupComplete` set to `true`, `agentName` persisted (also updates SOUL.md)
+
+### Bundled Templates
+
+| Template | Contents |
+|----------|----------|
+| `gateway/templates/default_agents.json` | 7 agents: code, data-analyst, planner, research, summarizer, tutor, writing (with temps, maxTokens, skill/MCP refs) |
+| `gateway/templates/default_mcps.json` | 8 MCP servers: time, github, brave-search, google-maps, sequential-thinking, google-drive, drawio, drawio-sse (all keys blanked, disabled) |
+
+### Name Presets
+
+Step 1 offers quick-pick personalities: **Brahmi**, **JohnnyLever**, **z-Bot**, or custom. The chosen name is stored in `settings.json` (`execution.agentName`) and written to `config/SOUL.md` (first line: `You are **Name**`).
+
+### Implementation Files
+
+| File | Purpose |
+|------|---------|
+| `gateway/gateway-services/src/settings.rs` | `ExecutionSettings` with `setup_complete`, `agent_name` |
+| `gateway/src/http/setup.rs` | Setup status + MCP defaults endpoints |
+| `gateway/src/http/settings.rs` | Updates SOUL.md when `agentName` changes |
+| `gateway/templates/default_agents.json` | Bundled agent definitions |
+| `gateway/templates/default_mcps.json` | Sanitized MCP server templates |
+| `apps/ui/src/features/setup/SetupWizard.tsx` | Wizard container, `useReducer` state, hydration |
+| `apps/ui/src/features/setup/SetupGuard.tsx` | Route guard — checks status, redirects |
+| `apps/ui/src/features/setup/steps/` | 6 step components (Name, Providers, Skills, Mcp, Agents, Review) |
+| `apps/ui/src/features/setup/components/` | StepIndicator, WizardNav |
+| `apps/ui/src/features/setup/presets.ts` | Name preset data |
+
+### UI Architecture
+
+Wizard renders outside the app shell (no sidebar). State managed via `useReducer` with `HYDRATE` action for pre-filling on re-run. Each step is a standalone component receiving wizard state + onChange callback. CSS uses BEM classes under `.setup-wizard`, `.step-indicator`, `.name-preset`, `.provider-add-*`, `.skill-category`, `.mcp-*`, `.agent-*`, `.review-*`.
+
+## Memory Brain
+
+The memory layer is z-Bot's cognitive system. Full documentation: [components/memory-layer/overview.md](components/memory-layer/overview.md). Backlog: [components/memory-layer/backlog.md](components/memory-layer/backlog.md).
+
+### Five Active Memory Loops
+
+| Loop | When | What | Files |
+|------|------|------|-------|
+| System recall | First message | `recall_with_graph()` → facts + episodes + graph → system message | `runner.rs:642` |
+| Intent + memory | Before intent LLM | `recall_for_intent()` → corrections, strategies, episodes | `intent_analysis.rs:326` |
+| Subagent priming | Delegation spawn | `recall_for_delegation()` → corrections, skills, ward files | `spawn.rs:311` |
+| Mid-session | Every N turns | RecallHook → new relevant facts injected | `executor.rs` |
+| Distillation | Session end | LLM extracts facts (verified), entities (normalized), relationships (deduped), episodes | `distillation.rs` |
+
+### Subagent Tool Registry
+
+All subagents (planner, code-agent, research-agent, etc.) now have:
+
+| Tool | Purpose |
+|------|---------|
+| ShellTool | Run commands, read files |
+| WriteFileTool | Create/overwrite files |
+| EditFileTool | Find-and-replace edits |
+| LoadSkillTool | Load skill instructions |
+| **WardTool** | Enter ward → AGENTS.md context + ward-entry recall |
+| **MemoryTool** | recall/save_fact → access the brain |
+| **GrepTool** | Search files efficiently |
+| RespondTool | Return result to parent |
+
+### Recall Scoring
+
+```
+score = (0.7 × vector + 0.3 × BM25) × category_weight × ward_affinity × temporal_decay × mention_boost × contradiction_penalty × predictive_boost
+```
+
+FTS5 queries sanitized with OR-joined terms (raw user messages break FTS5 syntax).
+
+### Accuracy Layer
+
+- **Fact verification**: grounded against tool outputs (confidence scaled by match ratio)
+- **Fact dedup**: 60% word overlap check in distillation prevents near-duplicates
+- **Entity normalization**: file basename matching, alias tracking in properties
+- **Relationship dedup**: unique index on (source_entity_id, target_entity_id, relationship_type)
+- **Failed episode warnings**: surface in recall as "Warnings — avoid these approaches" before successes
+
+### Ward Knowledge (auto-generated)
+
+- `ward.md` — curated: max 5 corrections, 3 strategies, 2 warnings (deduped by word overlap)
+- `core_docs.md` — all `.py/.js/.ts/.rs` files with function signatures (recursive scan)
+- `structure.md` — directory tree
 
 ## Crate Structure
 
@@ -312,7 +572,7 @@ Standalone data services:
 services/
 ├── execution-state/     # Session/execution state machine (SQLite)
 ├── api-logs/            # Execution logging (SQLite)
-├── knowledge-graph/     # Entity/relationship storage (used by distillation)
+├── knowledge-graph/     # Entity/relationship storage, GraphTraversal trait (SQLite CTE → Neo4j swappable)
 └── daily-sessions/      # Session management
 ```
 
@@ -327,7 +587,7 @@ gateway/
 ├── gateway-templates/   # Prompt assembly, shard injection
 ├── gateway-connectors/  # ConnectorRegistry, dispatch (Discord, Telegram, Slack)
 ├── gateway-services/    # AgentService, ProviderService, ModelRegistry, McpService, SkillService, SettingsService
-├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller, MemoryRecall
+├── gateway-execution/   # ExecutionRunner, delegation, lifecycle, streaming, BatchWriter, SessionDistiller (health, episodes, strategies, failure clustering, ward sync), MemoryRecall (priority engine, graph expansion, nudges)
 ├── gateway-hooks/       # Hook trait, HookRegistry, CliHook, CronHook
 ├── gateway-cron/        # CronJobConfig, CronService
 ├── gateway-bus/         # GatewayBus trait, SessionRequest, SessionHandle
@@ -397,16 +657,16 @@ pub trait LlmClient: Send + Sync {
 The LLM client is wrapped in a chain of decorators for reliability and rate limiting:
 
 ```
-OpenAiClient → RetryingLlmClient → ThrottledLlmClient
+OpenAiClient → RetryingLlmClient → RateLimitedLlmClient
 ```
 
 | Layer | Purpose | File |
 |-------|---------|------|
 | `OpenAiClient` | Raw OpenAI-compatible API calls | `runtime/agent-runtime/src/llm/openai.rs` |
 | `RetryingLlmClient` | Automatic retry on transient errors | `runtime/agent-runtime/src/llm/retry.rs` |
-| `ThrottledLlmClient` | Per-provider concurrent request limiting | `runtime/agent-runtime/src/llm/throttle.rs` |
+| `RateLimitedLlmClient` | Per-provider concurrency semaphore + sliding window RPM | `runtime/agent-runtime/src/llm/rate_limiter.rs` |
 
-The `ThrottledLlmClient` uses a shared `tokio::sync::Semaphore` per provider. All executors for the same provider share the same semaphore, preventing burst 429 rate limits. Configured via `maxConcurrentRequests` in `providers.json` (default: 3).
+The `RateLimitedLlmClient` uses a shared `ProviderRateLimiter` per provider (concurrency semaphore + RPM sliding window). All executors for the same provider share the same limiter, preventing burst 429s. Auto-halves RPM after a 429. Configured via `rateLimits` in `providers.json` (default: 30 RPM / 2 concurrent).
 
 ## Session Management Architecture
 
@@ -722,10 +982,15 @@ User Message
 | PUT | `/api/settings/tools` | Update tool settings |
 | GET | `/api/settings/logs` | Get log settings |
 | PUT | `/api/settings/logs` | Update log settings (requires restart) |
-| **Operations Dashboard** | | |
-| GET | `/api/executions/stats/counts` | Dashboard statistics |
-| GET | `/api/executions/v2/sessions/full` | Sessions with executions |
-| GET | `/api/executions/v2/sessions/:id` | Single session details |
+| **Execution Intelligence Dashboard** | | |
+| GET | `/api/executions/stats/counts` | KPI cards (success rate, tokens, tool calls, duration) |
+| GET | `/api/executions/v2/sessions/full` | Sessions with inline mini waterfalls |
+| GET | `/api/executions/v2/sessions/:id` | Full waterfall timeline with delegation spans |
+| **Observatory (Knowledge Graph)** | | |
+| GET | `/api/memory/graph/entities` | Graph entities for D3-force visualization |
+| GET | `/api/memory/graph/relationships` | Graph relationships |
+| GET | `/api/memory/health` | Learning health (distillation stats) |
+| POST | `/api/memory/distill/backfill` | Retroactive distillation |
 | POST | `/api/gateway/submit` | Submit new agent request |
 | GET | `/api/gateway/status/:session_id` | Get session status |
 | POST | `/api/gateway/cancel/:session_id` | Cancel running session |
@@ -921,7 +1186,9 @@ CREATE TABLE embedding_cache (
 );
 ```
 
-### Memory Evolution Architecture
+### Cognitive Memory Architecture
+
+The memory system is a full cognitive pipeline: distill (post-session extraction), recall (tool-call based retrieval with priority scoring), and a knowledge graph with graph-driven expansion.
 
 ```
                     ┌─────────────────────────────────┐
@@ -933,8 +1200,14 @@ CREATE TABLE embedding_cache (
           ┌────────────────────┼────────────────────┐
           ▼                    ▼                     ▼
 ┌──────────────────┐ ┌─────────────────┐ ┌──────────────────┐
-│ Session Distiller │ │  Memory Indexer  │ │  Smart Recall    │
-│ (post-session)   │ │ (on fact write)  │ │ (session start)  │
+│ Session Distiller │ │  Memory Indexer  │ │  Memory Recall   │
+│ (post-session)   │ │ (on fact write)  │ │ (tool-call based)│
+│ + health report  │ │                  │ │ + graph expansion│
+│ + provider fbk   │ │                  │ │ + priority engine│
+│ + episode extract│ │                  │ │ + nudges         │
+│ + strategy emerge│ │                  │ │                  │
+│ + failure cluster│ │                  │ │                  │
+│ + ward file sync │ │                  │ │                  │
 └────────┬─────────┘ └────────┬────────┘ └────────┬─────────┘
          │                    │                    │
          ▼                    ▼                    ▼
@@ -945,25 +1218,158 @@ CREATE TABLE embedding_cache (
 │  │ (structured) │  │ _fts (FTS5)  │  │ (in Rust, <10K)    │  │
 │  └─────────────┘  └──────────────┘  └────────────────────┘  │
 │                                                              │
+│  ┌───────────────────┐  ┌────────────────┐                   │
+│  │ distillation_runs │  │ session_episodes│                   │
+│  │ (health tracking) │  │ (episodic mem) │                   │
+│  └───────────────────┘  └────────────────┘                   │
+│  ┌───────────────────┐  ┌────────────────┐                   │
+│  │ recall_log        │  │ memory_facts   │                   │
+│  │ (audit trail)     │  │ _archive (decay)│                  │
+│  └───────────────────┘  └────────────────┘                   │
+│                                                              │
 │  Hybrid Search: 0.7 * vector_score + 0.3 * bm25_score       │
 │  × confidence × recency_decay × mention_boost                │
+│                                                              │
+│  Priority Engine (recall):                                    │
+│  category_weight × ward_affinity × temporal_decay             │
+│  correction 1.5x > strategy 1.4x > user 1.3x > domain 1.0x │
 └─────────────────────────────────────────────────────────────┘
          │
          ▼
 ┌─────────────────────────────────────────────────────────────┐
 │  Knowledge Graph (services/knowledge-graph/)                 │
-│  Entities + relationships extracted during distillation      │
+│  198+ entities, 333+ relationships, cross-agent __global__   │
+│  GraphTraversal trait (SQLite CTE today, Neo4j future)       │
+│  2-hop BFS expansion via recursive CTE for recall            │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+#### Distillation Pipeline
+
+Post-session LLM extraction with:
+- **Health reporting**: `distillation_runs` table tracks success/failure per session
+- **Provider fallback**: tries configured provider, falls back gracefully
+- **Episode extraction**: identifies session episodes (goal, outcome, tools used) in `session_episodes`
+- **Strategy emergence**: detects repeated successful patterns, promotes to strategy facts
+- **Failure clustering**: groups repeated failures, auto-generates correction facts
+- **Ward file sync**: auto-generates `wards/{ward}/memory/ward.md` from distilled knowledge
+- **Contradiction detection**: flags conflicting facts via `memory_facts.contradicted_by`
+
+#### Recall Architecture
+
+Recall is **tool-call based** — the agent explicitly calls `memory recall` (not hidden injection). This makes recall visible, debuggable, and learnable.
+
+**Priority scoring**: Each recalled fact is scored by:
+1. **Category weight**: correction (1.5x) > strategy (1.4x) > user preference (1.3x) > domain (1.0x)
+2. **Ward affinity boost**: facts from the active ward score higher
+3. **Temporal decay**: per-category half-lives (corrections 90d, domain 30d) via `recall_config.json`
+4. **Contradiction penalty**: facts flagged by `contradicted_by` are penalized
+5. **Predictive recall**: success-correlated facts bubble up from historical recall_log
+
+**Graph-driven expansion**: After initial fact retrieval, a 2-hop BFS via SQLite recursive CTE expands through the knowledge graph. Related entities within `max_hops` (configurable) are included with `hop_decay` attenuation.
+
+**Corrections as rules**: Top correction facts are always injected first, formatted as "NEVER do X" / "ALWAYS do Y" rules. Filtered by query relevance.
+
+**Capability gap detection**: When no matching skill/agent is found, recall surfaces the gap and prompts the agent to create a plan.
+
+**Recall nudges**: System nudges at session start, ward entry, and post-delegation prompt the agent to recall via the tool.
+
+**Configuration**: `config/recall_config.json` with `category_weights`, `ward_affinity`, `temporal_decay` half-lives, `graph_traversal` (max_hops, hop_decay), `predictive_recall`, `session_offload`.
+
+#### Session Offload
+
+Old session transcripts are archived to JSONL.gz files to keep SQLite lean:
+- `zero sessions archive --older-than 7` — offload transcripts older than N days
+- `zero sessions restore <session_id>` — restore an archived session
+- `sessions.archived` column tracks offload state
+
+#### Fact Pruning
+
+Temporal decay moves old facts past their category half-life to `memory_facts_archive`. Archived facts are excluded from recall but preserved for audit.
 
 **Key files**:
 - `runtime/agent-runtime/src/llm/embedding.rs` — EmbeddingClient trait, EmbeddingConfig
 - `runtime/agent-runtime/src/llm/openai_embedding.rs` — OpenAI-compatible embedding client
 - `runtime/agent-runtime/src/llm/local_embedding.rs` — fastembed local client (default)
 - `gateway/gateway-database/src/memory_repository.rs` — MemoryFact CRUD, hybrid search, embedding cache
-- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (fires after both `invoke()` and `invoke_continuation()`, min 4 messages, extracts facts + entities + relationships)
-- `gateway/gateway-execution/src/recall.rs` — MemoryRecall (inject facts at session start)
+- `gateway/gateway-execution/src/distillation.rs` — SessionDistiller (health reporting, episode extraction, strategy emergence, failure clustering, ward file sync)
+- `gateway/gateway-execution/src/recall.rs` — MemoryRecall (priority engine, graph expansion, corrections as rules, nudges)
 - `runtime/agent-tools/src/tools/memory.rs` — save_fact, recall, graph actions
+- `config/recall_config.json` — recall tuning: weights, decay, graph traversal, predictive recall
+
+### distillation_runs
+Tracks distillation health per session (v11).
+
+```sql
+CREATE TABLE distillation_runs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    status TEXT NOT NULL,              -- success|failed|skipped
+    facts_extracted INTEGER DEFAULT 0,
+    entities_extracted INTEGER DEFAULT 0,
+    relationships_extracted INTEGER DEFAULT 0,
+    provider TEXT,
+    error_message TEXT,
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### session_episodes
+Episodic memory — goal/outcome pairs extracted during distillation (v11).
+
+```sql
+CREATE TABLE session_episodes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    episode_index INTEGER NOT NULL,
+    goal TEXT NOT NULL,
+    outcome TEXT,
+    tools_used TEXT,                    -- JSON array
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### recall_log
+Audit trail for recall invocations — enables predictive recall (v13).
+
+```sql
+CREATE TABLE recall_log (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    query TEXT NOT NULL,
+    facts_returned INTEGER DEFAULT 0,
+    graph_hops_used INTEGER DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+### memory_facts_archive
+Temporally decayed facts moved here for archival (v13).
+
+```sql
+CREATE TABLE memory_facts_archive (
+    -- Same schema as memory_facts
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    category TEXT NOT NULL,
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL,
+    archived_at TEXT NOT NULL DEFAULT (datetime('now')),
+    original_created_at TEXT
+);
+```
+
+### Additional columns (migration notes)
+
+| Migration | Table | Column | Purpose |
+|-----------|-------|--------|---------|
+| v11 | `memory_facts` | `ward_id TEXT` | Ward-scoped facts |
+| v12 | `memory_facts` | `contradicted_by TEXT` | Links to contradicting fact ID |
+| v13 | `sessions` | `archived INTEGER DEFAULT 0` | Session offload tracking |
 
 ### ID Conventions
 
@@ -1549,6 +1955,42 @@ The `respond_to` field controls where agent responses are delivered:
 - **Empty/null**: Response goes to web UI only (default)
 - **Specified**: Response dispatched to listed connectors
 - **Original source NOT automatically included** (explicit routing)
+
+## UI: Observatory and Execution Intelligence Dashboard
+
+### Observatory (Knowledge Graph)
+
+D3-force directed graph visualization of the knowledge graph. Entity detail sidebar on click. Learning health bar shows distillation success rate with a backfill button for retroactive distillation.
+
+Implementation: `apps/ui/src/features/observatory/`
+
+### Execution Intelligence Dashboard
+
+Replaced the flat 845-line log viewer with a visual observability dashboard:
+- **KPI cards** with sparkline trends (success rate, tokens, tool calls, duration)
+- **Session list** with inline mini waterfalls showing execution shape
+- **Expandable full waterfall timelines** with delegation spans and tool dots
+- **Interactive**: hover tooltips on dots/bars, click for slide-out detail panel
+- **Real-time**: auto-refresh when sessions are running
+- **Session titles** derived from first user message
+
+Implementation: `apps/ui/src/features/executions/`
+
+## Extension Points
+
+### GraphTraversal Trait
+
+Abstract graph backend — SQLite recursive CTE today, Neo4j tomorrow. The trait provides `expand_from_entity(entity_id, max_hops)` for recall graph expansion and `find_related(entity_ids, relationship_types)` for targeted traversal.
+
+Implementation: `services/knowledge-graph/src/traversal.rs`
+
+### New CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `zero distill backfill` | Retroactive distillation for sessions that pre-date the pipeline |
+| `zero sessions archive --older-than 7` | Offload old transcripts to JSONL.gz |
+| `zero sessions restore <session_id>` | Restore an archived session |
 
 ## Runtime Memory Profile
 

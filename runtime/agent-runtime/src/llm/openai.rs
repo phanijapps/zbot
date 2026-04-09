@@ -15,6 +15,8 @@ use crate::llm::client::{
 };
 use crate::llm::config::LlmConfig;
 use crate::types::{ChatMessage, ToolCall};
+use zero_core::types::{Part, ContentSource};
+use zero_core::multimodal::rehydrate_source;
 
 /// OpenAI-compatible LLM client
 ///
@@ -23,6 +25,17 @@ use crate::types::{ChatMessage, ToolCall};
 pub struct OpenAiClient {
     config: Arc<LlmConfig>,
     http_client: reqwest::Client,
+}
+
+/// Attempt to recover the first JSON object from a concatenated string like `{"a":"b"}{"c":"d"}`.
+/// Returns Some(Value) if recovery succeeds, None otherwise.
+fn recover_first_json(raw: &str) -> Option<serde_json::Value> {
+    if let Some(pos) = raw.find("}{") {
+        let first = &raw[..pos + 1];
+        serde_json::from_str(first).ok()
+    } else {
+        None
+    }
 }
 
 /// Check if a JSON string is complete (has balanced braces, brackets, and strings).
@@ -74,9 +87,15 @@ impl OpenAiClient {
     /// Create a new OpenAI-compatible client
     pub fn new(config: LlmConfig) -> Result<Self, LlmError> {
         tracing::debug!("Creating OpenAI client for model: {}", config.model);
+        let http_client = reqwest::Client::builder()
+            .tcp_nodelay(true)
+            .pool_max_idle_per_host(4)
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
+            .timeout(std::time::Duration::from_secs(600))
+            .build()?;
         Ok(Self {
             config: Arc::new(config),
-            http_client: reqwest::Client::new(),
+            http_client,
         })
     }
 
@@ -86,12 +105,51 @@ impl OpenAiClient {
         &self.config
     }
 
+    /// Rehydrate any FileRef sources in messages to Base64 before sending to the API.
+    fn rehydrate_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
+        messages.into_iter().map(|mut msg| {
+            msg.content = msg.content.into_iter().map(|part| {
+                match &part {
+                    Part::Image { source: source @ ContentSource::FileRef(path), mime_type, detail } => {
+                        match rehydrate_source(source) {
+                            Ok(new_source) => Part::Image {
+                                source: new_source,
+                                mime_type: mime_type.clone(),
+                                detail: detail.clone(),
+                            },
+                            Err(e) => {
+                                tracing::warn!("Failed to rehydrate FileRef {}: {}", path, e);
+                                part
+                            }
+                        }
+                    }
+                    Part::File { source: source @ ContentSource::FileRef(path), mime_type, filename } => {
+                        match rehydrate_source(source) {
+                            Ok(new_source) => Part::File {
+                                source: new_source,
+                                mime_type: mime_type.clone(),
+                                filename: filename.clone(),
+                            },
+                            Err(e) => {
+                                tracing::warn!("Failed to rehydrate FileRef {}: {}", path, e);
+                                part
+                            }
+                        }
+                    }
+                    _ => part,
+                }
+            }).collect();
+            msg
+        }).collect()
+    }
+
     /// Build the request body for the API
     fn build_request_body(
         &self,
         messages: Vec<ChatMessage>,
         tools: Option<Value>,
     ) -> Value {
+        let messages = Self::rehydrate_messages(messages);
         let mut body_obj = json!({
             "model": self.config.model,
             "messages": messages,
@@ -117,40 +175,39 @@ impl OpenAiClient {
             }
         }
 
-        // Debug: log request size estimation
-        let request_json = serde_json::to_string(&body_obj).unwrap_or_default();
-        let estimated_chars = request_json.len();
-        let estimated_tokens = estimated_chars / 4; // rough estimate: ~4 chars per token
+        // Only serialize for logging at debug level (avoids 100KB serialization on every call)
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let request_json = serde_json::to_string(&body_obj).unwrap_or_default();
+            let estimated_chars = request_json.len();
+            let estimated_tokens = estimated_chars / 4;
+            tracing::debug!(
+                "Request size: ~{} chars (~{} tokens estimated)",
+                estimated_chars,
+                estimated_tokens
+            );
 
-        tracing::info!(
-            "Request size: ~{} chars (~{} tokens estimated)",
-            estimated_chars,
-            estimated_tokens
-        );
+            if let Some(tools_val) = &tools {
+                if let Some(tools_array) = tools_val.as_array() {
+                    let tools_json = serde_json::to_string(tools_val).unwrap_or_default();
+                    let tools_tokens = tools_json.len() / 4;
+                    tracing::debug!(
+                        "Tools: {} tools, ~{} chars (~{} tokens)",
+                        tools_array.len(),
+                        tools_json.len(),
+                        tools_tokens
+                    );
+                }
+            }
 
-        // Log tools count and size
-        if let Some(tools_val) = &tools {
-            if let Some(tools_array) = tools_val.as_array() {
-                let tools_json = serde_json::to_string(tools_val).unwrap_or_default();
-                let tools_tokens = tools_json.len() / 4;
-                tracing::info!(
-                    "Tools: {} tools, ~{} chars (~{} tokens)",
-                    tools_array.len(),
-                    tools_json.len(),
-                    tools_tokens
+            if let Some(messages_val) = body_obj.get("messages") {
+                let messages_json = serde_json::to_string(messages_val).unwrap_or_default();
+                let messages_tokens = messages_json.len() / 4;
+                tracing::debug!(
+                    "Messages: ~{} chars (~{} tokens)",
+                    messages_json.len(),
+                    messages_tokens
                 );
             }
-        }
-
-        // Log messages size
-        if let Some(messages_val) = body_obj.get("messages") {
-            let messages_json = serde_json::to_string(messages_val).unwrap_or_default();
-            let messages_tokens = messages_json.len() / 4;
-            tracing::info!(
-                "Messages: ~{} chars (~{} tokens)",
-                messages_json.len(),
-                messages_tokens
-            );
         }
 
         if self.config.thinking_enabled {
@@ -233,7 +290,12 @@ impl OpenAiClient {
                         let arguments_str = call.get("function")?.get("arguments")?.as_str()?.to_string();
 
                         // Parse arguments from string to Value for internal use
-                        let arguments = serde_json::from_str(&arguments_str).ok()?;
+                        let arguments = serde_json::from_str(&arguments_str)
+                            .or_else(|_| {
+                                recover_first_json(&arguments_str)
+                                    .ok_or_else(|| serde_json::from_str::<Value>("null").unwrap_err())
+                            })
+                            .ok()?;
 
                         Some(ToolCall::new(id, name, arguments))
                     })
@@ -272,6 +334,10 @@ impl LlmClient for OpenAiClient {
         callback: StreamCallback,
     ) -> Result<ChatResponse, LlmError> {
         tracing::info!("Starting streaming chat with {} messages", messages.len());
+
+        // Clone messages+tools for non-streaming fallback if stream breaks
+        let fallback_messages = messages.clone();
+        let fallback_tools = tools.clone();
 
         let url = format!("{}/chat/completions", self.config.base_url);
 
@@ -331,10 +397,38 @@ impl LlmClient for OpenAiClient {
         let mut sse_buffer = String::new();
 
         while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|e| {
-                tracing::error!("Stream error: {}", e);
-                LlmError::HttpError(e)
-            })?;
+            let chunk = match chunk {
+                Ok(c) => c,
+                Err(e) => {
+                    tracing::warn!(
+                        emitted_chars = full_content.len(),
+                        tool_calls = tool_accumulators.len(),
+                        "Stream decode error — falling back to non-streaming: {}",
+                        e
+                    );
+
+                    // If we haven't emitted anything yet, retry as non-streaming
+                    if full_content.is_empty() && tool_accumulators.is_empty() {
+                        tracing::info!("No content emitted yet, retrying as non-streaming request");
+                        let body = self.build_request_body(fallback_messages, fallback_tools);
+                        let response = self.make_request(body).await?;
+                        let parsed = self.parse_response(response);
+                        // Emit the full response as a single token
+                        if !parsed.content.is_empty() {
+                            callback(StreamChunk::Token(parsed.content.clone()));
+                        }
+                        return Ok(parsed);
+                    }
+
+                    // If we already emitted content, return what we have as partial
+                    // (better than crashing — executor can continue)
+                    tracing::warn!(
+                        "Stream broke after {} chars emitted — returning partial response",
+                        full_content.len()
+                    );
+                    break;
+                }
+            };
             sse_buffer.push_str(&String::from_utf8_lossy(&chunk));
 
             // Find the last complete line boundary
@@ -499,15 +593,25 @@ impl LlmClient for OpenAiClient {
                     match serde_json::from_str::<serde_json::Value>(&acc.arguments) {
                         Ok(args) => args,
                         Err(e) => {
-                            tracing::warn!(
-                                "Failed to parse tool call arguments for '{}': {} — raw: {}",
-                                acc.name, e, acc.arguments
-                            );
-                            json!({
-                                "__error__": "PARSE_ERROR",
-                                "__message__": format!("JSON parse error: {}", e),
-                                "__truncated__": false
-                            })
+                            // Attempt recovery: model may have concatenated multiple JSON objects
+                            if let Some(recovered) = recover_first_json(&acc.arguments) {
+                                tracing::info!(
+                                    "Recovered first JSON from concatenated tool call '{}' — \
+                                     original had trailing data after first object",
+                                    acc.name
+                                );
+                                recovered
+                            } else {
+                                tracing::warn!(
+                                    "Failed to parse tool call arguments for '{}': {} — raw: {}",
+                                    acc.name, e, &acc.arguments[..acc.arguments.len().min(200)]
+                                );
+                                json!({
+                                    "__error__": "PARSE_ERROR",
+                                    "__message__": "Only one tool call per response. Send one tool call, wait for the result, then call the next.",
+                                    "__truncated__": false
+                                })
+                            }
                         }
                     }
                 };
@@ -573,5 +677,43 @@ mod tests {
 
         assert_eq!(tool_call.id, "call_123");
         assert_eq!(tool_call.name, "search");
+    }
+}
+
+#[cfg(test)]
+mod json_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn test_recover_concatenated_json() {
+        let raw = r#"{"action":"recall","query":"test"}{"title":"My Title"}{"action":"use"}"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["action"], "recall");
+        assert_eq!(val["query"], "test");
+    }
+
+    #[test]
+    fn test_recover_single_json_returns_none() {
+        let raw = r#"{"action":"recall","query":"test"}"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_recover_invalid_json_returns_none() {
+        let raw = r#"not json at all"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_recover_nested_braces() {
+        let raw = r#"{"args":{"nested":"value"}}{"second":"obj"}"#;
+        let result = recover_first_json(raw);
+        assert!(result.is_some());
+        let val = result.unwrap();
+        assert_eq!(val["args"]["nested"], "value");
     }
 }

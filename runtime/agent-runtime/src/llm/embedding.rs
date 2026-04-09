@@ -70,6 +70,11 @@ pub struct EmbeddingConfig {
     /// Enable SHA-256 hash dedup cache (default true).
     #[serde(default = "default_cache_enabled")]
     pub cache_enabled: bool,
+
+    /// Idle timeout in seconds before unloading the local model from RAM.
+    /// Default: 600 (10 minutes). Set to 0 to never unload (keep in RAM permanently).
+    #[serde(default = "default_idle_timeout")]
+    pub idle_timeout_secs: u64,
 }
 
 /// Which embedding backend to use.
@@ -95,6 +100,7 @@ impl Default for EmbeddingConfig {
             dimensions: 384,
             batch_size: default_batch_size(),
             cache_enabled: default_cache_enabled(),
+            idle_timeout_secs: default_idle_timeout(),
         }
     }
 }
@@ -105,6 +111,10 @@ const fn default_batch_size() -> usize {
 
 const fn default_cache_enabled() -> bool {
     true
+}
+
+const fn default_idle_timeout() -> u64 {
+    600 // 10 minutes — long enough to cover multi-delegation sessions
 }
 
 /// Compute SHA-256 hash of text content for embedding cache lookups.
@@ -125,6 +135,7 @@ mod tests {
         assert_eq!(config.dimensions, 384);
         assert_eq!(config.batch_size, 32);
         assert!(config.cache_enabled);
+        assert_eq!(config.idle_timeout_secs, 600);
         assert!(matches!(config.provider, EmbeddingProviderType::Local));
     }
 
@@ -147,6 +158,7 @@ mod tests {
             dimensions: 768,
             batch_size: 16,
             cache_enabled: true,
+            idle_timeout_secs: 600,
         };
         let json = serde_json::to_string_pretty(&config).unwrap();
         assert!(json.contains("provider_id"));

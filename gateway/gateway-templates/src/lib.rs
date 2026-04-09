@@ -19,7 +19,7 @@ use std::sync::Arc;
 pub struct Templates;
 
 /// Required shards — loaded from config/shards/ if present, otherwise from embedded defaults.
-const REQUIRED_SHARDS: &[&str] = &["tooling_skills", "memory_learning", "planning_autonomy"];
+const REQUIRED_SHARDS: &[&str] = &["first_turn_protocol", "tooling_skills", "memory_learning", "planning_autonomy"];
 
 // =========================================================================
 // Public API
@@ -72,6 +72,18 @@ fn assemble_prompt(config_dir: &Path, vault_dir: &Path) -> String {
     let os_md = load_or_create_os(config_dir);
     if !os_md.is_empty() {
         parts.push(os_md);
+    }
+
+    // Create config/models.json from bundled registry if it doesn't exist
+    let models_path = config_dir.join("models.json");
+    if !models_path.exists() {
+        if let Some(bundled) = Templates::get("models_registry.json") {
+            if let Err(e) = std::fs::write(&models_path, &bundled.data) {
+                tracing::warn!("Failed to create models.json: {}", e);
+            } else {
+                tracing::info!("Created config/models.json from bundled registry");
+            }
+        }
     }
 
     // 4. Shards — config/shards/ overrides embedded, plus extra user shards

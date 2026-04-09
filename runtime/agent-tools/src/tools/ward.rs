@@ -97,37 +97,20 @@ impl WardTool {
         let default_purpose = format!("Domain workspace for {} projects.", ward_name);
         let purpose = purpose.unwrap_or(&default_purpose);
 
-        let structure = structure.unwrap_or(
-            "- `core/` — Shared reusable Python modules\n- `output/` — Final deliverables (reports, charts, HTML)",
-        );
-
-        let content = format!(
-r#"# {name}
-
-## Purpose
-{purpose}
-
-## Directory Layout
-{structure}
-
-## Core Modules
-*(populated as modules are created in core/)*
-
-## Conventions
-- Python with yfinance, pandas, matplotlib
-- All reusable code in `core/`, task-specific work in subdirectories
-- Output files (reports, charts) go in `output/`
-- Use `apply_patch` for all file operations
-- Max 100 lines per file, one concern per module
-
-## History
-- {today}: Ward created
-"#,
+        let mut content = format!(
+            "# {name}\n\n## Purpose\n{purpose}\n",
             name = ward_name,
             purpose = purpose,
-            structure = structure,
-            today = today,
         );
+
+        if let Some(structure) = structure {
+            content.push_str(&format!("\n## Directory Layout\n{}\n", structure));
+        }
+
+        content.push_str(&format!(
+            "\n## Core Modules\n*(auto-indexed after each session)*\n\n## History\n- {}: Ward created\n",
+            today,
+        ));
 
         if let Err(e) = std::fs::write(&agents_md_path, content) {
             tracing::warn!("Failed to create AGENTS.md in ward '{}': {}", ward_name, e);
@@ -301,9 +284,12 @@ impl Tool for WardTool {
                     })?;
                 }
 
-                // Create AGENTS.md with intent context for new wards
+                // Create ward scaffold for new wards
                 if created {
                     self.create_agents_md(&ward_dir, name, ctx.as_ref());
+                    // Create mandatory directories
+                    let _ = std::fs::create_dir_all(ward_dir.join("memory-bank"));
+                    let _ = std::fs::create_dir_all(ward_dir.join("specs"));
                 }
 
                 // Set ward_id in context state
@@ -528,8 +514,11 @@ mod tests {
         assert!(content.contains("# test-project"));
         assert!(content.contains("## Purpose"));
         assert!(content.contains("Domain workspace for test-project"));
-        assert!(content.contains("core/"));
+        assert!(content.contains("auto-indexed"));
         assert!(content.contains("Ward created"));
+        // Should NOT contain hardcoded Python conventions
+        assert!(!content.contains("yfinance"));
+        assert!(!content.contains("pandas"));
     }
 
     #[test]

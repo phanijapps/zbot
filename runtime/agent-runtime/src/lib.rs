@@ -55,6 +55,9 @@ pub mod middleware;
 /// Executor core
 pub mod executor;
 
+/// Steering queue for mid-execution message injection
+pub mod steering;
+
 /// Logging utilities
 pub mod logging;
 
@@ -70,6 +73,7 @@ pub use llm::{
     LlmClient, LlmError, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
     ToolCallChunk, ChatResponse, TokenUsage,
     RetryingLlmClient, RetryPolicy, ThrottledLlmClient,
+    ProviderRateLimiter, RateLimitedLlmClient, NonStreamingLlmClient,
     EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError,
     OpenAiEmbeddingClient, LocalEmbeddingClient, content_hash,
 };
@@ -101,7 +105,13 @@ pub use middleware::{
 };
 
 pub use executor::{
-    AgentExecutor, ExecutorConfig, ExecutorError, RecallHook, RecallHookResult, create_executor
+    AgentExecutor, ExecutorConfig, ExecutorError, RecallHook, RecallHookResult, create_executor,
+    ToolCallDecision, ToolExecutionMode, BeforeToolCallHook, AfterToolCallHook,
+    TransformContextHook,
+};
+
+pub use steering::{
+    SteeringQueue, SteeringHandle, SteeringMessage, SteeringSource, SteeringPriority,
 };
 
 pub use logging::{
