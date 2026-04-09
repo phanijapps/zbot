@@ -7,7 +7,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useSearchParams } from "react-router-dom";
 import {
   Loader2, ChevronDown, ChevronRight, Plus,
-  Shield, Activity, Check, Eye,
+  Shield, Activity, Check, Eye, Zap, Sparkles,
 } from "lucide-react";
 import {
   getTransport,
@@ -575,33 +575,34 @@ export function WebSettingsPanel() {
           ) : execSettings ? (
             <>
               {execRestartRequired && (
-                <div className="settings-alert settings-alert--warning" style={{ marginBottom: 12 }}>
+                <div className="settings-alert settings-alert--warning" style={{ marginBottom: "var(--spacing-3)" }}>
                   Restart the daemon for changes to take effect.
                 </div>
               )}
               {execSaveMessage && (
-                <div className={`settings-alert ${execSaveMessage === "Saved" ? "settings-alert--success" : "settings-alert--error"}`} style={{ marginBottom: 12 }}>
+                <div className={`settings-alert ${execSaveMessage === "Saved" ? "settings-alert--success" : "settings-alert--error"}`} style={{ marginBottom: "var(--spacing-3)" }}>
                   {execSaveMessage}
                 </div>
               )}
 
-              <div className="cmd-center">
+              <div className="provider-grid">
                 {/* ── Orchestrator Card ── */}
-                <div className="cmd-card">
-                  <div className="cmd-card__accent cmd-card__accent--indigo" />
-                  <div className="cmd-card__header">
-                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #818cf8, #6366f1)" }}>
-                      <Activity style={{ width: 16, height: 16, color: "#fff" }} />
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Activity style={{ width: 18, height: 18 }} />
                     </div>
                     <div>
-                      <div className="cmd-card__label" style={{ color: "#818cf8" }}>Orchestrator</div>
-                      <div className="cmd-card__sublabel">Root agent steering</div>
+                      <h2 className="settings-section-header">Orchestrator</h2>
+                      <p className="page-subtitle">Root agent model configuration</p>
                     </div>
                   </div>
-                  <div className="cmd-card__panel">
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Provider</span>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label">Provider</label>
                       <select
+                        className="form-input form-select"
                         value={execSettings.orchestrator?.providerId || ""}
                         onChange={(e) => handleExecChange({
                           orchestrator: {
@@ -611,15 +612,16 @@ export function WebSettingsPanel() {
                           },
                         })}
                       >
-                        <option value="">Default</option>
+                        <option value="">Default Provider</option>
                         {providers.filter((p) => p.verified).map((p) => (
                           <option key={p.id} value={p.id}>{p.name}</option>
                         ))}
                       </select>
                     </div>
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Model</span>
+                    <div>
+                      <label className="settings-field-label">Model</label>
                       <select
+                        className="form-input form-select"
                         value={execSettings.orchestrator?.model || ""}
                         onChange={(e) => handleExecChange({
                           orchestrator: {
@@ -628,17 +630,16 @@ export function WebSettingsPanel() {
                           },
                         })}
                       >
-                        <option value="">Default</option>
+                        <option value="">Default Model</option>
                         {(providers.find((p) => p.id === (execSettings.orchestrator?.providerId || defaultProviderId))?.models || []).map((m) => (
                           <option key={m} value={m}>{m}</option>
                         ))}
                       </select>
                     </div>
-                  </div>
-                  <div className="cmd-card__pills">
-                    <div className="cmd-card__pill">
-                      <div className="cmd-card__pill-label">Temp</div>
+                    <div>
+                      <label className="settings-field-label">Temperature</label>
                       <input
+                        className="form-input"
                         type="number"
                         min={0} max={2} step={0.1}
                         value={execSettings.orchestrator?.temperature ?? 0.7}
@@ -648,12 +649,12 @@ export function WebSettingsPanel() {
                             temperature: parseFloat(e.target.value) || 0.7,
                           },
                         })}
-                        style={{ textAlign: "center" }}
                       />
                     </div>
-                    <div className="cmd-card__pill">
-                      <div className="cmd-card__pill-label">Tokens</div>
+                    <div>
+                      <label className="settings-field-label">Max Output Tokens</label>
                       <input
+                        className="form-input"
                         type="number"
                         min={1024} step={1024}
                         value={execSettings.orchestrator?.maxTokens ?? 16384}
@@ -663,43 +664,46 @@ export function WebSettingsPanel() {
                             maxTokens: parseInt(e.target.value) || 16384,
                           },
                         })}
-                        style={{ textAlign: "center" }}
                       />
                     </div>
-                    <div className="cmd-card__pill">
-                      <div className="cmd-card__pill-label">Thinking</div>
-                      <div
-                        className="cmd-card__pill-value"
-                        style={{ color: execSettings.orchestrator?.thinkingEnabled !== false ? "#4ade80" : "#666", cursor: "pointer" }}
-                        onClick={() => handleExecChange({
-                          orchestrator: {
-                            ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                            thinkingEnabled: execSettings.orchestrator?.thinkingEnabled === false,
-                          },
-                        })}
-                      >
-                        {execSettings.orchestrator?.thinkingEnabled !== false ? "ON" : "OFF"}
-                      </div>
-                    </div>
                   </div>
+
+                  <label className={`settings-toggle-option ${execSettings.orchestrator?.thinkingEnabled !== false ? "settings-toggle-option--active" : ""}`} style={{ marginTop: "var(--spacing-3)" }}>
+                    <input
+                      type="checkbox"
+                      checked={execSettings.orchestrator?.thinkingEnabled !== false}
+                      onChange={() => handleExecChange({
+                        orchestrator: {
+                          ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
+                          thinkingEnabled: execSettings.orchestrator?.thinkingEnabled === false,
+                        },
+                      })}
+                      className="settings-toggle-option__checkbox"
+                    />
+                    <div className="flex-1">
+                      <div className="settings-toggle-option__title">Thinking Mode</div>
+                      <div className="settings-toggle-option__description">Extended reasoning before delegating</div>
+                    </div>
+                  </label>
                 </div>
 
                 {/* ── Distillation Card ── */}
-                <div className="cmd-card">
-                  <div className="cmd-card__accent cmd-card__accent--purple" />
-                  <div className="cmd-card__header">
-                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #c084fc, #a855f7)" }}>
-                      <ChevronDown style={{ width: 16, height: 16, color: "#fff" }} />
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Sparkles style={{ width: 18, height: 18 }} />
                     </div>
                     <div>
-                      <div className="cmd-card__label" style={{ color: "#c084fc" }}>Distillation</div>
-                      <div className="cmd-card__sublabel">Memory extraction model</div>
+                      <h2 className="settings-section-header">Distillation</h2>
+                      <p className="page-subtitle">Override for memory extraction</p>
                     </div>
                   </div>
-                  <div className="cmd-card__panel">
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Provider</span>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label">Provider</label>
                       <select
+                        className="form-input form-select"
                         value={execSettings.distillation?.providerId || ""}
                         onChange={(e) => handleExecChange({
                           distillation: {
@@ -715,9 +719,10 @@ export function WebSettingsPanel() {
                         ))}
                       </select>
                     </div>
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Model</span>
+                    <div>
+                      <label className="settings-field-label">Model</label>
                       <select
+                        className="form-input form-select"
                         value={execSettings.distillation?.model || ""}
                         onChange={(e) => handleExecChange({
                           distillation: {
@@ -738,25 +743,25 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                   </div>
-                  <div className="cmd-card__help">Override to use a cheaper model for memory extraction</div>
                 </div>
 
                 {/* ── Multimodal Card ── */}
-                <div className="cmd-card">
-                  <div className="cmd-card__accent cmd-card__accent--teal" />
-                  <div className="cmd-card__header">
-                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #2dd4bf, #14b8a6)" }}>
-                      <Eye style={{ width: 16, height: 16, color: "#fff" }} />
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Eye style={{ width: 18, height: 18 }} />
                     </div>
                     <div>
-                      <div className="cmd-card__label" style={{ color: "#2dd4bf" }}>Multimodal</div>
-                      <div className="cmd-card__sublabel">Vision analysis model</div>
+                      <h2 className="settings-section-header">Multimodal</h2>
+                      <p className="page-subtitle">Vision analysis model</p>
                     </div>
                   </div>
-                  <div className="cmd-card__panel">
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Provider</span>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="settings-field-label">Provider</label>
                       <select
+                        className="form-input form-select"
                         value={execSettings.multimodal?.providerId || ""}
                         onChange={(e) => handleExecChange({
                           multimodal: {
@@ -772,9 +777,10 @@ export function WebSettingsPanel() {
                         ))}
                       </select>
                     </div>
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Model</span>
+                    <div>
+                      <label className="settings-field-label">Model</label>
                       <select
+                        className="form-input form-select"
                         value={execSettings.multimodal?.model || ""}
                         onChange={(e) => handleExecChange({
                           multimodal: {
@@ -792,11 +798,10 @@ export function WebSettingsPanel() {
                         })()}
                       </select>
                     </div>
-                  </div>
-                  <div className="cmd-card__pills">
-                    <div className="cmd-card__pill">
-                      <div className="cmd-card__pill-label">Temp</div>
+                    <div>
+                      <label className="settings-field-label">Temperature</label>
                       <input
+                        className="form-input"
                         type="number"
                         min={0} max={2} step={0.1}
                         value={execSettings.multimodal?.temperature ?? 0.3}
@@ -806,12 +811,12 @@ export function WebSettingsPanel() {
                             temperature: parseFloat(e.target.value) || 0.3,
                           },
                         })}
-                        style={{ textAlign: "center" }}
                       />
                     </div>
-                    <div className="cmd-card__pill">
-                      <div className="cmd-card__pill-label">Tokens</div>
+                    <div>
+                      <label className="settings-field-label">Max Output Tokens</label>
                       <input
+                        className="form-input"
                         type="number"
                         min={256} step={256}
                         value={execSettings.multimodal?.maxTokens ?? 4096}
@@ -821,41 +826,40 @@ export function WebSettingsPanel() {
                             maxTokens: parseInt(e.target.value) || 4096,
                           },
                         })}
-                        style={{ textAlign: "center" }}
                       />
                     </div>
                   </div>
                 </div>
 
                 {/* ── Execution Card ── */}
-                <div className="cmd-card">
-                  <div className="cmd-card__accent cmd-card__accent--orange" />
-                  <div className="cmd-card__header">
-                    <div className="cmd-card__icon" style={{ background: "linear-gradient(135deg, #fb923c, #f97316)" }}>
-                      <Shield style={{ width: 16, height: 16, color: "#fff" }} />
+                <div className="card card__padding--lg">
+                  <div className="flex items-center gap-3" style={{ marginBottom: "var(--spacing-3)" }}>
+                    <div className="card__icon card__icon--primary">
+                      <Zap style={{ width: 18, height: 18 }} />
                     </div>
                     <div>
-                      <div className="cmd-card__label" style={{ color: "#fb923c" }}>Execution</div>
-                      <div className="cmd-card__sublabel">Parallel agent control</div>
+                      <h2 className="settings-section-header">Execution</h2>
+                      <p className="page-subtitle">Parallel agent control</p>
                     </div>
                   </div>
-                  <div className="cmd-card__panel">
-                    <div className="cmd-card__row">
-                      <span className="cmd-card__key">Max Parallel Agents</span>
-                      <input
-                        type="number"
-                        value={execSettings.maxParallelAgents}
-                        onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, parseInt(e.target.value, 10) || 1) })}
-                        disabled={isSavingExec}
-                        min={1}
-                        max={10}
-                        style={{ textAlign: "center" }}
-                      />
-                    </div>
+
+                  <div>
+                    <label className="settings-field-label">Max Parallel Agents</label>
+                    <input
+                      className="form-input"
+                      type="number"
+                      value={execSettings.maxParallelAgents}
+                      onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                      disabled={isSavingExec}
+                      min={1}
+                      max={10}
+                      style={{ maxWidth: 200 }}
+                    />
                   </div>
+
                   <button
                     className="btn btn--outline btn--sm"
-                    style={{ width: "100%", marginTop: 4 }}
+                    style={{ width: "100%", marginTop: "var(--spacing-3)" }}
                     onClick={() => { window.location.href = "/setup"; }}
                   >
                     Re-run Setup Wizard
