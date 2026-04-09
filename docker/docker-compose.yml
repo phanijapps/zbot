@@ -3,9 +3,7 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
-    ports:
-      - "18791:18791"
-      - "18790:18790"
+    network_mode: host
     volumes:
       - ${VAULT_PATH:-~/Documents/zbot}:/data/zbot
       - fastembed-cache:/root/.cache/fastembed
