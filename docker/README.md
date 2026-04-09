@@ -11,7 +11,7 @@ cd docker/
 
 First build takes ~10 minutes (Rust compilation). Subsequent starts are instant.
 
-Open **http://localhost:8080** and add your LLM provider in Settings.
+Open **http://localhost:18791** and add your LLM provider in Settings.
 
 ## Manual Setup
 
