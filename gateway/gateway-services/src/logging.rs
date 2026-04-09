@@ -92,12 +92,12 @@ fn default_max_files() -> usize {
 impl Default for LogSettings {
     fn default() -> Self {
         Self {
-            enabled: false,
+            enabled: true,
             directory: None,
             level: default_log_level(),
             rotation: default_rotation(),
             max_files: default_max_files(),
-            suppress_stdout: false,
+            suppress_stdout: true,
         }
     }
 }
@@ -165,12 +165,12 @@ mod tests {
     #[test]
     fn test_default_settings() {
         let settings = LogSettings::default();
-        assert!(!settings.enabled);
+        assert!(settings.enabled);
         assert!(settings.directory.is_none());
         assert_eq!(settings.level, "info");
         assert_eq!(settings.rotation, "daily");
         assert_eq!(settings.max_files, 7);
-        assert!(!settings.suppress_stdout);
+        assert!(settings.suppress_stdout);
     }
 
     #[test]

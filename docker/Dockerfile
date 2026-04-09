@@ -93,8 +93,14 @@ COPY --from=builder /build/target/release/zerod /usr/local/bin/zerod
 # Copy built frontend
 COPY --from=frontend /build/dist /opt/zbot/ui
 
-# Create non-root user (optional, can run as root for simplicity)
-RUN mkdir -p /data/zbot /root/.cache/fastembed
+# Create non-root user (UID 1000 matches typical host user)
+# Running as root causes LLMs to refuse shell commands
+RUN useradd -m -u 1000 -s /bin/bash zbot \
+    && mkdir -p /data/zbot /home/zbot/.cache/fastembed \
+    && chown -R zbot:zbot /data/zbot /opt/zbot /home/zbot
+
+USER zbot
+WORKDIR /home/zbot
 
 # Healthcheck
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
@@ -103,4 +109,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=10s \
 EXPOSE 18791 18790
 
 ENTRYPOINT ["/usr/local/bin/zerod"]
-CMD ["--host", "0.0.0.0", "--data-dir", "/data/zbot", "--static-dir", "/opt/zbot/ui", "--log-no-stdout"]
+CMD ["--host", "0.0.0.0", "--data-dir", "/data/zbot", "--static-dir", "/opt/zbot/ui"]

@@ -6,7 +6,7 @@ services:
     network_mode: host
     volumes:
       - ${VAULT_PATH:-~/Documents/zbot}:/data/zbot
-      - fastembed-cache:/root/.cache/fastembed
+      - fastembed-cache:/home/zbot/.cache/fastembed
     environment:
       - RUST_LOG=warn
     restart: unless-stopped

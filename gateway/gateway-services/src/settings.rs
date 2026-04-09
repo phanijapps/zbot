@@ -320,8 +320,8 @@ mod tests {
         // Optional tools are disabled by default
         assert!(!settings.tools.python);
         assert!(!settings.tools.web_fetch);
-        // Logging is disabled by default
-        assert!(!settings.logs.enabled);
+        // Logging is enabled by default (quiet mode)
+        assert!(settings.logs.enabled);
     }
 
     #[test]
@@ -345,9 +345,9 @@ mod tests {
         let dir = tempdir().unwrap();
         let service = SettingsService::new_legacy(dir.path().to_path_buf());
 
-        // Default: logging disabled
+        // Default: logging enabled with stdout suppressed
         let log_settings = service.get_log_settings().unwrap();
-        assert!(!log_settings.enabled);
+        assert!(log_settings.enabled);
 
         // Update: enable logging
         let mut new_log_settings = LogSettings::enabled();
