@@ -73,7 +73,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   {
     name: "Z.AI",
     baseUrl: "https://api.z.ai/api/coding/paas/v4",
-    models: "glm-5.1, glm-5, glm-4.7",
+    models: "glm-5.1, glm-5, glm-5-turbo, glm-4.7, glm-4.6, glm-4.5",
     apiKeyHint: "z.ai dashboard",
     apiKeyPlaceholder: "your-api-key",
   },
