@@ -88,12 +88,14 @@ A new page with a clean, minimal UI:
 
 ### Frontend: Navigation
 
-Add "Chat" to the sidebar navigation alongside existing links:
-- Chat (fast) — `/chat`
-- Home (goal-oriented) — `/`
+Add "Chat" to the sidebar navigation. No changes to existing routes or the current `/` experience:
+- Chat — `/chat` (new, fast mode)
+- Research — `/` (existing, unchanged, full orchestration)
 - Dashboard — `/dashboard`
 - Logs — `/logs`
 - Settings — `/settings`
+
+The current "Home" nav label becomes "Research" to differentiate from Chat. The `/` route, its components, hooks, and behavior are completely untouched.
 
 ### Stretch Goal: "Go Deep" Handoff
 
