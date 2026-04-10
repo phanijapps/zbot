@@ -150,6 +150,10 @@ pub struct ExecutorConfig {
     /// Set to 0 to disable compaction.
     pub context_window_tokens: u64,
 
+    /// Percentage of context window at which to inject a pre-compaction memory flush warning.
+    /// Default: 80. Chat mode sets this to 70 so the nudge fires before the middleware prunes.
+    pub compaction_warn_pct: u64,
+
     /// Soft turn budget: inject a "wrap up" nudge after this many tool-calling iterations.
     /// Set to 0 to disable.
     pub turn_budget: u32,
@@ -210,6 +214,7 @@ impl ExecutorConfig {
             max_extensions: 3,
             extension_size: 25,
             context_window_tokens: 128_000, // Default to 128K context
+            compaction_warn_pct: 80,      // Warn at 80% by default
             turn_budget: 25,  // Soft nudge at 25 turns
             max_turns: 50,    // Hard stop at 50 turns
             before_tool_call: None,
@@ -252,6 +257,7 @@ impl fmt::Debug for ExecutorConfig {
             .field("max_extensions", &self.max_extensions)
             .field("extension_size", &self.extension_size)
             .field("context_window_tokens", &self.context_window_tokens)
+            .field("compaction_warn_pct", &self.compaction_warn_pct)
             .field("turn_budget", &self.turn_budget)
             .field("max_turns", &self.max_turns)
             .field("before_tool_call", &self.before_tool_call.as_ref().map(|_| "<hook>"))
@@ -647,37 +653,39 @@ impl AgentExecutor {
                 && current_messages.len() > last_compaction_check_msg_count
             {
                 last_compaction_check_msg_count = current_messages.len();
-                let threshold = (self.config.context_window_tokens * 80) / 100;
-                if total_tokens_in > threshold {
+                let warn_threshold = (self.config.context_window_tokens * self.config.compaction_warn_pct) / 100;
+                let compact_threshold = (self.config.context_window_tokens * 80) / 100;
+                if total_tokens_in > warn_threshold {
                     // Pre-compaction memory flush: inject a nudge to save important facts
                     // before context is trimmed. The agent can use save_fact on the next
                     // turn before the old messages disappear.
                     if !compaction_warned {
                         current_messages.push(ChatMessage::system(
-                            "[MEMORY FLUSH] Context is approaching limits and will be compacted. \
-                             If there are important facts, decisions, or user preferences from \
-                             this session that should persist, use `memory(save_fact, ...)` now \
-                             before context is trimmed.".to_string()
+                            "[system] Context is getting full. Save important facts with \
+                             memory(action=\"save_fact\", scope=\"chat\") before they are pruned.".to_string()
                         ));
                         compaction_warned = true;
                         tracing::info!(
                             tokens_in = total_tokens_in,
-                            threshold = threshold,
+                            warn_threshold = warn_threshold,
                             "Pre-compaction memory flush warning injected"
                         );
                         // Skip actual compaction this iteration — give agent one turn to save
                         continue;
                     }
 
-                    let before = current_messages.len();
-                    current_messages = compact_messages(current_messages);
-                    tracing::info!(
-                        tokens_in = total_tokens_in,
-                        threshold = threshold,
-                        messages_before = before,
-                        messages_after = current_messages.len(),
-                        "Context compacted"
-                    );
+                    // Actual compaction triggers at 80% regardless of warn threshold
+                    if total_tokens_in > compact_threshold {
+                        let before = current_messages.len();
+                        current_messages = compact_messages(current_messages);
+                        tracing::info!(
+                            tokens_in = total_tokens_in,
+                            compact_threshold = compact_threshold,
+                            messages_before = before,
+                            messages_after = current_messages.len(),
+                            "Context compacted"
+                        );
+                    }
                 }
             }
 

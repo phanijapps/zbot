@@ -210,6 +210,9 @@ impl<'a> AgentLoader<'a> {
                     gateway_templates::load_system_prompt_from_paths(&self.paths)
                 };
 
+                // Chat mode: higher temperature for creative, personality-forward responses
+                let temperature = if self.fast_mode { 1.0 } else { orch.temperature };
+
                 let agent = gateway_services::agents::Agent {
                     id: "root".to_string(),
                     name: "root".to_string(),
@@ -218,7 +221,7 @@ impl<'a> AgentLoader<'a> {
                     agent_type: Some("orchestrator".to_string()),
                     provider_id: provider.id.clone().unwrap_or_default(),
                     model,
-                    temperature: orch.temperature,
+                    temperature,
                     max_tokens: orch.max_tokens,
                     thinking_enabled,
                     voice_recording_enabled: false,
