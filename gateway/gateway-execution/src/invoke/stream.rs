@@ -256,14 +256,21 @@ pub fn handle_delegation(
     output_schema: &Option<serde_json::Value>,
     skills: &[String],
     complexity: &Option<String>,
+    parallel: bool,
 ) {
+    let delegation_type = if parallel {
+        DelegationType::Parallel
+    } else {
+        DelegationType::Sequential
+    };
+
     // Create the delegated execution immediately (status=QUEUED)
     // This ensures try_complete_session() sees it as pending
     let child_execution_id = match ctx.state_service.create_delegated_execution(
         &ctx.session_id,
         child_agent,
         &ctx.execution_id,
-        DelegationType::Sequential,
+        delegation_type,
         task,
     ) {
         Ok(exec) => {
@@ -287,7 +294,7 @@ pub fn handle_delegation(
                 &ctx.session_id,
                 child_agent,
                 &ctx.execution_id,
-                DelegationType::Sequential,
+                delegation_type,
                 task,
             )
             .id
@@ -314,6 +321,7 @@ pub fn handle_delegation(
         output_schema: output_schema.clone(),
         skills: skills.to_vec(),
         complexity: complexity.clone(),
+        parallel,
     });
 
     log_delegation(ctx, child_agent, task);
@@ -363,10 +371,11 @@ pub fn process_stream_event(
         output_schema,
         skills,
         complexity,
+        parallel,
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills, complexity);
+        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills, complexity, *parallel);
     }
 
     // Log based on event type

@@ -51,6 +51,9 @@ pub struct DelegationRequest {
 
     /// Task complexity level ("S", "M", "L", "XL") for budget enforcement.
     pub complexity: Option<String>,
+
+    /// Whether to run in parallel (bypass per-session queue).
+    pub parallel: bool,
 }
 
 // ============================================================================

@@ -139,6 +139,7 @@ pub enum StreamEvent {
         output_schema: Option<Value>,
         skills: Vec<String>,
         complexity: Option<String>,
+        parallel: bool,
     },
 
     /// Plan update action from the update_plan tool.

@@ -203,6 +203,13 @@ pub struct DelegateAction {
     /// applies complexity-based turn budgets instead of the default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub complexity: Option<String>,
+
+    /// Whether to run this delegation in parallel (skip per-session queue).
+    ///
+    /// When true, the delegation bypasses the sequential queue and runs
+    /// immediately, subject only to the global concurrency semaphore.
+    #[serde(default)]
+    pub parallel: bool,
 }
 
 impl EventActions {
@@ -294,6 +301,7 @@ mod tests {
             output_schema: None,
             skills: vec![],
             complexity: Some("M".to_string()),
+            parallel: false,
         };
         assert_eq!(action.complexity, Some("M".to_string()));
     }

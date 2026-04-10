@@ -222,6 +222,7 @@ mod tests {
             output_schema: None,
             skills: vec![],
             complexity: None,
+            parallel: false,
         };
 
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
