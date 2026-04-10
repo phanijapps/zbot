@@ -315,6 +315,7 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
             orchestrator: req.orchestrator.unwrap_or_default(),
             distillation: req.distillation.unwrap_or_default(),
             multimodal: req.multimodal.unwrap_or_default(),
+            chat: gateway_services::ChatConfig::default(),
         }
     }
 }
