@@ -29,7 +29,7 @@ pub struct UploadResponse {
     pub mime_type: String,
     /// Size in bytes.
     pub size: u64,
-    /// Relative path within the vault data directory (e.g., "uploads/uuid.xlsx").
+    /// Absolute path on the server filesystem.
     pub path: String,
 }
 
@@ -45,8 +45,8 @@ pub struct UploadError {
 
 /// POST /api/upload
 ///
-/// Accept a multipart file upload and persist it to `{data_dir}/uploads/`.
-/// Returns metadata including a relative path suitable for referencing in messages.
+/// Accept a multipart file upload and persist it to `{vault}/temp/attachments/`.
+/// Returns metadata including an absolute path suitable for referencing in messages.
 pub async fn upload_file(
     State(state): State<AppState>,
     mut multipart: Multipart,
@@ -122,8 +122,8 @@ pub async fn upload_file(
         format!("{}.{}", id, extension)
     };
 
-    // Build the uploads directory under the vault data dir.
-    let uploads_dir: PathBuf = state.paths.data_dir().join("uploads");
+    // Build the attachments directory under the vault temp dir.
+    let uploads_dir: PathBuf = state.paths.vault_dir().join("temp").join("attachments");
     if let Err(e) = std::fs::create_dir_all(&uploads_dir) {
         return Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -145,15 +145,15 @@ pub async fn upload_file(
         ));
     }
 
-    // Return a path relative to the data directory.
-    let relative_path = format!("uploads/{}", stored_name);
+    // Return the absolute path so agents can read the file directly.
+    let abs_path = dest.to_string_lossy().to_string();
 
     Ok(Json(UploadResponse {
         id,
         filename: original_filename,
         mime_type: content_type,
         size,
-        path: relative_path,
+        path: abs_path,
     }))
 }
 
