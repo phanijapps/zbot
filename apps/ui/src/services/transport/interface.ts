@@ -216,7 +216,8 @@ export interface Transport {
     agentId: string,
     conversationId: string,
     message: string,
-    sessionId?: string
+    sessionId?: string,
+    mode?: string
   ): Promise<TransportResult<{ conversationId: string; sessionId?: string }>>;
 
   /** Stop an agent execution */

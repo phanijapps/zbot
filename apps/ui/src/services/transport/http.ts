@@ -622,7 +622,8 @@ export class HttpTransport implements Transport {
     agentId: string,
     conversationId: string,
     message: string,
-    sessionId?: string
+    sessionId?: string,
+    mode?: string
   ): Promise<TransportResult<{ conversationId: string; sessionId?: string }>> {
     // Send execute command via WebSocket
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
@@ -639,6 +640,11 @@ export class HttpTransport implements Transport {
     // Include session_id to continue an existing session
     if (sessionId) {
       command.session_id = sessionId;
+    }
+
+    // Include mode for fast chat
+    if (mode) {
+      command.mode = mode;
     }
 
 

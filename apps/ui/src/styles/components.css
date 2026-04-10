@@ -4712,3 +4712,28 @@
 .intel-artifacts__icon { color: var(--muted-foreground); flex-shrink: 0; }
 .intel-artifacts__name { color: var(--foreground); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .intel-artifacts__size { margin-left: auto; color: var(--muted-foreground); font-size: 11px; white-space: nowrap; }
+
+/* ==========================================================================
+   FAST CHAT
+   Minimal chat UI for fast mode
+   ========================================================================== */
+
+.fast-chat { display: flex; flex-direction: column; height: 100%; overflow: hidden; }
+.fast-chat__header { display: flex; justify-content: space-between; align-items: center; padding: var(--spacing-2) var(--spacing-4); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+.fast-chat__title { font-weight: 600; font-size: var(--text-sm); }
+.fast-chat__actions { display: flex; gap: var(--spacing-1); }
+.fast-chat__messages { flex: 1; overflow-y: auto; padding: var(--spacing-4); display: flex; flex-direction: column; gap: var(--spacing-3); }
+.fast-chat__empty { display: flex; align-items: center; justify-content: center; height: 100%; color: var(--muted-foreground); }
+.fast-chat__msg { display: flex; }
+.fast-chat__msg--user { justify-content: flex-end; }
+.fast-chat__msg--assistant, .fast-chat__msg--tool { justify-content: flex-start; }
+.fast-chat__bubble { max-width: 80%; padding: var(--spacing-2) var(--spacing-3); border-radius: var(--radius-lg); font-size: var(--text-sm); line-height: 1.5; }
+.fast-chat__bubble--user { background: var(--primary); color: var(--primary-foreground); border-bottom-right-radius: var(--radius-sm); }
+.fast-chat__bubble--agent { background: var(--card); border: 1px solid var(--border); border-bottom-left-radius: var(--radius-sm); }
+.fast-chat__bubble--agent p { margin: 0; }
+.fast-chat__bubble--agent p + p { margin-top: var(--spacing-2); }
+.fast-chat__tool { align-self: flex-start; max-width: 90%; font-size: var(--text-xs); border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+.fast-chat__tool-name { padding: var(--spacing-1) var(--spacing-2); background: var(--muted); font-weight: 600; font-family: var(--font-mono); color: var(--muted-foreground); }
+.fast-chat__tool-output { padding: var(--spacing-2); font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; color: var(--muted-foreground); }
+.fast-chat__typing { align-self: flex-start; padding: var(--spacing-2); }
+.fast-chat__input { padding: var(--spacing-2) var(--spacing-4); border-top: 1px solid var(--border); flex-shrink: 0; }

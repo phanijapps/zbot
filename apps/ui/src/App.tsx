@@ -18,6 +18,7 @@ import {
   Brain,
   Network,
   MessageSquare,
+  Search,
 } from "lucide-react";
 import { initializeTransport, getTransport } from "@/services/transport";
 import { SetupWizard, SetupGuard } from "./features/setup";
@@ -29,6 +30,7 @@ import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
 import { WebMemoryPanel } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
+import { FastChat } from "./features/chat/FastChat";
 // ChatSlider removed — chat is now the home route, no longer in a slide-over
 import { ThemeToggle } from "./components/ThemeToggle";
 
@@ -186,7 +188,7 @@ function App() {
                   <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
                   <Route path="/settings" element={<WebSettingsPanel />} />
-                  <Route path="/chat" element={<Navigate to="/" replace />} />
+                  <Route path="/chat" element={<FastChat />} />
                   <Route path="/providers" element={<Navigate to="/settings" replace />} />
                   <Route path="/skills" element={<Navigate to="/agents?tab=skills" replace />} />
                   <Route path="/hooks" element={<Navigate to="/agents?tab=schedules" replace />} />
@@ -226,7 +228,8 @@ const navGroups: NavGroup[] = [
   {
     // Main group - no label
     items: [
-      { to: "/", label: "Chat", icon: MessageSquare },
+      { to: "/chat", label: "Chat", icon: MessageSquare },
+      { to: "/", label: "Research", icon: Search },
       { to: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
       { to: "/logs", label: "Logs", icon: Eye },
       { to: "/memory", label: "Memory", icon: Brain },
