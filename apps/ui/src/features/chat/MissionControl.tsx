@@ -67,6 +67,7 @@ export function MissionControl() {
                 status={state.status}
                 phase={state.phase}
                 subagents={state.subagents as unknown as import("@/services/transport/types").SubagentStateData[]}
+                sessionId={currentSessionId}
               />
           <div className="mission-control__input">
             <ChatInput

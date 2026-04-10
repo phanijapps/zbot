@@ -83,6 +83,7 @@ import type {
   GraphSubgraphOptions,
   SetupStatus,
   SessionState,
+  Artifact,
 } from "./types";
 
 // ============================================================================
@@ -1507,6 +1508,19 @@ export class HttpTransport implements Transport {
       : `/api/graph/${encodeURIComponent(agentId)}/entities/${encodeURIComponent(entityId)}/subgraph`;
 
     return this.get<GraphSubgraphResponse>(path);
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Artifact Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async listSessionArtifacts(sessionId: string): Promise<TransportResult<Artifact[]>> {
+    return this.get<Artifact[]>(`/api/sessions/${encodeURIComponent(sessionId)}/artifacts`);
+  }
+
+  getArtifactContentUrl(artifactId: string): string {
+    const base = this.config?.httpUrl ?? "";
+    return `${base}/api/artifacts/${encodeURIComponent(artifactId)}/content`;
   }
 
   // ─────────────────────────────────────────────────────────────────────────
