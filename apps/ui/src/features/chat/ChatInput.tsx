@@ -14,6 +14,8 @@ export interface UploadedFile {
   mimeType: string;
   /** File size in bytes */
   size: number;
+  /** Absolute path on server filesystem */
+  path: string;
 }
 
 export interface ChatInputProps {
@@ -28,12 +30,18 @@ export interface ChatInputProps {
 async function uploadFile(file: File): Promise<UploadedFile> {
   const form = new FormData();
   form.append("file", file);
-  const base = "http://localhost:18791";
-  const res = await fetch(`${base}/api/upload`, { method: "POST", body: form });
+  const res = await fetch("/api/upload", { method: "POST", body: form });
   if (!res.ok) {
     throw new Error(`Upload failed: ${res.statusText}`);
   }
-  return res.json();
+  const data = await res.json();
+  return {
+    id: data.id,
+    name: data.filename,
+    mimeType: data.mime_type,
+    size: data.size,
+    path: data.path,
+  };
 }
 
 // ============================================================================
@@ -89,8 +97,19 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handleFileSelect(e.dataTransfer.files);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
   return (
-    <div style={{ width: "100%" }}>
+    <div style={{ width: "100%" }} onDrop={handleDrop} onDragOver={handleDragOver}>
       {/* Pending attachment chips */}
       {attachments.length > 0 && (
         <div className="chat-input__chips">

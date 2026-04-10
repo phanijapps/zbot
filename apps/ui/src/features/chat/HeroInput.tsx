@@ -27,12 +27,18 @@ interface HeroInputProps {
 async function uploadFile(file: File): Promise<UploadedFile> {
   const form = new FormData();
   form.append("file", file);
-  const base = "http://localhost:18791";
-  const res = await fetch(`${base}/api/upload`, { method: "POST", body: form });
+  const res = await fetch("/api/upload", { method: "POST", body: form });
   if (!res.ok) {
     throw new Error(`Upload failed: ${res.statusText}`);
   }
-  return res.json();
+  const data = await res.json();
+  return {
+    id: data.id,
+    name: data.filename,
+    mimeType: data.mime_type,
+    size: data.size,
+    path: data.path,
+  };
 }
 
 // ============================================================================

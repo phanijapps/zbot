@@ -1126,8 +1126,15 @@ export function useMissionControl() {
         // Build message — if attachments, include their references
         let message = text.trim();
         if (attachments.length > 0) {
-          const refs = attachments.map((a) => `[file:${a.id}:${a.name}]`).join(" ");
-          message = `${message}\n\n${refs}`;
+          const header = "| File | Type | Size | Path |";
+          const sep = "|------|------|------|------|";
+          const rows = attachments.map((a) => {
+            const sizeStr = a.size < 1024 ? `${a.size} B`
+              : a.size < 1024 * 1024 ? `${(a.size / 1024).toFixed(1)} KB`
+              : `${(a.size / (1024 * 1024)).toFixed(1)} MB`;
+            return `| ${a.name} | ${a.mimeType} | ${sizeStr} | ${a.path} |`;
+          }).join("\n");
+          message = `${message}\n\n**Attached files:**\n${header}\n${sep}\n${rows}`;
         }
 
         await transport.executeAgent(ROOT_AGENT_ID, conversationId, message, currentSessionId);
