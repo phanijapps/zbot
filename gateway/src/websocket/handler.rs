@@ -329,6 +329,7 @@ async fn handle_client_message(
             conversation_id,
             message,
             session_id: exec_session_id,
+            mode,
             ..
         } => {
             debug!(
@@ -370,10 +371,12 @@ async fn handle_client_message(
             });
 
             // Invoke the agent via runtime service with hook context and callback
+            let invoke_mode = if mode == "deep" { None } else { Some(mode) };
             match runtime
                 .invoke_with_hook_and_callback(
                     &agent_id, &conversation_id, &message,
                     hook_context, exec_session_id, Some(on_ready),
+                    invoke_mode,
                 )
                 .await
             {

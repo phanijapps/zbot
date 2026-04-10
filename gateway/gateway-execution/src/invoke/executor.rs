@@ -56,6 +56,7 @@ pub struct ExecutorBuilder {
     is_delegated: bool,
     subagent_non_streaming: bool,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
+    fast_mode: bool,
 }
 
 impl ExecutorBuilder {
@@ -72,6 +73,7 @@ impl ExecutorBuilder {
             is_delegated: false,
             subagent_non_streaming: true,
             extra_initial_state: None,
+            fast_mode: false,
         }
     }
 
@@ -117,6 +119,12 @@ impl ExecutorBuilder {
     /// Set the model registry for capability lookups and context window resolution.
     pub fn with_model_registry(mut self, registry: Arc<ModelRegistry>) -> Self {
         self.model_registry = Some(registry);
+        self
+    }
+
+    /// Enable fast chat mode (disables single_action_mode for multi-tool turns).
+    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
+        self.fast_mode = fast_mode;
         self
     }
 
@@ -378,8 +386,8 @@ impl ExecutorBuilder {
             Arc::new(pipeline)
         };
 
-        // Root is an orchestrator — enforce single action per turn
-        if !self.is_delegated {
+        // Root is an orchestrator — enforce single action per turn (except fast chat mode)
+        if !self.is_delegated && !self.fast_mode {
             executor_config.single_action_mode = true;
         }
 

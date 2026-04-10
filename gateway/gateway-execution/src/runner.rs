@@ -643,7 +643,8 @@ impl ExecutionRunner {
         // Load agent configuration (or create default for "root" agent)
         let settings_for_loader = gateway_services::SettingsService::new(self.paths.clone());
         let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone())
-            .with_settings(&settings_for_loader);
+            .with_settings(&settings_for_loader)
+            .with_fast_mode(config.is_fast_mode());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -661,6 +662,8 @@ impl ExecutionRunner {
 
         // Graph-powered recall for first message — inject remembered facts, episodes, and
         // entity context before the agent sees the user's message.
+        // Skipped in fast mode for speed — chat_protocol instructs the agent to skip recall.
+        if !config.is_fast_mode() {
         if let Some(recall) = &self.memory_recall {
             match recall.recall_with_graph(
                 &config.agent_id,
@@ -699,9 +702,11 @@ impl ExecutionRunner {
                 }
             }
         }
+        } // end !is_fast_mode recall gate
 
         // Nudge the agent to use memory.recall tool at session start (visible, agent-driven)
-        if history.is_empty() {
+        // Skipped in fast mode — fast chat starts working immediately.
+        if !config.is_fast_mode() && history.is_empty() {
             history.push(ChatMessage::system(
                 "Before starting this task, use the memory tool to recall relevant knowledge \
                  — corrections, past strategies, and domain context.".to_string()
@@ -1427,7 +1432,8 @@ impl ExecutionRunner {
         // Use ExecutorBuilder to create the executor
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone())
-            .with_rate_limiter(rate_limiter);
+            .with_rate_limiter(rate_limiter)
+            .with_fast_mode(config.is_fast_mode());
         if let Some(ref registry) = self.model_registry {
             builder = builder.with_model_registry(registry.clone());
         }
@@ -1448,7 +1454,8 @@ impl ExecutionRunner {
         } else {
             false
         };
-        if is_root && !already_analyzed {
+        let is_fast_mode = config.is_fast_mode();
+        if is_root && !already_analyzed && !is_fast_mode {
             if let Some(ref fs) = fact_store_for_indexing {
                 // Index resources (fast DB upsert — no LLM call)
                 index_resources(
