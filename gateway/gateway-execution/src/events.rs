@@ -81,7 +81,7 @@ pub fn convert_stream_event(
         StreamEvent::ActionRespond {
             message,
             session_id: respond_session_id,
-            ..
+            ..  // artifacts handled by stream.rs before conversion
         } => Some(GatewayEvent::Respond {
             session_id: respond_session_id.unwrap_or_else(|| session_id.to_string()),
             execution_id: execution_id.to_string(),

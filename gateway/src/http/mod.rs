@@ -3,6 +3,7 @@
 //! RESTful HTTP API for the gateway.
 
 mod agents;
+mod artifacts;
 mod bridge;
 mod connectors;
 mod conversations;
@@ -159,6 +160,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
         .route("/api/sessions/:id/state", get(sessions::get_session_state))
+        // Artifact endpoints
+        .route("/api/sessions/:session_id/artifacts", get(artifacts::list_session_artifacts))
+        .route("/api/artifacts/:artifact_id/content", get(artifacts::serve_artifact_content))
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))

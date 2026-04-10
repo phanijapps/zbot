@@ -121,6 +121,9 @@ pub enum StreamEvent {
         format: String,
         conversation_id: Option<String>,
         session_id: Option<String>,
+        /// Artifacts declared by the agent in its response.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        artifacts: Vec<zero_core::event::ArtifactDeclaration>,
     },
 
     /// Delegate action from the delegate tool.
