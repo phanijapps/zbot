@@ -113,6 +113,7 @@ MIME type mapping:
 - `json` → `application/json`
 - `pdf` → `application/pdf`
 - `docx` → `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+- `pptx` → `application/vnd.openxmlformats-officedocument.presentationml.presentation`
 - `xlsx` → `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
 - `png/jpg/gif/svg` → `image/*`
 - `mp4/webm` → `video/*`
@@ -193,6 +194,7 @@ Opens a modal or slide-out panel. Renderer selected by file type:
 | json | Formatted/collapsible JSON tree |
 | pdf | Embedded PDF viewer (`<embed>` or pdf.js) |
 | docx | Rendered via mammoth.js (JS library, ~100KB) |
+| pptx | Rendered via pptx2html or slide thumbnails via soffice conversion |
 | xlsx | Rendered via SheetJS (first sheet as HTML table) |
 | png, jpg, gif, svg | `<img>` tag |
 | mp4, webm | Native `<video>` player |
@@ -236,8 +238,7 @@ Include any file the user would want to see or download: reports, code, document
 
 ### Out of Scope
 - Automatic artifact detection from shell commands
-- DOCX/XLSX inline rendering (show download link for v1, add mammoth.js/SheetJS later)
-- PDF inline rendering (show download link for v1, add pdf.js later)
+- Advanced DOCX/XLSX/PPTX rendering fallbacks (basic rendering in v1, polished renderers later)
 - Artifact versioning or diffing
 - Artifact search across sessions
 - Artifact deletion/cleanup
