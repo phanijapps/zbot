@@ -29,6 +29,7 @@ mod webhooks;
 use crate::config::GatewayConfig;
 use crate::state::AppState;
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{delete, get, post, put},
     Router,
 };
@@ -155,7 +156,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
         .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
         // Upload endpoint
-        .route("/api/upload", post(upload::upload_file))
+        .route("/api/upload", post(upload::upload_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
         // Session archive endpoints
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
