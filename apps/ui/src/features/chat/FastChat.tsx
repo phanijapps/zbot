@@ -4,7 +4,11 @@
 // ============================================================================
 
 import { useRef, useEffect } from "react";
-import { Square, Brain } from "lucide-react";
+import {
+  Square, Brain, Users, Loader2, CheckCircle2,
+  FileText, FileCode, Table, Globe, Image, Film, Music,
+  File, Presentation,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { ChatInput } from "./ChatInput";
@@ -24,11 +28,31 @@ const PROSE_CLASSES =
   "prose-code:before:content-none prose-code:after:content-none";
 
 // ============================================================================
+// Artifact icon helper (mirrors ArtifactsPanel)
+// ============================================================================
+
+function getArtifactIcon(fileType?: string) {
+  const size = 12;
+  switch (fileType) {
+    case "md": case "txt": case "docx": return <FileText size={size} />;
+    case "rs": case "py": case "js": case "ts": case "tsx": case "jsx": return <FileCode size={size} />;
+    case "csv": case "json": case "xlsx": return <Table size={size} />;
+    case "html": case "htm": return <Globe size={size} />;
+    case "png": case "jpg": case "jpeg": case "gif": case "svg": return <Image size={size} />;
+    case "mp4": case "webm": return <Film size={size} />;
+    case "mp3": case "wav": return <Music size={size} />;
+    case "pptx": return <Presentation size={size} />;
+    case "pdf": return <FileText size={size} />;
+    default: return <File size={size} />;
+  }
+}
+
+// ============================================================================
 // Component
 // ============================================================================
 
 export function FastChat() {
-  const { state, sendMessage, stopAgent, showThinking, setShowThinking, initializing } = useFastChat();
+  const { state, artifacts, sendMessage, stopAgent, showThinking, setShowThinking, initializing } = useFastChat();
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const isRunning = state.status === "running";
 
@@ -98,6 +122,17 @@ export function FastChat() {
         <div ref={messagesEndRef} />
       </div>
 
+      {/* Artifact pills */}
+      {artifacts.length > 0 && (
+        <div className="fast-chat__artifacts">
+          {artifacts.map((art) => (
+            <span key={art.id} className="fast-chat__artifact-pill" title={art.filePath}>
+              {getArtifactIcon(art.fileType)} {art.label || art.fileName}
+            </span>
+          ))}
+        </div>
+      )}
+
       {/* Input */}
       <div className="fast-chat__input">
         <ChatInput onSend={handleSend} disabled={isRunning} />
@@ -116,6 +151,32 @@ function MessageBubble({ message, showThinking }: { message: FastMessage; showTh
     return (
       <div className="fast-chat__msg fast-chat__msg--thinking">
         <ThinkingBlock content={message.content} />
+      </div>
+    );
+  }
+
+  if (message.role === "delegation") {
+    return (
+      <div className="fast-chat__msg fast-chat__msg--delegation">
+        <div className="fast-chat__delegation">
+          <div className="fast-chat__delegation-header">
+            <Users size={14} />
+            <span className="fast-chat__delegation-agent">{message.delegationAgent}</span>
+            <span className="fast-chat__delegation-status">
+              {message.delegationStatus === "running" && <Loader2 size={12} className="animate-spin" />}
+              {message.delegationStatus === "completed" && <CheckCircle2 size={12} style={{ color: "var(--success)" }} />}
+            </span>
+          </div>
+          {message.delegationTask && (
+            <div className="fast-chat__delegation-task">{message.delegationTask}</div>
+          )}
+          {message.delegationResult && (
+            <details className="fast-chat__delegation-result">
+              <summary>Result</summary>
+              <div>{message.delegationResult}</div>
+            </details>
+          )}
+        </div>
       </div>
     );
   }

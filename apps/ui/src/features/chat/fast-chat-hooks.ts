@@ -7,6 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getTransport, type StreamEvent } from "@/services/transport";
+import type { Artifact } from "@/services/transport/types";
 
 // ============================================================================
 // Types
@@ -14,13 +15,18 @@ import { getTransport, type StreamEvent } from "@/services/transport";
 
 export interface FastMessage {
   id: string;
-  role: "user" | "assistant" | "tool" | "thinking";
+  role: "user" | "assistant" | "tool" | "thinking" | "delegation";
   content: string;
   timestamp: string;
   /** For tool messages */
   toolName?: string;
   toolOutput?: string;
   isError?: boolean;
+  /** Delegation fields */
+  delegationAgent?: string;
+  delegationTask?: string;
+  delegationStatus?: "running" | "completed" | "error";
+  delegationResult?: string;
   /** Whether this message is still being streamed */
   isStreaming?: boolean;
 }
@@ -32,6 +38,7 @@ export interface FastChatState {
 
 export interface UseFastChatResult {
   state: FastChatState;
+  artifacts: Artifact[];
   sendMessage: (text: string) => Promise<void>;
   stopAgent: () => Promise<void>;
   showThinking: boolean;
@@ -75,6 +82,7 @@ export function useFastChat(): UseFastChatResult {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [showThinking, setShowThinking] = useState(false);
   const [initializing, setInitializing] = useState(true);
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
 
   // Streaming buffer
   const streamingBufferRef = useRef("");
@@ -457,6 +465,15 @@ export function useFastChat(): UseFastChatResult {
           setMessages((prev) =>
             prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
           );
+
+          // Fetch artifacts after agent completes
+          if (sessionIdRef.current) {
+            getTransport().then((t) =>
+              t.listSessionArtifacts(sessionIdRef.current!).then((r) => {
+                if (r.success && r.data) setArtifacts(r.data);
+              })
+            );
+          }
           break;
         }
 
@@ -477,6 +494,54 @@ export function useFastChat(): UseFastChatResult {
           setMessages((prev) =>
             prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
           );
+          break;
+        }
+
+        // ----------------------------------------------------------------
+        // Delegation events
+        // ----------------------------------------------------------------
+        case "delegation_started": {
+          const childAgent = (event.child_agent_id ?? "") as string;
+          const task = (event.task ?? "") as string;
+          const childExecId = (event.child_execution_id ?? "") as string;
+
+          const msgId = crypto.randomUUID();
+          if (childExecId) toolCallMsgMapRef.current.set(`delegation:${childExecId}`, msgId);
+
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: msgId,
+              role: "delegation",
+              content: "",
+              timestamp: now(),
+              delegationAgent: childAgent,
+              delegationTask: task,
+              delegationStatus: "running",
+            },
+          ]);
+          break;
+        }
+
+        case "delegation_completed": {
+          const childExecId = (event.child_execution_id ?? "") as string;
+          const result = (event.result ?? "") as string;
+          const msgId = toolCallMsgMapRef.current.get(`delegation:${childExecId}`);
+
+          if (msgId) {
+            setMessages((prev) => {
+              const idx = prev.findIndex((m) => m.id === msgId);
+              if (idx < 0) return prev;
+              const updated = [...prev];
+              updated[idx] = {
+                ...updated[idx],
+                delegationStatus: "completed",
+                delegationResult: result,
+              };
+              return updated;
+            });
+            toolCallMsgMapRef.current.delete(`delegation:${childExecId}`);
+          }
           break;
         }
 
@@ -602,5 +667,5 @@ export function useFastChat(): UseFastChatResult {
 
   const state: FastChatState = { messages, status };
 
-  return { state, sendMessage, stopAgent, showThinking, setShowThinking, initializing };
+  return { state, artifacts, sendMessage, stopAgent, showThinking, setShowThinking, initializing };
 }

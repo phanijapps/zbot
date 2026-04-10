@@ -4780,3 +4780,73 @@
   color: var(--primary) !important;
   background: color-mix(in srgb, var(--primary) 10%, transparent);
 }
+
+/* Delegation block in fast chat */
+.fast-chat__msg--delegation { justify-content: flex-start; }
+
+.fast-chat__delegation {
+  max-width: 90%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-size: var(--text-xs);
+}
+
+.fast-chat__delegation-header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  font-weight: 600;
+}
+
+.fast-chat__delegation-agent { color: var(--primary); }
+
+.fast-chat__delegation-task {
+  padding: var(--spacing-1) var(--spacing-2);
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+
+.fast-chat__delegation-result {
+  border-top: 1px solid var(--border);
+  font-size: 11px;
+}
+
+.fast-chat__delegation-result summary {
+  padding: var(--spacing-1) var(--spacing-2);
+  cursor: pointer;
+  color: var(--muted-foreground);
+}
+
+.fast-chat__delegation-result > div {
+  padding: var(--spacing-2);
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+/* Artifact pills in fast chat */
+.fast-chat__artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--spacing-1);
+  padding: var(--spacing-2) var(--spacing-4);
+  border-top: 1px solid var(--border);
+}
+
+.fast-chat__artifact-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 10px;
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  font-size: 11px;
+  color: var(--foreground);
+  cursor: default;
+}
