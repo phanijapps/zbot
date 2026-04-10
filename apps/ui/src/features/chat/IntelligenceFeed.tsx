@@ -3,6 +3,13 @@
 // Right sidebar: active ward, recalled facts, subagents, plan
 // ============================================================================
 
+import { useState, useEffect } from "react";
+import {
+  FileText, FileCode, Table, Globe, Image, Film, Music,
+  File, Presentation
+} from "lucide-react";
+import { getTransport } from "@/services/transport";
+import type { Artifact } from "@/services/transport/types";
 import type { PlanStep } from "./PlanBlock";
 import type { IntentAnalysis } from "./mission-hooks";
 
@@ -38,6 +45,8 @@ export interface IntelligenceFeedProps {
   subagents: SubagentInfo[];
   plan: PlanStep[];
   intentAnalysis: IntentAnalysis | null;
+  sessionId: string | null;
+  onArtifactClick: (artifact: Artifact) => void;
 }
 
 // ============================================================================
@@ -64,7 +73,23 @@ export function IntelligenceFeed({
   subagents,
   plan,
   intentAnalysis,
+  sessionId,
+  onArtifactClick,
 }: IntelligenceFeedProps) {
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+
+  useEffect(() => {
+    if (!sessionId) { setArtifacts([]); return; }
+    let cancelled = false;
+    async function load() {
+      const transport = await getTransport();
+      const result = await transport.listSessionArtifacts(sessionId!);
+      if (!cancelled && result.success && result.data) setArtifacts(result.data);
+    }
+    load();
+    return () => { cancelled = true; };
+  }, [sessionId]);
+
   return (
     <div>
       {/* Intent Analysis */}
@@ -157,6 +182,24 @@ export function IntelligenceFeed({
             </div>
           ) : (
             <div className="intel-empty">No active ward</div>
+          )}
+          {artifacts.length > 0 && (
+            <div className="intel-artifacts">
+              <div className="intel-artifacts__label">
+                {artifacts.length} artifact{artifacts.length !== 1 ? "s" : ""}
+              </div>
+              {artifacts.map((art) => (
+                <div
+                  key={art.id}
+                  className="intel-artifacts__row"
+                  onClick={() => onArtifactClick(art)}
+                >
+                  <span className="intel-artifacts__icon">{getArtifactIcon(art.fileType)}</span>
+                  <span className="intel-artifacts__name">{art.label || art.fileName}</span>
+                  <span className="intel-artifacts__size">{formatFileSize(art.fileSize)}</span>
+                </div>
+              ))}
+            </div>
           )}
         </div>
       </details>
@@ -279,4 +322,30 @@ export function IntelligenceFeed({
       </details>
     </div>
   );
+}
+
+// ============================================================================
+// Artifact Helpers
+// ============================================================================
+
+function getArtifactIcon(fileType?: string) {
+  const size = 14;
+  switch (fileType) {
+    case "md": case "txt": case "docx": return <FileText size={size} />;
+    case "rs": case "py": case "js": case "ts": case "tsx": case "jsx": return <FileCode size={size} />;
+    case "csv": case "json": case "xlsx": return <Table size={size} />;
+    case "html": case "htm": return <Globe size={size} />;
+    case "png": case "jpg": case "jpeg": case "gif": case "svg": return <Image size={size} />;
+    case "mp4": case "webm": return <Film size={size} />;
+    case "mp3": case "wav": return <Music size={size} />;
+    case "pptx": return <Presentation size={size} />;
+    default: return <File size={size} />;
+  }
+}
+
+function formatFileSize(bytes?: number): string {
+  if (!bytes) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }

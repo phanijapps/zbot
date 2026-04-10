@@ -21,6 +21,7 @@
 //! - `runner` - Main execution runner
 
 pub mod archiver;
+pub mod artifacts;
 pub mod composite_provider;
 pub mod config;
 pub mod continuation;

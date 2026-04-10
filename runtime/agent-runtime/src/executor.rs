@@ -971,6 +971,7 @@ impl AgentExecutor {
                                     format: respond.format.clone(),
                                     conversation_id: respond.conversation_id.clone(),
                                     session_id: respond.session_id.clone(),
+                                    artifacts: respond.artifacts.clone(),
                                 });
                                 should_stop_after_respond = true;
                                 progress_tracker.record_respond();

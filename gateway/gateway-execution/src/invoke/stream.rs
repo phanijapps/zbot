@@ -331,6 +331,29 @@ pub fn process_stream_event(
     ctx: &StreamContext,
     event: &StreamEvent,
 ) -> (Option<GatewayEvent>, Option<String>) {
+    // Handle artifact declarations from respond actions
+    if let StreamEvent::ActionRespond { ref artifacts, .. } = event {
+        if !artifacts.is_empty() {
+            // Fetch ward_id from the session record (persisted by WardChanged events)
+            let ward_id = ctx
+                .state_service
+                .get_session(&ctx.session_id)
+                .ok()
+                .flatten()
+                .and_then(|s| s.ward_id);
+
+            crate::artifacts::process_artifact_declarations(
+                artifacts,
+                &ctx.session_id,
+                &ctx.execution_id,
+                &ctx.agent_id,
+                ward_id.as_deref(),
+                &ctx.vault_dir,
+                &ctx.state_service,
+            );
+        }
+    }
+
     // Handle delegation events
     if let StreamEvent::ActionDelegate {
         agent_id: child_agent,

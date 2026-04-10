@@ -22,7 +22,20 @@ Edit an existing file by finding and replacing exact text.
 Task checklist. Steps: pending, in_progress, completed, failed. Use for 3+ step tasks.
 
 ### respond
-Call when ALL work is done. Ends execution.
+Call when ALL work is done. Ends execution. If you created output files (reports, code, documents, data, images, etc.), declare them as artifacts:
+
+```json
+respond({
+  "message": "Task complete. Created the auth system with tests.",
+  "artifacts": [
+    { "path": "src/auth.rs", "label": "Auth middleware" },
+    { "path": "docs/api.md", "label": "API documentation" },
+    { "path": "reports/test-results.html", "label": "Test results" }
+  ]
+})
+```
+
+Always include artifacts for files the user would want to see or download. Paths are relative to the current ward.
 
 ### grep
 Search file contents by regex.

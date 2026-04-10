@@ -612,6 +612,21 @@ impl<D: StateDbProvider> StateService<D> {
             Ok(id.clone())
         })
     }
+    // =========================================================================
+    // ARTIFACTS
+    // =========================================================================
+
+    pub fn create_artifact(&self, artifact: &crate::types::Artifact) -> Result<(), String> {
+        self.repo.create_artifact(artifact)
+    }
+
+    pub fn list_artifacts_by_session(&self, session_id: &str) -> Result<Vec<crate::types::Artifact>, String> {
+        self.repo.list_artifacts_by_session(session_id)
+    }
+
+    pub fn get_artifact(&self, artifact_id: &str) -> Result<Option<crate::types::Artifact>, String> {
+        self.repo.get_artifact(artifact_id)
+    }
 }
 
 // ============================================================================

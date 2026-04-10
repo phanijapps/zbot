@@ -898,6 +898,98 @@ impl<D: StateDbProvider> StateRepository<D> {
         })
     }
 
+    // =========================================================================
+    // ARTIFACTS
+    // =========================================================================
+
+    /// Insert a new artifact record.
+    pub fn create_artifact(&self, artifact: &Artifact) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO artifacts (
+                    id, session_id, ward_id, execution_id, agent_id,
+                    file_path, file_name, file_type, file_size, label, created_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                params![
+                    artifact.id,
+                    artifact.session_id,
+                    artifact.ward_id,
+                    artifact.execution_id,
+                    artifact.agent_id,
+                    artifact.file_path,
+                    artifact.file_name,
+                    artifact.file_type,
+                    artifact.file_size,
+                    artifact.label,
+                    artifact.created_at,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// List all artifacts for a session, ordered by creation time.
+    pub fn list_artifacts_by_session(&self, session_id: &str) -> Result<Vec<Artifact>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, ward_id, execution_id, agent_id,
+                        file_path, file_name, file_type, file_size, label, created_at
+                 FROM artifacts
+                 WHERE session_id = ?1
+                 ORDER BY created_at",
+            )?;
+            let rows = stmt
+                .query_map(params![session_id], |row| {
+                    Ok(Artifact {
+                        id: row.get(0)?,
+                        session_id: row.get(1)?,
+                        ward_id: row.get(2)?,
+                        execution_id: row.get(3)?,
+                        agent_id: row.get(4)?,
+                        file_path: row.get(5)?,
+                        file_name: row.get(6)?,
+                        file_type: row.get(7)?,
+                        file_size: row.get(8)?,
+                        label: row.get(9)?,
+                        created_at: row.get(10)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Get a single artifact by ID.
+    pub fn get_artifact(&self, artifact_id: &str) -> Result<Option<Artifact>, String> {
+        self.db.with_connection(|conn| {
+            let result = conn
+                .query_row(
+                    "SELECT id, session_id, ward_id, execution_id, agent_id,
+                            file_path, file_name, file_type, file_size, label, created_at
+                     FROM artifacts
+                     WHERE id = ?1",
+                    params![artifact_id],
+                    |row| {
+                        Ok(Artifact {
+                            id: row.get(0)?,
+                            session_id: row.get(1)?,
+                            ward_id: row.get(2)?,
+                            execution_id: row.get(3)?,
+                            agent_id: row.get(4)?,
+                            file_path: row.get(5)?,
+                            file_name: row.get(6)?,
+                            file_type: row.get(7)?,
+                            file_size: row.get(8)?,
+                            label: row.get(9)?,
+                            created_at: row.get(10)?,
+                        })
+                    },
+                )
+                .optional()?;
+            Ok(result)
+        })
+    }
+
     fn row_to_session_message(
         row: &rusqlite::Row,
     ) -> Result<crate::handlers::SessionMessage, rusqlite::Error> {

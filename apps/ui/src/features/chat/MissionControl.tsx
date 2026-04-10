@@ -4,12 +4,15 @@
 // Shows HeroInput when idle with no blocks, full layout otherwise.
 // ============================================================================
 
+import { useState } from "react";
 import { useMissionControl, useRecentSessions } from "./mission-hooks";
 import { SessionBar } from "./SessionBar";
 import { ExecutionNarrative } from "./ExecutionNarrative";
 import { IntelligenceFeed } from "./IntelligenceFeed";
+import { ArtifactSlideOut } from "./ArtifactSlideOut";
 import { ChatInput } from "./ChatInput";
 import { HeroInput } from "./HeroInput";
+import type { Artifact } from "@/services/transport/types";
 
 // ============================================================================
 // Component
@@ -26,6 +29,9 @@ import { HeroInput } from "./HeroInput";
 export function MissionControl() {
   const { state, sendMessage, stopAgent, startNewSession } = useMissionControl();
   const { sessions: recentSessions } = useRecentSessions();
+
+  // Artifact slide-out state (must be before any early returns — hooks rule)
+  const [viewingArtifact, setViewingArtifact] = useState<Artifact | null>(null);
 
   // No blocks and idle — show the beautiful landing input
   // But NOT if we're about to load a session (logSessionId or activeSessionId present)
@@ -47,6 +53,12 @@ export function MissionControl() {
 
   return (
     <div className="mission-control">
+      {viewingArtifact && (
+        <ArtifactSlideOut
+          artifact={viewingArtifact}
+          onClose={() => setViewingArtifact(null)}
+        />
+      )}
       <SessionBar
         title={state.sessionTitle}
         agentId="root"
@@ -83,6 +95,8 @@ export function MissionControl() {
             subagents={state.subagents}
             plan={state.plan}
             intentAnalysis={state.intentAnalysis}
+            sessionId={currentSessionId}
+            onArtifactClick={(art) => setViewingArtifact(art)}
           />
         </div>
       </div>

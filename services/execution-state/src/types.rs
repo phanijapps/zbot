@@ -777,6 +777,47 @@ impl axum::response::IntoResponse for ApiError {
 /// Alias for backwards compatibility during migration.
 pub type ExecutionSession = AgentExecution;
 
+// ============================================================================
+// ARTIFACT
+// ============================================================================
+
+/// A file artifact produced by an agent execution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Artifact {
+    pub id: String,
+    pub session_id: String,
+    pub ward_id: Option<String>,
+    pub execution_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub file_path: String,
+    pub file_name: String,
+    pub file_type: Option<String>,
+    pub file_size: Option<i64>,
+    pub label: Option<String>,
+    pub created_at: String,
+}
+
+impl Artifact {
+    pub fn new(
+        session_id: impl Into<String>,
+        file_path: impl Into<String>,
+        file_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: format!("art-{}", uuid::Uuid::new_v4()),
+            session_id: session_id.into(),
+            ward_id: None,
+            execution_id: None,
+            agent_id: None,
+            file_path: file_path.into(),
+            file_name: file_name.into(),
+            file_type: None,
+            file_size: None,
+            label: None,
+            created_at: chrono::Utc::now().to_rfc3339(),
+        }
+    }
+}
 
 // ============================================================================
 // TESTS

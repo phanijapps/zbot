@@ -73,6 +73,7 @@ import type {
   GraphSubgraphOptions,
   SetupStatus,
   SessionState,
+  Artifact,
 } from "./types";
 
 // ============================================================================
@@ -467,4 +468,14 @@ export interface Transport {
     entityId: string,
     options?: GraphSubgraphOptions
   ): Promise<TransportResult<GraphSubgraphResponse>>;
+
+  // =========================================================================
+  // Artifact Operations
+  // =========================================================================
+
+  /** List all artifacts for a session */
+  listSessionArtifacts(sessionId: string): Promise<TransportResult<Artifact[]>>;
+
+  /** Get the URL to fetch artifact content */
+  getArtifactContentUrl(artifactId: string): string;
 }

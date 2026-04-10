@@ -499,6 +499,24 @@ export interface SetupStatus {
 }
 
 // ============================================================================
+// Artifact Types
+// ============================================================================
+
+export interface Artifact {
+  id: string;
+  sessionId: string;
+  wardId?: string;
+  executionId?: string;
+  agentId?: string;
+  filePath: string;
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  label?: string;
+  createdAt: string;
+}
+
+// ============================================================================
 // Event Types
 // ============================================================================
 
