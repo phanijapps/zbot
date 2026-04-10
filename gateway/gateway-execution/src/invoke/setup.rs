@@ -190,8 +190,8 @@ impl<'a> AgentLoader<'a> {
                     .filter(|m| !m.is_empty())
                     .unwrap_or_else(|| provider.default_model().to_string());
 
-                // Fast mode: disable thinking for speed (unless user explicitly overrides)
-                let thinking_enabled = if self.fast_mode { false } else { orch.thinking_enabled };
+                // Both modes respect orchestrator thinking config — chat UI toggles visibility
+                let thinking_enabled = orch.thinking_enabled;
 
                 tracing::info!(
                     provider = %provider.name,

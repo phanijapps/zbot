@@ -86,9 +86,13 @@ export function FastChat() {
         {state.messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} showThinking={showThinking} />
         ))}
-        {isRunning && state.messages.length > 0 && (
+        {isRunning && (
           <div className="fast-chat__typing">
-            <span className="loading-dots" />
+            <div className="thinking-indicator__dots">
+              <div className="thinking-indicator__dot" />
+              <div className="thinking-indicator__dot" />
+              <div className="thinking-indicator__dot" />
+            </div>
           </div>
         )}
         <div ref={messagesEndRef} />
