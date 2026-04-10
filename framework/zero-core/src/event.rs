@@ -138,6 +138,15 @@ pub struct EventActions {
     pub delegate: Option<DelegateAction>,
 }
 
+/// A file artifact declared by an agent in its response.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactDeclaration {
+    /// File path (relative to ward or absolute)
+    pub path: String,
+    /// Human-readable label
+    pub label: Option<String>,
+}
+
 /// Action for the respond tool.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RespondAction {
@@ -152,6 +161,10 @@ pub struct RespondAction {
 
     /// Session ID for web hooks.
     pub session_id: Option<String>,
+
+    /// Artifacts produced by this execution
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub artifacts: Vec<ArtifactDeclaration>,
 }
 
 /// Action for the delegate tool.

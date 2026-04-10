@@ -63,6 +63,24 @@ impl Tool for RespondTool {
                     "enum": ["text", "markdown", "html"],
                     "default": "text",
                     "description": "Format of the message (text, markdown, or html)"
+                },
+                "artifacts": {
+                    "type": "array",
+                    "description": "Files produced by this execution. Include any outputs the user would want to see or download.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "File path relative to the current ward"
+                            },
+                            "label": {
+                                "type": "string",
+                                "description": "Human-readable label for this artifact"
+                            }
+                        },
+                        "required": ["path"]
+                    }
                 }
             },
             "required": ["message"]
@@ -79,6 +97,11 @@ impl Tool for RespondTool {
             .get("format")
             .and_then(|v| v.as_str())
             .unwrap_or("text");
+
+        let artifacts: Vec<zero_core::event::ArtifactDeclaration> = args
+            .get("artifacts")
+            .and_then(|v| serde_json::from_value(v.clone()).ok())
+            .unwrap_or_default();
 
         // Get hook context from state
         let hook_context = ctx.get_state("hook_context");
@@ -110,6 +133,7 @@ impl Tool for RespondTool {
             format: format.to_string(),
             conversation_id: conversation_id.clone(),
             session_id: session_id.clone(),
+            artifacts,
         });
         ctx.set_actions(actions);
 

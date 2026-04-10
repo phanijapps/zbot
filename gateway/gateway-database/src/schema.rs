@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 15;
+const SCHEMA_VERSION: i32 = 16;
 
 /// Run migrations for existing databases.
 ///
@@ -202,6 +202,31 @@ fn migrate_database(conn: &Connection) -> Result<()> {
     if version < 15 {
         let _ = conn.execute(
             "ALTER TABLE agent_executions ADD COLUMN child_session_id TEXT",
+            [],
+        );
+    }
+
+    // v15 → v16: Add artifacts table for agent-generated file tracking
+    if version < 16 {
+        let _ = conn.execute(
+            "CREATE TABLE IF NOT EXISTS artifacts (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                ward_id TEXT,
+                execution_id TEXT,
+                agent_id TEXT,
+                file_path TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                file_type TEXT,
+                file_size INTEGER,
+                label TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            )",
+            [],
+        );
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id)",
             [],
         );
     }
@@ -636,6 +661,33 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // ARTIFACTS
+    // File artifacts produced by agent executions
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS artifacts (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            ward_id TEXT,
+            execution_id TEXT,
+            agent_id TEXT,
+            file_path TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            file_type TEXT,
+            file_size INTEGER,
+            label TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id)",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -757,14 +809,14 @@ mod tests {
     }
 
     #[test]
-    fn test_schema_version_is_13() {
+    fn test_schema_version_is_16() {
         let conn = setup_db();
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 13, "schema version should be 13");
+        assert_eq!(version, 16, "schema version should be 16");
     }
 
     #[test]
