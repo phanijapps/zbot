@@ -1,14 +1,11 @@
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArtifactsPanel } from "./ArtifactsPanel";
 
 export interface AgentResponseProps {
   /** Markdown content from the agent */
   content: string;
   /** ISO timestamp */
   timestamp: string;
-  /** Session ID for loading artifacts */
-  sessionId?: string;
 }
 
 /** Formats an ISO timestamp to a short time string (HH:MM) */
@@ -36,7 +33,7 @@ const PROSE_CLASSES =
 /**
  * Agent response block — avatar (Z, muted), timestamp, markdown-rendered text.
  */
-export function AgentResponse({ content, timestamp, sessionId }: AgentResponseProps) {
+export function AgentResponse({ content, timestamp }: AgentResponseProps) {
   return (
     <div className="msg-block">
       <div className="msg-block__avatar msg-block__avatar--agent">Z</div>
@@ -46,7 +43,6 @@ export function AgentResponse({ content, timestamp, sessionId }: AgentResponsePr
           <div className={PROSE_CLASSES}>
             <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
           </div>
-          {sessionId && <ArtifactsPanel sessionId={sessionId} />}
         </div>
       </div>
     </div>

@@ -4611,3 +4611,104 @@
   font-size: 12px;
   color: var(--foreground);
 }
+
+/* ============================================================================
+   Artifact Slide-Out Viewer
+   ============================================================================ */
+
+.artifact-slideout__backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  z-index: 100;
+}
+
+.artifact-slideout {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: 62%;
+  height: 100vh;
+  background: var(--background);
+  border-left: 1px solid var(--border);
+  z-index: 101;
+  display: flex;
+  flex-direction: column;
+  box-shadow: -4px 0 24px rgba(0, 0, 0, 0.3);
+}
+
+.artifact-slideout__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: var(--spacing-3) var(--spacing-4);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.artifact-slideout__title {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  font-weight: 600;
+  font-size: var(--text-sm);
+}
+
+.artifact-slideout__icon { color: var(--muted-foreground); }
+
+.artifact-slideout__meta {
+  font-weight: 400;
+  font-size: var(--text-xs);
+  color: var(--muted-foreground);
+}
+
+.artifact-slideout__actions {
+  display: flex;
+  gap: var(--spacing-1);
+}
+
+.artifact-slideout__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--spacing-4);
+}
+
+.artifact-slideout__pre {
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--foreground);
+  line-height: 1.6;
+}
+
+/* ============================================================================
+   Artifacts in Ward Sidebar
+   ============================================================================ */
+
+.intel-artifacts {
+  margin-top: var(--spacing-2);
+  padding-top: var(--spacing-2);
+  border-top: 1px solid var(--border);
+}
+
+.intel-artifacts__label {
+  font-size: 11px;
+  color: var(--muted-foreground);
+  margin-bottom: var(--spacing-1);
+}
+
+.intel-artifacts__row {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  padding: 3px var(--spacing-1);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+
+.intel-artifacts__row:hover { background: var(--muted); }
+.intel-artifacts__icon { color: var(--muted-foreground); flex-shrink: 0; }
+.intel-artifacts__name { color: var(--foreground); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.intel-artifacts__size { margin-left: auto; color: var(--muted-foreground); font-size: 11px; white-space: nowrap; }

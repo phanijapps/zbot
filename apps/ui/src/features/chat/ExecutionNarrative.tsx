@@ -16,10 +16,9 @@ export interface ExecutionNarrativeProps {
   status: string;
   phase: Phase;
   subagents?: SubagentStateData[];
-  sessionId?: string | null;
 }
 
-export function ExecutionNarrative({ blocks, status, phase, subagents, sessionId }: ExecutionNarrativeProps) {
+export function ExecutionNarrative({ blocks, status, phase, subagents }: ExecutionNarrativeProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -60,7 +59,6 @@ export function ExecutionNarrative({ blocks, status, phase, subagents, sessionId
               <AgentResponse
                 content={responseBlocks[i].data.content as string}
                 timestamp={(responseBlocks[i].data.timestamp ?? responseBlocks[i].timestamp) as string}
-                sessionId={sessionId ?? undefined}
               />
             )}
           </div>
