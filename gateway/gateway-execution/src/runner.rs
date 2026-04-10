@@ -371,7 +371,26 @@ impl ExecutionRunner {
                     Some(request) = rx.recv() => {
                         let session_id = request.session_id.clone();
 
-                        if active_sessions.contains(&session_id) {
+                        if request.parallel {
+                            // Parallel: skip per-session queue, go straight to global semaphore
+                            tracing::info!(
+                                session_id = %session_id,
+                                child_agent = %request.child_agent_id,
+                                "Parallel delegation — bypassing per-session queue"
+                            );
+                            spawn_with_notification(
+                                request,
+                                &event_bus, &agent_service, &provider_service,
+                                &mcp_service, &skill_service, &paths,
+                                &conversation_repo, &handles, &delegation_registry,
+                                &delegation_tx, &log_service, &state_service,
+                                &workspace_cache, &delegation_semaphore,
+                                &memory_repo, &embedding_client,
+                                &memory_recall, &rate_limiters,
+                                done_tx.clone(),
+                            );
+                        } else if active_sessions.contains(&session_id) {
+                            // Sequential: queue behind active delegation
                             tracing::info!(
                                 session_id = %session_id,
                                 agent = %request.child_agent_id,
@@ -380,6 +399,7 @@ impl ExecutionRunner {
                             );
                             queued.entry(session_id).or_default().push_back(request);
                         } else {
+                            // Sequential: no active delegation, spawn immediately
                             tracing::info!(
                                 session_id = %session_id,
                                 parent_agent = %request.parent_agent_id,
@@ -1187,6 +1207,7 @@ impl ExecutionRunner {
             output_schema: None,
             skills: vec![],
             complexity: None,
+            parallel: false,
         };
 
         // 7. Re-spawn the subagent

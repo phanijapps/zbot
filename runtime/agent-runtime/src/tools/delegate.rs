@@ -88,6 +88,11 @@ impl Tool for DelegateTool {
                     "type": "array",
                     "items": { "type": "string" },
                     "description": "Skills to pre-load for the subagent. These are loaded into the agent's context automatically."
+                },
+                "parallel": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Set true for independent tasks that can run simultaneously. Use false (default) when tasks must run in order or share files."
                 }
             },
             "required": ["agent_id", "task"]
@@ -150,6 +155,11 @@ impl Tool for DelegateTool {
                     .collect()
             })
             .unwrap_or_default();
+
+        let parallel = args
+            .get("parallel")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
         // Get parent context from state
         let parent_agent_id = ctx
@@ -228,6 +238,7 @@ impl Tool for DelegateTool {
             output_schema,
             skills,
             complexity: None,
+            parallel,
         });
         ctx.set_actions(actions);
 

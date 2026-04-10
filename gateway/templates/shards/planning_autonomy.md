@@ -14,6 +14,14 @@ When a task needs code AND analysis, split it: code-agent builds, data-analyst i
 - One delegation at a time — system resumes you after each completes
 - Include the ward name in every delegation message
 - Review each result before proceeding to the next step
+
+### Parallel Delegation
+When delegating independent tasks, set `parallel: true` to run them simultaneously:
+- Tasks are independent (no shared files or state)
+- Tasks don't need results from each other
+- Tasks work in different wards or on different files
+
+Keep `parallel: false` (default) when tasks must run in order or share resources.
 </delegation_rules>
 
 <prohibited_actions>
