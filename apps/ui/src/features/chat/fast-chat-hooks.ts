@@ -2,6 +2,7 @@
 // FAST CHAT HOOKS
 // Simplified version of mission-hooks for fast mode (no intent analysis).
 // Flat message list, streaming tokens, tool call tracking.
+// Persistent session via POST /api/chat/init.
 // ============================================================================
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -13,7 +14,7 @@ import { getTransport, type StreamEvent } from "@/services/transport";
 
 export interface FastMessage {
   id: string;
-  role: "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool" | "thinking";
   content: string;
   timestamp: string;
   /** For tool messages */
@@ -29,58 +30,59 @@ export interface FastChatState {
   status: "idle" | "running" | "completed" | "error";
 }
 
+export interface UseFastChatResult {
+  state: FastChatState;
+  sendMessage: (text: string) => Promise<void>;
+  stopAgent: () => Promise<void>;
+  showThinking: boolean;
+  setShowThinking: (v: boolean) => void;
+  initializing: boolean;
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
 
 const ROOT_AGENT_ID = "root";
-const FAST_CONV_ID_KEY = "zbot_fast_conv_id";
-const FAST_SESSION_ID_KEY = "zbot_fast_session_id";
-
-function getOrCreateConversationId(): string {
-  let convId = localStorage.getItem(FAST_CONV_ID_KEY);
-  if (!convId) {
-    convId = `fast-${crypto.randomUUID()}`;
-    localStorage.setItem(FAST_CONV_ID_KEY, convId);
-  }
-  return convId;
-}
-
-function createNewConversationId(): string {
-  localStorage.removeItem(FAST_SESSION_ID_KEY);
-  const convId = `fast-${crypto.randomUUID()}`;
-  localStorage.setItem(FAST_CONV_ID_KEY, convId);
-  return convId;
-}
-
-function getSessionId(): string | null {
-  return localStorage.getItem(FAST_SESSION_ID_KEY);
-}
-
-function setSessionId(id: string): void {
-  localStorage.setItem(FAST_SESSION_ID_KEY, id);
-}
 
 function now(): string {
   return new Date().toISOString();
+}
+
+/**
+ * Extract a display-friendly tool name from tool_calls data.
+ */
+function extractToolName(toolCalls: unknown): string | undefined {
+  if (Array.isArray(toolCalls) && toolCalls.length > 0) {
+    const first = toolCalls[0];
+    if (typeof first === "object" && first !== null) {
+      const tc = first as Record<string, unknown>;
+      return (tc.name ?? tc.tool ?? tc.function ?? "") as string || undefined;
+    }
+  }
+  if (typeof toolCalls === "string") return toolCalls;
+  return undefined;
 }
 
 // ============================================================================
 // Hook: useFastChat
 // ============================================================================
 
-export function useFastChat() {
+export function useFastChat(): UseFastChatResult {
   const [messages, setMessages] = useState<FastMessage[]>([]);
   const [status, setStatus] = useState<FastChatState["status"]>("idle");
-
-  const [conversationId, setConversationId] = useState<string>(() => {
-    return getOrCreateConversationId();
-  });
-  const [activeSessionId, setActiveSessionId] = useState<string | null>(() => getSessionId());
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [conversationId, setConversationId] = useState<string | null>(null);
+  const [showThinking, setShowThinking] = useState(false);
+  const [initializing, setInitializing] = useState(true);
 
   // Streaming buffer
   const streamingBufferRef = useRef("");
   const rafIdRef = useRef<number | null>(null);
+
+  // Thinking streaming buffer
+  const thinkingBufferRef = useRef("");
+  const thinkingRafIdRef = useRef<number | null>(null);
 
   // Sequence dedup
   const lastSeqRef = useRef(0);
@@ -91,8 +93,80 @@ export function useFastChat() {
   // Map tool_call_id -> message id
   const toolCallMsgMapRef = useRef<Map<string, string>>(new Map());
 
+  // Stable refs for session/conversation IDs (avoid stale closures)
+  const sessionIdRef = useRef<string | null>(null);
+  const conversationIdRef = useRef<string | null>(null);
+
+  // Keep refs in sync
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
+  useEffect(() => {
+    conversationIdRef.current = conversationId;
+  }, [conversationId]);
+
   // ========================================================================
-  // Flush streaming buffer
+  // On mount: init session + load history
+  // ========================================================================
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function init() {
+      try {
+        // Ensure transport is ready (initializes WebSocket)
+        await getTransport();
+
+        // Get or create persistent chat session
+        const initResult = await fetch("/api/chat/init", { method: "POST" });
+        if (!initResult.ok) {
+          console.error("[FastChat] Failed to init session:", initResult.statusText);
+          setInitializing(false);
+          return;
+        }
+        const { sessionId: sid, conversationId: cid } = await initResult.json();
+        if (cancelled) return;
+
+        setSessionId(sid);
+        setConversationId(cid);
+        sessionIdRef.current = sid;
+        conversationIdRef.current = cid;
+
+        // Load existing messages
+        const msgResult = await fetch(
+          `/api/sessions/${encodeURIComponent(sid)}/messages?limit=100`
+        );
+        if (msgResult.ok) {
+          const msgs = await msgResult.json();
+          if (!cancelled && Array.isArray(msgs)) {
+            const mapped: FastMessage[] = msgs.map((m: Record<string, unknown>) => ({
+              id: (m.id as string) || crypto.randomUUID(),
+              role: (m.role as FastMessage["role"]) || "assistant",
+              content: (m.content as string) || "",
+              timestamp: (m.createdAt as string) || now(),
+              toolName: m.toolCalls ? extractToolName(m.toolCalls) : undefined,
+              toolOutput: m.toolResults ? String(m.toolResults) : undefined,
+            }));
+            setMessages(mapped);
+          }
+        }
+      } catch (error) {
+        console.error("[FastChat] Init error:", error);
+      } finally {
+        if (!cancelled) {
+          setInitializing(false);
+        }
+      }
+    }
+
+    init();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ========================================================================
+  // Flush streaming buffer (assistant tokens)
   // ========================================================================
 
   const flushTokenBuffer = useCallback(() => {
@@ -135,6 +209,49 @@ export function useFastChat() {
   }, []);
 
   // ========================================================================
+  // Flush thinking buffer
+  // ========================================================================
+
+  const flushThinkingBuffer = useCallback(() => {
+    const buffered = thinkingBufferRef.current;
+    if (!buffered) return;
+    thinkingBufferRef.current = "";
+    thinkingRafIdRef.current = null;
+
+    setMessages((prev) => {
+      // Find last streaming thinking message
+      let targetIdx = -1;
+      for (let i = prev.length - 1; i >= 0; i--) {
+        if (prev[i].role === "thinking" && prev[i].isStreaming) {
+          targetIdx = i;
+          break;
+        }
+      }
+
+      if (targetIdx >= 0) {
+        const updated = [...prev];
+        updated[targetIdx] = {
+          ...updated[targetIdx],
+          content: updated[targetIdx].content + buffered,
+        };
+        return updated;
+      }
+
+      // No streaming thinking message found — create one
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "thinking",
+          content: buffered,
+          timestamp: now(),
+          isStreaming: true,
+        },
+      ];
+    });
+  }, []);
+
+  // ========================================================================
   // Event handler
   // ========================================================================
 
@@ -150,7 +267,7 @@ export function useFastChat() {
         case "invoke_accepted": {
           if (event.session_id && typeof event.session_id === "string") {
             setSessionId(event.session_id);
-            setActiveSessionId(event.session_id);
+            sessionIdRef.current = event.session_id;
           }
           lastSeqRef.current = 0;
           break;
@@ -160,7 +277,7 @@ export function useFastChat() {
           setStatus("running");
           if (event.session_id && typeof event.session_id === "string") {
             setSessionId(event.session_id);
-            setActiveSessionId(event.session_id);
+            sessionIdRef.current = event.session_id;
           }
           break;
         }
@@ -180,6 +297,21 @@ export function useFastChat() {
         }
 
         // ----------------------------------------------------------------
+        // Thinking / reasoning streaming
+        // ----------------------------------------------------------------
+        case "thinking":
+        case "reasoning": {
+          const delta = (event.delta ?? event.content ?? "") as string;
+          if (delta) {
+            thinkingBufferRef.current += delta;
+            if (thinkingRafIdRef.current === null) {
+              thinkingRafIdRef.current = requestAnimationFrame(flushThinkingBuffer);
+            }
+          }
+          break;
+        }
+
+        // ----------------------------------------------------------------
         // Tool calls
         // ----------------------------------------------------------------
         case "tool_call": {
@@ -188,6 +320,15 @@ export function useFastChat() {
 
           // Skip internal tools that don't need display
           if (toolName === "set_session_title" || toolName === "respond") break;
+
+          // Finalize any streaming thinking message before tool call
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.role === "thinking" && m.isStreaming
+                ? { ...m, isStreaming: false }
+                : m
+            )
+          );
 
           const msgId = crypto.randomUUID();
           if (toolCallId) toolCallMsgMapRef.current.set(toolCallId, msgId);
@@ -244,6 +385,12 @@ export function useFastChat() {
           }
           flushTokenBuffer();
 
+          if (thinkingRafIdRef.current !== null) {
+            cancelAnimationFrame(thinkingRafIdRef.current);
+            thinkingRafIdRef.current = null;
+          }
+          flushThinkingBuffer();
+
           const finalMessage = event.final_message as string | undefined;
           if (finalMessage) {
             setMessages((prev) => {
@@ -282,6 +429,12 @@ export function useFastChat() {
           }
           flushTokenBuffer();
 
+          if (thinkingRafIdRef.current !== null) {
+            cancelAnimationFrame(thinkingRafIdRef.current);
+            thinkingRafIdRef.current = null;
+          }
+          flushThinkingBuffer();
+
           const result = event.result as string | undefined;
           if (result) {
             setMessages((prev) => {
@@ -313,6 +466,13 @@ export function useFastChat() {
             rafIdRef.current = null;
           }
           flushTokenBuffer();
+
+          if (thinkingRafIdRef.current !== null) {
+            cancelAnimationFrame(thinkingRafIdRef.current);
+            thinkingRafIdRef.current = null;
+          }
+          flushThinkingBuffer();
+
           setStatus("error");
           setMessages((prev) =>
             prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
@@ -324,7 +484,7 @@ export function useFastChat() {
           break;
       }
     },
-    [flushTokenBuffer]
+    [flushTokenBuffer, flushThinkingBuffer]
   );
 
   // ========================================================================
@@ -348,9 +508,9 @@ export function useFastChat() {
         })
       );
 
-      if (activeSessionId && activeSessionId !== conversationId) {
+      if (sessionId && sessionId !== conversationId) {
         unsubs.push(
-          transport.subscribeConversation(activeSessionId, {
+          transport.subscribeConversation(sessionId, {
             onEvent: handleStreamEvent,
             scope: "session",
           })
@@ -367,10 +527,15 @@ export function useFastChat() {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
       }
+      if (thinkingRafIdRef.current !== null) {
+        cancelAnimationFrame(thinkingRafIdRef.current);
+        thinkingRafIdRef.current = null;
+      }
       streamingBufferRef.current = "";
+      thinkingBufferRef.current = "";
       lastSeqRef.current = 0;
     };
-  }, [activeSessionId, conversationId, handleStreamEvent]);
+  }, [sessionId, conversationId, handleStreamEvent]);
 
   // ========================================================================
   // Send message
@@ -380,6 +545,13 @@ export function useFastChat() {
     async (text: string) => {
       if (!text.trim() || isSubmittingRef.current) return;
       isSubmittingRef.current = true;
+
+      const cid = conversationIdRef.current;
+      if (!cid) {
+        console.error("[FastChat] No conversationId, cannot send");
+        isSubmittingRef.current = false;
+        return;
+      }
 
       setMessages((prev) => [
         ...prev,
@@ -395,10 +567,10 @@ export function useFastChat() {
 
       try {
         const transport = await getTransport();
-        const currentSessionId = getSessionId() ?? undefined;
+        const currentSessionId = sessionIdRef.current ?? undefined;
         await transport.executeAgent(
           ROOT_AGENT_ID,
-          conversationId,
+          cid,
           text.trim(),
           currentSessionId,
           "fast"
@@ -410,7 +582,7 @@ export function useFastChat() {
         isSubmittingRef.current = false;
       }
     },
-    [conversationId]
+    []
   );
 
   // ========================================================================
@@ -418,30 +590,17 @@ export function useFastChat() {
   // ========================================================================
 
   const stopAgent = useCallback(async () => {
+    const cid = conversationIdRef.current;
+    if (!cid) return;
     try {
       const transport = await getTransport();
-      await transport.stopAgent(conversationId);
+      await transport.stopAgent(cid);
     } catch (error) {
       console.error("[FastChat] Failed to stop agent:", error);
     }
-  }, [conversationId]);
-
-  // ========================================================================
-  // Start new session
-  // ========================================================================
-
-  const startNewSession = useCallback(() => {
-    const newConvId = createNewConversationId();
-    setConversationId(newConvId);
-    setActiveSessionId(null);
-    setMessages([]);
-    setStatus("idle");
-    lastSeqRef.current = 0;
-    streamingBufferRef.current = "";
-    toolCallMsgMapRef.current.clear();
   }, []);
 
   const state: FastChatState = { messages, status };
 
-  return { state, sendMessage, stopAgent, startNewSession };
+  return { state, sendMessage, stopAgent, showThinking, setShowThinking, initializing };
 }

@@ -4737,3 +4737,46 @@
 .fast-chat__tool-output { padding: var(--spacing-2); font-family: var(--font-mono); font-size: 11px; white-space: pre-wrap; word-break: break-word; max-height: 200px; overflow-y: auto; color: var(--muted-foreground); }
 .fast-chat__typing { align-self: flex-start; padding: var(--spacing-2); }
 .fast-chat__input { padding: var(--spacing-2) var(--spacing-4); border-top: 1px solid var(--border); flex-shrink: 0; }
+
+/* Thinking message in fast chat */
+.fast-chat__msg--thinking { justify-content: flex-start; }
+
+/* Thinking Block */
+.thinking-block {
+  max-width: 90%;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  font-size: var(--text-xs);
+}
+
+.thinking-block__header {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-1);
+  padding: var(--spacing-1) var(--spacing-2);
+  background: var(--muted);
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.thinking-block__header:hover { background: var(--card); }
+
+.thinking-block__content {
+  padding: var(--spacing-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted-foreground);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+/* Active toggle button state */
+.btn--active {
+  color: var(--primary) !important;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+}
