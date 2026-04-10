@@ -56,6 +56,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -81,13 +82,17 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   const handleFileSelect = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setUploading(true);
+    setUploadError(null);
     try {
       const uploaded = await Promise.all(
         Array.from(files).map((f) => uploadFile(f)),
       );
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
       console.error("File upload failed:", err);
+      setUploadError(msg);
+      setTimeout(() => setUploadError(null), 5000);
     } finally {
       setUploading(false);
     }
@@ -175,6 +180,11 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       {uploading && (
         <div className="chat-input__uploading">
           Uploading...
+        </div>
+      )}
+      {uploadError && (
+        <div style={{ fontSize: "var(--text-xs)", color: "var(--destructive)", marginTop: 4 }}>
+          {uploadError}
         </div>
       )}
     </div>

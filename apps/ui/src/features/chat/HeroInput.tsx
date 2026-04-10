@@ -60,6 +60,7 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<UploadedFile[]>([]);
   const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -83,13 +84,17 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
   const handleFileSelect = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     setUploading(true);
+    setUploadError(null);
     try {
       const uploaded = await Promise.all(
         Array.from(files).map((f) => uploadFile(f)),
       );
       setAttachments((prev) => [...prev, ...uploaded]);
     } catch (err) {
+      const msg = err instanceof Error ? err.message : "Upload failed";
       console.error("File upload failed:", err);
+      setUploadError(msg);
+      setTimeout(() => setUploadError(null), 5000);
     } finally {
       setUploading(false);
     }
@@ -99,13 +104,24 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const handleDrop = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handleFileSelect(e.dataTransfer.files);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
   const handleSuggestionClick = (suggestion: string) => {
     setText(suggestion);
     textareaRef.current?.focus();
   };
 
   return (
-    <div className="hero-input">
+    <div className="hero-input" onDrop={handleDrop} onDragOver={handleDragOver}>
       {/* Brand */}
       <div className="hero-input__brand">
         <img src="/zbot_icon_light.svg" alt="z-Bot" className="hero-input__logo-img" />
@@ -177,6 +193,11 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
       {uploading && (
         <div className="chat-input__uploading" style={{ marginTop: 8 }}>
           Uploading...
+        </div>
+      )}
+      {uploadError && (
+        <div style={{ marginTop: 8, fontSize: "var(--text-xs)", color: "var(--destructive)", textAlign: "center" }}>
+          {uploadError}
         </div>
       )}
 
