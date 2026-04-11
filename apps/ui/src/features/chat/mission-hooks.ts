@@ -402,7 +402,7 @@ export function useMissionControl() {
             // Parse plan text: split by newlines, treat each line as a step
             const lines = rawSteps.split("\n").filter((l: string) => l.trim());
             for (const line of lines) {
-              const trimmed = line.replace(/^[\s\-\*\d.]+/, "").trim();
+              const trimmed = line.replace(/^[\s\-*\d.]+/, "").trim();
               if (trimmed) {
                 const isDone = line.includes("[x]") || line.includes("✓");
                 steps.push({ text: trimmed, status: isDone ? "done" as StepStatus : "pending" as StepStatus });
