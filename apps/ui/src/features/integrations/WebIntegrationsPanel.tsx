@@ -304,6 +304,16 @@ export function WebIntegrationsPanel() {
     setShowEnvValues(new Set());
   }, [selectedMcpDetail, selectedMcpSummary]);
 
+  const handleSaveSuccess = useCallback(async () => {
+    await loadMcps(transport!);
+    if (tsSlideoverMode === "edit" && selectedMcpSummary) {
+      await loadMcpDetail(selectedMcpSummary.id);
+      setTsSlideoverMode("view");
+    } else {
+      setTsSlideoverOpen(false);
+    }
+  }, [transport, tsSlideoverMode, selectedMcpSummary, loadMcps, loadMcpDetail]);
+
   const handleSave = useCallback(async () => {
     if (!transport || !formData.name || !formData.type) return;
 
@@ -337,20 +347,14 @@ export function WebIntegrationsPanel() {
       }
 
       if (result.success) {
-        await loadMcps(transport);
-        if (tsSlideoverMode === "edit" && selectedMcpSummary) {
-          await loadMcpDetail(selectedMcpSummary.id);
-          setTsSlideoverMode("view");
-        } else {
-          setTsSlideoverOpen(false);
-        }
+        await handleSaveSuccess();
       } else {
         setError(result.error || `Failed to ${tsSlideoverMode} tool server`);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     }
-  }, [transport, formData, argsInput, envVars, tsSlideoverMode, editingId, selectedMcpSummary, loadMcps, loadMcpDetail]);
+  }, [transport, formData, argsInput, envVars, tsSlideoverMode, editingId, selectedMcpSummary, loadMcps, loadMcpDetail, handleSaveSuccess]);
 
   const handleDelete = useCallback(async () => {
     if (!transport || !selectedMcpSummary) return;

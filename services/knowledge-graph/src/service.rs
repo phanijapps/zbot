@@ -157,27 +157,11 @@ impl GraphService {
             let mut next_hop: Vec<String> = Vec::new();
 
             for entity_id in &current_hop {
-                // Get neighbors for this entity
                 let neighbors = self
                     .storage
                     .get_neighbors(agent_id, entity_id, Direction::Both, 1000)
                     .await?;
-
-                for neighbor in neighbors {
-                    // Track the relationship
-                    if !visited_relationships.contains(&neighbor.relationship.id) {
-                        visited_relationships.insert(neighbor.relationship.id.clone());
-                        relationships.push(neighbor.relationship);
-                    }
-
-                    // Track the entity
-                    let neighbor_id = neighbor.entity.id.clone();
-                    if !visited_entities.contains(&neighbor_id) {
-                        visited_entities.insert(neighbor_id.clone());
-                        entities.push(neighbor.entity);
-                        next_hop.push(neighbor_id);
-                    }
-                }
+                collect_neighbors(neighbors, &mut visited_entities, &mut visited_relationships, &mut entities, &mut relationships, &mut next_hop);
             }
 
             current_hop = next_hop;
@@ -275,6 +259,29 @@ impl GraphService {
     /// List all relationships across all agents.
     pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
         self.storage.list_all_relationships(limit).await
+    }
+}
+
+/// Process a list of neighbors into the BFS accumulators.
+fn collect_neighbors(
+    neighbors: Vec<crate::types::NeighborInfo>,
+    visited_entities: &mut HashSet<String>,
+    visited_relationships: &mut HashSet<String>,
+    entities: &mut Vec<Entity>,
+    relationships: &mut Vec<Relationship>,
+    next_hop: &mut Vec<String>,
+) {
+    for neighbor in neighbors {
+        if !visited_relationships.contains(&neighbor.relationship.id) {
+            visited_relationships.insert(neighbor.relationship.id.clone());
+            relationships.push(neighbor.relationship);
+        }
+        let neighbor_id = neighbor.entity.id.clone();
+        if !visited_entities.contains(&neighbor_id) {
+            visited_entities.insert(neighbor_id.clone());
+            entities.push(neighbor.entity);
+            next_hop.push(neighbor_id);
+        }
     }
 }
 

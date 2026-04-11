@@ -60,6 +60,19 @@ export function ReviewStep({
   const enabledMcps = mcpConfigs.filter((c) => c.enabled);
   const overrideCount = Object.keys(agentOverrides).length;
 
+  const hasAgentConfigChanged = (
+    original: GlobalDefault | undefined,
+    desired: GlobalDefault,
+  ): boolean => {
+    if (!original) return true;
+    return (
+      original.providerId !== desired.providerId
+      || original.model !== desired.model
+      || original.temperature !== desired.temperature
+      || original.maxTokens !== desired.maxTokens
+    );
+  };
+
   const handleLaunch = async () => {
     setIsLaunching(true);
     setError(null);
@@ -101,13 +114,7 @@ export function ReviewStep({
           : globalDefault;
 
         const original = originalAgentConfigs[agent.id];
-        const changed = !original
-          || original.providerId !== desired.providerId
-          || original.model !== desired.model
-          || original.temperature !== desired.temperature
-          || original.maxTokens !== desired.maxTokens;
-
-        if (changed) {
+        if (hasAgentConfigChanged(original, desired)) {
           await transport.updateAgent(agent.id, {
             providerId: desired.providerId,
             model: desired.model,

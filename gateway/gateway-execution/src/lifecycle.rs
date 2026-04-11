@@ -44,48 +44,57 @@ pub fn get_or_create_session(
 ) -> SessionSetup {
     if let Some(session_id) = existing_session_id {
         // Try to continue existing session
-        match state_service.get_session(session_id) {
-            Ok(Some(session)) => {
-                // Reuse the existing root execution (one continuous conversation)
-                let execution_id = match state_service.get_root_execution(session_id) {
-                    Ok(Some(root_exec)) => root_exec.id,
-                    _ => {
-                        // Fallback: create new root execution if none found
-                        let execution = AgentExecution::new_root(session_id, agent_id);
-                        if let Err(e) = state_service.create_execution(&execution) {
-                            tracing::warn!("Failed to create execution in existing session: {}", e);
-                        }
-                        execution.id
-                    }
-                };
-
-                // Reactivate session if it was in a terminal state (completed/crashed)
-                // This handles the case where user sends a new message to a completed session
-                if let Err(e) = state_service.reactivate_session(session_id) {
-                    tracing::warn!("Failed to reactivate session: {}", e);
-                }
-
-                // Also reactivate the execution if it was completed
-                if let Err(e) = state_service.reactivate_execution(&execution_id) {
-                    tracing::warn!("Failed to reactivate execution: {}", e);
-                }
-
-                return SessionSetup {
-                    session_id: session_id.to_string(),
-                    execution_id,
-                    ward_id: session.ward_id,
-                };
-            }
+        let session = match state_service.get_session(session_id) {
+            Ok(Some(s)) => s,
             Ok(None) => {
                 tracing::warn!("Session {} not found, creating new session", session_id);
+                return create_new_session(state_service, agent_id, source);
             }
             Err(e) => {
                 tracing::warn!("Failed to get session: {}", e);
+                return create_new_session(state_service, agent_id, source);
             }
+        };
+
+        // Reuse the existing root execution (one continuous conversation)
+        let execution_id = match state_service.get_root_execution(session_id) {
+            Ok(Some(root_exec)) => root_exec.id,
+            _ => {
+                // Fallback: create new root execution if none found
+                let execution = AgentExecution::new_root(session_id, agent_id);
+                if let Err(e) = state_service.create_execution(&execution) {
+                    tracing::warn!("Failed to create execution in existing session: {}", e);
+                }
+                execution.id
+            }
+        };
+
+        // Reactivate session if it was in a terminal state (completed/crashed)
+        // This handles the case where user sends a new message to a completed session
+        if let Err(e) = state_service.reactivate_session(session_id) {
+            tracing::warn!("Failed to reactivate session: {}", e);
         }
+
+        // Also reactivate the execution if it was completed
+        if let Err(e) = state_service.reactivate_execution(&execution_id) {
+            tracing::warn!("Failed to reactivate execution: {}", e);
+        }
+
+        return SessionSetup {
+            session_id: session_id.to_string(),
+            execution_id,
+            ward_id: session.ward_id,
+        };
     }
 
-    // Create new session with source
+    create_new_session(state_service, agent_id, source)
+}
+
+fn create_new_session(
+    state_service: &StateService<DatabaseManager>,
+    agent_id: &str,
+    source: TriggerSource,
+) -> SessionSetup {
     let (session, execution) = state_service
         .create_session_with_source(agent_id, source)
         .unwrap_or_else(|e| {

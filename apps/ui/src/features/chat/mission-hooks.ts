@@ -1066,6 +1066,33 @@ export function useMissionControl() {
   // Load existing session messages on mount (for resuming past sessions)
   // ========================================================================
 
+  const buildSessionBlocks = (
+    sessionId: string,
+    userMessage: string | undefined,
+    response: string | undefined,
+    startedAt: string,
+  ): NarrativeBlock[] => {
+    const blocks: NarrativeBlock[] = [];
+    if (userMessage) {
+      blocks.push({
+        id: "user-" + sessionId,
+        type: "user",
+        timestamp: startedAt,
+        data: { content: userMessage, timestamp: startedAt },
+      });
+    }
+    if (response) {
+      blocks.push({
+        id: "response-" + sessionId,
+        type: "response",
+        timestamp: startedAt,
+        data: { content: response, timestamp: startedAt },
+        isStreaming: false,
+      });
+    }
+    return blocks;
+  };
+
   useEffect(() => {
     const logSessionId = localStorage.getItem("agentzero_log_session_id");
     console.log("[MissionControl] loadSession check:", { logSessionId, activeSessionId, hasLoaded: hasLoadedSessionRef.current });
@@ -1142,24 +1169,7 @@ export function useMissionControl() {
         }
 
         // Center — build minimal blocks (user message + response only)
-        const loadedBlocks: NarrativeBlock[] = [];
-        if (s.userMessage) {
-          loadedBlocks.push({
-            id: "user-" + sessionToLoad,
-            type: "user",
-            timestamp: s.session.startedAt,
-            data: { content: s.userMessage, timestamp: s.session.startedAt },
-          });
-        }
-        if (s.response) {
-          loadedBlocks.push({
-            id: "response-" + sessionToLoad,
-            type: "response",
-            timestamp: s.session.startedAt,
-            data: { content: s.response, timestamp: s.session.startedAt },
-            isStreaming: false,
-          });
-        }
+        const loadedBlocks = buildSessionBlocks(sessionToLoad, s.userMessage ?? undefined, s.response ?? undefined, s.session.startedAt);
         if (loadedBlocks.length > 0) setBlocks(loadedBlocks);
 
       } catch (err) {

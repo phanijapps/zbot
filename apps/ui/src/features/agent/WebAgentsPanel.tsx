@@ -150,6 +150,18 @@ export function WebAgentsPanel() {
     getTransport().then(setTransport);
   }, []);
 
+  const applyProvidersResult = (data: typeof providers) => {
+    setProviders(data);
+    if (!newAgent.providerId && data.length > 0) {
+      const def = data[0];
+      setNewAgent((prev) => ({
+        ...prev,
+        providerId: def.id || "",
+        model: getProviderDefaultModel(def),
+      }));
+    }
+  };
+
   const loadAllData = useCallback(async () => {
     if (!transport) return;
     setIsLoading(true);
@@ -162,17 +174,7 @@ export function WebAgentsPanel() {
         transport.listCronJobs(),
       ]);
       if (agentsRes.success && agentsRes.data) setAgents(agentsRes.data);
-      if (providersRes.success && providersRes.data) {
-        setProviders(providersRes.data);
-        if (!newAgent.providerId && providersRes.data.length > 0) {
-          const def = providersRes.data[0];
-          setNewAgent((prev) => ({
-            ...prev,
-            providerId: def.id || "",
-            model: getProviderDefaultModel(def),
-          }));
-        }
-      }
+      if (providersRes.success && providersRes.data) applyProvidersResult(providersRes.data);
       if (modelsRes.data) setModelRegistry(modelsRes.data);
       if (skillsRes.success && skillsRes.data) setSkills(skillsRes.data);
       if (schedulesRes.success && schedulesRes.data) setSchedules(schedulesRes.data);

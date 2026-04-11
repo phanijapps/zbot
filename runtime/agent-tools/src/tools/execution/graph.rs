@@ -549,6 +549,22 @@ impl Tool for ExecutionGraphTool {
 }
 
 // ============================================================================
+// VALIDATION HELPERS
+// ============================================================================
+
+fn validate_node_input_refs(node: &GraphNode, node_ids: &HashSet<&str>) -> Result<()> {
+    for (param, input_ref) in &node.inputs {
+        if !node_ids.contains(input_ref.from.as_str()) {
+            return Err(ZeroError::Tool(format!(
+                "Node '{}' input '{}' references unknown node '{}'",
+                node.id, param, input_ref.from
+            )));
+        }
+    }
+    Ok(())
+}
+
+// ============================================================================
 // ACTION HANDLERS
 // ============================================================================
 
@@ -593,15 +609,7 @@ impl ExecutionGraphTool {
                     node.id, cond.ref_node
                 )));
             }
-            // Validate input references
-            for (param, input_ref) in &node.inputs {
-                if !node_ids.contains(input_ref.from.as_str()) {
-                    return Err(ZeroError::Tool(format!(
-                        "Node '{}' input '{}' references unknown node '{}'",
-                        node.id, param, input_ref.from
-                    )));
-                }
-            }
+            validate_node_input_refs(node, &node_ids)?;
         }
 
         let graph_id = format!(
