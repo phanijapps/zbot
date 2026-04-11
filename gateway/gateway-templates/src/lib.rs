@@ -1,3 +1,17 @@
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(missing_docs)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::fn_params_excessive_bools)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::unnecessary_wraps)]
 //! # Gateway Templates
 //!
 //! System prompt assembly for AgentZero agents.
@@ -281,9 +295,8 @@ fn load_shards(config_dir: &Path) -> String {
         let mut extras: Vec<_> = entries
             .filter_map(|e| e.ok())
             .filter(|e| {
-                let name = e.file_name().to_string_lossy().to_string();
-                name.ends_with(".md")
-                    && !loaded_names.contains(&name.trim_end_matches(".md").to_string())
+                let name = e.file_name().to_string_lossy().into_owned();
+                name.ends_with(".md") && !loaded_names.contains(name.trim_end_matches(".md"))
             })
             .collect();
         extras.sort_by_key(|e| e.file_name());
@@ -349,7 +362,7 @@ mod tests {
 
         // Prompt should contain content from all three
         assert!(prompt.contains("Jaffa")); // from SOUL
-        assert!(prompt.contains("EXECUTION")); // from INSTRUCTIONS
+        assert!(prompt.contains("execution_mode")); // from INSTRUCTIONS
         assert!(prompt.contains("PLATFORM")); // from OS
         assert!(prompt.contains("SYSTEM SHARDS")); // separator
         assert!(prompt.contains("MEMORY & LEARNING")); // from shard
@@ -448,6 +461,6 @@ mod tests {
         // Should load all required shards from embedded
         assert!(shards.contains("TOOLING & SKILLS"));
         assert!(shards.contains("MEMORY & LEARNING"));
-        assert!(shards.contains("PLANNING & AUTONOMY"));
+        assert!(shards.contains("delegation_rules")); // from planning_autonomy shard
     }
 }

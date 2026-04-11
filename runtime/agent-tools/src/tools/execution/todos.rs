@@ -81,6 +81,7 @@ pub struct TodoList {
 
 impl TodoList {
     /// Create a new empty TODO list
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self {
             items: Vec::new(),
@@ -152,7 +153,7 @@ impl TodoTool {
     fn load_todos(ctx: &Arc<dyn ToolContext>) -> TodoList {
         ctx.get_state(TODO_LIST_KEY)
             .and_then(|v| serde_json::from_value(v).ok())
-            .unwrap_or_else(TodoList::new)
+            .unwrap_or_default()
     }
 
     /// Save the TODO list to session state
@@ -174,9 +175,7 @@ impl TodoTool {
             .and_then(|v| v.as_str().map(String::from));
 
         // Check if this is the orchestrator (no root_agent_id or same as agent_id)
-        let is_orchestrator = root_agent_id
-            .as_ref()
-            .map_or(true, |root| root == &agent_id);
+        let is_orchestrator = root_agent_id.as_ref().is_none_or(|root| root == &agent_id);
 
         // Extract agent name from agent_id (e.g., "parent.subagent" -> "subagent")
         let agent_name = if is_orchestrator {

@@ -113,6 +113,7 @@ impl ExecutionRunner {
     ///
     /// This initializes the runner and spawns a background task for
     /// processing delegation requests from running agents.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
@@ -146,6 +147,7 @@ impl ExecutionRunner {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     /// Create a new execution runner with connector registry for response routing.
     pub fn with_connector_registry(
         event_bus: Arc<EventBus>,
@@ -835,6 +837,7 @@ impl ExecutionRunner {
     }
 
     /// Spawn the async execution task.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_execution_task(
         &self,
         executor: AgentExecutor,
@@ -862,7 +865,7 @@ impl ExecutionRunner {
         let paths = self.paths.clone();
         let delegation_registry = self.delegation_registry.clone();
         let handles = self.handles.clone();
-        let skill_service = self.skill_service.clone();
+        let _skill_service = self.skill_service.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -1456,6 +1459,7 @@ impl ExecutionRunner {
     }
 
     /// Create an executor for the agent using the ExecutorBuilder.
+    #[allow(clippy::too_many_arguments)]
     ///
     /// Returns the executor and any recommended skill IDs from intent analysis
     /// (empty when analysis is skipped or fails).
@@ -2970,14 +2974,14 @@ pub fn auto_update_agents_md_with_lang_configs(
         })
     });
 
-    let import_example = match example_import {
+    let _import_example = match example_import {
         Some((module, Some(func))) => format!("`from core.{} import {}`", module, func),
         Some((module, None)) => format!("`from core.{} import ...`", module),
         None => "`from core.<module> import <function>`".to_string(),
     };
 
     // Determine an example task dir prefix for the coding guide
-    let task_dir_hint = task_dirs
+    let _task_dir_hint = task_dirs
         .first()
         .map(|d| {
             // Use the top-level portion, e.g. "stocks/spy" -> "stocks/{ticker}"
@@ -3080,14 +3084,13 @@ fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Pa
             for entry in entries.filter_map(|e| e.ok()) {
                 if entry.path().extension().and_then(|e| e.to_str()) == Some("py") {
                     if let Ok(src) = std::fs::read_to_string(entry.path()) {
-                        if src.contains("import yfinance") && !tech.iter().any(|t| *t == "yfinance")
-                        {
+                        if src.contains("import yfinance") && !tech.contains(&"yfinance") {
                             tech.push("yfinance");
                         }
-                        if src.contains("import pandas") && !tech.iter().any(|t| *t == "pandas") {
+                        if src.contains("import pandas") && !tech.contains(&"pandas") {
                             tech.push("pandas");
                         }
-                        if src.contains("import numpy") && !tech.iter().any(|t| *t == "numpy") {
+                        if src.contains("import numpy") && !tech.contains(&"numpy") {
                             tech.push("numpy");
                         }
                     }
@@ -3104,6 +3107,7 @@ fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Pa
     }
 }
 
+#[allow(clippy::only_used_in_recursion)]
 fn generate_tree(
     dir: &std::path::Path,
     base: &std::path::Path,

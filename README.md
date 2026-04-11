@@ -68,7 +68,7 @@ Each subagent works in isolation with its own conversation, tools, and context. 
 ### Prerequisites
 
 - **Node.js 18+** and npm
-- **Rust 1.88+** with cargo
+- **Rust 1.93+** with cargo
 - An LLM API key (OpenAI, Anthropic, etc.)
 
 ### Install & Run

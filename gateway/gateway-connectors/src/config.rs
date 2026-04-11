@@ -163,7 +163,7 @@ pub struct CreateConnectorRequest {
 }
 
 /// Request to update a connector.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UpdateConnectorRequest {
     #[serde(default)]
     pub name: Option<String>,

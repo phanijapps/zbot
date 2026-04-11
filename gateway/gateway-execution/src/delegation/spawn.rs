@@ -22,7 +22,7 @@ use crate::handle::ExecutionHandle;
 use crate::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, detect_subagent_role,
     process_stream_event, spawn_batch_writer_with_repo, subagent_rules, AgentLoader,
-    ExecutorBuilder, ResponseAccumulator, StreamContext, SubagentRole, WorkspaceCache,
+    ExecutorBuilder, ResponseAccumulator, StreamContext, WorkspaceCache,
 };
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
@@ -42,6 +42,7 @@ use crate::recall::MemoryRecall;
 /// - Building and running the executor
 /// - Sending callbacks to the parent on completion
 /// - Marking execution as CRASHED if spawn fails
+#[allow(clippy::too_many_arguments)]
 pub async fn spawn_delegated_agent(
     request: &DelegationRequest,
     event_bus: Arc<EventBus>,
@@ -261,7 +262,7 @@ pub async fn spawn_delegated_agent(
         .unwrap_or_default();
     let model_registry = Arc::new(gateway_services::models::ModelRegistry::load(
         &bundled_models,
-        &paths.vault_dir(),
+        paths.vault_dir(),
     ));
 
     // Get shared rate limiter for the child's provider
@@ -393,6 +394,7 @@ pub async fn spawn_delegated_agent(
     Ok(child_conversation_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 /// Spawn the async execution task for the delegated agent.
 fn spawn_execution_task(
     executor: AgentExecutor,
@@ -613,6 +615,7 @@ fn spawn_execution_task(
 }
 
 /// Handle successful execution completion.
+#[allow(clippy::too_many_arguments)]
 async fn handle_execution_success(
     conversation_repo: &ConversationRepository,
     state_service: &StateService<DatabaseManager>,
@@ -734,6 +737,7 @@ fn crash_spawn_failure(
 }
 
 /// Handle execution failure.
+#[allow(clippy::too_many_arguments)]
 async fn handle_execution_failure(
     conversation_repo: &ConversationRepository,
     state_service: &StateService<DatabaseManager>,

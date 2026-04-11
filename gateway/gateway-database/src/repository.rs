@@ -108,7 +108,7 @@ impl ConversationRepository {
                  ORDER BY created_at ASC",
             )?;
 
-            let rows = stmt.query_map([execution_id], |row| Self::row_to_message(row))?;
+            let rows = stmt.query_map([execution_id], Self::row_to_message)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -128,7 +128,7 @@ impl ConversationRepository {
                  LIMIT ?2",
             )?;
 
-            let rows = stmt.query_map(params![execution_id, limit as i64], |row| Self::row_to_message(row))?;
+            let rows = stmt.query_map(params![execution_id, limit as i64], Self::row_to_message)?;
 
             // Collect and reverse to get chronological order
             let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>, _>>()?;
@@ -137,12 +137,6 @@ impl ConversationRepository {
         })
     }
 
-    /// Get messages from all root executions in a session.
-    ///
-    /// This loads the full conversation history across all root agent turns,
-    /// including callback messages from completed subagents.
-    // =========================================================================
-    // SESSION-BASED MESSAGE OPERATIONS
     // =========================================================================
 
     /// Append a single message to a session's conversation stream.
@@ -214,7 +208,7 @@ impl ConversationRepository {
                  LIMIT ?2",
             )?;
 
-            let rows = stmt.query_map(params![session_id, limit as i64], |row| Self::row_to_message(row))?;
+            let rows = stmt.query_map(params![session_id, limit as i64], Self::row_to_message)?;
 
             let mut messages: Vec<Message> = rows.collect::<Result<Vec<_>, _>>()?;
             messages.reverse();

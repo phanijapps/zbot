@@ -52,6 +52,7 @@ pub struct StreamContext {
 
 impl StreamContext {
     /// Create a new stream context.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent_id: String,
         conversation_id: String,
@@ -246,6 +247,7 @@ pub fn handle_token_update(ctx: &StreamContext, tokens_in: u64, tokens_out: u64)
 ///
 /// The execution record is created immediately with status QUEUED to prevent a race
 /// condition where `try_complete_session()` could mark the session COMPLETED before
+#[allow(clippy::too_many_arguments)]
 /// the subagent execution exists.
 pub fn handle_delegation(
     ctx: &StreamContext,
@@ -535,12 +537,8 @@ impl ResponseAccumulator {
             return;
         }
 
-        // Handle leading newlines for respond tool messages
-        if content.starts_with("\n\n") && !self.content.is_empty() {
-            self.content.push_str(content);
-        } else {
-            self.content.push_str(content);
-        }
+        // Append content (including leading newlines for respond tool messages)
+        self.content.push_str(content);
     }
 
     /// Get the accumulated response.

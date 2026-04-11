@@ -16,9 +16,6 @@
 //! 5. Handles tool execution and result collection
 //! 6. Emits events for real-time feedback
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
-
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -305,11 +302,11 @@ pub enum ToolExecutionMode {
 }
 
 /// Type alias for beforeToolCall hook.
-/// Receives (tool_name, args). Returns Allow or Block.
+/// Receives (`tool_name`, args). Returns Allow or Block.
 pub type BeforeToolCallHook = Arc<dyn Fn(&str, &Value) -> ToolCallDecision + Send + Sync>;
 
 /// Type alias for afterToolCall hook.
-/// Receives (tool_name, args, result, succeeded). Returns optional replacement result.
+/// Receives (`tool_name`, args, result, succeeded). Returns optional replacement result.
 pub type AfterToolCallHook = Arc<dyn Fn(&str, &Value, &str, bool) -> Option<String> + Send + Sync>;
 
 /// Type alias for transformContext hook.
@@ -467,7 +464,7 @@ impl AgentExecutor {
             .middleware_pipeline
             .process_messages(messages, &middleware_context, &mut on_event)
             .await
-            .map_err(|e| ExecutorError::MiddlewareError(e))?;
+            .map_err(ExecutorError::MiddlewareError)?;
 
         // Get tools schema if enabled
         let tools_schema = if self.config.tools_enabled {
@@ -600,8 +597,7 @@ impl AgentExecutor {
                     if iters >= hard_budget {
                         // Hard budget exceeded: inject urgent message
                         current_messages.push(ChatMessage::user(format!(
-                            "[STEER: System] Budget exceeded ({}/{} iterations for {} task).                              Respond NOW with what you have. Do not start new work.",
-                            iters, hard_budget, complexity
+                            "[STEER: System] Budget exceeded ({iters}/{hard_budget} iterations for {complexity} task).                              Respond NOW with what you have. Do not start new work."
                         )));
                         tracing::warn!(
                             complexity = %complexity,
@@ -612,8 +608,7 @@ impl AgentExecutor {
                     } else if iters == soft_budget {
                         // Soft budget: nudge exactly once (when iters == soft_budget)
                         current_messages.push(ChatMessage::user(format!(
-                            "[STEER: System] You've used {}/{} iterations for a {} task.                              Wrap up or simplify your approach.",
-                            iters, hard_budget, complexity
+                            "[STEER: System] You've used {iters}/{hard_budget} iterations for a {complexity} task.                              Wrap up or simplify your approach."
                         )));
                         tracing::info!(
                             complexity = %complexity,
@@ -709,7 +704,9 @@ impl AgentExecutor {
             // multi-turn sessions.
             if self.recall_every_n_turns > 0
                 && progress_tracker.total_iterations > 0
-                && progress_tracker.total_iterations % self.recall_every_n_turns == 0
+                && progress_tracker
+                    .total_iterations
+                    .is_multiple_of(self.recall_every_n_turns)
             {
                 if let Some(hook) = &self.recall_hook {
                     // Find the latest user message for query context
@@ -717,7 +714,7 @@ impl AgentExecutor {
                         .iter()
                         .rev()
                         .find(|m| m.role == "user")
-                        .map(|m| m.text_content())
+                        .map(super::types::messages::ChatMessage::text_content)
                         .unwrap_or_default();
 
                     let hook_clone = Arc::clone(hook);
@@ -847,13 +844,13 @@ impl AgentExecutor {
             // Await the final response (channel closed = stream complete)
             let response = stream_handle
                 .await
-                .map_err(|e| ExecutorError::LlmError(format!("Stream task panicked: {}", e)))?
+                .map_err(|e| ExecutorError::LlmError(format!("Stream task panicked: {e}")))?
                 .map_err(|e| ExecutorError::LlmError(e.to_string()))?;
 
             // Update cumulative token counts and emit event
             if let Some(usage) = &response.usage {
-                total_tokens_in += usage.prompt_tokens as u64;
-                total_tokens_out += usage.completion_tokens as u64;
+                total_tokens_in += u64::from(usage.prompt_tokens);
+                total_tokens_out += u64::from(usage.completion_tokens);
 
                 on_event(StreamEvent::TokenUpdate {
                     timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -865,7 +862,7 @@ impl AgentExecutor {
             tracing::debug!(
                 "LLM response - content: '{}', tool_calls: {}",
                 response.content,
-                response.tool_calls.as_ref().map_or(0, |v| v.len())
+                response.tool_calls.as_ref().map_or(0, std::vec::Vec::len)
             );
 
             // Check for tool calls
@@ -926,7 +923,7 @@ impl AgentExecutor {
                         ToolCallDecision::Block { reason } => {
                             blocked_results.insert(
                                 tc.id.clone(),
-                                format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason),
+                                format!("{{\"blocked\":true,\"reason\":\"{reason}\"}}"),
                             );
                         }
                     }
@@ -1054,7 +1051,7 @@ impl AgentExecutor {
                                 // Check for show_content marker
                                 if parsed
                                     .get("__show_content")
-                                    .and_then(|v| v.as_bool())
+                                    .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false)
                                 {
                                     let content_type = parsed
@@ -1076,10 +1073,12 @@ impl AgentExecutor {
                                     let file_path = parsed
                                         .get("file_path")
                                         .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
-                                    let is_attachment =
-                                        parsed.get("is_attachment").and_then(|v| v.as_bool());
-                                    let base64 = parsed.get("base64").and_then(|v| v.as_bool());
+                                        .map(std::string::ToString::to_string);
+                                    let is_attachment = parsed
+                                        .get("is_attachment")
+                                        .and_then(serde_json::Value::as_bool);
+                                    let base64 =
+                                        parsed.get("base64").and_then(serde_json::Value::as_bool);
 
                                     on_event(StreamEvent::ShowContent {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -1096,7 +1095,7 @@ impl AgentExecutor {
                                 // Check for request_input marker
                                 if parsed
                                     .get("__request_input")
-                                    .and_then(|v| v.as_bool())
+                                    .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false)
                                 {
                                     let form_id = parsed
@@ -1120,13 +1119,13 @@ impl AgentExecutor {
                                     let description = parsed
                                         .get("description")
                                         .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
+                                        .map(std::string::ToString::to_string);
                                     let schema =
                                         parsed.get("schema").cloned().unwrap_or_else(|| json!({}));
                                     let submit_button = parsed
                                         .get("submit_button")
                                         .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
+                                        .map(std::string::ToString::to_string);
 
                                     on_event(StreamEvent::RequestInput {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -1142,7 +1141,7 @@ impl AgentExecutor {
                                 // Check for ward_changed marker (from ward tool)
                                 if parsed
                                     .get("__ward_changed__")
-                                    .and_then(|v| v.as_bool())
+                                    .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false)
                                 {
                                     if let Some(ward_id) =
@@ -1158,7 +1157,7 @@ impl AgentExecutor {
                                 // Check for plan_update marker
                                 if parsed
                                     .get("__plan_update")
-                                    .and_then(|v| v.as_bool())
+                                    .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false)
                                 {
                                     let plan =
@@ -1166,7 +1165,7 @@ impl AgentExecutor {
                                     let explanation = parsed
                                         .get("explanation")
                                         .and_then(|v| v.as_str())
-                                        .map(|s| s.to_string());
+                                        .map(std::string::ToString::to_string);
 
                                     on_event(StreamEvent::ActionPlanUpdate {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -1178,7 +1177,7 @@ impl AgentExecutor {
                                 // Check for session_title_changed marker
                                 if parsed
                                     .get("__session_title_changed__")
-                                    .and_then(|v| v.as_bool())
+                                    .and_then(serde_json::Value::as_bool)
                                     .unwrap_or(false)
                                 {
                                     if let Some(title) =
@@ -1291,14 +1290,14 @@ impl AgentExecutor {
         // Emit done event — but NOT if we stopped for delegation.
         // When delegation is pending, the runner should NOT mark this execution
         // as completed. The continuation callback will resume it later.
-        if !stopped_for_delegation {
+        if stopped_for_delegation {
+            tracing::info!("Executor paused for delegation — skipping Done event");
+        } else {
             on_event(StreamEvent::Done {
                 timestamp: chrono::Utc::now().timestamp_millis() as u64,
                 final_message: full_response.clone(),
                 token_count: full_response.len(),
             });
-        } else {
-            tracing::info!("Executor paused for delegation — skipping Done event");
         }
 
         // Emit context state for checkpoint persistence
@@ -1332,7 +1331,7 @@ impl AgentExecutor {
             let result = tool
                 .execute(shared_ctx.clone(), arguments.clone())
                 .await
-                .map_err(|e| format!("Tool execution failed: {:?}", e))?;
+                .map_err(|e| format!("Tool execution failed: {e:?}"))?;
 
             // Atomically take any actions that were set by the tool
             let actions = shared_ctx.take_actions();
@@ -1375,8 +1374,7 @@ impl AgentExecutor {
                             tools
                                 .into_iter()
                                 .find(|t| normalize_tool_name(&t.name) == normalized_tool)
-                                .map(|t| t.name)
-                                .unwrap_or_else(|| normalized_tool.to_string())
+                                .map_or_else(|| normalized_tool.to_string(), |t| t.name)
                         } else {
                             normalized_tool.to_string()
                         }
@@ -1404,7 +1402,7 @@ impl AgentExecutor {
             }
         }
 
-        Err(format!("Tool not found: {}", tool_name))
+        Err(format!("Tool not found: {tool_name}"))
     }
 
     /// Harden a tool parameter schema for stricter LLM compliance.
@@ -1421,9 +1419,9 @@ impl AgentExecutor {
         schema
     }
 
-    /// Normalize MCP tool parameters to OpenAI format
+    /// Normalize MCP tool parameters to `OpenAI` format
     ///
-    /// OpenAI requires parameters to have `type: "object"` at the root.
+    /// `OpenAI` requires parameters to have `type: "object"` at the root.
     /// MCP tools may return parameters without this wrapper.
     fn normalize_mcp_parameters(params: Option<Value>) -> Value {
         match params {
@@ -1449,9 +1447,7 @@ impl AgentExecutor {
         for tool in self.tool_registry.get_all() {
             let tool_name = tool.name();
             let tool_desc = tool.description();
-            let schema = tool.parameters_schema()
-                .map(Self::harden_tool_schema)
-                .unwrap_or_else(|| json!({"type": "object", "properties": {}, "additionalProperties": false, "required": []}));
+            let schema = tool.parameters_schema().map_or_else(|| json!({"type": "object", "properties": {}, "additionalProperties": false, "required": []}), Self::harden_tool_schema);
 
             // Validate tool name and description aren't empty
             if tool_name.is_empty() {
@@ -1479,7 +1475,7 @@ impl AgentExecutor {
         for mcp_id in &self.config.mcps {
             if let Some(client) = self.mcp_manager.get_client(mcp_id).await {
                 let mcp_tools = client.list_tools().await.map_err(|e| {
-                    ExecutorError::McpError(format!("Failed to list MCP tools: {}", e))
+                    ExecutorError::McpError(format!("Failed to list MCP tools: {e}"))
                 })?;
 
                 tracing::info!(
@@ -1493,7 +1489,7 @@ impl AgentExecutor {
                     // Pattern must match: ^[a-zA-Z0-9_-]+$
                     let mcp_id_normalized = normalize_tool_name(mcp_id);
                     let tool_name_normalized = normalize_tool_name(&mcp_tool.name);
-                    let tool_name = format!("{}__{}", mcp_id_normalized, tool_name_normalized);
+                    let tool_name = format!("{mcp_id_normalized}__{tool_name_normalized}");
 
                     // Normalize parameters to OpenAI format and harden schema
                     let parameters = Self::harden_tool_schema(Self::normalize_mcp_parameters(
@@ -1571,7 +1567,7 @@ impl AgentExecutor {
         // Generate unique filename
         let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S");
         let sanitized_tool = tool_name.replace(['/', '\\', ':', '*', '?', '"', '<', '>', '|'], "_");
-        let filename = format!("{}_{}.txt", sanitized_tool, timestamp);
+        let filename = format!("{sanitized_tool}_{timestamp}.txt");
         let file_path = offload_dir.join(&filename);
 
         // Write result to file
@@ -1609,9 +1605,9 @@ impl AgentExecutor {
     }
 }
 
-/// Normalize a string to be a valid OpenAI tool name.
+/// Normalize a string to be a valid `OpenAI` tool name.
 ///
-/// OpenAI requires tool names to match: ^[a-zA-Z0-9_-]+$
+/// `OpenAI` requires tool names to match: ^[a-zA-Z0-9_-]+$
 /// This function replaces any invalid characters with underscores.
 fn normalize_tool_name(name: &str) -> String {
     name.chars()
@@ -1636,7 +1632,7 @@ fn normalize_tool_name(name: &str) -> String {
 /// success rate, and repetition patterns.
 #[allow(dead_code)] // Extension fields kept for diagnostics/legacy
 struct ProgressTracker {
-    /// Recent tool calls as (name, args_hash) for repetition detection
+    /// Recent tool calls as (name, `args_hash`) for repetition detection
     recent_tool_calls: VecDeque<(String, u64)>,
     /// Recent error messages for repeated-error detection
     recent_errors: VecDeque<String>,
@@ -1726,8 +1722,7 @@ impl ProgressTracker {
                         let item_count = args
                             .get("items")
                             .and_then(|v| v.as_array())
-                            .map(|arr| arr.len() as u32)
-                            .unwrap_or(1);
+                            .map_or(1, |arr| arr.len() as u32);
                         self.plan_items_created += item_count;
                         self.has_plan = true;
                         self.score += 3 + item_count.min(5) as i32; // +3 base + 1/item (max +5)
@@ -1735,7 +1730,7 @@ impl ProgressTracker {
                     "update" => {
                         if args
                             .get("completed")
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false)
                         {
                             self.plan_items_completed += 1;
@@ -1778,9 +1773,15 @@ impl ProgressTracker {
 
         // Score diversity every 10 FAILED calls (not total calls)
         self.window_tool_calls += 1;
-        if !succeeded && self.tool_name_window.len() >= 10 && self.tool_name_window.len() % 5 == 0 {
-            let distinct: HashSet<&str> =
-                self.tool_name_window.iter().map(|s| s.as_str()).collect();
+        if !succeeded
+            && self.tool_name_window.len() >= 10
+            && self.tool_name_window.len().is_multiple_of(5)
+        {
+            let distinct: HashSet<&str> = self
+                .tool_name_window
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
             let ratio = distinct.len() as f32 / self.tool_name_window.len() as f32;
 
             if ratio <= 0.15 {
@@ -1872,9 +1873,9 @@ impl ProgressTracker {
     }
 
     /// Grant an extension: reset the score window and increment counter.
-    /// NOTE: tool_name_window is NOT cleared — diversity tracking spans full session.
-    /// NOTE: has_plan, plan_items_created, plan_items_completed, planning_nudge_sent,
-    ///       and tool_calls_before_plan are intentionally NOT reset — planning state
+    /// NOTE: `tool_name_window` is NOT cleared — diversity tracking spans full session.
+    /// NOTE: `has_plan`, `plan_items_created`, `plan_items_completed`, `planning_nudge_sent`,
+    ///       and `tool_calls_before_plan` are intentionally NOT reset — planning state
     ///       spans the full execution.
     #[allow(dead_code)]
     fn grant_extension(&mut self) {
@@ -2010,15 +2011,14 @@ fn extract_key_info(content: &str) -> String {
                 || trimmed.ends_with(".ts")
                 || trimmed.ends_with(".yaml")
                 || trimmed.ends_with(".toml"))
+            && !info.contains(&trimmed.to_string())
         {
-            if !info.contains(&trimmed.to_string()) {
-                info.push(trimmed.to_string());
-            }
+            info.push(trimmed.to_string());
         }
-        if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
-            if !info.contains(&trimmed.to_string()) {
-                info.push(trimmed.to_string());
-            }
+        if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
+            && !info.contains(&trimmed.to_string())
+        {
+            info.push(trimmed.to_string());
         }
     }
 
@@ -2045,15 +2045,15 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
 
     // Phase 2: Clear old tool result content (keep tool_call_id for pairing)
     let compress_boundary = messages.len().saturating_sub(KEEP_RECENT);
-    for i in 0..compress_boundary {
-        if messages[i].role == "tool" {
-            let text = messages[i].text_content();
+    for message in &mut messages[..compress_boundary] {
+        if message.role == "tool" {
+            let text = message.text_content();
             let preserved = extract_key_info(&text);
-            messages[i].content = vec![Part::Text {
+            message.content = vec![Part::Text {
                 text: if preserved.is_empty() {
                     "[result cleared]".to_string()
                 } else {
-                    format!("[result cleared — {}]", preserved)
+                    format!("[result cleared — {preserved}]")
                 },
             }];
         }
@@ -2085,8 +2085,7 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         // Find clean split point
         let target_start = messages.len().saturating_sub(KEEP_RECENT);
         let mut split_at = target_start;
-        for i in target_start..messages.len() {
-            let msg = &messages[i];
+        for (i, msg) in messages.iter().enumerate().skip(target_start) {
             if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
                 split_at = i;
                 break;
@@ -2096,9 +2095,8 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         let trimmed_count = split_at.saturating_sub(non_system_start);
         if trimmed_count > 0 {
             compacted.push(ChatMessage::user(format!(
-                "[SYSTEM: Context compacted. {} earlier messages were compressed and trimmed. \
-                 The original request and recent messages are preserved. Continue with the task.]",
-                trimmed_count
+                "[SYSTEM: Context compacted. {trimmed_count} earlier messages were compressed and trimmed. \
+                 The original request and recent messages are preserved. Continue with the task.]"
             )));
         }
 
@@ -2115,7 +2113,7 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
 /// Removes orphaned `tool` messages whose `tool_call_id` doesn't match
 /// any `tool_calls` entry in a preceding `assistant` message.
 /// This prevents API errors: "Messages with role 'tool' must be a response
-/// to a preceding message with 'tool_calls'"
+/// to a preceding message with '`tool_calls`'"
 fn sanitize_messages(messages: &mut Vec<ChatMessage>) {
     // Collect all valid tool_call_ids from assistant messages
     let mut valid_tool_call_ids = HashSet::new();
@@ -2160,6 +2158,7 @@ fn sanitize_messages(messages: &mut Vec<ChatMessage>) {
 /// When LLMs generate tool calls with massive arguments (e.g., including
 /// full conversation context), storing these in message history causes
 /// exponential growth. This function truncates arguments to a reasonable size.
+#[allow(dead_code)]
 fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
     let args_str = serde_json::to_string(args).unwrap_or_default();
     if args_str.len() <= max_chars {
@@ -2194,10 +2193,10 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
     json!({"_truncated": true, "_original_size": args_str.len()})
 }
 
-/// Truncate a tool result string if it exceeds max_chars.
+/// Truncate a tool result string if it exceeds `max_chars`.
 ///
 /// Keeps the first ~80% and last ~20% of the budget with a truncation notice.
-/// Returns the original string if within limits or if max_chars is 0 (disabled).
+/// Returns the original string if within limits or if `max_chars` is 0 (disabled).
 fn truncate_tool_result(result: String, max_chars: usize) -> String {
     if max_chars == 0 || result.len() <= max_chars {
         return result;
@@ -2225,7 +2224,7 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
     let mut head = String::new();
     let mut head_count = 0;
     for line in &lines {
-        let next = format!("{}\n", line);
+        let next = format!("{line}\n");
         if head.len() + next.len() > head_budget {
             break;
         }
@@ -2259,7 +2258,7 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
     );
 
     // Final budget check — if combined fits, return it; otherwise trim head/tail further
-    let combined = format!("{}{}{}", head, notice, tail);
+    let combined = format!("{head}{notice}{tail}");
     if combined.len() <= max_chars {
         return combined;
     }
@@ -2273,7 +2272,7 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
     let mut tight_head = String::new();
     let mut tight_head_count = 0;
     for line in &lines {
-        let next = format!("{}\n", line);
+        let next = format!("{line}\n");
         if tight_head.len() + next.len() > tight_head_budget {
             break;
         }
@@ -2304,7 +2303,7 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
         result.len()
     );
 
-    format!("{}{}{}", tight_head, tight_notice, tight_tail)
+    format!("{tight_head}{tight_notice}{tight_tail}")
 }
 
 #[cfg(test)]
@@ -2342,16 +2341,14 @@ mod truncation_tests {
         let tail_t = truncated.matches('T').count();
         assert!(
             head_h > tail_t,
-            "head ({}) should be larger than tail ({})",
-            head_h,
-            tail_t
+            "head ({head_h}) should be larger than tail ({tail_t})"
         );
     }
 
     #[test]
     fn test_truncation_preserves_line_boundaries() {
         let lines: Vec<String> = (0..100)
-            .map(|i| format!("Line {}: some content here", i))
+            .map(|i| format!("Line {i}: some content here"))
             .collect();
         let input = lines.join("\n");
         let result = truncate_tool_result(input, 500);
@@ -2363,8 +2360,7 @@ mod truncation_tests {
                     || line.contains("TRUNCATED")
                     || line.contains("---")
                     || line.is_empty(),
-                "Truncated mid-line: '{}'",
-                line
+                "Truncated mid-line: '{line}'"
             );
         }
     }
@@ -2485,8 +2481,7 @@ mod progress_tracker_tests {
         let diagnosis = tracker.diagnosis();
         assert!(
             diagnosis.contains("loop") || diagnosis.contains("No progress"),
-            "Got: {}",
-            diagnosis
+            "Got: {diagnosis}"
         );
     }
 
@@ -2498,7 +2493,7 @@ mod progress_tracker_tests {
         tracker.record_tool_call("write", &json!({}), true);
         tracker.record_tool_call("shell", &json!({}), true);
         let diagnosis = tracker.diagnosis();
-        assert!(diagnosis.contains("progress"), "Got: {}", diagnosis);
+        assert!(diagnosis.contains("progress"), "Got: {diagnosis}");
     }
 
     #[test]
@@ -2842,8 +2837,7 @@ mod progress_tracker_tests {
         let diagnosis = tracker.diagnosis();
         assert!(
             diagnosis.contains("plan: 1/2 items done"),
-            "Expected plan status in diagnosis, got: {}",
-            diagnosis
+            "Expected plan status in diagnosis, got: {diagnosis}"
         );
     }
 
@@ -2854,8 +2848,7 @@ mod progress_tracker_tests {
         let diagnosis = tracker.diagnosis();
         assert!(
             diagnosis.contains("no plan created"),
-            "Expected 'no plan created' in diagnosis, got: {}",
-            diagnosis
+            "Expected 'no plan created' in diagnosis, got: {diagnosis}"
         );
     }
 
@@ -2932,7 +2925,7 @@ mod progress_tracker_tests {
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: format!("Step {}", i),
+                    text: format!("Step {i}"),
                 }],
                 tool_calls: None,
                 tool_call_id: None,
@@ -3079,7 +3072,6 @@ mod progress_tracker_tests {
 #[cfg(test)]
 mod hook_tests {
     use super::*;
-    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn test_tool_call_decision_default_is_allow() {
@@ -3101,7 +3093,7 @@ mod hook_tests {
     #[test]
     fn test_before_tool_call_block_returns_reason() {
         let reason = "Ward boundary violation";
-        let result = format!("{{\"blocked\":true,\"reason\":\"{}\"}}", reason);
+        let result = format!("{{\"blocked\":true,\"reason\":\"{reason}\"}}");
         assert!(result.contains("blocked"));
         assert!(result.contains(reason));
     }
@@ -3196,14 +3188,14 @@ mod compaction_tests {
 
         for i in 0..14 {
             let tool = ToolCall::new(
-                format!("call_{}", i),
+                format!("call_{i}"),
                 "write_file".to_string(),
                 json!({"path": format!("src/file_{}.py", i)}),
             );
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: format!("Creating file_{}.py with detailed explanation", i),
+                    text: format!("Creating file_{i}.py with detailed explanation"),
                 }],
                 tool_calls: Some(vec![tool]),
                 tool_call_id: None,
@@ -3211,10 +3203,10 @@ mod compaction_tests {
             messages.push(ChatMessage {
                 role: "tool".to_string(),
                 content: vec![Part::Text {
-                    text: format!("File created: src/file_{}.py", i),
+                    text: format!("File created: src/file_{i}.py"),
                 }],
                 tool_calls: None,
-                tool_call_id: Some(format!("call_{}", i)),
+                tool_call_id: Some(format!("call_{i}")),
             });
         }
 
@@ -3246,7 +3238,7 @@ mod compaction_tests {
             ChatMessage::user("request".to_string()),
         ];
         for i in 0..25 {
-            messages.push(ChatMessage::user(format!("msg {}", i)));
+            messages.push(ChatMessage::user(format!("msg {i}")));
         }
         let compacted = compact_messages(messages);
         assert!(compacted.last().unwrap().text_content().contains("msg 24"));

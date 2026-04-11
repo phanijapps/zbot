@@ -38,6 +38,7 @@ pub struct FunctionTool {
     name: String,
     description: String,
     parameters: Option<Value>,
+    #[allow(clippy::type_complexity)]
     handler: Arc<
         dyn Fn(Arc<dyn ToolContext>, Value) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>>
             + Send

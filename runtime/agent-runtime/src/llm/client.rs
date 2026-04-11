@@ -45,7 +45,7 @@ pub type StreamCallback = Box<dyn Fn(StreamChunk) + Send + Sync>;
 /// Trait for LLM client implementations
 ///
 /// This trait provides a unified interface for interacting with
-/// various LLM providers (OpenAI, Anthropic, etc.)
+/// various LLM providers (`OpenAI`, Anthropic, etc.)
 #[async_trait]
 pub trait LlmClient: Send + Sync {
     /// Get the model identifier

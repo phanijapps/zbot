@@ -1,3 +1,17 @@
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(missing_docs)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::fn_params_excessive_bools)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::unnecessary_wraps)]
 //! # z-Bot Daemon
 //!
 //! Standalone server for the agent runtime.
@@ -169,7 +183,7 @@ impl From<LogSettings> for LogConfig {
 /// Load settings.json from the data directory.
 ///
 /// Returns default settings if the file doesn't exist or can't be parsed.
-fn load_settings(data_dir: &PathBuf) -> AppSettings {
+fn load_settings(data_dir: &std::path::Path) -> AppSettings {
     // Try new path first (config/settings.json), fall back to legacy path (settings.json)
     let new_path = data_dir.join("config").join("settings.json");
     let legacy_path = data_dir.join("settings.json");
@@ -203,7 +217,7 @@ fn load_settings(data_dir: &PathBuf) -> AppSettings {
 /// Resolve logging configuration by merging settings.json with CLI args.
 ///
 /// Precedence: CLI args > settings.json > defaults
-fn resolve_log_config(args: &Args, data_dir: &PathBuf) -> LogConfig {
+fn resolve_log_config(args: &Args, data_dir: &std::path::Path) -> LogConfig {
     // Load settings from file
     let file_settings = load_settings(data_dir);
     let mut config = LogConfig::from(file_settings.logs);
@@ -261,7 +275,7 @@ fn parse_level(level: &str) -> Level {
 /// to ensure log files are properly flushed.
 fn setup_logging(
     config: &LogConfig,
-    data_dir: &PathBuf,
+    data_dir: &std::path::Path,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let level = parse_level(&config.level);
     let env_filter = EnvFilter::from_default_env().add_directive(level.into());

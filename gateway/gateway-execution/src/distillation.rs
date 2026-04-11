@@ -164,6 +164,7 @@ impl SessionDistiller {
     /// The distiller resolves the default provider and creates a lightweight
     /// LLM client on-demand in `distill()`, avoiding the need for a concrete
     /// LLM client at construction time.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider_service: Arc<ProviderService>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,
@@ -1227,6 +1228,7 @@ fn summarize_tool_result(content: &str) -> String {
 }
 
 /// Truncate a JSON string to a max length for display.
+#[allow(dead_code)]
 fn truncate_json(json_str: &str, max_len: usize) -> String {
     if json_str.len() <= max_len {
         json_str.to_string()

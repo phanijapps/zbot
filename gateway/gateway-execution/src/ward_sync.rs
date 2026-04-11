@@ -142,7 +142,6 @@ pub fn generate_ward_knowledge_file(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     #[test]
     fn ward_knowledge_file_is_regenerated_after_delete() {

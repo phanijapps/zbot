@@ -306,18 +306,7 @@ pub struct TestResult {
     pub latency_ms: Option<u64>,
 }
 
-impl Default for UpdateConnectorRequest {
-    fn default() -> Self {
-        Self {
-            name: None,
-            transport: None,
-            metadata: None,
-            enabled: None,
-            outbound_enabled: None,
-            inbound_enabled: None,
-        }
-    }
-}
+// Default is now derived on UpdateConnectorRequest
 
 #[cfg(test)]
 mod tests {

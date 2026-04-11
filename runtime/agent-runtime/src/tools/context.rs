@@ -25,14 +25,14 @@ pub struct ToolContext {
     /// Optional conversation ID for scoping file operations
     pub conversation_id: Option<String>,
 
-    /// Skills available to the current agent (for load_skill tool)
+    /// Skills available to the current agent (for `load_skill` tool)
     pub available_skills: Vec<String>,
 
     /// Agent ID for this execution
     pub agent_id: Option<String>,
 
     /// Function call ID for the current tool execution.
-    /// Uses RwLock for interior mutability since context is shared via Arc.
+    /// Uses `RwLock` for interior mutability since context is shared via Arc.
     function_call_id: RwLock<String>,
 
     /// Key-value state storage
@@ -41,7 +41,7 @@ pub struct ToolContext {
     /// Event actions
     actions: RwLock<EventActions>,
 
-    /// Static empty content for user_content()
+    /// Static empty content for `user_content()`
     empty_content: Content,
 }
 
@@ -190,7 +190,7 @@ impl ToolContext {
     /// `restore_state()` or by passing to `full_with_state()`.
     ///
     /// Includes skill-related state keys like:
-    /// - `skill:graph` - SkillGraph with loaded skills and resources
+    /// - `skill:graph` - `SkillGraph` with loaded skills and resources
     /// - `skill:loaded_skills` - List of currently loaded skill names
     #[must_use]
     pub fn export_state(&self) -> Value {
@@ -225,7 +225,7 @@ impl ToolContext {
         CallbackContext::get_state(self, "skill:graph")
     }
 
-    /// Get the conversation directory if conversation_id is set
+    /// Get the conversation directory if `conversation_id` is set
     ///
     /// This returns None in the library context. The application layer
     /// should provide the actual path resolution.
@@ -235,7 +235,7 @@ impl ToolContext {
         // The application layer should override or extend this
         self.conversation_id
             .as_ref()
-            .map(|id| PathBuf::from(format!("/conversations/{}", id)))
+            .map(|id| PathBuf::from(format!("/conversations/{id}")))
     }
 }
 
@@ -252,11 +252,11 @@ impl zero_core::ReadonlyContext for ToolContext {
         self.agent_id.as_deref().unwrap_or("root")
     }
 
-    fn user_id(&self) -> &str {
+    fn user_id(&self) -> &'static str {
         "default"
     }
 
-    fn app_name(&self) -> &str {
+    fn app_name(&self) -> &'static str {
         "zbot"
     }
 
@@ -264,7 +264,7 @@ impl zero_core::ReadonlyContext for ToolContext {
         self.conversation_id.as_deref().unwrap_or("unknown")
     }
 
-    fn branch(&self) -> &str {
+    fn branch(&self) -> &'static str {
         "main"
     }
 

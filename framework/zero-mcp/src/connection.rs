@@ -194,7 +194,7 @@ impl Default for McpConnectionPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{McpServerConfig, McpTransport};
+    use crate::config::McpServerConfig;
 
     #[tokio::test]
     async fn test_connection_state_transitions() {

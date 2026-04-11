@@ -10,7 +10,7 @@ use std::sync::Arc;
 /// Trait for providing file system context to tools
 ///
 /// This allows the framework to be used with different directory structures
-/// without depending on application-specific code like AppDirs.
+/// without depending on application-specific code like `AppDirs`.
 pub trait FileSystemContext: Send + Sync {
     /// Get the conversation directory for a given conversation ID
     fn conversation_dir(&self, conversation_id: &str) -> Option<PathBuf>;

@@ -49,6 +49,7 @@ impl<'de> Deserialize<'de> for EntityType {
 
 impl EntityType {
     /// Parse from string
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().as_str() {
             "person" => EntityType::Person,
@@ -120,6 +121,7 @@ impl<'de> Deserialize<'de> for RelationshipType {
 
 impl RelationshipType {
     /// Parse from string
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().replace('_', "").as_str() {
             "worksfor" => RelationshipType::WorksFor,
@@ -276,19 +278,15 @@ pub struct ExtractedKnowledge {
 /// Direction for neighbor queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[derive(Default)]
 pub enum Direction {
     /// Entity → Other (outgoing edges)
     Outgoing,
     /// Other → Entity (incoming edges)
     Incoming,
     /// Either direction
+    #[default]
     Both,
-}
-
-impl Default for Direction {
-    fn default() -> Self {
-        Direction::Both
-    }
 }
 
 /// Information about a neighboring entity

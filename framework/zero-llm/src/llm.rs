@@ -115,14 +115,20 @@ pub struct LlmResponse {
     pub usage: Option<TokenUsage>,
 }
 
-impl LlmResponse {
-    /// Create a new empty response.
-    pub fn new() -> Self {
+impl Default for LlmResponse {
+    fn default() -> Self {
         Self {
             content: None,
             turn_complete: true,
             usage: None,
         }
+    }
+}
+
+impl LlmResponse {
+    /// Create a new empty response.
+    pub fn new() -> Self {
+        Self::default()
     }
 
     /// Create a text response.

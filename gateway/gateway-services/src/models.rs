@@ -293,7 +293,7 @@ mod tests {
         assert_eq!(profile.provider, "unknown");
         assert!(profile.capabilities.tools);
         assert!(!profile.capabilities.vision);
-        assert_eq!(profile.context.input, 8192);
+        assert_eq!(profile.context.input, 256_000);
     }
 
     #[test]

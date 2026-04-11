@@ -234,10 +234,10 @@ impl Tool for WebFetchTool {
         }
 
         // Add body for POST/PUT/PATCH
-        if matches!(method, Method::POST | Method::PUT | Method::PATCH) {
-            if let Some(body) = args.get("body").and_then(|v| v.as_str()) {
-                request = request.body(body.to_string());
-            }
+        if matches!(method, Method::POST | Method::PUT | Method::PATCH)
+            && let Some(body) = args.get("body").and_then(|v| v.as_str())
+        {
+            request = request.body(body.to_string());
         }
 
         // Send request
@@ -259,13 +259,13 @@ impl Tool for WebFetchTool {
         }
 
         // Check content length before downloading
-        if let Some(content_length) = response.content_length() {
-            if content_length as usize > MAX_RESPONSE_SIZE {
-                return Err(ZeroError::Tool(format!(
-                    "Response too large: {} bytes (max: {} bytes)",
-                    content_length, MAX_RESPONSE_SIZE
-                )));
-            }
+        if let Some(content_length) = response.content_length()
+            && content_length as usize > MAX_RESPONSE_SIZE
+        {
+            return Err(ZeroError::Tool(format!(
+                "Response too large: {} bytes (max: {} bytes)",
+                content_length, MAX_RESPONSE_SIZE
+            )));
         }
 
         // Get response body with size limit

@@ -134,7 +134,7 @@ pub enum StreamEvent {
         parallel: bool,
     },
 
-    /// Plan update action from the update_plan tool.
+    /// Plan update action from the `update_plan` tool.
     /// Signals that the agent's plan has been updated.
     #[serde(rename = "action_plan_update")]
     ActionPlanUpdate {
@@ -204,7 +204,7 @@ pub enum StreamEvent {
     // ========================================================================
     // SESSION EVENTS
     // ========================================================================
-    /// Session title changed via set_session_title tool.
+    /// Session title changed via `set_session_title` tool.
     #[serde(rename = "session_title_changed")]
     SessionTitleChanged {
         timestamp: u64,
@@ -253,7 +253,7 @@ pub fn current_timestamp() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
+        .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
         .unwrap_or(0)
 }
 

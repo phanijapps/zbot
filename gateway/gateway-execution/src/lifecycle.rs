@@ -144,6 +144,7 @@ pub fn start_execution(
 ///
 /// If `respond_to` contains connector IDs and `connector_registry` is provided,
 /// the response will be dispatched to those connectors.
+#[allow(clippy::too_many_arguments)]
 pub async fn complete_execution(
     state_service: &StateService<DatabaseManager>,
     log_service: &LogService<DatabaseManager>,
@@ -321,6 +322,7 @@ pub async fn complete_execution(
 
 /// Handle execution error/crash.
 ///
+#[allow(clippy::too_many_arguments)]
 /// Updates state, logs the error, and emits events.
 pub async fn crash_execution(
     state_service: &StateService<DatabaseManager>,
@@ -373,6 +375,7 @@ pub async fn crash_execution(
 }
 
 /// Handle user-initiated stop.
+#[allow(clippy::too_many_arguments)]
 ///
 /// Updates state, logs the stop, and emits events.
 pub async fn stop_execution(
@@ -460,6 +463,7 @@ pub async fn emit_delegation_started(
 }
 
 /// Emit delegation completed event.
+#[allow(clippy::too_many_arguments)]
 pub async fn emit_delegation_completed(
     event_bus: &EventBus,
     parent_agent_id: &str,

@@ -20,7 +20,7 @@ use zero_core::types::{ContentSource, Part};
 /// OpenAI-compatible LLM client
 ///
 /// This client works with any LLM provider that implements
-/// the OpenAI API format (including many self-hosted models)
+/// the `OpenAI` API format (including many self-hosted models)
 pub struct OpenAiClient {
     config: Arc<LlmConfig>,
     http_client: reqwest::Client,
@@ -30,7 +30,7 @@ pub struct OpenAiClient {
 /// Returns Some(Value) if recovery succeeds, None otherwise.
 fn recover_first_json(raw: &str) -> Option<serde_json::Value> {
     if let Some(pos) = raw.find("}{") {
-        let first = &raw[..pos + 1];
+        let first = &raw[..=pos];
         serde_json::from_str(first).ok()
     } else {
         None
@@ -104,7 +104,7 @@ impl OpenAiClient {
         &self.config
     }
 
-    /// Rehydrate any FileRef sources in messages to Base64 before sending to the API.
+    /// Rehydrate any `FileRef` sources in messages to Base64 before sending to the API.
     fn rehydrate_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         messages
             .into_iter()
@@ -237,13 +237,13 @@ impl OpenAiClient {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             tracing::error!("API error ({}): {}", status, error_text);
-            return Err(LlmError::ApiError(format!("({}): {}", status, error_text)));
+            return Err(LlmError::ApiError(format!("({status}): {error_text}")));
         }
 
         response
             .json::<Value>()
             .await
-            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {}", e)))
+            .map_err(|e| LlmError::ParseError(format!("Failed to parse response: {e}")))
     }
 
     /// Parse the API response
@@ -258,7 +258,7 @@ impl OpenAiClient {
         let reasoning = response
             .pointer("/choices/0/message/reasoning_content")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         // Parse tool calls if present
         let tool_calls = self.parse_tool_calls(&response);
@@ -381,7 +381,7 @@ impl LlmClient for OpenAiClient {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             tracing::error!("API error ({}): {}", status, error_text);
-            return Err(LlmError::ApiError(format!("({}): {}", status, error_text)));
+            return Err(LlmError::ApiError(format!("({status}): {error_text}")));
         }
 
         let mut full_content = String::new();
@@ -491,9 +491,10 @@ impl LlmClient for OpenAiClient {
                 // Capture usage from the final chunk (sent when stream_options.include_usage=true)
                 if let Some(u) = json_data.get("usage") {
                     if let (Some(pt), Some(ct), Some(tt)) = (
-                        u.get("prompt_tokens").and_then(|v| v.as_u64()),
-                        u.get("completion_tokens").and_then(|v| v.as_u64()),
-                        u.get("total_tokens").and_then(|v| v.as_u64()),
+                        u.get("prompt_tokens").and_then(serde_json::Value::as_u64),
+                        u.get("completion_tokens")
+                            .and_then(serde_json::Value::as_u64),
+                        u.get("total_tokens").and_then(serde_json::Value::as_u64),
                     ) {
                         stream_usage = Some(TokenUsage {
                             prompt_tokens: pt as u32,
@@ -546,7 +547,10 @@ impl LlmClient for OpenAiClient {
                 // Tool calls — accumulate deltas by index
                 if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                     for call in calls {
-                        let index = call.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
+                        let index = call
+                            .get("index")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0);
 
                         let acc =
                             tool_accumulators
@@ -604,25 +608,14 @@ impl LlmClient for OpenAiClient {
         // Build final tool calls from accumulated deltas
         let mut tool_calls: Vec<ToolCall> = Vec::new();
         let mut indices: Vec<u64> = tool_accumulators.keys().copied().collect();
-        indices.sort();
+        indices.sort_unstable();
         for index in indices {
             if let Some(acc) = tool_accumulators.remove(&index) {
                 if acc.name.is_empty() {
                     tracing::warn!("Skipping tool call at index {} with empty name", index);
                     continue;
                 }
-                let args_value = if !is_json_complete(&acc.arguments) {
-                    tracing::error!(
-                        "Tool '{}' arguments JSON is incomplete (truncated). Args (first 200): '{}'",
-                        acc.name, &acc.arguments[..acc.arguments.len().min(200)]
-                    );
-                    json!({
-                        "__error__": "TRUNCATED_ARGUMENTS",
-                        "__message__": "Tool call arguments were truncated. Try a shorter command or split into multiple calls.",
-                        "__original_length__": acc.arguments.len(),
-                        "__truncated__": true
-                    })
-                } else {
+                let args_value = if is_json_complete(&acc.arguments) {
                     match serde_json::from_str::<serde_json::Value>(&acc.arguments) {
                         Ok(args) => args,
                         Err(e) => {
@@ -649,6 +642,17 @@ impl LlmClient for OpenAiClient {
                             }
                         }
                     }
+                } else {
+                    tracing::error!(
+                        "Tool '{}' arguments JSON is incomplete (truncated). Args (first 200): '{}'",
+                        acc.name, &acc.arguments[..acc.arguments.len().min(200)]
+                    );
+                    json!({
+                        "__error__": "TRUNCATED_ARGUMENTS",
+                        "__message__": "Tool call arguments were truncated. Try a shorter command or split into multiple calls.",
+                        "__original_length__": acc.arguments.len(),
+                        "__truncated__": true
+                    })
                 };
                 tool_calls.push(ToolCall::new(acc.id, acc.name, args_value));
             }
@@ -746,7 +750,7 @@ mod json_recovery_tests {
 
     #[test]
     fn test_recover_invalid_json_returns_none() {
-        let raw = r#"not json at all"#;
+        let raw = r"not json at all";
         let result = recover_first_json(raw);
         assert!(result.is_none());
     }

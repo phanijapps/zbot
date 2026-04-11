@@ -117,6 +117,7 @@ impl Default for OrchestratorConfig {
 /// Both fields default to None, inheriting from orchestrator config.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[derive(Default)]
 pub struct DistillationConfig {
     /// Provider ID override. None = inherit from orchestrator config.
     #[serde(default)]
@@ -124,15 +125,6 @@ pub struct DistillationConfig {
     /// Model override. None = inherit from orchestrator config.
     #[serde(default)]
     pub model: Option<String>,
-}
-
-impl Default for DistillationConfig {
-    fn default() -> Self {
-        Self {
-            provider_id: None,
-            model: None,
-        }
-    }
 }
 
 /// Default multimodal model configuration.
@@ -235,7 +227,7 @@ impl SettingsService {
             return Ok(AppSettings::default());
         }
 
-        let content = fs::read_to_string(&self.config_path())
+        let content = fs::read_to_string(self.config_path())
             .map_err(|e| format!("Failed to read settings.json: {}", e))?;
 
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings.json: {}", e))
@@ -272,7 +264,7 @@ impl SettingsService {
         let content = serde_json::to_string_pretty(settings)
             .map_err(|e| format!("Failed to serialize settings: {}", e))?;
 
-        fs::write(&self.config_path(), content)
+        fs::write(self.config_path(), content)
             .map_err(|e| format!("Failed to write settings.json: {}", e))?;
 
         // Update cache
@@ -401,8 +393,10 @@ mod tests {
         let service = SettingsService::new_legacy(dir.path().to_path_buf());
 
         // Invalid log level should fail
-        let mut invalid_settings = LogSettings::default();
-        invalid_settings.level = "invalid".to_string();
+        let invalid_settings = LogSettings {
+            level: "invalid".to_string(),
+            ..LogSettings::default()
+        };
 
         let result = service.update_log_settings(invalid_settings);
         assert!(result.is_err());

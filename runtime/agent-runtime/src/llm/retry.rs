@@ -15,7 +15,7 @@ use crate::types::ChatMessage;
 /// Configuration for retry behavior on LLM API calls.
 #[derive(Debug, Clone)]
 pub struct RetryPolicy {
-    /// Maximum number of retry attempts (total calls = max_retries + 1).
+    /// Maximum number of retry attempts (total calls = `max_retries` + 1).
     pub max_retries: u32,
 
     /// Base delay before first retry. Subsequent delays grow exponentially.
@@ -71,10 +71,8 @@ impl RetryPolicy {
             LlmError::HttpError(_) => self.retry_on_transport,
             LlmError::ApiError(msg) => {
                 // Retry on 5xx server errors
-                if self.retry_on_server_error {
-                    if msg.starts_with("(5") {
-                        return true;
-                    }
+                if self.retry_on_server_error && msg.starts_with("(5") {
+                    return true;
                 }
                 // Retry on 429 rate limit errors from API
                 if self.retry_on_rate_limit && msg.contains("429") {
@@ -103,7 +101,7 @@ fn pseudo_random() -> f64 {
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.subsec_nanos())
         .unwrap_or(0);
-    (nanos % 1000) as f64 / 1000.0
+    f64::from(nanos % 1000) / 1000.0
 }
 
 /// An LLM client wrapper that adds retry logic with exponential backoff.

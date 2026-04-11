@@ -193,10 +193,8 @@ pub fn format_intent_injection(
              Then execute each step from the plan by delegating to the assigned agent.\n",
             analysis.primary_intent, wr.ward_name
         ));
-    } else {
-        if !es.explanation.is_empty() {
-            out.push_str(&format!("\n**Approach:** {}\n", es.explanation));
-        }
+    } else if !es.explanation.is_empty() {
+        out.push_str(&format!("\n**Approach:** {}\n", es.explanation));
     }
 
     // Lightweight ward reminder
@@ -838,7 +836,6 @@ mod tests {
 
     use agent_runtime::{ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
-    use std::sync::Arc;
 
     struct MockLlmClient {
         response: String,

@@ -132,6 +132,83 @@ impl Session for InMemorySession {
     }
 }
 
+/// Wrapper for InMemorySession that implements Session with interior mutability.
+/// This allows sharing the session across async contexts while satisfying the Session trait.
+pub struct MutexSession(pub std::sync::Mutex<InMemorySession>);
+
+impl MutexSession {
+    /// Create a new MutexSession from an InMemorySession.
+    pub fn new(session: InMemorySession) -> Self {
+        Self(std::sync::Mutex::new(session))
+    }
+
+    /// Create a new MutexSession with the given parameters.
+    pub fn with_params(id: String, app_name: String, user_id: String) -> Self {
+        Self::new(InMemorySession::new(id, app_name, user_id))
+    }
+
+    /// Add content to the session (convenience method).
+    pub fn add_content(&self, content: Content) {
+        if let Ok(mut session) = self.0.lock() {
+            session.add_content(content);
+        }
+    }
+
+    /// Lock the session and get the inner mutex guard.
+    pub fn lock(
+        &self,
+    ) -> Result<
+        std::sync::MutexGuard<'_, InMemorySession>,
+        std::sync::PoisonError<std::sync::MutexGuard<'_, InMemorySession>>,
+    > {
+        self.0.lock()
+    }
+}
+
+impl Session for MutexSession {
+    fn id(&self) -> &str {
+        // Return a placeholder - can't hold lock for reference
+        "unknown"
+    }
+
+    fn app_name(&self) -> &str {
+        "unknown"
+    }
+
+    fn user_id(&self) -> &str {
+        "unknown"
+    }
+
+    fn state(&self) -> &dyn State {
+        // Return a reference to a static empty state
+        // Note: This is a limitation of the trait design with Mutex wrapping
+        // The conversation_history() method is the primary one that works correctly
+        use once_cell::sync::Lazy;
+        use std::collections::HashMap;
+        struct EmptyState;
+        impl State for EmptyState {
+            fn get(&self, _key: &str) -> Option<serde_json::Value> {
+                None
+            }
+            fn set(&mut self, _key: String, _value: serde_json::Value) {}
+            fn all(&self) -> HashMap<String, serde_json::Value> {
+                HashMap::new()
+            }
+        }
+        static EMPTY_STATE_BOX: Lazy<Box<dyn State>> =
+            Lazy::new(|| Box::new(EmptyState) as Box<dyn State>);
+        &**EMPTY_STATE_BOX
+    }
+
+    fn conversation_history(&self) -> Vec<Content> {
+        if let Ok(session) = self.0.lock() {
+            session.conversation_history()
+        } else {
+            Vec::new()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,82 +285,5 @@ mod tests {
         assert_eq!(dyn_session.id(), "session-1");
         assert_eq!(dyn_session.app_name(), "test-app");
         assert_eq!(dyn_session.user_id(), "user-1");
-    }
-}
-
-/// Wrapper for InMemorySession that implements Session with interior mutability.
-/// This allows sharing the session across async contexts while satisfying the Session trait.
-pub struct MutexSession(pub std::sync::Mutex<InMemorySession>);
-
-impl MutexSession {
-    /// Create a new MutexSession from an InMemorySession.
-    pub fn new(session: InMemorySession) -> Self {
-        Self(std::sync::Mutex::new(session))
-    }
-
-    /// Create a new MutexSession with the given parameters.
-    pub fn with_params(id: String, app_name: String, user_id: String) -> Self {
-        Self::new(InMemorySession::new(id, app_name, user_id))
-    }
-
-    /// Add content to the session (convenience method).
-    pub fn add_content(&self, content: Content) {
-        if let Ok(mut session) = self.0.lock() {
-            session.add_content(content);
-        }
-    }
-
-    /// Lock the session and get the inner mutex guard.
-    pub fn lock(
-        &self,
-    ) -> Result<
-        std::sync::MutexGuard<'_, InMemorySession>,
-        std::sync::PoisonError<std::sync::MutexGuard<'_, InMemorySession>>,
-    > {
-        self.0.lock()
-    }
-}
-
-impl Session for MutexSession {
-    fn id(&self) -> &str {
-        // Return a placeholder - can't hold lock for reference
-        "unknown"
-    }
-
-    fn app_name(&self) -> &str {
-        "unknown"
-    }
-
-    fn user_id(&self) -> &str {
-        "unknown"
-    }
-
-    fn state(&self) -> &dyn State {
-        // Return a reference to a static empty state
-        // Note: This is a limitation of the trait design with Mutex wrapping
-        // The conversation_history() method is the primary one that works correctly
-        use once_cell::sync::Lazy;
-        use std::collections::HashMap;
-        struct EmptyState;
-        impl State for EmptyState {
-            fn get(&self, _key: &str) -> Option<serde_json::Value> {
-                None
-            }
-            fn set(&mut self, _key: String, _value: serde_json::Value) {}
-            fn all(&self) -> HashMap<String, serde_json::Value> {
-                HashMap::new()
-            }
-        }
-        static EMPTY_STATE_BOX: Lazy<Box<dyn State>> =
-            Lazy::new(|| Box::new(EmptyState) as Box<dyn State>);
-        &**EMPTY_STATE_BOX
-    }
-
-    fn conversation_history(&self) -> Vec<Content> {
-        if let Ok(session) = self.0.lock() {
-            session.conversation_history()
-        } else {
-            Vec::new()
-        }
     }
 }

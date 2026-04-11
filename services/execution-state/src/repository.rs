@@ -57,14 +57,14 @@ impl<D: StateDbProvider> StateRepository<D> {
                     session.completed_at,
                     session.total_tokens_in as i64,
                     session.total_tokens_out as i64,
-                    session.metadata.as_ref().map(|m| serde_json::to_string(m).ok()).flatten(),
+                    session.metadata.as_ref().and_then(|m| serde_json::to_string(m).ok()),
                     session.pending_delegations as i64,
                     session.continuation_needed as i64,
                     session.ward_id,
                     session.parent_session_id,
                     session.thread_id,
                     session.connector_id,
-                    session.respond_to.as_ref().map(|r| serde_json::to_string(r).ok()).flatten(),
+                    session.respond_to.as_ref().and_then(|r| serde_json::to_string(r).ok()),
                 ],
             )?;
             Ok(())
@@ -314,7 +314,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                 params![
                     thread_id,
                     connector_id,
-                    respond_to.map(|r| serde_json::to_string(r).ok()).flatten(),
+                    respond_to.and_then(|r| serde_json::to_string(r).ok()),
                     id,
                 ],
             )?;
@@ -419,8 +419,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                     execution
                         .checkpoint
                         .as_ref()
-                        .map(|c| serde_json::to_string(c).ok())
-                        .flatten(),
+                        .and_then(|c| serde_json::to_string(c).ok()),
                     execution.error,
                     execution.log_path,
                     execution.child_session_id,

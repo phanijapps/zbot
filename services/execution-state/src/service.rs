@@ -721,8 +721,8 @@ impl<D: StateDbProvider> StateService<D> {
                     role,
                     content,
                     created_at,
-                    tool_calls.map(|v| serde_json::to_string(v).ok()).flatten(),
-                    tool_results.map(|v| serde_json::to_string(v).ok()).flatten(),
+                    tool_calls.and_then(|v| serde_json::to_string(v).ok()),
+                    tool_results.and_then(|v| serde_json::to_string(v).ok()),
                 ],
             )?;
             Ok(id.clone())

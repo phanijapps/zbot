@@ -67,13 +67,13 @@ impl HttpMcpClient {
             .json(&request_body)
             .send()
             .await
-            .map_err(|e| McpError::ProtocolError(format!("HTTP request failed: {}", e)))?;
+            .map_err(|e| McpError::ProtocolError(format!("HTTP request failed: {e}")))?;
 
         let status = response.status();
         let response_text = response
             .text()
             .await
-            .map_err(|e| McpError::ProtocolError(format!("Failed to read response: {}", e)))?;
+            .map_err(|e| McpError::ProtocolError(format!("Failed to read response: {e}")))?;
 
         tracing::debug!(
             "HTTP MCP response status: {}, body: {}",
@@ -89,13 +89,12 @@ impl HttpMcpClient {
             )));
         }
 
-        let response_json: Value = serde_json::from_str(&response_text).map_err(|e| {
-            McpError::ProtocolError(format!("Failed to parse JSON response: {}", e))
-        })?;
+        let response_json: Value = serde_json::from_str(&response_text)
+            .map_err(|e| McpError::ProtocolError(format!("Failed to parse JSON response: {e}")))?;
 
         // Check for JSON-RPC error
         if let Some(error) = response_json.get("error") {
-            return Err(McpError::ProtocolError(format!("MCP error: {}", error)));
+            return Err(McpError::ProtocolError(format!("MCP error: {error}")));
         }
 
         Ok(response_json)

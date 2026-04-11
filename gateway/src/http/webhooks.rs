@@ -181,7 +181,7 @@ pub async fn handle_whatsapp_webhook(
                 .and_then(|b| b.as_str());
 
             if let (Some(from), Some(text)) = (from, text) {
-                let hook_context = HookContext::new(
+                let _hook_context = HookContext::new(
                     HookType::WhatsApp {
                         phone_number_id: phone_number_id.clone(),
                     },
@@ -236,7 +236,7 @@ pub async fn handle_telegram_webhook(
                 .and_then(|id| id.as_i64())
                 .unwrap_or(0);
 
-            let hook_context = HookContext::new(
+            let _hook_context = HookContext::new(
                 HookType::Telegram {
                     bot_id: bot_id.clone(),
                     chat_id,
@@ -273,7 +273,7 @@ pub async fn verify_webhook(
     match hook_type.as_str() {
         "whatsapp" => {
             // WhatsApp verification
-            if let (Some(mode), Some(token), Some(challenge)) = (
+            if let (Some(mode), Some(_token), Some(challenge)) = (
                 params.get("hub.mode"),
                 params.get("hub.verify_token"),
                 params.get("hub.challenge"),

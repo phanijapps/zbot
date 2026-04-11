@@ -114,7 +114,7 @@ impl MemoryTool {
                     })
                     .ok_or_else(|| ZeroError::Tool("No vault path configured".to_string()))
             }
-            "agent" | _ => self
+            _ => self
                 .fs
                 .agent_data_dir(agent_id)
                 .map(|dir| dir.join(MEMORY_FILE))
@@ -521,7 +521,7 @@ impl MemoryTool {
             Some(store) => store
                 .save_fact(agent_id, category, key, content, confidence, None)
                 .await
-                .map_err(|e| ZeroError::Tool(e)),
+                .map_err(ZeroError::Tool),
             None => {
                 // Fallback: store in legacy KV file
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
@@ -574,7 +574,7 @@ impl MemoryTool {
             Some(store) => store
                 .recall_facts_prioritized(agent_id, query, limit)
                 .await
-                .map_err(|e| ZeroError::Tool(e)),
+                .map_err(ZeroError::Tool),
             None => {
                 // Fallback: search KV store with category-aware ordering
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;

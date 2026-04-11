@@ -18,9 +18,6 @@
 //!
 //! See the README.md file for detailed usage examples.
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
-
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Log level for the application
@@ -54,6 +51,7 @@ impl LogLevel {
 
     /// Parse from string
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "error" => Some(Self::Error),

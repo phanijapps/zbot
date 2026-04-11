@@ -32,6 +32,7 @@ pub struct DelegateTool;
 
 impl DelegateTool {
     /// Create a new delegate tool.
+    #[must_use]
     pub fn new() -> Self {
         Self
     }
@@ -45,11 +46,11 @@ impl Default for DelegateTool {
 
 #[async_trait]
 impl Tool for DelegateTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "delegate_to_agent"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Delegate a task to a specialized subagent. The subagent will work on the task \
          independently and you will receive a callback message when it completes. \
          Use this for complex subtasks that require specialized expertise."
@@ -136,12 +137,12 @@ impl Tool for DelegateTool {
 
         let wait_for_result = args
             .get("wait_for_result")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         let max_iterations = args
             .get("max_iterations")
-            .and_then(|v| v.as_u64())
+            .and_then(serde_json::Value::as_u64)
             .map(|v| v as u32);
 
         let output_schema = args.get("output_schema").cloned();
@@ -151,20 +152,20 @@ impl Tool for DelegateTool {
             .and_then(|v| v.as_array())
             .map(|arr| {
                 arr.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .filter_map(|v| v.as_str().map(std::string::ToString::to_string))
                     .collect()
             })
             .unwrap_or_default();
 
         let parallel = args
             .get("parallel")
-            .and_then(|v| v.as_bool())
+            .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
 
         // Get parent context from state
         let parent_agent_id = ctx
             .get_state("agent_id")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string))
             .unwrap_or_else(|| "unknown".to_string());
 
         // Guard: Prevent self-delegation
@@ -210,7 +211,7 @@ impl Tool for DelegateTool {
 
         let parent_conversation_id = ctx
             .get_state("conversation_id")
-            .and_then(|v| v.as_str().map(|s| s.to_string()))
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string))
             .unwrap_or_else(|| "unknown".to_string());
 
         // Generate child conversation ID
@@ -230,7 +231,7 @@ impl Tool for DelegateTool {
             "macos" => "\n\n[PLATFORM: macOS / zsh.]",
             _ => "\n\n[PLATFORM: Linux / bash.]",
         };
-        let enriched_task = format!("{}{}", task, platform_hint);
+        let enriched_task = format!("{task}{platform_hint}");
 
         // Set delegation action for the executor to pick up
         let mut actions = ctx.actions();

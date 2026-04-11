@@ -12,9 +12,6 @@
 //! - [`messages`]: Chat message and tool call types
 //! - [`events`]: Streaming event types for execution feedback
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
-
 pub mod events;
 pub mod messages;
 

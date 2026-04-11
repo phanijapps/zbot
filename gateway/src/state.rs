@@ -144,7 +144,7 @@ impl AppState {
         let bundled_models = gateway_templates::Templates::get("models_registry.json")
             .map(|f| f.data.to_vec())
             .unwrap_or_default();
-        let model_registry = Arc::new(ModelRegistry::load(&bundled_models, &paths.vault_dir()));
+        let model_registry = Arc::new(ModelRegistry::load(&bundled_models, paths.vault_dir()));
 
         // Initialize SQLite database for conversation persistence
         let db_manager = Arc::new(
@@ -392,7 +392,7 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             session_archiver: None,
-            model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
+            model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
@@ -406,6 +406,7 @@ impl AppState {
     }
 
     /// Create with custom components.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_components(
         agents: Arc<AgentService>,
         skills: Arc<SkillService>,
@@ -461,7 +462,7 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             session_archiver: None,
-            model_registry: Arc::new(ModelRegistry::load(&[], &paths.vault_dir())),
+            model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,

@@ -274,13 +274,8 @@ mod tests {
 
         // Spawn worker simulator that responds to queries
         tokio::spawn(async move {
-            if let Some(msg) = rx.recv().await {
-                match msg {
-                    BridgeServerMessage::ResourceQuery { request_id, .. } => {
-                        pending_clone.resolve(&request_id, serde_json::json!([{"name": "Alice"}]));
-                    }
-                    _ => {}
-                }
+            if let Some(BridgeServerMessage::ResourceQuery { request_id, .. }) = rx.recv().await {
+                pending_clone.resolve(&request_id, serde_json::json!([{"name": "Alice"}]));
             }
         });
 
@@ -328,16 +323,12 @@ mod tests {
 
         // Spawn worker simulator
         tokio::spawn(async move {
-            if let Some(msg) = rx.recv().await {
-                match msg {
-                    BridgeServerMessage::CapabilityInvoke { request_id, .. } => {
-                        pending_clone.resolve(
-                            &request_id,
-                            serde_json::json!({"success": true, "message_id": "msg-123"}),
-                        );
-                    }
-                    _ => {}
-                }
+            if let Some(BridgeServerMessage::CapabilityInvoke { request_id, .. }) = rx.recv().await
+            {
+                pending_clone.resolve(
+                    &request_id,
+                    serde_json::json!({"success": true, "message_id": "msg-123"}),
+                );
             }
         });
 

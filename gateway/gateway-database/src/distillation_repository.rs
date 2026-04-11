@@ -97,7 +97,7 @@ impl DistillationRepository {
                  WHERE session_id = ?1",
             )?;
 
-            let result = stmt.query_row(params![session_id], |row| row_to_distillation_run(row));
+            let result = stmt.query_row(params![session_id], row_to_distillation_run);
 
             match result {
                 Ok(run) => Ok(Some(run)),
@@ -162,7 +162,7 @@ impl DistillationRepository {
                  ORDER BY created_at ASC",
             )?;
 
-            let rows = stmt.query_map(params![max_retries], |row| row_to_distillation_run(row))?;
+            let rows = stmt.query_map(params![max_retries], row_to_distillation_run)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }

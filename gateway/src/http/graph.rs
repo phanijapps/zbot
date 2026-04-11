@@ -9,7 +9,7 @@ use axum::{
     Json,
 };
 use gateway_database::{DistillationStats, UndistilledSession};
-use knowledge_graph::{Direction, Entity, GraphStats, NeighborInfo, Relationship, Subgraph};
+use knowledge_graph::{Direction, Entity, GraphStats, Relationship, Subgraph};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 

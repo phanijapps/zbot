@@ -120,7 +120,7 @@ impl Agent for SequentialAgent {
 mod tests {
     use super::*;
     use std::sync::Arc;
-    use zero_core::{Content, Event};
+    use zero_core::Event;
 
     // Mock agent for testing
     struct MockAgent {

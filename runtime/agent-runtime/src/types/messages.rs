@@ -70,6 +70,7 @@ impl ChatMessage {
     }
 
     /// Get all text content joined as a single string.
+    #[must_use]
     pub fn text_content(&self) -> String {
         self.content
             .iter()
@@ -82,8 +83,9 @@ impl ChatMessage {
     }
 
     /// Returns true if this message contains any non-text parts.
+    #[must_use]
     pub fn has_multimodal_content(&self) -> bool {
-        self.content.iter().any(|p| p.is_multimodal())
+        self.content.iter().any(zero_core::Part::is_multimodal)
     }
 }
 
@@ -99,10 +101,10 @@ impl Serialize for ChatMessage {
             + self.tool_call_id.as_ref().map_or(0, |_| 1);
         let mut s = serializer.serialize_struct("ChatMessage", field_count)?;
         s.serialize_field("role", &self.role)?;
-        if !self.has_multimodal_content() {
-            s.serialize_field("content", &self.text_content())?;
-        } else {
+        if self.has_multimodal_content() {
             s.serialize_field("content", &self.content)?;
+        } else {
+            s.serialize_field("content", &self.text_content())?;
         }
         if let Some(ref tc) = self.tool_calls {
             s.serialize_field("tool_calls", tc)?;
@@ -136,8 +138,7 @@ impl<'de> Deserialize<'de> for ChatMessage {
             Value::Null => vec![],
             other => {
                 return Err(serde::de::Error::custom(format!(
-                    "expected string or array for content, got {}",
-                    other
+                    "expected string or array for content, got {other}"
                 )))
             }
         };

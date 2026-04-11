@@ -1,3 +1,17 @@
+#![allow(clippy::missing_docs_in_private_items)]
+#![allow(clippy::missing_errors_doc)]
+#![allow(clippy::must_use_candidate)]
+#![allow(clippy::doc_markdown)]
+#![allow(clippy::module_name_repetitions)]
+#![allow(missing_docs)]
+#![allow(clippy::cast_possible_truncation)]
+#![allow(clippy::cast_sign_loss)]
+#![allow(clippy::cast_precision_loss)]
+#![allow(clippy::cast_possible_wrap)]
+#![allow(clippy::too_many_lines)]
+#![allow(clippy::fn_params_excessive_bools)]
+#![allow(clippy::items_after_statements)]
+#![allow(clippy::unnecessary_wraps)]
 // ============================================================================
 // AGENT RUNTIME LIBRARY
 // A modular AI agent execution framework with MCP support
@@ -15,7 +29,7 @@
 //! The library follows Clean Architecture principles with clear separation of concerns:
 //!
 //! - **Types**: Shared data structures (messages, events, tool calls)
-//! - **LLM**: Abstraction over LLM providers (OpenAI, Anthropic, etc.)
+//! - **LLM**: Abstraction over LLM providers (`OpenAI`, Anthropic, etc.)
 //! - **Tools**: Extensible tool registry and execution framework
 //! - **MCP**: Model Context Protocol client for external tool integration
 //! - **Middleware**: Pipeline for message preprocessing and event handling
@@ -24,10 +38,7 @@
 //!
 //! For detailed usage examples, see the README.md file.
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
-#![warn(clippy::pedantic)]
-#![allow(clippy::module_name_repetitions)]
+// Note: clippy::all and clippy::pedantic lints are managed via crate-level allows above
 // ============================================================================
 // PUBLIC API RE-EXPORTS
 // ============================================================================

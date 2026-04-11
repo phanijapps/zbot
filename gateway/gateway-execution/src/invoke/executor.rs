@@ -11,7 +11,6 @@ use agent_tools::{
     EditFileTool,
     GlobTool,
     GrepTool,
-    ListAgentsTool,
     LoadSkillTool,
     // Root orchestrator tools
     MemoryTool,
@@ -158,6 +157,7 @@ impl ExecutorBuilder {
     /// * `hook_context` - Optional hook context for initial state
     /// * `mcp_service` - MCP service for starting servers
     /// * `ward_id` - Optional active ward from existing session
+    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         &self,
         agent: &Agent,
@@ -608,7 +608,9 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
 ///
 /// Reads `agents_data/shared/workspace.json` and returns its contents
 /// as a HashMap for injection into executor initial state.
-fn load_workspace_from_disk(config_dir: &PathBuf) -> Option<HashMap<String, serde_json::Value>> {
+fn load_workspace_from_disk(
+    config_dir: &std::path::Path,
+) -> Option<HashMap<String, serde_json::Value>> {
     let workspace_path = config_dir
         .join("agents_data")
         .join("shared")
@@ -663,7 +665,7 @@ mod tests {
     #[test]
     fn test_load_workspace_context_missing_file() {
         let dir = TempDir::new().unwrap();
-        let result = load_workspace_from_disk(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(dir.path());
         assert!(result.is_none());
     }
 
@@ -696,7 +698,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_workspace_from_disk(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(dir.path());
         assert!(result.is_some());
 
         let workspace = result.unwrap();
@@ -727,7 +729,7 @@ mod tests {
         )
         .unwrap();
 
-        let result = load_workspace_from_disk(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(dir.path());
         assert!(result.is_none());
     }
 
@@ -739,7 +741,7 @@ mod tests {
 
         std::fs::write(shared_dir.join("workspace.json"), "not valid json").unwrap();
 
-        let result = load_workspace_from_disk(&dir.path().to_path_buf());
+        let result = load_workspace_from_disk(dir.path());
         assert!(result.is_none());
     }
 }

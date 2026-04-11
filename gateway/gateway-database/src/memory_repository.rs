@@ -171,7 +171,7 @@ impl MemoryRepository {
 
             let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -194,7 +194,7 @@ impl MemoryRepository {
                  WHERE id = ?1"
             )?;
 
-            let result = stmt.query_row(params![id], |row| row_to_memory_fact(row));
+            let result = stmt.query_row(params![id], row_to_memory_fact);
 
             match result {
                 Ok(fact) => Ok(Some(fact)),
@@ -277,7 +277,7 @@ impl MemoryRepository {
             let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params_vec.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -509,6 +509,7 @@ impl MemoryRepository {
     /// 2. Run vector search by loading embeddings and computing cosine similarity in Rust
     /// 3. Combine scores: `vector_weight * cos_sim + bm25_weight * bm25_score`
     /// 4. Apply confidence, recency, and mention_count modifiers
+    #[allow(clippy::too_many_arguments)]
     pub fn search_memory_facts_hybrid(
         &self,
         query_text: &str,
@@ -634,7 +635,7 @@ impl MemoryRepository {
 
             let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
 
             let mut scored: Vec<ScoredFact> = rows
                 .filter_map(|r| r.ok())
@@ -732,7 +733,7 @@ impl MemoryRepository {
 
             let rows = stmt.query_map(
                 params![agent_id, min_confidence, limit as i64],
-                |row| row_to_memory_fact(row),
+                row_to_memory_fact,
             )?;
             rows.collect::<Result<Vec<_>, _>>()
         })
@@ -761,7 +762,7 @@ impl MemoryRepository {
 
             let rows = stmt.query_map(
                 params![agent_id, category, limit as i64],
-                |row| row_to_memory_fact(row),
+                row_to_memory_fact,
             )?;
             rows.collect::<Result<Vec<_>, _>>()
         })
@@ -903,7 +904,7 @@ impl MemoryRepository {
             let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params_vec.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_memory_fact(row))?;
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_memory_fact)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -1202,7 +1203,9 @@ mod tests {
 
     #[test]
     fn test_f32_blob_roundtrip() {
-        let original = vec![1.5_f32, -2.5, 0.0, 3.14159];
+        #[allow(clippy::approx_constant)]
+        let pi_approx = 3.14159_f32;
+        let original = vec![1.5_f32, -2.5, 0.0, pi_approx];
         let blob = f32_vec_to_blob(&original);
         let recovered = blob_to_f32_vec(&blob);
         assert_eq!(original.len(), recovered.len());

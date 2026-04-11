@@ -200,6 +200,7 @@ pub async fn send_callback_to_parent(
 ///
 /// When the delegation has an `output_schema`, the response is validated
 /// (or wrapped) before being forwarded to the parent.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_delegation_success(
     delegation_ctx: Option<&DelegationContext>,
     conversation_repo: &ConversationRepository,

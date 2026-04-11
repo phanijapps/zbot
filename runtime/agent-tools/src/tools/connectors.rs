@@ -94,7 +94,7 @@ impl Tool for QueryResourceTool {
                     .provider
                     .list_connectors()
                     .await
-                    .map_err(|e| ZeroError::Tool(e))?;
+                    .map_err(ZeroError::Tool)?;
 
                 if connectors.is_empty() {
                     return Ok(json!({
@@ -179,7 +179,7 @@ impl Tool for QueryResourceTool {
                     .provider
                     .query_resource(connector_id, resource, params)
                     .await
-                    .map_err(|e| ZeroError::Tool(e))?;
+                    .map_err(ZeroError::Tool)?;
 
                 Ok(result)
             }
@@ -212,7 +212,7 @@ impl Tool for QueryResourceTool {
                     .provider
                     .invoke_capability(connector_id, capability, payload, &session_id, &agent_id)
                     .await
-                    .map_err(|e| ZeroError::Tool(e))?;
+                    .map_err(ZeroError::Tool)?;
 
                 Ok(result)
             }
