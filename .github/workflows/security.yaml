@@ -62,6 +62,9 @@ jobs:
         working-directory: apps/ui
 
       # ---------- Secrets scanning ----------
+      - name: Clean stale gitleaks tmp (self-hosted runner)
+        run: rm -f /tmp/gitleaks.tmp
+
       - name: Run Gitleaks (secrets scan)
         uses: gitleaks/gitleaks-action@v2
         env:
