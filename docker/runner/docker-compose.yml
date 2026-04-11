@@ -1,0 +1,20 @@
+services:
+  runner:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      RUNNER_NAME: zbot-local
+      RUNNER_TOKEN: ${RUNNER_TOKEN}
+      RUNNER_REPOSITORY_URL: https://github.com/phanijapps/zbot
+      RUNNER_LABELS: self-hosted,linux,x64,zbot
+    volumes:
+      - runner-work:/home/runner/work
+      - cargo-cache:/home/runner/.cargo/registry
+      - cargo-git:/home/runner/.cargo/git
+    restart: unless-stopped
+
+volumes:
+  runner-work:
+  cargo-cache:
+  cargo-git:
