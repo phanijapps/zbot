@@ -16,7 +16,31 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ── Rust coverage ──────────────────────────────────────────
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libssl-dev make gcc g++ libstdc++-12-dev libonig-dev
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Generate Rust coverage (LCOV)
+        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info
+        continue-on-error: true
+
+      # ── SonarQube scan ─────────────────────────────────────────
       - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v5
+        uses: SonarSource/sonarqube-scan-action@v6
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
