@@ -232,34 +232,43 @@ function handleToolCallMemoryRecall(toolCallId: string, ctx: EventHandlerCtx): v
   ]);
 }
 
-function handleToolCallUpdatePlan(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
+function parsePlanStepsFromArray(rawSteps: unknown[]): PlanStep[] {
   const steps: PlanStep[] = [];
+  for (const s of rawSteps) {
+    if (typeof s === "string") {
+      steps.push({ text: s, status: "pending" as StepStatus });
+    } else if (typeof s === "object" && s) {
+      const obj = s as Record<string, unknown>;
+      steps.push({
+        text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
+        status: (obj.status ?? "pending") as StepStatus,
+      });
+    }
+  }
+  return steps;
+}
+
+function parsePlanStepsFromString(rawSteps: string): PlanStep[] {
+  const steps: PlanStep[] = [];
+  const lines = rawSteps.split("\n").filter((l: string) => l.trim());
+  for (const line of lines) {
+    const trimmed = line.replace(/^[\s\-*\d.]+/, "").trim();
+    if (trimmed) {
+      const isDone = line.includes("[x]") || line.includes("✓");
+      steps.push({ text: trimmed, status: isDone ? "done" as StepStatus : "pending" as StepStatus });
+    }
+  }
+  return steps;
+}
+
+function parsePlanSteps(args: Record<string, unknown>): PlanStep[] {
   const rawSteps = args.steps ?? args.plan ?? args.content ?? "";
-  if (Array.isArray(rawSteps)) {
-    for (const s of rawSteps) {
-      if (typeof s === "string") {
-        steps.push({ text: s, status: "pending" as StepStatus });
-      } else if (typeof s === "object" && s) {
-        const obj = s as Record<string, unknown>;
-        steps.push({
-          text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
-          status: (obj.status ?? "pending") as StepStatus,
-        });
-      }
-    }
-  } else if (typeof rawSteps === "string" && rawSteps.trim()) {
-    const lines = rawSteps.split("\n").filter((l: string) => l.trim());
-    for (const line of lines) {
-      const trimmed = line.replace(/^[\s\-*\d.]+/, "").trim();
-      if (trimmed) {
-        const isDone = line.includes("[x]") || line.includes("✓");
-        steps.push({ text: trimmed, status: isDone ? "done" as StepStatus : "pending" as StepStatus });
-      }
-    }
-  }
-  if (steps.length > 0) {
-    ctx.setPlan(steps);
-  }
+  if (Array.isArray(rawSteps)) return parsePlanStepsFromArray(rawSteps);
+  if (typeof rawSteps === "string" && rawSteps.trim()) return parsePlanStepsFromString(rawSteps);
+  return [];
+}
+
+function upsertPlanBlock(steps: PlanStep[], ctx: EventHandlerCtx): void {
   const planData = { steps: steps.length > 0 ? steps : [{ text: "Planning...", status: "active" as StepStatus }] };
   ctx.setBlocks((prev) => {
     const existingIdx = prev.findIndex((b) => b.type === "plan");
@@ -270,6 +279,14 @@ function handleToolCallUpdatePlan(args: Record<string, unknown>, ctx: EventHandl
     }
     return [...prev, { id: crypto.randomUUID(), type: "plan", timestamp: now(), data: planData }];
   });
+}
+
+function handleToolCallUpdatePlan(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
+  const steps = parsePlanSteps(args);
+  if (steps.length > 0) {
+    ctx.setPlan(steps);
+  }
+  upsertPlanBlock(steps, ctx);
 }
 
 function handleToolCallRespond(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
