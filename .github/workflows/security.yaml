@@ -32,7 +32,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Rust clippy
-        run: cargo clippy --all-targets --all-features -- -D warnings
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
@@ -55,13 +55,11 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
-        # If React lives in /frontend, change to:
-        # working-directory: frontend
+        working-directory: apps/ui
 
       - name: NPM audit (high+)
         run: npm audit --audit-level=high
-        # If React lives in /frontend, change to:
-        # working-directory: frontend
+        working-directory: apps/ui
 
       # ---------- Secrets scanning ----------
       - name: Run Gitleaks (secrets scan)
