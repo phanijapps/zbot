@@ -16,11 +16,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Rust, cargo-llvm-cov, and build deps are pre-installed on self-hosted runner
-      - name: Generate Rust coverage (LCOV)
-        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info
-        continue-on-error: true
-
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
