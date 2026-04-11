@@ -50,29 +50,31 @@ export function formatTokens(n: number | undefined): string {
 export function extractToolSummary(toolName: string, args?: string): string {
   if (!args) return "";
   try {
-    const parsed = JSON.parse(args);
-    if (toolName === "shell" && parsed.command) {
-      const cmd = String(parsed.command);
-      return cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
-    }
-    if ((toolName === "read" || toolName === "edit" || toolName === "write") && parsed.path) {
-      return String(parsed.path);
-    }
-    if (toolName === "grep" && parsed.pattern) {
-      return `/${parsed.pattern}/`;
-    }
-    if (toolName === "glob" && parsed.pattern) {
-      return String(parsed.pattern);
-    }
-    if (toolName === "web_fetch" && parsed.url) {
-      return String(parsed.url).slice(0, 60);
-    }
-    if (toolName === "respond" && parsed.message) {
-      const msg = String(parsed.message);
-      return msg.length > 50 ? msg.slice(0, 47) + "..." : msg;
-    }
+    const parsed = JSON.parse(args) as Record<string, unknown>;
+    return extractFromParsed(toolName, parsed);
   } catch {
     // Not valid JSON
   }
   return "";
+}
+
+function truncate(s: string, max: number): string {
+  return s.length > max ? s.slice(0, max - 3) + "..." : s;
+}
+
+function extractFromParsed(toolName: string, parsed: Record<string, unknown>): string {
+  const extractors: Record<string, (p: Record<string, unknown>) => string> = {
+    shell: (p) => truncate(String(p.command || ""), 60),
+    read: (p) => String(p.path || ""),
+    edit: (p) => String(p.path || ""),
+    write: (p) => String(p.path || ""),
+    grep: (p) => (p.pattern ? `/${p.pattern}/` : ""),
+    glob: (p) => String(p.pattern || ""),
+    web_fetch: (p) => truncate(String(p.url || ""), 60),
+    respond: (p) => truncate(String(p.message || ""), 50),
+  };
+
+  const extractor = extractors[toolName];
+  if (!extractor) return "";
+  return extractor(parsed) || "";
 }

@@ -121,6 +121,640 @@ function parseArgs(args: unknown): Record<string, unknown> {
 }
 
 // ============================================================================
+// Event handler context — passed to extracted handler functions
+// ============================================================================
+
+interface EventHandlerCtx {
+  setBlocks: React.Dispatch<React.SetStateAction<NarrativeBlock[]>>;
+  setStatus: React.Dispatch<React.SetStateAction<MissionState["status"]>>;
+  setPhase: React.Dispatch<React.SetStateAction<Phase>>;
+  setSessionTitle: React.Dispatch<React.SetStateAction<string>>;
+  setTokenCount: React.Dispatch<React.SetStateAction<number>>;
+  setModelName: React.Dispatch<React.SetStateAction<string>>;
+  setSubagents: React.Dispatch<React.SetStateAction<SubagentInfo[]>>;
+  setPlan: React.Dispatch<React.SetStateAction<PlanStep[]>>;
+  setRecalledFacts: React.Dispatch<React.SetStateAction<RecalledFact[]>>;
+  setActiveWard: React.Dispatch<React.SetStateAction<{ name: string; content: string } | null>>;
+  setIntentAnalysis: React.Dispatch<React.SetStateAction<IntentAnalysis | null>>;
+  setActiveSessionId: React.Dispatch<React.SetStateAction<string | null>>;
+  toolCallBlockMapRef: React.MutableRefObject<Map<string, string>>;
+  executionAgentMapRef: React.MutableRefObject<Map<string, string>>;
+  titleFallbackTimerRef: React.MutableRefObject<ReturnType<typeof setTimeout> | null>;
+  lastUserMessageRef: React.MutableRefObject<string>;
+  streamingBufferRef: React.MutableRefObject<string>;
+  rafIdRef: React.MutableRefObject<number | null>;
+  flushTokenBuffer: () => void;
+  startDurationTimer: () => void;
+  stopDurationTimer: () => void;
+  generateFallbackTitle: (message: string) => string;
+}
+
+// ============================================================================
+// Extracted event handlers
+// ============================================================================
+
+function handleInvokeAccepted(event: StreamEvent, ctx: EventHandlerCtx): void {
+  if (event.session_id && typeof event.session_id === "string") {
+    setSessionId(event.session_id);
+    ctx.setActiveSessionId(event.session_id);
+  }
+}
+
+function handleAgentStarted(event: StreamEvent, ctx: EventHandlerCtx): void {
+  ctx.setStatus("running");
+  ctx.startDurationTimer();
+  if (event.session_id && typeof event.session_id === "string") {
+    setSessionId(event.session_id);
+    ctx.setActiveSessionId(event.session_id);
+  }
+  if (event.model && typeof event.model === "string") {
+    ctx.setModelName(event.model);
+  }
+
+  // Clear any previous fallback timer
+  if (ctx.titleFallbackTimerRef.current) {
+    clearTimeout(ctx.titleFallbackTimerRef.current);
+    ctx.titleFallbackTimerRef.current = null;
+  }
+
+  // Start fallback title timer — if no title arrives in 10s, generate from user message
+  ctx.titleFallbackTimerRef.current = setTimeout(() => {
+    ctx.setSessionTitle((current) => {
+      if (current) return current; // Title already set
+      const msg = ctx.lastUserMessageRef.current;
+      if (!msg) return current;
+      return ctx.generateFallbackTitle(msg);
+    });
+    ctx.titleFallbackTimerRef.current = null;
+  }, 10_000);
+}
+
+function handleTokenEvent(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const delta = (event.delta ?? event.content ?? "") as string;
+  if (delta) {
+    ctx.streamingBufferRef.current += delta;
+    if (ctx.rafIdRef.current === null) {
+      ctx.rafIdRef.current = requestAnimationFrame(ctx.flushTokenBuffer);
+    }
+  }
+  // Track tokens from any available field
+  const totalTok = (event.total_tokens ?? event.tokens_in ?? event.token_count) as number | undefined;
+  if (typeof totalTok === "number" && totalTok > 0) {
+    ctx.setTokenCount(totalTok);
+  } else {
+    // Increment by 1 per token event as fallback
+    ctx.setTokenCount((prev) => prev + 1);
+  }
+}
+
+function handleToolCallSetSessionTitle(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
+  const title = (args.title ?? args.name ?? "") as string;
+  if (title) {
+    ctx.setSessionTitle(title);
+    if (ctx.titleFallbackTimerRef.current) {
+      clearTimeout(ctx.titleFallbackTimerRef.current);
+      ctx.titleFallbackTimerRef.current = null;
+    }
+  }
+}
+
+function handleToolCallMemoryRecall(toolCallId: string, ctx: EventHandlerCtx): void {
+  const blockId = crypto.randomUUID();
+  if (toolCallId) ctx.toolCallBlockMapRef.current.set(toolCallId, blockId);
+  ctx.setBlocks((prev) => [
+    ...prev,
+    {
+      id: blockId,
+      type: "recall",
+      timestamp: now(),
+      data: { raw: "" }, // Will be filled by tool_result
+    },
+  ]);
+}
+
+function handleToolCallUpdatePlan(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
+  const steps: PlanStep[] = [];
+  const rawSteps = args.steps ?? args.plan ?? args.content ?? "";
+  if (Array.isArray(rawSteps)) {
+    for (const s of rawSteps) {
+      if (typeof s === "string") {
+        steps.push({ text: s, status: "pending" as StepStatus });
+      } else if (typeof s === "object" && s) {
+        const obj = s as Record<string, unknown>;
+        steps.push({
+          text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
+          status: (obj.status ?? "pending") as StepStatus,
+        });
+      }
+    }
+  } else if (typeof rawSteps === "string" && rawSteps.trim()) {
+    const lines = rawSteps.split("\n").filter((l: string) => l.trim());
+    for (const line of lines) {
+      const trimmed = line.replace(/^[\s\-*\d.]+/, "").trim();
+      if (trimmed) {
+        const isDone = line.includes("[x]") || line.includes("✓");
+        steps.push({ text: trimmed, status: isDone ? "done" as StepStatus : "pending" as StepStatus });
+      }
+    }
+  }
+  if (steps.length > 0) {
+    ctx.setPlan(steps);
+  }
+  const planData = { steps: steps.length > 0 ? steps : [{ text: "Planning...", status: "active" as StepStatus }] };
+  ctx.setBlocks((prev) => {
+    const existingIdx = prev.findIndex((b) => b.type === "plan");
+    if (existingIdx >= 0) {
+      const updated = [...prev];
+      updated[existingIdx] = { ...updated[existingIdx], data: planData };
+      return updated;
+    }
+    return [...prev, { id: crypto.randomUUID(), type: "plan", timestamp: now(), data: planData }];
+  });
+}
+
+function handleToolCallRespond(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
+  const respondMsg = (args.message ?? "") as string;
+  if (respondMsg) {
+    ctx.setBlocks((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        type: "response",
+        timestamp: now(),
+        data: { content: respondMsg, timestamp: now() },
+        isStreaming: false,
+      },
+    ]);
+  }
+  ctx.setPhase("responding");
+}
+
+function handleToolCallDelegateToAgent(
+  args: Record<string, unknown>,
+  toolCallId: string,
+  inputSummary: string,
+  ctx: EventHandlerCtx,
+): void {
+  const delegateAgentId = (args.agent_id ?? args.agentId ?? "") as string;
+  const task = (args.task ?? args.message ?? inputSummary) as string;
+  const blockId = crypto.randomUUID();
+  if (toolCallId) ctx.toolCallBlockMapRef.current.set(toolCallId, blockId);
+  ctx.setBlocks((prev) => [
+    ...prev,
+    {
+      id: blockId,
+      type: "delegation",
+      timestamp: now(),
+      data: { agentId: delegateAgentId, task, status: "active" },
+    },
+  ]);
+  ctx.setSubagents((prev) => [
+    ...prev.filter((s) => !(s.agentId === delegateAgentId && s.status === "active")),
+    { agentId: delegateAgentId, task, status: "active" },
+  ]);
+  ctx.setPhase((prev) => prev === "planning" || prev === "intent" ? "executing" : prev);
+}
+
+function handleToolCallGeneric(
+  toolName: string,
+  toolCallId: string,
+  inputSummary: string,
+  ctx: EventHandlerCtx,
+): void {
+  const blockId = crypto.randomUUID();
+  if (toolCallId) ctx.toolCallBlockMapRef.current.set(toolCallId, blockId);
+  ctx.setBlocks((prev) => [
+    ...prev,
+    {
+      id: blockId,
+      type: "tool",
+      timestamp: now(),
+      data: {
+        toolName,
+        input: inputSummary,
+        isExpanded: false,
+      },
+      isExpanded: false,
+    },
+  ]);
+}
+
+function handleToolCallEvent(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const toolName = (event.tool ?? event.tool_name ?? "") as string;
+  const args = parseArgs(event.arguments ?? event.args);
+  const toolCallId = (event.tool_call_id ?? event.id ?? "") as string;
+  const inputSummary = (event.input ?? JSON.stringify(args).slice(0, 200)) as string;
+  const action = (args.action ?? args.operation ?? "") as string;
+
+  if (toolName === "set_session_title") {
+    handleToolCallSetSessionTitle(args, ctx);
+  } else if (toolName === "memory" && action === "recall") {
+    handleToolCallMemoryRecall(toolCallId, ctx);
+  } else if (toolName === "update_plan") {
+    handleToolCallUpdatePlan(args, ctx);
+  } else if (toolName === "respond") {
+    handleToolCallRespond(args, ctx);
+  } else if (toolName === "delegate_to_agent") {
+    handleToolCallDelegateToAgent(args, toolCallId, inputSummary, ctx);
+  } else {
+    handleToolCallGeneric(toolName, toolCallId, inputSummary, ctx);
+  }
+}
+
+function handleToolResultRecallBlock(
+  block: NarrativeBlock,
+  result: string,
+  updated: NarrativeBlock[],
+  idx: number,
+  ctx: EventHandlerCtx,
+): void {
+  updated[idx] = { ...block, data: { raw: result } };
+  try {
+    const parsed = JSON.parse(result);
+    const facts = parsed.results ?? parsed.facts ?? [];
+    if (Array.isArray(facts) && facts.length > 0) {
+      ctx.setRecalledFacts(
+        facts.map((f: Record<string, unknown>) => ({
+          key: (f.key ?? "") as string,
+          content: (f.content ?? "") as string,
+          category: (f.category ?? "") as string,
+          confidence: (f.confidence ?? 0) as number,
+        }))
+      );
+    }
+  } catch { /* ignore parse failure */ }
+}
+
+function handleToolResultToolBlock(
+  block: NarrativeBlock,
+  result: string,
+  isError: boolean,
+  updated: NarrativeBlock[],
+  idx: number,
+  ctx: EventHandlerCtx,
+): void {
+  updated[idx] = {
+    ...block,
+    data: { ...block.data, output: result, isError },
+  };
+  const toolName = block.data.toolName as string;
+  if (toolName === "ward" || toolName === "set_ward" || toolName === "enter_ward") {
+    try {
+      const parsed = JSON.parse(result);
+      if (parsed.__ward_changed__ || parsed.action === "switched") {
+        const wardName = (parsed.ward_name ?? parsed.name ?? "unknown") as string;
+        const wardContent = (parsed.agents_md ?? parsed.content ?? "") as string;
+        ctx.setActiveWard({ name: wardName, content: wardContent.slice(0, 300) });
+      }
+    } catch { /* not ward JSON, ignore */ }
+  }
+}
+
+function handleToolResultPlanBlock(
+  block: NarrativeBlock,
+  result: string,
+  updated: NarrativeBlock[],
+  idx: number,
+  ctx: EventHandlerCtx,
+): void {
+  try {
+    const parsed = JSON.parse(result);
+    if (Array.isArray(parsed.steps)) {
+      const steps = parsed.steps.map((s: Record<string, unknown>) => ({
+        text: (s.text ?? "") as string,
+        status: (s.status ?? "pending") as StepStatus,
+      }));
+      updated[idx] = { ...block, data: { steps } };
+      ctx.setPlan(steps);
+    }
+  } catch {
+    // leave block as-is
+  }
+}
+
+function handleToolResultEvent(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const toolCallId = (event.tool_call_id ?? "") as string;
+  const result = (event.result ?? event.output ?? "") as string;
+  const isError = event.is_error === true || event.error === true;
+  const blockId = toolCallId ? ctx.toolCallBlockMapRef.current.get(toolCallId) : undefined;
+
+  if (blockId) {
+    ctx.setBlocks((prev) => {
+      const idx = prev.findIndex((b) => b.id === blockId);
+      if (idx < 0) return prev;
+      const block = prev[idx];
+      const updated = [...prev];
+
+      if (block.type === "recall") {
+        handleToolResultRecallBlock(block, result, updated, idx, ctx);
+      } else if (block.type === "tool") {
+        handleToolResultToolBlock(block, result, isError, updated, idx, ctx);
+      } else if (block.type === "delegation") {
+        updated[idx] = {
+          ...block,
+          data: { ...block.data, result, status: isError ? "error" : "completed" },
+        };
+      } else if (block.type === "plan") {
+        handleToolResultPlanBlock(block, result, updated, idx, ctx);
+      }
+
+      return updated;
+    });
+    ctx.toolCallBlockMapRef.current.delete(toolCallId);
+  }
+}
+
+function handleDelegationStarted(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const childAgentId = (event.child_agent_id ?? "") as string;
+  const task = (event.task ?? "") as string;
+
+  const childExecId = (event.child_execution_id ?? event.execution_id) as string | undefined;
+  if (childExecId && childAgentId) {
+    ctx.executionAgentMapRef.current.set(childExecId, childAgentId);
+  }
+
+  ctx.setBlocks((prev) => {
+    const idx = prev.findIndex(
+      (b) => b.type === "delegation" && b.data.agentId === childAgentId && b.data.status === "active",
+    );
+    if (idx >= 0) {
+      const updated = [...prev];
+      updated[idx] = {
+        ...updated[idx],
+        data: { ...updated[idx].data, task: task || updated[idx].data.task },
+      };
+      return updated;
+    }
+    return [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        type: "delegation",
+        timestamp: now(),
+        data: { agentId: childAgentId, task, status: "active" },
+      },
+    ];
+  });
+
+  ctx.setSubagents((prev) => {
+    const existing = prev.find((s) => s.agentId === childAgentId && s.status === "active");
+    if (existing) return prev;
+    return [...prev, { agentId: childAgentId, task, status: "active" }];
+  });
+}
+
+function handleDelegationCompleted(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const childAgentId = (event.child_agent_id ?? "") as string;
+  const result = (event.result ?? "") as string;
+
+  ctx.setBlocks((prev) => {
+    const idx = prev.findIndex(
+      (b) => b.type === "delegation" && b.data.agentId === childAgentId && b.data.status === "active",
+    );
+    if (idx >= 0) {
+      const updated = [...prev];
+      updated[idx] = {
+        ...updated[idx],
+        data: { ...updated[idx].data, status: "completed", result },
+      };
+      return updated;
+    }
+    return prev;
+  });
+
+  ctx.setSubagents((prev) =>
+    prev.map((s) =>
+      s.agentId === childAgentId && s.status === "active"
+        ? { ...s, status: "completed" }
+        : s,
+    ),
+  );
+}
+
+function handleDelegationError(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const childAgentId = (event.child_agent_id ?? "") as string;
+  const error = (event.error ?? "") as string;
+
+  ctx.setBlocks((prev) => {
+    const idx = prev.findIndex(
+      (b) => b.type === "delegation" && b.data.agentId === childAgentId && b.data.status === "active",
+    );
+    if (idx >= 0) {
+      const updated = [...prev];
+      updated[idx] = {
+        ...updated[idx],
+        data: { ...updated[idx].data, status: "error", result: error },
+      };
+      return updated;
+    }
+    return prev;
+  });
+
+  ctx.setSubagents((prev) =>
+    prev.map((s) =>
+      s.agentId === childAgentId && s.status === "active"
+        ? { ...s, status: "error" }
+        : s,
+    ),
+  );
+}
+
+function handleSessionTitleChanged(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const title = (event.title ?? "") as string;
+  if (title) {
+    ctx.setSessionTitle(title);
+    if (ctx.titleFallbackTimerRef.current) {
+      clearTimeout(ctx.titleFallbackTimerRef.current);
+      ctx.titleFallbackTimerRef.current = null;
+    }
+  }
+}
+
+function handleWardChanged(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const wardId = (event.ward_id ?? "") as string;
+  if (wardId) {
+    ctx.setActiveWard({ name: wardId, content: "" });
+  }
+}
+
+function handleIntentAnalysisStarted(ctx: EventHandlerCtx): void {
+  ctx.setBlocks((prev) => [
+    ...prev,
+    {
+      id: "intent-streaming",
+      type: "intent_analysis",
+      timestamp: now(),
+      data: {},
+      isStreaming: true,
+    },
+  ]);
+}
+
+function handleIntentAnalysisComplete(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const wardRec = event.ward_recommendation as Record<string, unknown> | undefined;
+  const execStrat = event.execution_strategy as Record<string, unknown> | undefined;
+  const ia: IntentAnalysis = {
+    primaryIntent: (event.primary_intent ?? "") as string,
+    hiddenIntents: (event.hidden_intents ?? []) as string[],
+    recommendedSkills: (event.recommended_skills ?? []) as string[],
+    recommendedAgents: (event.recommended_agents ?? []) as string[],
+    wardRecommendation: {
+      action: (wardRec?.action ?? "") as string,
+      wardName: (wardRec?.ward_name ?? "") as string,
+      subdirectory: wardRec?.subdirectory as string | undefined,
+      reason: (wardRec?.reason ?? "") as string,
+    },
+    executionStrategy: {
+      approach: (execStrat?.approach ?? "simple") as string,
+      graph: execStrat?.graph as IntentAnalysis["executionStrategy"]["graph"],
+      explanation: (execStrat?.explanation ?? "") as string,
+    },
+  };
+  ctx.setIntentAnalysis(ia);
+  ctx.setPhase("planning");
+
+  if (ia.wardRecommendation.wardName) {
+    ctx.setActiveWard((prev) =>
+      prev ?? { name: ia.wardRecommendation.wardName, content: ia.wardRecommendation.reason }
+    );
+  }
+
+  ctx.setBlocks((prev) => {
+    const idx = prev.findIndex(
+      (b) => b.type === "intent_analysis" && b.isStreaming,
+    );
+    if (idx >= 0) {
+      const updated = [...prev];
+      updated[idx] = {
+        ...updated[idx],
+        data: { analysis: ia },
+        isStreaming: false,
+      };
+      return updated;
+    }
+    return [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        type: "intent_analysis",
+        timestamp: now(),
+        data: { analysis: ia },
+        isStreaming: false,
+      },
+    ];
+  });
+}
+
+function flushAndCancelRaf(ctx: EventHandlerCtx): void {
+  if (ctx.rafIdRef.current !== null) {
+    cancelAnimationFrame(ctx.rafIdRef.current);
+    ctx.rafIdRef.current = null;
+  }
+  ctx.flushTokenBuffer();
+}
+
+function handleTurnComplete(event: StreamEvent, ctx: EventHandlerCtx): void {
+  flushAndCancelRaf(ctx);
+
+  const finalMessage = event.final_message as string | undefined;
+  if (finalMessage) {
+    ctx.setBlocks((prev) => {
+      const lastIdx = prev.length - 1;
+      const last = prev[lastIdx];
+      if (last && last.type === "response" && last.isStreaming) {
+        return [
+          ...prev.slice(0, lastIdx),
+          { ...last, data: { ...last.data, content: finalMessage }, isStreaming: false },
+        ];
+      }
+      return [
+        ...prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)),
+        {
+          id: crypto.randomUUID(),
+          type: "response",
+          timestamp: now(),
+          data: { content: finalMessage, timestamp: now() },
+          isStreaming: false,
+        },
+      ];
+    });
+  }
+}
+
+function handleAgentCompleted(event: StreamEvent, ctx: EventHandlerCtx): void {
+  flushAndCancelRaf(ctx);
+
+  const result = event.result as string | undefined;
+  if (result) {
+    ctx.setBlocks((prev) => {
+      const hasResponse = prev.some((b) => b.type === "response");
+      if (hasResponse) return prev;
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          type: "response",
+          timestamp: now(),
+          data: { content: result, timestamp: now() },
+          isStreaming: false,
+        },
+      ];
+    });
+  }
+
+  ctx.setStatus("completed");
+  ctx.setPhase("completed");
+  ctx.stopDurationTimer();
+  ctx.setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
+}
+
+function handleErrorEvent(ctx: EventHandlerCtx): void {
+  flushAndCancelRaf(ctx);
+  ctx.setStatus("error");
+  ctx.setPhase("error");
+  ctx.stopDurationTimer();
+  ctx.setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
+}
+
+function handleSystemOrMessage(event: StreamEvent, ctx: EventHandlerCtx): void {
+  const content = (event.content ?? event.message ?? "") as string;
+  if (content) {
+    ctx.setBlocks((prev) => [
+      ...prev,
+      {
+        id: crypto.randomUUID(),
+        type: "response",
+        timestamp: now(),
+        data: { content, timestamp: now() },
+        isStreaming: false,
+      },
+    ]);
+  }
+}
+
+function parseIntentAnalysisFromState(ia: Record<string, unknown>): IntentAnalysis {
+  const wr = (ia.ward_recommendation ?? {}) as Record<string, unknown>;
+  const es = (ia.execution_strategy ?? {}) as Record<string, unknown>;
+  return {
+    primaryIntent: (ia.primary_intent ?? "") as string,
+    hiddenIntents: (ia.hidden_intents ?? []) as string[],
+    recommendedSkills: (ia.recommended_skills ?? []) as string[],
+    recommendedAgents: (ia.recommended_agents ?? []) as string[],
+    wardRecommendation: {
+      action: (wr.action ?? "") as string,
+      wardName: (wr.ward_name ?? "") as string,
+      subdirectory: wr.subdirectory as string | undefined,
+      reason: (wr.reason ?? "") as string,
+    },
+    executionStrategy: {
+      approach: (es.approach ?? "simple") as string,
+      graph: es.graph as IntentAnalysis["executionStrategy"]["graph"],
+      explanation: (es.explanation ?? "") as string,
+    },
+  };
+}
+
+// ============================================================================
 // Hook: useMissionControl
 // ============================================================================
 
@@ -275,616 +909,66 @@ export function useMissionControl() {
       lastSeqRef.current = seq;
     }
 
+    const ctx: EventHandlerCtx = {
+      setBlocks, setStatus, setPhase, setSessionTitle, setTokenCount, setModelName,
+      setSubagents, setPlan, setRecalledFacts, setActiveWard, setIntentAnalysis,
+      setActiveSessionId, toolCallBlockMapRef, executionAgentMapRef,
+      titleFallbackTimerRef, lastUserMessageRef, streamingBufferRef, rafIdRef,
+      flushTokenBuffer, startDurationTimer, stopDurationTimer, generateFallbackTitle,
+    };
+
     switch (event.type) {
-      // ------------------------------------------------------------------
-      // Session lifecycle
-      // ------------------------------------------------------------------
-      case "invoke_accepted": {
-        if (event.session_id && typeof event.session_id === "string") {
-          setSessionId(event.session_id);
-          setActiveSessionId(event.session_id);
-        }
+      case "invoke_accepted":
+        handleInvokeAccepted(event, ctx);
         lastSeqRef.current = 0;
         break;
-      }
-
-      case "agent_started": {
-        setStatus("running");
-        startDurationTimer();
-        if (event.session_id && typeof event.session_id === "string") {
-          setSessionId(event.session_id);
-          setActiveSessionId(event.session_id);
-        }
-        if (event.model && typeof event.model === "string") {
-          setModelName(event.model);
-        }
-
-        // Clear any previous fallback timer
-        if (titleFallbackTimerRef.current) {
-          clearTimeout(titleFallbackTimerRef.current);
-          titleFallbackTimerRef.current = null;
-        }
-
-        // Start fallback title timer — if no title arrives in 10s, generate from user message
-        titleFallbackTimerRef.current = setTimeout(() => {
-          setSessionTitle((current) => {
-            if (current) return current; // Title already set
-            const msg = lastUserMessageRef.current;
-            if (!msg) return current;
-            return generateFallbackTitle(msg);
-          });
-          titleFallbackTimerRef.current = null;
-        }, 10_000);
+      case "agent_started":
+        handleAgentStarted(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Token streaming
-      // ------------------------------------------------------------------
-      case "token": {
-        const delta = (event.delta ?? event.content ?? "") as string;
-        if (delta) {
-          streamingBufferRef.current += delta;
-          if (rafIdRef.current === null) {
-            rafIdRef.current = requestAnimationFrame(flushTokenBuffer);
-          }
-        }
-        // Track tokens from any available field
-        const totalTok = (event.total_tokens ?? event.tokens_in ?? event.token_count) as number | undefined;
-        if (typeof totalTok === "number" && totalTok > 0) {
-          setTokenCount(totalTok);
-        } else {
-          // Increment by 1 per token event as fallback
-          setTokenCount((prev) => prev + 1);
-        }
+      case "token":
+        handleTokenEvent(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Tool calls
-      // ------------------------------------------------------------------
-      case "tool_call": {
-        const toolName = (event.tool ?? event.tool_name ?? "") as string;
-        const args = parseArgs(event.arguments ?? event.args);
-        const toolCallId = (event.tool_call_id ?? event.id ?? "") as string;
-        const inputSummary = (event.input ?? JSON.stringify(args).slice(0, 200)) as string;
-
-        // Check for special tool types
-        const action = (args.action ?? args.operation ?? "") as string;
-
-        // set_session_title — update title, no block
-        if (toolName === "set_session_title") {
-          const title = (args.title ?? args.name ?? "") as string;
-          if (title) {
-            setSessionTitle(title);
-            if (titleFallbackTimerRef.current) {
-              clearTimeout(titleFallbackTimerRef.current);
-              titleFallbackTimerRef.current = null;
-            }
-          }
-          break;
-        }
-
-        // memory recall — type: 'recall'
-        if (toolName === "memory" && action === "recall") {
-          const blockId = crypto.randomUUID();
-          if (toolCallId) toolCallBlockMapRef.current.set(toolCallId, blockId);
-          setBlocks((prev) => [
-            ...prev,
-            {
-              id: blockId,
-              type: "recall",
-              timestamp: now(),
-              data: { raw: "" }, // Will be filled by tool_result
-            },
-          ]);
-          break;
-        }
-
-        // update_plan — type: 'plan'
-        if (toolName === "update_plan") {
-          const steps: PlanStep[] = [];
-          // Try structured steps first, then parse from plan text
-          const rawSteps = args.steps ?? args.plan ?? args.content ?? "";
-          if (Array.isArray(rawSteps)) {
-            for (const s of rawSteps) {
-              if (typeof s === "string") {
-                steps.push({ text: s, status: "pending" as StepStatus });
-              } else if (typeof s === "object" && s) {
-                const obj = s as Record<string, unknown>;
-                steps.push({
-                  text: (obj.text ?? obj.step ?? obj.description ?? "") as string,
-                  status: (obj.status ?? "pending") as StepStatus,
-                });
-              }
-            }
-          } else if (typeof rawSteps === "string" && rawSteps.trim()) {
-            // Parse plan text: split by newlines, treat each line as a step
-            const lines = rawSteps.split("\n").filter((l: string) => l.trim());
-            for (const line of lines) {
-              const trimmed = line.replace(/^[\s\-\*\d.]+/, "").trim();
-              if (trimmed) {
-                const isDone = line.includes("[x]") || line.includes("✓");
-                steps.push({ text: trimmed, status: isDone ? "done" as StepStatus : "pending" as StepStatus });
-              }
-            }
-          }
-          if (steps.length > 0) {
-            setPlan(steps);
-          }
-          const planData = { steps: steps.length > 0 ? steps : [{ text: "Planning...", status: "active" as StepStatus }] };
-          // Replace existing plan block instead of appending a new one
-          setBlocks((prev) => {
-            const existingIdx = prev.findIndex((b) => b.type === "plan");
-            if (existingIdx >= 0) {
-              const updated = [...prev];
-              updated[existingIdx] = { ...updated[existingIdx], data: planData };
-              return updated;
-            }
-            return [...prev, { id: crypto.randomUUID(), type: "plan", timestamp: now(), data: planData }];
-          });
-          break;
-        }
-
-        // respond — agent's final response, create response block
-        if (toolName === "respond") {
-          const respondMsg = (args.message ?? "") as string;
-          if (respondMsg) {
-            setBlocks((prev) => [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                type: "response",
-                timestamp: now(),
-                data: { content: respondMsg, timestamp: now() },
-                isStreaming: false,
-              },
-            ]);
-          }
-          setPhase("responding");
-          break;
-        }
-
-        // delegate_to_agent — type: 'delegation'
-        if (toolName === "delegate_to_agent") {
-          const delegateAgentId = (args.agent_id ?? args.agentId ?? "") as string;
-          const task = (args.task ?? args.message ?? inputSummary) as string;
-          const blockId = crypto.randomUUID();
-          if (toolCallId) toolCallBlockMapRef.current.set(toolCallId, blockId);
-          setBlocks((prev) => [
-            ...prev,
-            {
-              id: blockId,
-              type: "delegation",
-              timestamp: now(),
-              data: { agentId: delegateAgentId, task, status: "active" },
-            },
-          ]);
-          setSubagents((prev) => [
-            ...prev.filter((s) => !(s.agentId === delegateAgentId && s.status === "active")),
-            { agentId: delegateAgentId, task, status: "active" },
-          ]);
-          setPhase((prev) => prev === "planning" || prev === "intent" ? "executing" : prev);
-          break;
-        }
-
-        // Generic tool call — type: 'tool'
-        {
-          const blockId = crypto.randomUUID();
-          if (toolCallId) toolCallBlockMapRef.current.set(toolCallId, blockId);
-          setBlocks((prev) => [
-            ...prev,
-            {
-              id: blockId,
-              type: "tool",
-              timestamp: now(),
-              data: {
-                toolName,
-                input: inputSummary,
-                isExpanded: false,
-              },
-              isExpanded: false,
-            },
-          ]);
-        }
+      case "tool_call":
+        handleToolCallEvent(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Tool results
-      // ------------------------------------------------------------------
-      case "tool_result": {
-        const toolCallId = (event.tool_call_id ?? "") as string;
-        const result = (event.result ?? event.output ?? "") as string;
-        const isError = event.is_error === true || event.error === true;
-        const blockId = toolCallId ? toolCallBlockMapRef.current.get(toolCallId) : undefined;
-
-        if (blockId) {
-          setBlocks((prev) => {
-            const idx = prev.findIndex((b) => b.id === blockId);
-            if (idx < 0) return prev;
-            const block = prev[idx];
-            const updated = [...prev];
-
-            if (block.type === "recall") {
-              // Fill recall block with result JSON
-              updated[idx] = { ...block, data: { raw: result } };
-              // Extract facts for sidebar
-              try {
-                const parsed = JSON.parse(result);
-                // The recall tool returns { results: [...], formatted: "..." }
-                const facts = parsed.results ?? parsed.facts ?? [];
-                if (Array.isArray(facts) && facts.length > 0) {
-                  setRecalledFacts(
-                    facts.map((f: Record<string, unknown>) => ({
-                      key: (f.key ?? "") as string,
-                      content: (f.content ?? "") as string,
-                      category: (f.category ?? "") as string,
-                      confidence: (f.confidence ?? 0) as number,
-                    }))
-                  );
-                }
-              } catch { /* ignore parse failure */ }
-            } else if (block.type === "tool") {
-              updated[idx] = {
-                ...block,
-                data: {
-                  ...block.data,
-                  output: result,
-                  isError,
-                },
-              };
-              // Check for ward data in tool result
-              const toolName = block.data.toolName as string;
-              if (toolName === "ward" || toolName === "set_ward" || toolName === "enter_ward") {
-                try {
-                  const parsed = JSON.parse(result);
-                  if (parsed.__ward_changed__ || parsed.action === "switched") {
-                    const wardName = (parsed.ward_name ?? parsed.name ?? "unknown") as string;
-                    const wardContent = (parsed.agents_md ?? parsed.content ?? "") as string;
-                    setActiveWard({ name: wardName, content: wardContent.slice(0, 300) });
-                  }
-                } catch { /* not ward JSON, ignore */ }
-              }
-            } else if (block.type === "delegation") {
-              updated[idx] = {
-                ...block,
-                data: { ...block.data, result, status: isError ? "error" : "completed" },
-              };
-            } else if (block.type === "plan") {
-              // Plan results — might have updated steps
-              try {
-                const parsed = JSON.parse(result);
-                if (Array.isArray(parsed.steps)) {
-                  const steps = parsed.steps.map((s: Record<string, unknown>) => ({
-                    text: (s.text ?? "") as string,
-                    status: (s.status ?? "pending") as StepStatus,
-                  }));
-                  updated[idx] = { ...block, data: { steps } };
-                  setPlan(steps);
-                }
-              } catch {
-                // leave block as-is
-              }
-            }
-
-            return updated;
-          });
-          toolCallBlockMapRef.current.delete(toolCallId);
-        }
+      case "tool_result":
+        handleToolResultEvent(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Delegation lifecycle (from server-side routing)
-      // ------------------------------------------------------------------
-      case "delegation_started": {
-        const childAgentId = (event.child_agent_id ?? "") as string;
-        const task = (event.task ?? "") as string;
-
-        // Populate execution→agent map for subagent tool routing
-        const childExecId = (event.child_execution_id ?? event.execution_id) as string | undefined;
-        if (childExecId && childAgentId) {
-          executionAgentMapRef.current.set(childExecId, childAgentId);
-        }
-
-        // Update existing delegation block if we have one
-        setBlocks((prev) => {
-          const idx = prev.findIndex(
-            (b) => b.type === "delegation" && b.data.agentId === childAgentId && b.data.status === "active",
-          );
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              data: { ...updated[idx].data, task: task || updated[idx].data.task },
-            };
-            return updated;
-          }
-          // If no existing block, create one
-          return [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              type: "delegation",
-              timestamp: now(),
-              data: { agentId: childAgentId, task, status: "active" },
-            },
-          ];
-        });
-
-        setSubagents((prev) => {
-          const existing = prev.find((s) => s.agentId === childAgentId && s.status === "active");
-          if (existing) return prev;
-          return [...prev, { agentId: childAgentId, task, status: "active" }];
-        });
+      case "delegation_started":
+        handleDelegationStarted(event, ctx);
         break;
-      }
-
-      case "delegation_completed": {
-        const childAgentId = (event.child_agent_id ?? "") as string;
-        const result = (event.result ?? "") as string;
-
-        setBlocks((prev) => {
-          const idx = prev.findIndex(
-            (b) => b.type === "delegation" && b.data.agentId === childAgentId && b.data.status === "active",
-          );
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              data: { ...updated[idx].data, status: "completed", result },
-            };
-            return updated;
-          }
-          return prev;
-        });
-
-        setSubagents((prev) =>
-          prev.map((s) =>
-            s.agentId === childAgentId && s.status === "active"
-              ? { ...s, status: "completed" }
-              : s,
-          ),
-        );
+      case "delegation_completed":
+        handleDelegationCompleted(event, ctx);
         break;
-      }
-
-      case "delegation_error": {
-        const childAgentId = (event.child_agent_id ?? "") as string;
-        const error = (event.error ?? "") as string;
-
-        setBlocks((prev) => {
-          const idx = prev.findIndex(
-            (b) => b.type === "delegation" && b.data.agentId === childAgentId && b.data.status === "active",
-          );
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              data: { ...updated[idx].data, status: "error", result: error },
-            };
-            return updated;
-          }
-          return prev;
-        });
-
-        setSubagents((prev) =>
-          prev.map((s) =>
-            s.agentId === childAgentId && s.status === "active"
-              ? { ...s, status: "error" }
-              : s,
-          ),
-        );
+      case "delegation_error":
+        handleDelegationError(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Session title
-      // ------------------------------------------------------------------
-      case "session_title_changed": {
-        const title = (event.title ?? "") as string;
-        if (title) {
-          setSessionTitle(title);
-          // Cancel fallback timer — real title arrived
-          if (titleFallbackTimerRef.current) {
-            clearTimeout(titleFallbackTimerRef.current);
-            titleFallbackTimerRef.current = null;
-          }
-        }
+      case "session_title_changed":
+        handleSessionTitleChanged(event, ctx);
         break;
-      }
-
-      case "ward_changed": {
-        const wardId = (event.ward_id ?? "") as string;
-        if (wardId) {
-          setActiveWard({ name: wardId, content: "" });
-        }
+      case "ward_changed":
+        handleWardChanged(event, ctx);
         break;
-      }
-
-      case "intent_analysis_started": {
-        // Create a streaming intent analysis block
-        setBlocks((prev) => [
-          ...prev,
-          {
-            id: "intent-streaming",
-            type: "intent_analysis",
-            timestamp: now(),
-            data: {},
-            isStreaming: true,
-          },
-        ]);
+      case "intent_analysis_started":
+        handleIntentAnalysisStarted(ctx);
         break;
-      }
-
-      case "intent_analysis_complete": {
-        const wardRec = event.ward_recommendation as Record<string, unknown> | undefined;
-        const execStrat = event.execution_strategy as Record<string, unknown> | undefined;
-        const ia: IntentAnalysis = {
-          primaryIntent: (event.primary_intent ?? "") as string,
-          hiddenIntents: (event.hidden_intents ?? []) as string[],
-          recommendedSkills: (event.recommended_skills ?? []) as string[],
-          recommendedAgents: (event.recommended_agents ?? []) as string[],
-          wardRecommendation: {
-            action: (wardRec?.action ?? "") as string,
-            wardName: (wardRec?.ward_name ?? "") as string,
-            subdirectory: wardRec?.subdirectory as string | undefined,
-            reason: (wardRec?.reason ?? "") as string,
-          },
-          executionStrategy: {
-            approach: (execStrat?.approach ?? "simple") as string,
-            graph: execStrat?.graph as IntentAnalysis["executionStrategy"]["graph"],
-            explanation: (execStrat?.explanation ?? "") as string,
-          },
-        };
-        setIntentAnalysis(ia);
-        setPhase("planning");
-
-        // Update active ward from intent analysis recommendation
-        if (ia.wardRecommendation.wardName) {
-          setActiveWard((prev) =>
-            prev ?? { name: ia.wardRecommendation.wardName, content: ia.wardRecommendation.reason }
-          );
-        }
-
-        // Update the streaming intent_analysis block with full data
-        setBlocks((prev) => {
-          const idx = prev.findIndex(
-            (b) => b.type === "intent_analysis" && b.isStreaming,
-          );
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              data: { analysis: ia },
-              isStreaming: false,
-            };
-            return updated;
-          }
-          // If no streaming block exists (e.g. replay), create a complete one
-          return [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              type: "intent_analysis",
-              timestamp: now(),
-              data: { analysis: ia },
-              isStreaming: false,
-            },
-          ];
-        });
+      case "intent_analysis_complete":
+        handleIntentAnalysisComplete(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Turn complete (respond tool output)
-      // ------------------------------------------------------------------
-      case "turn_complete": {
-        // Flush any buffered tokens
-        if (rafIdRef.current !== null) {
-          cancelAnimationFrame(rafIdRef.current);
-          rafIdRef.current = null;
-        }
-        flushTokenBuffer();
-
-        const finalMessage = event.final_message as string | undefined;
-        if (finalMessage) {
-          setBlocks((prev) => {
-            const lastIdx = prev.length - 1;
-            const last = prev[lastIdx];
-            if (last && last.type === "response" && last.isStreaming) {
-              return [
-                ...prev.slice(0, lastIdx),
-                { ...last, data: { ...last.data, content: finalMessage }, isStreaming: false },
-              ];
-            }
-            return [
-              ...prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)),
-              {
-                id: crypto.randomUUID(),
-                type: "response",
-                timestamp: now(),
-                data: { content: finalMessage, timestamp: now() },
-                isStreaming: false,
-              },
-            ];
-          });
-        }
+      case "turn_complete":
+        handleTurnComplete(event, ctx);
         break;
-      }
-
-      // ------------------------------------------------------------------
-      // Agent completed / error
-      // ------------------------------------------------------------------
-      case "agent_completed": {
-        if (rafIdRef.current !== null) {
-          cancelAnimationFrame(rafIdRef.current);
-          rafIdRef.current = null;
-        }
-        flushTokenBuffer();
-
-        // Safety net: create response block from result if none exists
-        const result = event.result as string | undefined;
-        if (result) {
-          setBlocks((prev) => {
-            const hasResponse = prev.some((b) => b.type === "response");
-            if (hasResponse) return prev;
-            return [
-              ...prev,
-              {
-                id: crypto.randomUUID(),
-                type: "response",
-                timestamp: now(),
-                data: { content: result, timestamp: now() },
-                isStreaming: false,
-              },
-            ];
-          });
-        }
-
-        setStatus("completed");
-        setPhase("completed");
-        stopDurationTimer();
-        // Finalize any streaming blocks
-        setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
+      case "agent_completed":
+        handleAgentCompleted(event, ctx);
         break;
-      }
-
-      case "error": {
-        if (rafIdRef.current !== null) {
-          cancelAnimationFrame(rafIdRef.current);
-          rafIdRef.current = null;
-        }
-        flushTokenBuffer();
-        setStatus("error");
-        setPhase("error");
-        stopDurationTimer();
-        setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
+      case "error":
+        handleErrorEvent(ctx);
         break;
-      }
-
-      // Handle system messages (delegation callbacks, continuation triggers)
       case "system_message":
-      case "message": {
-        const content = (event.content ?? event.message ?? "") as string;
-        if (content) {
-          setBlocks((prev) => [
-            ...prev,
-            {
-              id: crypto.randomUUID(),
-              type: "response",
-              timestamp: now(),
-              data: { content, timestamp: now() },
-              isStreaming: false,
-            },
-          ]);
-        }
+      case "message":
+        handleSystemOrMessage(event, ctx);
         break;
-      }
-
       default:
-        // Unhandled event types — no-op
         break;
     }
   }, [flushTokenBuffer, startDurationTimer, stopDurationTimer]);
@@ -1005,26 +1089,9 @@ export function useMissionControl() {
 
         // Sidebar — intent analysis
         if (s.intentAnalysis) {
-          const ia = s.intentAnalysis as Record<string, unknown>;
-          const wr = (ia.ward_recommendation ?? {}) as Record<string, unknown>;
-          const es = (ia.execution_strategy ?? {}) as Record<string, unknown>;
-          setIntentAnalysis({
-            primaryIntent: (ia.primary_intent ?? "") as string,
-            hiddenIntents: (ia.hidden_intents ?? []) as string[],
-            recommendedSkills: (ia.recommended_skills ?? []) as string[],
-            recommendedAgents: (ia.recommended_agents ?? []) as string[],
-            wardRecommendation: {
-              action: (wr.action ?? "") as string,
-              wardName: (wr.ward_name ?? "") as string,
-              subdirectory: wr.subdirectory as string | undefined,
-              reason: (wr.reason ?? "") as string,
-            },
-            executionStrategy: {
-              approach: (es.approach ?? "simple") as string,
-              graph: es.graph as IntentAnalysis["executionStrategy"]["graph"],
-              explanation: (es.explanation ?? "") as string,
-            },
-          });
+          setIntentAnalysis(
+            parseIntentAnalysisFromState(s.intentAnalysis as Record<string, unknown>)
+          );
         }
 
         // Sidebar — ward, facts, plan

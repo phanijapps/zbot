@@ -80,7 +80,7 @@ echo "Fetching expected checksum from GitHub API..."
 EXPECTED_DIGEST=$(curl -sL "https://api.github.com/repos/lightpanda-io/browser/releases/tags/nightly" \
     | jq -r --arg name "$ASSET_NAME" '.assets[] | select(.name == $name) | .digest')
 
-if [ -z "$EXPECTED_DIGEST" ] || [ "$EXPECTED_DIGEST" = "null" ]; then
+if [[ -z "$EXPECTED_DIGEST" ]] || [[ "$EXPECTED_DIGEST" = "null" ]]; then
     echo "ERROR: Could not retrieve checksum for $ASSET_NAME from GitHub API."
     exit 1
 fi
@@ -101,7 +101,7 @@ else
     ACTUAL_SHA256=$(shasum -a 256 "$INSTALL_DIR/$BINARY_NAME" | awk '{print $1}')
 fi
 
-if [ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]; then
+if [[ "$ACTUAL_SHA256" != "$EXPECTED_SHA256" ]]; then
     echo "ERROR: Checksum verification FAILED!"
     echo "  Expected: $EXPECTED_SHA256"
     echo "  Actual:   $ACTUAL_SHA256"

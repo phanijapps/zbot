@@ -75,7 +75,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
   // Load skills, MCPs, and schedules for this agent
   useEffect(() => {
     loadData();
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, []);  
 
   const loadData = async () => {
     setIsLoading(true);

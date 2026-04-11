@@ -73,7 +73,7 @@ export function ProvidersEmptyState({ existingProviders, onProviderCreated, onOp
       } else {
         setError(createResult.error || "Failed to save provider.");
       }
-    } catch (err) {
+    } catch (_err) {
       setError("Could not reach provider — check the URL and try again.");
     } finally {
       setIsConnecting(false);

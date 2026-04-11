@@ -47,7 +47,7 @@ export function MemoryFactCard({
     if (isDeleting) return;
     setIsDeleting(true);
     try {
-      await onDelete();
+      onDelete();
     } finally {
       setIsDeleting(false);
     }
