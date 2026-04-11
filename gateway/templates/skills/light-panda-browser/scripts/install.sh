@@ -77,7 +77,7 @@ ASSET_NAME="${DOWNLOAD_URL##*/}"
 
 # Fetch expected SHA256 digest from GitHub release API
 echo "Fetching expected checksum from GitHub API..."
-EXPECTED_DIGEST=$(curl -sL "https://api.github.com/repos/lightpanda-io/browser/releases/tags/nightly" \
+EXPECTED_DIGEST=$(curl --proto '=https' -sL "https://api.github.com/repos/lightpanda-io/browser/releases/tags/nightly" \
     | jq -r --arg name "$ASSET_NAME" '.assets[] | select(.name == $name) | .digest')
 
 if [[ -z "$EXPECTED_DIGEST" ]] || [[ "$EXPECTED_DIGEST" = "null" ]]; then
@@ -91,7 +91,7 @@ echo "Expected SHA256: $EXPECTED_SHA256"
 
 # Download binary
 echo "Downloading Lightpanda..."
-curl -L -o "$INSTALL_DIR/$BINARY_NAME" "$DOWNLOAD_URL"
+curl --proto '=https' -L -o "$INSTALL_DIR/$BINARY_NAME" "$DOWNLOAD_URL"
 
 # Verify checksum
 echo "Verifying checksum..."

@@ -93,6 +93,13 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
   },
 ];
 
+/** Remove trailing slashes from a URL without using a regex */
+function trimTrailingSlashes(url: string): string {
+  let s = url;
+  while (s.endsWith("/")) s = s.slice(0, -1);
+  return s;
+}
+
 /** Filter out presets where a provider with the same base URL already exists */
 export function getAvailablePresets(
   existingProviders: { baseUrl: string; name: string }[]
@@ -101,7 +108,7 @@ export function getAvailablePresets(
     (preset) =>
       !existingProviders.some(
         (p) =>
-          p.baseUrl.replace(/\/+$/, "") === preset.baseUrl.replace(/\/+$/, "") ||
+          trimTrailingSlashes(p.baseUrl) === trimTrailingSlashes(preset.baseUrl) ||
           p.name.toLowerCase() === preset.name.toLowerCase()
       )
   );

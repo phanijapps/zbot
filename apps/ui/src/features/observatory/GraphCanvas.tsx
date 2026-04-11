@@ -221,8 +221,8 @@ export function GraphCanvas({
       const onMove = (e: MouseEvent) => {
         // Parse transform from root group to account for zoom/pan
         const transformStr = gRef.current?.getAttribute("transform") || "";
-        const scaleMatch = transformStr.match(/scale\(([^)]+)\)/);
-        const translateMatch = transformStr.match(/translate\(([^,]+),\s*([^)]+)\)/);
+        const scaleMatch = transformStr.match(/scale\(([^)]+?)\)/);
+        const translateMatch = transformStr.match(/translate\(([^,)]+),\s*([^)]+?)\)/);
         const scale = scaleMatch ? Number.parseFloat(scaleMatch[1]) : 1;
         const tx = translateMatch ? Number.parseFloat(translateMatch[1]) : 0;
         const ty = translateMatch ? Number.parseFloat(translateMatch[2]) : 0;
