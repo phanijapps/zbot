@@ -25,6 +25,8 @@ import json
 import sys
 import time
 
+DEFAULT_TITLE = "No title"
+
 # Try importing ddgs (newer metasearch), fall back to duckduckgo-search
 DDGS = None
 LIB_NAME = None
@@ -134,7 +136,7 @@ def display_text_results(results):
         return
 
     for i, r in enumerate(results, 1):
-        title = r.get("title", "No title")
+        title = r.get("title", DEFAULT_TITLE)
         href = r.get("href", r.get("url", ""))
         body = r.get("body", r.get("snippet", ""))[:200]
         print(f"\n{i}. {title}")
@@ -150,7 +152,7 @@ def display_news_results(results):
         return
 
     for i, r in enumerate(results, 1):
-        title = r.get("title", "No title")
+        title = r.get("title", DEFAULT_TITLE)
         url = r.get("url", r.get("href", ""))
         source = r.get("source", "Unknown")
         date = r.get("date", "")
@@ -171,7 +173,7 @@ def display_image_results(results):
         return
 
     for i, r in enumerate(results, 1):
-        title = r.get("title", "No title")
+        title = r.get("title", DEFAULT_TITLE)
         image_url = r.get("image", "")
         source_url = r.get("url", "")
         width = r.get("width", "?")
@@ -190,7 +192,7 @@ def display_video_results(results):
         return
 
     for i, r in enumerate(results, 1):
-        title = r.get("title", "No title")
+        title = r.get("title", DEFAULT_TITLE)
         content_url = r.get("content", "")
         publisher = r.get("publisher", "")
         uploader = r.get("uploader", "")

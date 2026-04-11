@@ -40,6 +40,9 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
+USER_AGENT = USER_AGENT
+DELETED_MARKER = DELETED_MARKER
+
 # --- Lazy imports with availability tracking ---
 _trafilatura = None
 _html2text = None
@@ -102,7 +105,7 @@ def fetch_reddit_thread(url, max_comments=15):
     clean_url = re.sub(r'\.json$', '', clean_url)
     json_url = clean_url + ".json"
 
-    headers = {"User-Agent": "AgentZero/1.0 (web-reader skill)"}
+    headers = {"User-Agent": USER_AGENT}
 
     try:
         resp = requests.get(json_url, headers=headers, timeout=20, allow_redirects=True)
@@ -120,7 +123,7 @@ def fetch_reddit_thread(url, max_comments=15):
     post = {
         "subreddit": post_data.get("subreddit", ""),
         "title": post_data.get("title", ""),
-        "author": post_data.get("author", "[deleted]"),
+        "author": post_data.get("author", DELETED_MARKER),
         "score": post_data.get("score", 0),
         "upvote_ratio": post_data.get("upvote_ratio", 0),
         "selftext": post_data.get("selftext", ""),
@@ -148,11 +151,11 @@ def _parse_comments_recursive(children, comments, depth=0, max_total=15):
             continue
 
         cd = child["data"]
-        if cd.get("body") in ("[deleted]", "[removed]", None):
+        if cd.get("body") in (DELETED_MARKER, "[removed]", None):
             continue
 
         comments.append({
-            "author": cd.get("author", "[deleted]"),
+            "author": cd.get("author", DELETED_MARKER),
             "body": cd.get("body", ""),
             "score": cd.get("score", 0),
             "depth": depth,
@@ -307,7 +310,7 @@ def read_with_html2text(url):
         return None, "html2text not installed"
 
     try:
-        headers = {"User-Agent": "AgentZero/1.0 (web-reader skill)"}
+        headers = {"User-Agent": USER_AGENT}
         resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
         resp.raise_for_status()
 
@@ -333,7 +336,7 @@ def fetch_html_only(url):
     """Just fetch raw HTML."""
     requests = get_requests()
     try:
-        headers = {"User-Agent": "AgentZero/1.0 (web-reader skill)"}
+        headers = {"User-Agent": USER_AGENT}
         resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
         resp.raise_for_status()
         return resp.text, None

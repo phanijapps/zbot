@@ -35,7 +35,7 @@ if ! docker compose version &>/dev/null; then
 fi
 
 # Setup .env on first run
-if [ ! -f .env ]; then
+if [[ ! -f .env ]]; then
     echo -e "${YELLOW}First run detected — setting up configuration...${NC}"
     echo ""
 

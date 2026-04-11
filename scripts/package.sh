@@ -37,14 +37,14 @@ detect_platform() {
 build_frontend() {
     log_info "Building frontend..."
 
-    if [ ! -d "$FRONTEND_DIR/node_modules" ]; then
+    if [[ ! -d "$FRONTEND_DIR/node_modules" ]]; then
         log_info "Installing frontend dependencies..."
         cd "$FRONTEND_DIR" && npm install
     fi
 
     cd "$FRONTEND_DIR" && npm run build
 
-    if [ ! -d "$FRONTEND_DIR/dist" ]; then
+    if [[ ! -d "$FRONTEND_DIR/dist" ]]; then
         log_error "Frontend build failed - dist/ not found"
         exit 1
     fi
@@ -150,7 +150,7 @@ main() {
     # Detect and package for current platform
     PLATFORM=$(detect_platform)
 
-    if [ "$PLATFORM" = "unknown" ]; then
+    if [[ "$PLATFORM" = "unknown" ]]; then
         log_error "Unknown platform: $(uname -s)-$(uname -m)"
         exit 1
     fi
