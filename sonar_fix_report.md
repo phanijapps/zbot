@@ -1,7 +1,15 @@
 # SonarQube Fix Report
 
 ## Security Scan
-**Result: 0 issues.** No vulnerabilities or security hotspots found.
+**Result: 0 vulnerabilities.** 8 security hotspots resolved:
+
+| Hotspot ID | File | Category | Fix |
+|------------|------|----------|-----|
+| AZ13h4m3 | GraphCanvas.tsx:224-225 | ReDoS | Made regex non-greedy + bounded character classes |
+| AZ13h4kk (x2) | providerPresets.ts:104 | ReDoS | Replaced `/\/+$/` regex with `trimTrailingSlashes()` helper |
+| AZ13h4ns (x2) | ProvidersStep.tsx:19,124 | ReDoS | Replaced `/\/+$/` regex with `trimSlashes()` helper |
+| AZ13h4hu | GraphView.tsx:93 | Weak PRNG | Replaced `Math.random()` with deterministic `(i * 7919) % 100` |
+| AZ19C8BM (x2) | install.sh:80,94 | HTTP downgrade | Added `--proto '=https'` to curl to enforce HTTPS on redirects |
 
 ## Reliability Scan
 
