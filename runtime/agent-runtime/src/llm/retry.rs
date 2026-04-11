@@ -9,9 +9,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use serde_json::Value;
 
-use super::client::{
-    ChatResponse, LlmClient, LlmError, StreamCallback,
-};
+use super::client::{ChatResponse, LlmClient, LlmError, StreamCallback};
 use crate::types::ChatMessage;
 
 /// Configuration for retry behavior on LLM API calls.
@@ -184,9 +182,7 @@ impl LlmClient for RetryingLlmClient {
         // Note: The executor uses chat_stream via an mpsc channel. If the stream
         // fails, the channel closes and the executor sees the error. Future
         // improvement: accept a callback factory for pre-connection retries.
-        self.inner
-            .chat_stream(messages, tools, callback)
-            .await
+        self.inner.chat_stream(messages, tools, callback).await
     }
 
     fn supports_tools(&self) -> bool {
@@ -247,7 +243,9 @@ mod tests {
         let policy = RetryPolicy::default();
 
         assert!(policy.should_retry(&LlmError::RateLimited));
-        assert!(policy.should_retry(&LlmError::ApiError("(500): Internal Server Error".to_string())));
+        assert!(policy.should_retry(&LlmError::ApiError(
+            "(500): Internal Server Error".to_string()
+        )));
         assert!(policy.should_retry(&LlmError::ApiError("(502): Bad Gateway".to_string())));
         assert!(policy.should_retry(&LlmError::ApiError("(429): Too Many Requests".to_string())));
         assert!(!policy.should_retry(&LlmError::AuthenticationFailed));

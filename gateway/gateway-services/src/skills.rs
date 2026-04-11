@@ -75,7 +75,15 @@ impl SkillService {
     pub async fn preload(&self) -> Result<(), String> {
         let skills = self.load_all_skills()?;
         *self.cache.write().await = Some(skills);
-        tracing::info!("Preloaded {} skills into cache", self.cache.read().await.as_ref().map(|s| s.len()).unwrap_or(0));
+        tracing::info!(
+            "Preloaded {} skills into cache",
+            self.cache
+                .read()
+                .await
+                .as_ref()
+                .map(|s| s.len())
+                .unwrap_or(0)
+        );
         Ok(())
     }
 
@@ -258,7 +266,9 @@ impl SkillService {
             name,
             display_name,
             description: frontmatter.description,
-            category: frontmatter.category.unwrap_or_else(|| "general".to_string()),
+            category: frontmatter
+                .category
+                .unwrap_or_else(|| "general".to_string()),
             instructions,
             created_at: None,
         })

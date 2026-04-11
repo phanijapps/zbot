@@ -31,11 +31,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_before_callback() {
-        let callback: BeforeAgentCallback = Arc::new(|_ctx| {
-            Box::pin(async move {
-                Some(Content::user("Preprocessed content"))
-            })
-        });
+        let callback: BeforeAgentCallback =
+            Arc::new(|_ctx| Box::pin(async move { Some(Content::user("Preprocessed content")) }));
 
         let result = callback(Arc::new(MockCallbackContext)).await;
         assert!(result.is_some());
@@ -45,9 +42,7 @@ mod tests {
     #[tokio::test]
     async fn test_after_callback() {
         let callback: AfterAgentCallback = Arc::new(|_ctx| {
-            Box::pin(async move {
-                Some(Content::assistant("Postprocessed content"))
-            })
+            Box::pin(async move { Some(Content::assistant("Postprocessed content")) })
         });
 
         let result = callback(Arc::new(MockCallbackContext)).await;
@@ -78,7 +73,10 @@ mod tests {
             "test"
         }
         fn user_content(&self) -> &Content {
-            static CONTENT: Content = Content { role: String::new(), parts: Vec::new() };
+            static CONTENT: Content = Content {
+                role: String::new(),
+                parts: Vec::new(),
+            };
             &CONTENT
         }
     }

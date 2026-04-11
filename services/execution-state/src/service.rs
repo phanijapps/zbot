@@ -44,7 +44,11 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     /// Create a new session with source and a root execution.
-    pub fn create_session_with_source(&self, agent_id: &str, source: TriggerSource) -> Result<(Session, AgentExecution), String> {
+    pub fn create_session_with_source(
+        &self,
+        agent_id: &str,
+        source: TriggerSource,
+    ) -> Result<(Session, AgentExecution), String> {
         let session = Session::new_with_source(agent_id, source);
         let execution = AgentExecution::new_root(&session.id, agent_id);
 
@@ -63,7 +67,11 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     /// Create a new session in QUEUED state (does not create root execution yet).
-    pub fn create_session_queued(&self, agent_id: &str, source: TriggerSource) -> Result<Session, String> {
+    pub fn create_session_queued(
+        &self,
+        agent_id: &str,
+        source: TriggerSource,
+    ) -> Result<Session, String> {
         let session = Session::new_queued(agent_id, source);
         self.repo.create_session(&session)?;
         Ok(session)
@@ -71,22 +79,30 @@ impl<D: StateDbProvider> StateService<D> {
 
     /// Start a queued session (transition Queued → Running and create root execution).
     pub fn start_session(&self, session_id: &str) -> Result<(Session, AgentExecution), String> {
-        let session = self.repo.get_session(session_id)?
+        let session = self
+            .repo
+            .get_session(session_id)?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
         if session.status != SessionStatus::Queued {
-            return Err(format!("Cannot start session in {} state (must be queued)", session.status.as_str()));
+            return Err(format!(
+                "Cannot start session in {} state (must be queued)",
+                session.status.as_str()
+            ));
         }
 
         // Transition to Running
-        self.repo.update_session_status(session_id, SessionStatus::Running)?;
+        self.repo
+            .update_session_status(session_id, SessionStatus::Running)?;
 
         // Create root execution
         let execution = AgentExecution::new_root(session_id, &session.root_agent_id);
         self.repo.create_execution(&execution)?;
 
         // Fetch updated session
-        let updated_session = self.repo.get_session(session_id)?
+        let updated_session = self
+            .repo
+            .get_session(session_id)?
             .ok_or_else(|| "Session disappeared after update".to_string())?;
 
         Ok((updated_session, execution))
@@ -98,7 +114,10 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     /// Get session with all executions.
-    pub fn get_session_with_executions(&self, session_id: &str) -> Result<Option<SessionWithExecutions>, String> {
+    pub fn get_session_with_executions(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<SessionWithExecutions>, String> {
         self.repo.get_session_with_executions(session_id)
     }
 
@@ -108,7 +127,10 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     /// List sessions with executions.
-    pub fn list_sessions_with_executions(&self, filter: &SessionFilter) -> Result<Vec<SessionWithExecutions>, String> {
+    pub fn list_sessions_with_executions(
+        &self,
+        filter: &SessionFilter,
+    ) -> Result<Vec<SessionWithExecutions>, String> {
         self.repo.list_sessions_with_executions(filter)
     }
 
@@ -127,35 +149,52 @@ impl<D: StateDbProvider> StateService<D> {
 
     /// Pause a session.
     pub fn pause_session(&self, session_id: &str) -> Result<(), String> {
-        let session = self.repo.get_session(session_id)?
+        let session = self
+            .repo
+            .get_session(session_id)?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
         if session.status != SessionStatus::Running {
-            return Err(format!("Cannot pause session in {} state", session.status.as_str()));
+            return Err(format!(
+                "Cannot pause session in {} state",
+                session.status.as_str()
+            ));
         }
 
-        self.repo.update_session_status(session_id, SessionStatus::Paused)
+        self.repo
+            .update_session_status(session_id, SessionStatus::Paused)
     }
 
     /// Resume a session.
     pub fn resume_session(&self, session_id: &str) -> Result<(), String> {
-        let session = self.repo.get_session(session_id)?
+        let session = self
+            .repo
+            .get_session(session_id)?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
         if session.status != SessionStatus::Paused && session.status != SessionStatus::Crashed {
-            return Err(format!("Cannot resume session in {} state", session.status.as_str()));
+            return Err(format!(
+                "Cannot resume session in {} state",
+                session.status.as_str()
+            ));
         }
 
-        self.repo.update_session_status(session_id, SessionStatus::Running)
+        self.repo
+            .update_session_status(session_id, SessionStatus::Running)
     }
 
     /// Cancel a session (by marking root execution cancelled).
     pub fn cancel_session(&self, session_id: &str) -> Result<(), String> {
-        let session = self.repo.get_session(session_id)?
+        let session = self
+            .repo
+            .get_session(session_id)?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
         if session.status.is_terminal() {
-            return Err(format!("Cannot cancel session in {} state", session.status.as_str()));
+            return Err(format!(
+                "Cannot cancel session in {} state",
+                session.status.as_str()
+            ));
         }
 
         // Cancel all running executions
@@ -166,17 +205,20 @@ impl<D: StateDbProvider> StateService<D> {
 
         for exec in executions {
             if !exec.status.is_terminal() {
-                self.repo.update_execution_status(&exec.id, ExecutionStatus::Cancelled)?;
+                self.repo
+                    .update_execution_status(&exec.id, ExecutionStatus::Cancelled)?;
             }
         }
 
-        self.repo.update_session_status(session_id, SessionStatus::Crashed)
+        self.repo
+            .update_session_status(session_id, SessionStatus::Crashed)
     }
 
     /// Complete a session.
     pub fn complete_session(&self, session_id: &str) -> Result<(), String> {
         self.repo.update_session_tokens(session_id)?;
-        self.repo.update_session_status(session_id, SessionStatus::Completed)
+        self.repo
+            .update_session_status(session_id, SessionStatus::Completed)
     }
 
     /// Mark a session as crashed.
@@ -190,15 +232,22 @@ impl<D: StateDbProvider> StateService<D> {
         })?;
 
         for exec in executions {
-            if matches!(exec.status, ExecutionStatus::Running | ExecutionStatus::Queued) {
-                if let Err(e) = self.repo.update_execution_status(&exec.id, ExecutionStatus::Crashed) {
+            if matches!(
+                exec.status,
+                ExecutionStatus::Running | ExecutionStatus::Queued
+            ) {
+                if let Err(e) = self
+                    .repo
+                    .update_execution_status(&exec.id, ExecutionStatus::Crashed)
+                {
                     tracing::warn!("Failed to crash execution {}: {}", exec.id, e);
                 }
             }
         }
 
         self.repo.update_session_tokens(session_id)?;
-        self.repo.update_session_status(session_id, SessionStatus::Crashed)
+        self.repo
+            .update_session_status(session_id, SessionStatus::Crashed)
     }
 
     /// Reactivate a terminal session (completed/crashed) back to running.
@@ -206,7 +255,9 @@ impl<D: StateDbProvider> StateService<D> {
     /// Called when a new execution is added to an existing session that was
     /// previously completed or crashed.
     pub fn reactivate_session(&self, session_id: &str) -> Result<(), String> {
-        let session = self.repo.get_session(session_id)?
+        let session = self
+            .repo
+            .get_session(session_id)?
             .ok_or_else(|| format!("Session not found: {}", session_id))?;
 
         if session.status.is_terminal() {
@@ -215,7 +266,8 @@ impl<D: StateDbProvider> StateService<D> {
                 old_status = %session.status.as_str(),
                 "Reactivating terminal session for new execution"
             );
-            self.repo.update_session_status(session_id, SessionStatus::Running)?;
+            self.repo
+                .update_session_status(session_id, SessionStatus::Running)?;
         }
 
         Ok(())
@@ -226,11 +278,16 @@ impl<D: StateDbProvider> StateService<D> {
     /// Used when continuing a session — the root execution is reused rather
     /// than creating a new one per user message.
     pub fn reactivate_execution(&self, execution_id: &str) -> Result<(), String> {
-        let execution = self.repo.get_execution(execution_id)?
+        let execution = self
+            .repo
+            .get_execution(execution_id)?
             .ok_or_else(|| format!("Execution not found: {}", execution_id))?;
 
-        if execution.status == ExecutionStatus::Completed || execution.status == ExecutionStatus::Crashed {
-            self.repo.update_execution_status(execution_id, ExecutionStatus::Running)?;
+        if execution.status == ExecutionStatus::Completed
+            || execution.status == ExecutionStatus::Crashed
+        {
+            self.repo
+                .update_execution_status(execution_id, ExecutionStatus::Running)?;
         }
 
         Ok(())
@@ -254,7 +311,8 @@ impl<D: StateDbProvider> StateService<D> {
         connector_id: Option<&str>,
         respond_to: Option<&Vec<String>>,
     ) -> Result<(), String> {
-        self.repo.update_session_routing(session_id, thread_id, connector_id, respond_to)
+        self.repo
+            .update_session_routing(session_id, thread_id, connector_id, respond_to)
     }
 
     /// Delete a session.
@@ -312,7 +370,10 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     /// Get child executions.
-    pub fn get_child_executions(&self, parent_execution_id: &str) -> Result<Vec<AgentExecution>, String> {
+    pub fn get_child_executions(
+        &self,
+        parent_execution_id: &str,
+    ) -> Result<Vec<AgentExecution>, String> {
         self.repo.get_child_executions(parent_execution_id)
     }
 
@@ -368,34 +429,51 @@ impl<D: StateDbProvider> StateService<D> {
 
     /// Start an execution.
     pub fn start_execution(&self, execution_id: &str) -> Result<(), String> {
-        self.repo.update_execution_status(execution_id, ExecutionStatus::Running)
+        self.repo
+            .update_execution_status(execution_id, ExecutionStatus::Running)
     }
 
     /// Complete an execution.
     pub fn complete_execution(&self, execution_id: &str) -> Result<(), String> {
-        self.repo.update_execution_status(execution_id, ExecutionStatus::Completed)
+        self.repo
+            .update_execution_status(execution_id, ExecutionStatus::Completed)
     }
 
     /// Set child_session_id on an execution (for smart resume).
-    pub fn set_child_session_id(&self, execution_id: &str, child_session_id: &str) -> Result<(), String> {
-        self.repo.set_child_session_id(execution_id, child_session_id)
+    pub fn set_child_session_id(
+        &self,
+        execution_id: &str,
+        child_session_id: &str,
+    ) -> Result<(), String> {
+        self.repo
+            .set_child_session_id(execution_id, child_session_id)
     }
 
     /// Find the most recently crashed subagent execution for a session.
     /// Returns None if only the root execution crashed or no crashes exist.
-    pub fn get_last_crashed_subagent(&self, session_id: &str) -> Result<Option<AgentExecution>, String> {
+    pub fn get_last_crashed_subagent(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<AgentExecution>, String> {
         self.repo.get_last_crashed_subagent(session_id)
     }
 
     /// Mark an execution as crashed.
     pub fn crash_execution(&self, execution_id: &str, error: &str) -> Result<(), String> {
         self.repo.set_execution_error(execution_id, error)?;
-        self.repo.update_execution_status(execution_id, ExecutionStatus::Crashed)
+        self.repo
+            .update_execution_status(execution_id, ExecutionStatus::Crashed)
     }
 
     /// Update execution tokens.
-    pub fn update_execution_tokens(&self, execution_id: &str, tokens_in: u64, tokens_out: u64) -> Result<(), String> {
-        self.repo.update_execution_tokens(execution_id, tokens_in, tokens_out)
+    pub fn update_execution_tokens(
+        &self,
+        execution_id: &str,
+        tokens_in: u64,
+        tokens_out: u64,
+    ) -> Result<(), String> {
+        self.repo
+            .update_execution_tokens(execution_id, tokens_in, tokens_out)
     }
 
     /// Eagerly aggregate session token totals from all executions.
@@ -409,8 +487,13 @@ impl<D: StateDbProvider> StateService<D> {
     }
 
     /// Save execution checkpoint.
-    pub fn save_execution_checkpoint(&self, execution_id: &str, checkpoint: &Checkpoint) -> Result<(), String> {
-        self.repo.save_execution_checkpoint(execution_id, checkpoint)
+    pub fn save_execution_checkpoint(
+        &self,
+        execution_id: &str,
+        checkpoint: &Checkpoint,
+    ) -> Result<(), String> {
+        self.repo
+            .save_execution_checkpoint(execution_id, checkpoint)
     }
 
     // =========================================================================
@@ -430,7 +513,10 @@ impl<D: StateDbProvider> StateService<D> {
     pub fn complete_delegation(&self, session_id: &str) -> Result<bool, String> {
         let remaining = self.repo.decrement_pending_delegations(session_id)?;
         if remaining == 0 {
-            let session = self.repo.get_session(session_id)?.ok_or("Session not found")?;
+            let session = self
+                .repo
+                .get_session(session_id)?
+                .ok_or("Session not found")?;
             Ok(session.continuation_needed)
         } else {
             Ok(false)
@@ -471,16 +557,33 @@ impl<D: StateDbProvider> StateService<D> {
             })?;
 
             for exec in executions {
-                if matches!(exec.status, ExecutionStatus::Running | ExecutionStatus::Queued) {
-                    if let Err(e) = self.repo.update_execution_status(&exec.id, ExecutionStatus::Paused) {
-                        tracing::warn!("Failed to pause execution {} during shutdown: {}", exec.id, e);
+                if matches!(
+                    exec.status,
+                    ExecutionStatus::Running | ExecutionStatus::Queued
+                ) {
+                    if let Err(e) = self
+                        .repo
+                        .update_execution_status(&exec.id, ExecutionStatus::Paused)
+                    {
+                        tracing::warn!(
+                            "Failed to pause execution {} during shutdown: {}",
+                            exec.id,
+                            e
+                        );
                     }
                 }
             }
 
             // Then mark the session as paused
-            if let Err(e) = self.repo.update_session_status(&session.id, SessionStatus::Paused) {
-                tracing::warn!("Failed to pause session {} during shutdown: {}", session.id, e);
+            if let Err(e) = self
+                .repo
+                .update_session_status(&session.id, SessionStatus::Paused)
+            {
+                tracing::warn!(
+                    "Failed to pause session {} during shutdown: {}",
+                    session.id,
+                    e
+                );
             }
         }
 
@@ -508,15 +611,26 @@ impl<D: StateDbProvider> StateService<D> {
             })?;
 
             for exec in executions {
-                if matches!(exec.status, ExecutionStatus::Running | ExecutionStatus::Queued) {
-                    if let Err(e) = self.repo.update_execution_status(&exec.id, ExecutionStatus::Crashed) {
-                        tracing::warn!("Failed to crash execution {} during recovery: {}", exec.id, e);
+                if matches!(
+                    exec.status,
+                    ExecutionStatus::Running | ExecutionStatus::Queued
+                ) {
+                    if let Err(e) = self
+                        .repo
+                        .update_execution_status(&exec.id, ExecutionStatus::Crashed)
+                    {
+                        tracing::warn!(
+                            "Failed to crash execution {} during recovery: {}",
+                            exec.id,
+                            e
+                        );
                     }
                 }
             }
 
             // Then mark the session as crashed
-            self.repo.update_session_status(&session.id, SessionStatus::Crashed)?;
+            self.repo
+                .update_session_status(&session.id, SessionStatus::Crashed)?;
         }
 
         Ok(count)
@@ -551,9 +665,11 @@ impl<D: StateDbProvider> StateService<D> {
                         role: row.get(2)?,
                         content: row.get(3)?,
                         created_at: row.get(4)?,
-                        tool_calls: row.get::<_, Option<String>>(5)?
+                        tool_calls: row
+                            .get::<_, Option<String>>(5)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
-                        tool_results: row.get::<_, Option<String>>(6)?
+                        tool_results: row
+                            .get::<_, Option<String>>(6)?
                             .and_then(|s| serde_json::from_str(&s).ok()),
                     })
                 })?
@@ -620,11 +736,17 @@ impl<D: StateDbProvider> StateService<D> {
         self.repo.create_artifact(artifact)
     }
 
-    pub fn list_artifacts_by_session(&self, session_id: &str) -> Result<Vec<crate::types::Artifact>, String> {
+    pub fn list_artifacts_by_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<crate::types::Artifact>, String> {
         self.repo.list_artifacts_by_session(session_id)
     }
 
-    pub fn get_artifact(&self, artifact_id: &str) -> Result<Option<crate::types::Artifact>, String> {
+    pub fn get_artifact(
+        &self,
+        artifact_id: &str,
+    ) -> Result<Option<crate::types::Artifact>, String> {
         self.repo.get_artifact(artifact_id)
     }
 }
@@ -646,8 +768,7 @@ mod tests {
 
     impl TestDbProvider {
         fn new() -> Self {
-            let conn =
-                Connection::open_in_memory().expect("Failed to create in-memory database");
+            let conn = Connection::open_in_memory().expect("Failed to create in-memory database");
 
             // Create tables matching the actual schema
             conn.execute_batch(
@@ -916,7 +1037,9 @@ mod tests {
     #[test]
     fn test_cli_session_auto_completes() {
         let service = setup_service();
-        let (session, execution) = service.create_session_with_source("test-agent", TriggerSource::Cli).unwrap();
+        let (session, execution) = service
+            .create_session_with_source("test-agent", TriggerSource::Cli)
+            .unwrap();
         assert_eq!(session.source, TriggerSource::Cli);
 
         // Complete the execution
@@ -934,7 +1057,9 @@ mod tests {
     #[test]
     fn test_cron_session_auto_completes() {
         let service = setup_service();
-        let (session, execution) = service.create_session_with_source("test-agent", TriggerSource::Cron).unwrap();
+        let (session, execution) = service
+            .create_session_with_source("test-agent", TriggerSource::Cron)
+            .unwrap();
         assert_eq!(session.source, TriggerSource::Cron);
 
         // Complete the execution
@@ -952,14 +1077,19 @@ mod tests {
     #[test]
     fn test_session_with_running_execution_does_not_complete() {
         let service = setup_service();
-        let (session, execution) = service.create_session_with_source("test-agent", TriggerSource::Cli).unwrap();
+        let (session, execution) = service
+            .create_session_with_source("test-agent", TriggerSource::Cli)
+            .unwrap();
 
         // Start but don't complete the execution
         service.start_execution(&execution.id).unwrap();
 
         // Try to auto-complete - should return false (execution still running)
         let completed = service.try_complete_session(&session.id).unwrap();
-        assert!(!completed, "Sessions with running executions should not complete");
+        assert!(
+            !completed,
+            "Sessions with running executions should not complete"
+        );
 
         // Session should still be Running
         let session_state = service.get_session(&session.id).unwrap().unwrap();
@@ -970,25 +1100,43 @@ mod tests {
     // Session Messages Tests
     // ========================================================================
 
-    fn setup_session_with_messages(service: &StateService<TestDbProvider>) -> (Session, AgentExecution, AgentExecution) {
+    fn setup_session_with_messages(
+        service: &StateService<TestDbProvider>,
+    ) -> (Session, AgentExecution, AgentExecution) {
         let (session, root_exec) = service.create_session("root-agent").unwrap();
 
         // Create delegated execution
-        let delegate_exec = service.create_delegated_execution(
-            &session.id,
-            "researcher",
-            &root_exec.id,
-            DelegationType::Sequential,
-            "Research task",
-        ).unwrap();
+        let delegate_exec = service
+            .create_delegated_execution(
+                &session.id,
+                "researcher",
+                &root_exec.id,
+                DelegationType::Sequential,
+                "Research task",
+            )
+            .unwrap();
 
         // Add messages to root execution
-        service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
-        service.add_message(&root_exec.id, "assistant", "Root response", None, None).unwrap();
+        service
+            .add_message(&root_exec.id, "user", "Hello root", None, None)
+            .unwrap();
+        service
+            .add_message(&root_exec.id, "assistant", "Root response", None, None)
+            .unwrap();
 
         // Add messages to delegated execution
-        service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
-        service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+        service
+            .add_message(&delegate_exec.id, "user", "Research this", None, None)
+            .unwrap();
+        service
+            .add_message(
+                &delegate_exec.id,
+                "assistant",
+                "Research results",
+                None,
+                None,
+            )
+            .unwrap();
 
         (session, root_exec, delegate_exec)
     }
@@ -1095,7 +1243,11 @@ mod tests {
 
         // Create completed subagent
         let sub1 = AgentExecution::new_delegated(
-            &session.id, "planner", &root_exec.id, DelegationType::Sequential, "Plan task",
+            &session.id,
+            "planner",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Plan task",
         );
         service.create_execution(&sub1).unwrap();
         service.complete_execution(&sub1.id).unwrap();
@@ -1105,10 +1257,16 @@ mod tests {
         service.create_session_from(&child_session).unwrap();
 
         let sub2 = AgentExecution::new_delegated(
-            &session.id, "researcher", &root_exec.id, DelegationType::Sequential, "Research task",
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
         );
         service.create_execution(&sub2).unwrap();
-        service.set_child_session_id(&sub2.id, &child_session.id).unwrap();
+        service
+            .set_child_session_id(&sub2.id, &child_session.id)
+            .unwrap();
         service.start_execution(&sub2.id).unwrap();
         service.crash_execution(&sub2.id, "LLM 500 error").unwrap();
 
@@ -1124,7 +1282,9 @@ mod tests {
         let service = setup_service();
         let (session, root_exec) = service.create_session("root").unwrap();
 
-        service.crash_execution(&root_exec.id, "LLM 500 error").unwrap();
+        service
+            .crash_execution(&root_exec.id, "LLM 500 error")
+            .unwrap();
 
         let crashed = service.get_last_crashed_subagent(&session.id).unwrap();
         assert!(crashed.is_none());
@@ -1144,11 +1304,16 @@ mod tests {
         service.create_session_from(&child_session).unwrap();
 
         let sub_exec = AgentExecution::new_delegated(
-            &session.id, "researcher", &root_exec.id,
-            DelegationType::Sequential, "Research task",
+            &session.id,
+            "researcher",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research task",
         );
         service.create_execution(&sub_exec).unwrap();
-        service.set_child_session_id(&sub_exec.id, &child_session.id).unwrap();
+        service
+            .set_child_session_id(&sub_exec.id, &child_session.id)
+            .unwrap();
         service.start_execution(&sub_exec.id).unwrap();
 
         // 3. Complete root execution (it has pending delegations)
@@ -1156,7 +1321,9 @@ mod tests {
         service.request_continuation(&session.id).unwrap();
 
         // 4. Crash the subagent
-        service.crash_execution(&sub_exec.id, "LLM 500 error").unwrap();
+        service
+            .crash_execution(&sub_exec.id, "LLM 500 error")
+            .unwrap();
         service.crash_session(&session.id).unwrap();
 
         // Verify crashed state
@@ -1164,9 +1331,15 @@ mod tests {
         assert_eq!(s.status, SessionStatus::Crashed);
 
         // 5. Find crashed subagent
-        let crashed = service.get_last_crashed_subagent(&session.id).unwrap().unwrap();
+        let crashed = service
+            .get_last_crashed_subagent(&session.id)
+            .unwrap()
+            .unwrap();
         assert_eq!(crashed.agent_id, "researcher");
-        assert_eq!(crashed.child_session_id.as_ref().unwrap(), &child_session.id);
+        assert_eq!(
+            crashed.child_session_id.as_ref().unwrap(),
+            &child_session.id
+        );
 
         // 6. Simulate what resume_crashed_subagent does:
         service.reactivate_session(&session.id).unwrap();

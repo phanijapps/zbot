@@ -194,7 +194,11 @@ pub async fn discover_plugins(
             let message = if discovered.is_empty() {
                 "No new plugins discovered".to_string()
             } else {
-                format!("Discovered {} new plugin(s): {:?}", discovered.len(), discovered)
+                format!(
+                    "Discovered {} new plugin(s): {:?}",
+                    discovered.len(),
+                    discovered
+                )
             };
 
             Ok(Json(PluginActionResponse {

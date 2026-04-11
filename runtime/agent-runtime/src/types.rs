@@ -15,12 +15,12 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod messages;
 pub mod events;
+pub mod messages;
 
 // Re-export commonly used types
-pub use messages::{ChatMessage, ToolCall};
 pub use events::StreamEvent;
+pub use messages::{ChatMessage, ToolCall};
 
 /// Result type for tool operations
 pub type ToolResult = std::result::Result<serde_json::Value, ToolError>;

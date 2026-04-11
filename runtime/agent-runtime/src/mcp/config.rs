@@ -6,8 +6,8 @@
 //!
 //! Configuration for MCP servers with different transport types.
 
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Configuration for an MCP server
 #[derive(Debug, Clone, Serialize, Deserialize)]

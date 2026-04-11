@@ -104,8 +104,12 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for CountingClient {
-        fn model(&self) -> &str { "test" }
-        fn provider(&self) -> &str { "test" }
+        fn model(&self) -> &str {
+            "test"
+        }
+        fn provider(&self) -> &str {
+            "test"
+        }
 
         async fn chat(
             &self,

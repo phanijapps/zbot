@@ -7,7 +7,9 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
+    widgets::{
+        Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+    },
     Frame,
 };
 
@@ -65,7 +67,12 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
     };
 
     let title = Line::from(vec![
-        Span::styled("  ZERO", Style::default().fg(COLOR_ACCENT).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  ZERO",
+            Style::default()
+                .fg(COLOR_ACCENT)
+                .add_modifier(Modifier::BOLD),
+        ),
         Span::styled(" │ ", Style::default().fg(COLOR_MUTED)),
         Span::styled(&state.agent_id, Style::default().fg(COLOR_FG)),
         status_indicator,
@@ -81,16 +88,16 @@ fn render_header(frame: &mut Frame, area: Rect, state: &AppState) {
         String::new()
     };
 
-    let right_info = Line::from(vec![
-        Span::styled(&iteration_info, Style::default().fg(COLOR_MUTED)),
-    ]);
+    let right_info = Line::from(vec![Span::styled(
+        &iteration_info,
+        Style::default().fg(COLOR_MUTED),
+    )]);
 
-    let header = Paragraph::new(vec![title, right_info])
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(COLOR_ACCENT_DIM))
-        );
+    let header = Paragraph::new(vec![title, right_info]).block(
+        Block::default()
+            .borders(Borders::BOTTOM)
+            .border_style(Style::default().fg(COLOR_ACCENT_DIM)),
+    );
 
     frame.render_widget(header, area);
 }
@@ -113,11 +120,12 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) {
         .flat_map(|msg| message_to_list_items(msg, inner_area.width as usize))
         .collect();
 
-    let messages_widget = List::new(messages)
-        .block(Block::default());
+    let messages_widget = List::new(messages).block(Block::default());
 
     // Calculate scroll state
-    let total_lines: usize = state.messages.iter()
+    let total_lines: usize = state
+        .messages
+        .iter()
         .map(|m| estimate_lines(m, inner_area.width as usize))
         .sum();
 
@@ -137,14 +145,9 @@ fn render_messages(frame: &mut Frame, area: Rect, state: &AppState) {
             .begin_symbol(Some("↑"))
             .end_symbol(Some("↓"));
 
-        let mut scrollbar_state = ScrollbarState::new(total_lines)
-            .position(scroll_offset);
+        let mut scrollbar_state = ScrollbarState::new(total_lines).position(scroll_offset);
 
-        frame.render_stateful_widget(
-            scrollbar,
-            area,
-            &mut scrollbar_state,
-        );
+        frame.render_stateful_widget(scrollbar, area, &mut scrollbar_state);
     }
 }
 
@@ -160,11 +163,15 @@ fn message_to_list_items<'a>(msg: &'a ChatMessage, width: usize) -> Vec<ListItem
     };
 
     // Header line
-    let header_text = format!("─── {} {}",
+    let header_text = format!(
+        "─── {} {}",
         role_str,
         "─".repeat(width.saturating_sub(role_str.len() + 5))
     );
-    items.push(ListItem::new(Line::styled(header_text, Style::default().fg(role_color).add_modifier(Modifier::BOLD))));
+    items.push(ListItem::new(Line::styled(
+        header_text,
+        Style::default().fg(role_color).add_modifier(Modifier::BOLD),
+    )));
 
     // Content
     let content_style = Style::default().fg(match msg.role {
@@ -182,7 +189,10 @@ fn message_to_list_items<'a>(msg: &'a ChatMessage, width: usize) -> Vec<ListItem
     // Tool info if present
     if let Some(tool) = &msg.tool_name {
         let tool_text = format!("  [{}]", tool);
-        items.push(ListItem::new(Line::styled(tool_text, Style::default().fg(COLOR_TOOL))));
+        items.push(ListItem::new(Line::styled(
+            tool_text,
+            Style::default().fg(COLOR_TOOL),
+        )));
     }
 
     // Empty line after message
@@ -221,30 +231,25 @@ fn render_input(frame: &mut Frame, area: Rect, state: &AppState) {
         state.input.clone()
     };
 
-    let input = Paragraph::new(display_text)
-        .style(input_style)
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(match state.input_mode {
-                    InputMode::Normal => COLOR_MUTED,
-                    InputMode::Editing => COLOR_ACCENT,
-                }))
-                .title(match state.input_mode {
-                    InputMode::Normal => " Input ",
-                    InputMode::Editing => " Type message (Enter to send, Esc to cancel) ",
-                })
-                .title_style(Style::default().fg(COLOR_ACCENT)),
-        );
+    let input = Paragraph::new(display_text).style(input_style).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(match state.input_mode {
+                InputMode::Normal => COLOR_MUTED,
+                InputMode::Editing => COLOR_ACCENT,
+            }))
+            .title(match state.input_mode {
+                InputMode::Normal => " Input ",
+                InputMode::Editing => " Type message (Enter to send, Esc to cancel) ",
+            })
+            .title_style(Style::default().fg(COLOR_ACCENT)),
+    );
 
     frame.render_widget(input, area);
 
     // Show cursor in editing mode
     if matches!(state.input_mode, InputMode::Editing) {
-        frame.set_cursor_position((
-            area.x + state.input.len() as u16 + 1,
-            area.y + 1,
-        ));
+        frame.set_cursor_position((area.x + state.input.len() as u16 + 1, area.y + 1));
     }
 }
 
@@ -258,7 +263,10 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
             Span::styled("⏳ ", Style::default().fg(COLOR_WARNING)),
             Span::styled("Processing", Style::default().fg(COLOR_WARNING)),
             if let Some(tool) = &state.current_tool {
-                Span::styled(format!(" │ Tool: {}", tool), Style::default().fg(COLOR_TOOL))
+                Span::styled(
+                    format!(" │ Tool: {}", tool),
+                    Style::default().fg(COLOR_TOOL),
+                )
             } else {
                 Span::raw("")
             },
@@ -266,12 +274,23 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     } else {
         vec![
             Span::styled(
-                if state.connected { "● Connected" } else { "○ Disconnected" },
-                Style::default().fg(if state.connected { COLOR_SUCCESS } else { COLOR_ERROR }),
+                if state.connected {
+                    "● Connected"
+                } else {
+                    "○ Disconnected"
+                },
+                Style::default().fg(if state.connected {
+                    COLOR_SUCCESS
+                } else {
+                    COLOR_ERROR
+                }),
             ),
             Span::styled(" │ ", Style::default().fg(COLOR_MUTED)),
             Span::styled(
-                format!("Conv: {}...", &state.conversation_id[..8.min(state.conversation_id.len())]),
+                format!(
+                    "Conv: {}...",
+                    &state.conversation_id[..8.min(state.conversation_id.len())]
+                ),
                 Style::default().fg(COLOR_MUTED),
             ),
         ]
@@ -283,8 +302,7 @@ fn render_status_bar(frame: &mut Frame, area: Rect, state: &AppState) {
     let left = Line::from(status_text);
 
     // Render left-aligned status
-    let status = Paragraph::new(left)
-        .style(Style::default().bg(Color::Rgb(30, 30, 30)));
+    let status = Paragraph::new(left).style(Style::default().bg(Color::Rgb(30, 30, 30)));
     frame.render_widget(status, area);
 
     // Render right-aligned keybinds

@@ -105,11 +105,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // category and mark them as contradicted.
         if let Some(ref emb) = embedding {
             if let Ok(similar_facts) = self.memory_repo.search_similar_facts(
-                emb,
-                agent_id,
-                0.8,  // high threshold to avoid false positives
-                5,
-                None, // no ward filtering
+                emb, agent_id, 0.8, // high threshold to avoid false positives
+                5, None, // no ward filtering
             ) {
                 for sf in similar_facts {
                     if sf.fact.key != key && sf.fact.category == category {
@@ -158,8 +155,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             query_embedding.as_deref(),
             agent_id,
             limit,
-            0.7, // vector weight
-            0.3, // bm25 weight
+            0.7,  // vector weight
+            0.3,  // bm25 weight
             None, // ward_id — no ward filtering from trait method
         )?;
 
@@ -200,30 +197,36 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             query_embedding.as_deref(),
             agent_id,
             limit * 2,
-            0.7, // vector weight
-            0.3, // bm25 weight
+            0.7,  // vector weight
+            0.3,  // bm25 weight
             None, // ward_id — no ward filtering from trait method
         )?;
 
         // Also fetch high-confidence facts (>= 0.9) — always relevant
-        let high_conf_facts = self.memory_repo
+        let high_conf_facts = self
+            .memory_repo
             .get_high_confidence_facts(agent_id, 0.9, limit)
             .unwrap_or_default();
 
         // Include relevant corrections — filter by minimum cosine similarity
         // to avoid injecting "WiZ lights" corrections for currency questions.
-        let all_corrections = self.memory_repo
+        let all_corrections = self
+            .memory_repo
             .get_facts_by_category(agent_id, "correction", 10)
             .unwrap_or_default();
         let corrections: Vec<_> = if let Some(ref qe) = query_embedding {
-            all_corrections.into_iter().filter(|fact| {
-                if let Some(ref fact_emb) = fact.embedding {
-                    let sim = crate::memory_repository::cosine_similarity(qe, fact_emb);
-                    sim >= 0.15
-                } else {
-                    true
-                }
-            }).take(5).collect()
+            all_corrections
+                .into_iter()
+                .filter(|fact| {
+                    if let Some(ref fact_emb) = fact.embedding {
+                        let sim = crate::memory_repository::cosine_similarity(qe, fact_emb);
+                        sim >= 0.15
+                    } else {
+                        true
+                    }
+                })
+                .take(5)
+                .collect()
         } else {
             all_corrections.into_iter().take(5).collect()
         };
@@ -277,7 +280,9 @@ impl MemoryFactStore for GatewayMemoryFactStore {
 
         // Sort by weighted score descending
         merged.sort_by(|a, b| {
-            b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal)
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
         });
         merged.truncate(limit);
 
@@ -317,16 +322,18 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // --- Capability gap detection ---
         // Check if any of the returned results include skill/agent categories.
         // If none do, the query is likely outside known capabilities.
-        let has_skill_or_agent = merged.iter().any(|sf| {
-            sf.fact.category == "skill" || sf.fact.category == "agent"
-        });
+        let has_skill_or_agent = merged
+            .iter()
+            .any(|sf| sf.fact.category == "skill" || sf.fact.category == "agent");
 
         if !has_skill_or_agent {
             // Fetch top skills and agents by confidence for the gap section
-            let top_skills = self.memory_repo
+            let top_skills = self
+                .memory_repo
                 .get_facts_by_category(agent_id, "skill", 3)
                 .unwrap_or_default();
-            let top_agents = self.memory_repo
+            let top_agents = self
+                .memory_repo
                 .get_facts_by_category(agent_id, "agent", 3)
                 .unwrap_or_default();
 
@@ -381,7 +388,7 @@ mod tests {
 
     fn create_test_store() -> GatewayMemoryFactStore {
         use gateway_services::VaultPaths;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let _ = temp_dir.keep();
@@ -395,7 +402,14 @@ mod tests {
         let store = create_test_store();
 
         let result = store
-            .save_fact("agent-1", "preference", "lang.main", "Prefers Rust", 0.9, None)
+            .save_fact(
+                "agent-1",
+                "preference",
+                "lang.main",
+                "Prefers Rust",
+                0.9,
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(result["success"], true);
@@ -432,7 +446,10 @@ mod tests {
     #[tokio::test]
     async fn test_recall_empty() {
         let store = create_test_store();
-        let recall = store.recall_facts("agent-1", "nonexistent", 5).await.unwrap();
+        let recall = store
+            .recall_facts("agent-1", "nonexistent", 5)
+            .await
+            .unwrap();
         assert_eq!(recall["count"].as_u64().unwrap(), 0);
     }
 }

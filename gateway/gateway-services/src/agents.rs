@@ -25,11 +25,18 @@ pub struct AgentConfig {
     pub max_tokens: u32,
     #[serde(rename = "thinkingEnabled", default)]
     pub thinking_enabled: bool,
-    #[serde(rename = "voiceRecordingEnabled", default = "default_voice_recording_enabled")]
+    #[serde(
+        rename = "voiceRecordingEnabled",
+        default = "default_voice_recording_enabled"
+    )]
     pub voice_recording_enabled: bool,
     pub skills: Vec<String>,
     pub mcps: Vec<String>,
-    #[serde(rename = "systemInstruction", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "systemInstruction",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub system_instruction: Option<String>,
 }
 
@@ -198,8 +205,11 @@ impl AgentService {
             .map_err(|e| format!("Failed to write config.yaml: {}", e))?;
 
         // Write AGENTS.md
-        fs::write(agent_dir.join("AGENTS.md"), format!("{}\n", agent.instructions))
-            .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
+        fs::write(
+            agent_dir.join("AGENTS.md"),
+            format!("{}\n", agent.instructions),
+        )
+        .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
 
         // Invalidate cache
         self.invalidate_cache().await;
@@ -259,8 +269,11 @@ impl AgentService {
             .map_err(|e| format!("Failed to write config.yaml: {}", e))?;
 
         // Write AGENTS.md
-        fs::write(target_dir.join("AGENTS.md"), format!("{}\n", agent.instructions))
-            .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
+        fs::write(
+            target_dir.join("AGENTS.md"),
+            format!("{}\n", agent.instructions),
+        )
+        .map_err(|e| format!("Failed to write AGENTS.md: {}", e))?;
 
         // Invalidate cache
         self.invalidate_cache().await;
@@ -369,7 +382,9 @@ impl AgentService {
 
         for entry in &template_agents {
             let name = entry["name"].as_str().unwrap_or_default();
-            if name.is_empty() { continue; }
+            if name.is_empty() {
+                continue;
+            }
 
             if self.get(name).await.is_ok() {
                 tracing::debug!("Agent {} already exists, skipping seed", name);
@@ -383,11 +398,21 @@ impl AgentService {
             let agent_type = entry["agentType"].as_str().unwrap_or("specialist");
             let temperature = entry["temperature"].as_f64().unwrap_or(0.7);
             let max_tokens = entry["maxTokens"].as_u64().unwrap_or(8192) as u32;
-            let skills: Vec<String> = entry["skills"].as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+            let skills: Vec<String> = entry["skills"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
-            let mcps: Vec<String> = entry["mcps"].as_array()
-                .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect::<Vec<_>>())
+            let mcps: Vec<String> = entry["mcps"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect::<Vec<_>>()
+                })
                 .unwrap_or_default();
 
             // Load instructions: try bundled template first, then hardcoded fallback

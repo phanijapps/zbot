@@ -97,7 +97,9 @@ impl LlmConditionalAgentBuilder {
         })?;
 
         if self.routes.is_empty() {
-            return Err(ZeroError::Generic("At least one route is required for LlmConditionalAgent".to_string()));
+            return Err(ZeroError::Generic(
+                "At least one route is required for LlmConditionalAgent".to_string(),
+            ));
         }
 
         Ok(LlmConditionalAgent {
@@ -119,7 +121,9 @@ impl LlmConditionalAgent {
 
     /// Extract text from user content
     fn extract_user_text(content: &Content) -> String {
-        content.parts.iter()
+        content
+            .parts
+            .iter()
             .filter_map(|p| {
                 if let Part::Text { text } = p {
                     Some(text.as_str())
@@ -252,7 +256,10 @@ mod tests {
     #[test]
     fn test_extract_user_text() {
         let content = Content::user("Hello world");
-        assert_eq!(LlmConditionalAgent::extract_user_text(&content), "Hello world");
+        assert_eq!(
+            LlmConditionalAgent::extract_user_text(&content),
+            "Hello world"
+        );
     }
 
     #[test]
@@ -260,11 +267,18 @@ mod tests {
         let content = Content {
             role: "user".to_string(),
             parts: vec![
-                Part::Text { text: "Hello".to_string() },
-                Part::Text { text: "world".to_string() },
+                Part::Text {
+                    text: "Hello".to_string(),
+                },
+                Part::Text {
+                    text: "world".to_string(),
+                },
             ],
         };
-        assert_eq!(LlmConditionalAgent::extract_user_text(&content), "Hello world");
+        assert_eq!(
+            LlmConditionalAgent::extract_user_text(&content),
+            "Hello world"
+        );
     }
 
     #[test]
@@ -342,9 +356,15 @@ mod tests {
 
     #[async_trait]
     impl Agent for MockAgent {
-        fn name(&self) -> &str { "mock" }
-        fn description(&self) -> &str { "Mock" }
-        fn sub_agents(&self) -> &[Arc<dyn Agent>] { &[] }
+        fn name(&self) -> &str {
+            "mock"
+        }
+        fn description(&self) -> &str {
+            "Mock"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
 
         async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> zero_core::Result<EventStream> {
             use async_stream::stream;

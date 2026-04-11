@@ -265,10 +265,7 @@ pub enum GatewayEvent {
     },
 
     /// Session title changed via set_session_title tool.
-    SessionTitleChanged {
-        session_id: String,
-        title: String,
-    },
+    SessionTitleChanged { session_id: String, title: String },
 
     /// Intent analysis started for a root session (pre-execution)
     IntentAnalysisStarted {
@@ -404,18 +401,42 @@ impl GatewayEvent {
     /// @deprecated Use session_id() for routing and execution_id() for filtering.
     pub fn conversation_id(&self) -> Option<&str> {
         match self {
-            Self::AgentStarted { conversation_id, .. } => conversation_id.as_deref(),
-            Self::AgentCompleted { conversation_id, .. } => conversation_id.as_deref(),
-            Self::AgentStopped { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Error { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Token { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Thinking { conversation_id, .. } => conversation_id.as_deref(),
-            Self::ToolCall { conversation_id, .. } => conversation_id.as_deref(),
-            Self::ToolResult { conversation_id, .. } => conversation_id.as_deref(),
-            Self::TurnComplete { conversation_id, .. } => conversation_id.as_deref(),
-            Self::IterationUpdate { conversation_id, .. } => conversation_id.as_deref(),
-            Self::ContinuationPrompt { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Respond { conversation_id, .. } => conversation_id.as_deref(),
+            Self::AgentStarted {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::AgentCompleted {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::AgentStopped {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Error {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Token {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Thinking {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::ToolCall {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::ToolResult {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::TurnComplete {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::IterationUpdate {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::ContinuationPrompt {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Respond {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
             Self::DelegationStarted {
                 parent_conversation_id,
                 ..
@@ -424,13 +445,23 @@ impl GatewayEvent {
                 parent_conversation_id,
                 ..
             } => parent_conversation_id.as_deref(),
-            Self::MessageAdded { conversation_id, .. } => conversation_id.as_deref(),
-            Self::TokenUsage { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Heartbeat { conversation_id, .. } => conversation_id.as_deref(),
+            Self::MessageAdded {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::TokenUsage {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Heartbeat {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
             Self::SessionContinuationReady { session_id, .. } => Some(session_id),
             Self::WardChanged { .. } => None,
-            Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
-            Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
+            Self::PlanUpdate {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::IterationsExtended {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
             Self::SessionTitleChanged { .. } => None,
             Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,

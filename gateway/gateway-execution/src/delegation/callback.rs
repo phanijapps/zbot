@@ -32,14 +32,10 @@ pub fn format_agent_display_name(agent_id: &str) -> String {
 /// Extract the RESULT line from a subagent response.
 /// Looks for "RESULT: APPROVED" or "RESULT: DEFECTS" near the end.
 fn extract_result_line(response: &str) -> Option<&str> {
-    response
-        .lines()
-        .rev()
-        .take(20)
-        .find(|line| {
-            let trimmed = line.trim();
-            trimmed.starts_with("RESULT: APPROVED") || trimmed.starts_with("RESULT: DEFECTS")
-        })
+    response.lines().rev().take(20).find(|line| {
+        let trimmed = line.trim();
+        trimmed.starts_with("RESULT: APPROVED") || trimmed.starts_with("RESULT: DEFECTS")
+    })
 }
 
 /// Extract defect lines after the RESULT: DEFECTS marker.
@@ -62,11 +58,7 @@ fn extract_defects(response: &str) -> String {
 }
 
 /// Format a successful callback message as markdown.
-pub fn format_callback_message(
-    agent_id: &str,
-    response: &str,
-    conversation_id: &str,
-) -> String {
+pub fn format_callback_message(agent_id: &str, response: &str, conversation_id: &str) -> String {
     let agent_display_name = format_agent_display_name(agent_id);
 
     let response_content = if response.is_empty() {
@@ -77,7 +69,8 @@ pub fn format_callback_message(
             if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(response) {
                 format!(
                     "```json\n{}\n```",
-                    serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| response.to_string())
+                    serde_json::to_string_pretty(&json_val)
+                        .unwrap_or_else(|_| response.to_string())
                 )
             } else {
                 response.to_string()
@@ -90,7 +83,8 @@ pub fn format_callback_message(
     // Detect structured review result for fast root decision-making
     let action_hint = if let Some(result_line) = extract_result_line(response) {
         if result_line.contains("APPROVED") {
-            "\n\n**Action:** This node APPROVED. Proceed to the next node in the execution plan.".to_string()
+            "\n\n**Action:** This node APPROVED. Proceed to the next node in the execution plan."
+                .to_string()
         } else if result_line.contains("DEFECTS") {
             let defects = extract_defects(response);
             format!(
@@ -112,11 +106,7 @@ pub fn format_callback_message(
 }
 
 /// Format an error callback message as markdown.
-pub fn format_error_callback_message(
-    agent_id: &str,
-    error: &str,
-    conversation_id: &str,
-) -> String {
+pub fn format_error_callback_message(agent_id: &str, error: &str, conversation_id: &str) -> String {
     let agent_display_name = format_agent_display_name(agent_id);
 
     format!(
@@ -223,8 +213,7 @@ pub async fn handle_delegation_success(
     if let Some(ctx) = delegation_ctx {
         if ctx.callback_on_complete {
             // Validate response against output_schema (if present)
-            let validated_response =
-                validate_delegation_response(response, &ctx.output_schema);
+            let validated_response = validate_delegation_response(response, &ctx.output_schema);
             let callback_msg =
                 format_callback_message(child_agent_id, &validated_response, child_conversation_id);
 
@@ -260,7 +249,14 @@ pub async fn handle_delegation_failure(
 ) {
     let error_msg = format_error_callback_message(child_agent_id, error, child_conversation_id);
 
-    if send_callback_to_parent(conversation_repo, event_bus, session_id, parent_execution_id, &error_msg).await
+    if send_callback_to_parent(
+        conversation_repo,
+        event_bus,
+        session_id,
+        parent_execution_id,
+        &error_msg,
+    )
+    .await
     {
         tracing::warn!(
             parent_execution = %parent_execution_id,
@@ -306,7 +302,10 @@ mod tests {
 
     #[test]
     fn test_format_agent_display_name() {
-        assert_eq!(format_agent_display_name("research-agent"), "Research Agent");
+        assert_eq!(
+            format_agent_display_name("research-agent"),
+            "Research Agent"
+        );
         assert_eq!(format_agent_display_name("code-reviewer"), "Code Reviewer");
         assert_eq!(format_agent_display_name("simple"), "Simple");
     }
@@ -339,14 +338,22 @@ mod tests {
 
     #[test]
     fn test_callback_with_approved() {
-        let msg = format_callback_message("code-agent", "Code looks clean.\n\nRESULT: APPROVED", "conv-123");
+        let msg = format_callback_message(
+            "code-agent",
+            "Code looks clean.\n\nRESULT: APPROVED",
+            "conv-123",
+        );
         assert!(msg.contains("APPROVED"));
         assert!(msg.contains("Proceed to the next node"));
     }
 
     #[test]
     fn test_callback_with_defects() {
-        let msg = format_callback_message("data-analyst", "Found issues.\n\nRESULT: DEFECTS\n- output.json: Wrong values (severity: high)", "conv-123");
+        let msg = format_callback_message(
+            "data-analyst",
+            "Found issues.\n\nRESULT: DEFECTS\n- output.json: Wrong values (severity: high)",
+            "conv-123",
+        );
         assert!(msg.contains("DEFECTS found"));
         assert!(msg.contains("Re-delegate to coding agent"));
         assert!(msg.contains("Wrong values"));
@@ -354,7 +361,11 @@ mod tests {
 
     #[test]
     fn test_callback_without_result() {
-        let msg = format_callback_message("research-agent", "Here are the results of my research.", "conv-123");
+        let msg = format_callback_message(
+            "research-agent",
+            "Here are the results of my research.",
+            "conv-123",
+        );
         assert!(!msg.contains("Action:"));
     }
 }

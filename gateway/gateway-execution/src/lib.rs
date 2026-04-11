@@ -31,33 +31,35 @@ pub mod events;
 pub mod handle;
 pub mod invoke;
 pub mod lifecycle;
+pub mod middleware;
 pub mod pruning;
 pub mod recall;
 pub mod resource_provider;
 pub mod runner;
 pub mod session_state;
 pub mod ward_sync;
-pub mod middleware;
 
 // Re-export public types
+pub use archiver::SessionArchiver;
+pub use composite_provider::CompositeResourceProvider;
 pub use config::{ExecutionConfig, GatewayFileSystem};
+pub use continuation::{check_and_spawn_continuation, spawn_continuation_turn};
 pub use delegation::{
     handle_delegation_failure, handle_delegation_success, handle_subagent_completion,
     spawn_delegated_agent, DelegationContext, DelegationRegistry, DelegationRequest,
 };
+pub use distillation::SessionDistiller;
 pub use events::convert_stream_event;
 pub use handle::ExecutionHandle;
-pub use continuation::{check_and_spawn_continuation, spawn_continuation_turn};
+pub use invoke::{new_workspace_cache, WorkspaceCache};
 pub use lifecycle::{
     complete_execution, crash_execution, emit_agent_started, emit_delegation_completed,
-    emit_delegation_started, get_or_create_session, start_execution,
-    stop_execution, SessionSetup,
+    emit_delegation_started, get_or_create_session, start_execution, stop_execution, SessionSetup,
 };
-pub use invoke::{new_workspace_cache, WorkspaceCache};
-pub use runner::{ExecutionRunner, OnSessionReady};
-pub use distillation::SessionDistiller;
-pub use recall::{MemoryRecall, RecallResult, GraphContext, format_recalled_facts, format_combined_recall, format_prioritized_recall};
-pub use archiver::SessionArchiver;
-pub use composite_provider::CompositeResourceProvider;
+pub use recall::{
+    format_combined_recall, format_prioritized_recall, format_recalled_facts, GraphContext,
+    MemoryRecall, RecallResult,
+};
 pub use resource_provider::GatewayResourceProvider;
+pub use runner::{ExecutionRunner, OnSessionReady};
 pub use session_state::{SessionState, SessionStateBuilder};

@@ -147,7 +147,10 @@ mod tests {
         let config = McpServerConfig::stdio("test", "Test", "echo");
         let client = MockMcpClient::new(config);
 
-        let result = client.call_tool("test", serde_json::json!({})).await.unwrap();
+        let result = client
+            .call_tool("test", serde_json::json!({}))
+            .await
+            .unwrap();
         assert_eq!(result["result"], "ok");
     }
 }

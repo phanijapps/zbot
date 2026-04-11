@@ -10,11 +10,11 @@ use tracing::{debug, info, warn};
 use uuid::Uuid;
 
 use zero_core::{
-    Agent, Content, Event, EventActions, EventStream, InvocationContext, Part, Result, ZeroError,
-    ReadonlyContext, CallbackContext, ToolContext,
+    Agent, CallbackContext, Content, Event, EventActions, EventStream, InvocationContext, Part,
+    ReadonlyContext, Result, ToolContext, ZeroError,
 };
-use zero_llm::{Llm, LlmRequest, LlmResponse, ToolCall, ToolDefinition};
 use zero_core::{Tool, Toolset};
+use zero_llm::{Llm, LlmRequest, LlmResponse, ToolCall, ToolDefinition};
 
 /// LLM-based agent that responds to user input using an LLM and tools.
 pub struct LlmAgent {
@@ -67,33 +67,48 @@ impl LlmAgent {
         let mut result = Vec::new();
         let mut pending_tool_calls: Vec<(String, String)> = Vec::new(); // (id, name)
 
-        debug!("Validating conversation history with {} contents", contents.len());
+        debug!(
+            "Validating conversation history with {} contents",
+            contents.len()
+        );
         for content in contents {
             // First, check if we have pending tool calls that need responses
             if !pending_tool_calls.is_empty() {
                 // Check if this content is a tool response
-                let is_tool_response = content.parts.iter().any(|part| {
-                    matches!(part, Part::FunctionResponse { .. })
-                });
+                let is_tool_response = content
+                    .parts
+                    .iter()
+                    .any(|part| matches!(part, Part::FunctionResponse { .. }));
 
                 if is_tool_response {
                     // Collect which tool_call_ids are being responded to
-                    let responded_ids: std::collections::HashSet<String> = content.parts.iter()
+                    let responded_ids: std::collections::HashSet<String> = content
+                        .parts
+                        .iter()
                         .filter_map(|part| match part {
                             Part::FunctionResponse { id, .. } => Some(id.clone()),
                             _ => None,
                         })
                         .collect();
 
-                    debug!("Tool response found with IDs: {:?}, pending: {:?}", responded_ids, pending_tool_calls);
+                    debug!(
+                        "Tool response found with IDs: {:?}, pending: {:?}",
+                        responded_ids, pending_tool_calls
+                    );
 
                     // Remove responded tool calls from pending
                     pending_tool_calls.retain(|(id, _)| !responded_ids.contains(id));
                 } else {
                     // Not a tool response but we have pending calls - add placeholder responses
-                    debug!("Non-tool-response content after tool calls, pending: {:?}", pending_tool_calls);
+                    debug!(
+                        "Non-tool-response content after tool calls, pending: {:?}",
+                        pending_tool_calls
+                    );
                     for (tool_id, tool_name) in pending_tool_calls.drain(..) {
-                        warn!("Adding placeholder response for orphaned tool call: {} ({})", tool_name, tool_id);
+                        warn!(
+                            "Adding placeholder response for orphaned tool call: {} ({})",
+                            tool_name, tool_id
+                        );
                         result.push(Content::tool_response(
                             tool_id,
                             format!("Error: Tool execution was interrupted for '{}'", tool_name),
@@ -107,7 +122,10 @@ impl LlmAgent {
                 for part in &content.parts {
                     if let Part::FunctionCall { name, id, .. } = part {
                         let tool_id = id.clone().unwrap_or_else(|| format!("unknown-{}", name));
-                        debug!("Found tool call in assistant message: {} ({})", name, tool_id);
+                        debug!(
+                            "Found tool call in assistant message: {} ({})",
+                            name, tool_id
+                        );
                         pending_tool_calls.push((tool_id, name.clone()));
                     }
                 }
@@ -118,7 +136,10 @@ impl LlmAgent {
 
         // Handle any remaining pending tool calls at the end
         for (tool_id, tool_name) in pending_tool_calls {
-            warn!("Adding placeholder response for orphaned tool call at end: {} ({})", tool_name, tool_id);
+            warn!(
+                "Adding placeholder response for orphaned tool call at end: {} ({})",
+                tool_name, tool_id
+            );
             result.push(Content::tool_response(
                 tool_id,
                 format!("Error: Tool execution was interrupted for '{}'", tool_name),
@@ -184,15 +205,12 @@ impl LlmAgent {
         for tool_call in tool_calls {
             debug!("Executing tool: {}", tool_call.name);
 
-            let tool = tools_map.get(&tool_call.name).ok_or_else(|| {
-                ZeroError::Tool(format!("Tool not found: {}", tool_call.name))
-            })?;
+            let tool = tools_map
+                .get(&tool_call.name)
+                .ok_or_else(|| ZeroError::Tool(format!("Tool not found: {}", tool_call.name)))?;
 
             // Create a ToolContext adapter for this tool call
-            let tool_ctx = Arc::new(ToolContextAdapter::new(
-                ctx.clone(),
-                tool_call.id.clone(),
-            ));
+            let tool_ctx = Arc::new(ToolContextAdapter::new(ctx.clone(), tool_call.id.clone()));
 
             let result = match tool.execute(tool_ctx, tool_call.arguments).await {
                 Ok(result) => result.to_string(),
@@ -202,10 +220,7 @@ impl LlmAgent {
                 }
             };
 
-            responses.push(Content::tool_response(
-                tool_call.id.clone(),
-                result,
-            ));
+            responses.push(Content::tool_response(tool_call.id.clone(), result));
         }
 
         Ok(responses)
@@ -236,7 +251,15 @@ impl LlmAgent {
                 .collect();
 
             if !tool_calls.is_empty() {
-                info!("LLM returned {} tool calls: {}", tool_calls.len(), tool_calls.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", "));
+                info!(
+                    "LLM returned {} tool calls: {}",
+                    tool_calls.len(),
+                    tool_calls
+                        .iter()
+                        .map(|t| t.name.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
                 Some(self.process_tool_calls(ctx, tool_calls).await?)
             } else {
                 info!("LLM returned text response instead of tool calls (should have used request_input for multi-field queries)");
@@ -250,11 +273,7 @@ impl LlmAgent {
     }
 
     /// Create an event from LLM response.
-    fn create_event(
-        &self,
-        ctx: &Arc<dyn InvocationContext>,
-        response: &LlmResponse,
-    ) -> Event {
+    fn create_event(&self, ctx: &Arc<dyn InvocationContext>, response: &LlmResponse) -> Event {
         Event {
             id: Uuid::new_v4().to_string(),
             timestamp: chrono::Utc::now(),
@@ -485,13 +504,13 @@ impl LlmAgentBuilder {
 
     /// Build the agent.
     pub fn build(self) -> Result<LlmAgent> {
-        let llm = self.llm.ok_or_else(|| {
-            ZeroError::Config("LLM is required".to_string())
-        })?;
+        let llm = self
+            .llm
+            .ok_or_else(|| ZeroError::Config("LLM is required".to_string()))?;
 
-        let tools = self.tools.unwrap_or_else(|| {
-            Arc::new(zero_tool::ToolRegistry::new())
-        });
+        let tools = self
+            .tools
+            .unwrap_or_else(|| Arc::new(zero_tool::ToolRegistry::new()));
 
         let mut agent = LlmAgent::new(self.name, self.description, llm, tools);
 
@@ -506,9 +525,9 @@ impl LlmAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::pin::Pin;
     use async_stream::stream;
     use futures::Stream;
+    use std::pin::Pin;
     use zero_tool::ToolRegistry;
 
     // Mock LLM for testing
@@ -527,7 +546,8 @@ mod tests {
         async fn generate_stream(
             &self,
             _request: LlmRequest,
-        ) -> Result<Pin<Box<dyn Stream<Item = Result<zero_llm::LlmResponseChunk>> + Send>>> {
+        ) -> Result<Pin<Box<dyn Stream<Item = Result<zero_llm::LlmResponseChunk>> + Send>>>
+        {
             // Return a simple stream
             let stream = stream! {
                 yield Ok(zero_llm::LlmResponseChunk {
@@ -579,8 +599,7 @@ mod tests {
 
     #[test]
     fn test_builder_missing_llm() {
-        let result = LlmAgentBuilder::new("test", "Test agent")
-            .build();
+        let result = LlmAgentBuilder::new("test", "Test agent").build();
 
         assert!(result.is_err());
     }

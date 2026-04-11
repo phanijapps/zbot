@@ -6,9 +6,11 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use zero_core::{
+    FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError,
+};
 
 /// AGENTS.md file name - living readme for agent executions
 const WARD_AGENTS_MD: &str = "AGENTS.md";
@@ -31,7 +33,10 @@ pub struct WardTool {
 impl WardTool {
     /// Create a new WardTool with file system context and optional fact store.
     #[must_use]
-    pub fn new(fs: Arc<dyn FileSystemContext>, fact_store: Option<Arc<dyn MemoryFactStore>>) -> Self {
+    pub fn new(
+        fs: Arc<dyn FileSystemContext>,
+        fact_store: Option<Arc<dyn MemoryFactStore>>,
+    ) -> Self {
         Self { fs, fact_store }
     }
 
@@ -67,17 +72,20 @@ impl WardTool {
         let purpose = ctx
             .get_state("ward_purpose")
             .and_then(|v| v.as_str().map(String::from));
-        let structure = ctx
-            .get_state("ward_structure")
-            .and_then(|v| {
-                v.as_object().map(|obj| {
-                    obj.iter()
-                        .map(|(dir, desc)| format!("- `{}` — {}", dir, desc.as_str().unwrap_or("")))
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                })
-            });
-        Self::write_agents_md(ward_dir, ward_name, purpose.as_deref(), structure.as_deref());
+        let structure = ctx.get_state("ward_structure").and_then(|v| {
+            v.as_object().map(|obj| {
+                obj.iter()
+                    .map(|(dir, desc)| format!("- `{}` — {}", dir, desc.as_str().unwrap_or("")))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            })
+        });
+        Self::write_agents_md(
+            ward_dir,
+            ward_name,
+            purpose.as_deref(),
+            structure.as_deref(),
+        );
     }
 
     /// Write AGENTS.md with purpose and structure. Testable without ToolContext.
@@ -121,7 +129,11 @@ impl WardTool {
     ///
     /// Best-effort: if no fact store is configured, or the recall fails,
     /// returns None and the ward switch still succeeds.
-    async fn recall_ward_facts(&self, ward_name: &str, ctx: &Arc<dyn ToolContext>) -> Option<Value> {
+    async fn recall_ward_facts(
+        &self,
+        ward_name: &str,
+        ctx: &Arc<dyn ToolContext>,
+    ) -> Option<Value> {
         let store = self.fact_store.as_ref()?;
 
         let agent_id = ctx
@@ -222,7 +234,10 @@ impl Tool for WardTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         // Check for error markers from truncated/malformed tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
-            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            let message = args
+                .get("__message__")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
             return Err(ZeroError::Tool(format!("{}: {}", error_type, message)));
         }
 
@@ -231,18 +246,16 @@ impl Tool for WardTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'action' parameter".to_string()))?;
 
-        let wards_root = self.fs.wards_root_dir().ok_or_else(|| {
-            ZeroError::Tool("Wards directory not configured".to_string())
-        })?;
+        let wards_root = self
+            .fs
+            .wards_root_dir()
+            .ok_or_else(|| ZeroError::Tool("Wards directory not configured".to_string()))?;
 
         match action {
             "use" | "create" => {
-                let name = args
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ZeroError::Tool("Missing 'name' parameter for use/create".to_string())
-                    })?;
+                let name = args.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ZeroError::Tool("Missing 'name' parameter for use/create".to_string())
+                })?;
 
                 // Validate ward name: alphanumeric, hyphens, underscores only
                 if !name
@@ -367,12 +380,9 @@ impl Tool for WardTool {
             }
 
             "info" => {
-                let name = args
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ZeroError::Tool("Missing 'name' parameter for info".to_string())
-                    })?;
+                let name = args.get("name").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ZeroError::Tool("Missing 'name' parameter for info".to_string())
+                })?;
 
                 let ward_dir = wards_root.join(name);
                 if !ward_dir.exists() {
@@ -530,7 +540,9 @@ mod tests {
             &ward_path,
             "financial-analysis",
             Some("Comprehensive investment analysis and professional reports"),
-            Some("- `core/` — Shared data fetching and analysis modules\n- `stocks/` — Per-ticker analysis\n- `output/` — Reports and charts"),
+            Some(
+                "- `core/` — Shared data fetching and analysis modules\n- `stocks/` — Per-ticker analysis\n- `output/` — Reports and charts",
+            ),
         );
 
         let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();

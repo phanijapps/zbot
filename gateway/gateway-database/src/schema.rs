@@ -24,7 +24,9 @@ fn migrate_database(conn: &Connection) -> Result<()> {
     }
 
     let version: i32 = conn
-        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| row.get(0))
+        .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
+            row.get(0)
+        })
         .unwrap_or(0);
 
     // v8 → v9: Add routing fields to sessions
@@ -128,10 +130,7 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         );
         // Drop the old unique constraint (it was an inline UNIQUE, which SQLite
         // implements as an auto-named index "sqlite_autoindex_memory_facts_1")
-        let _ = conn.execute(
-            "DROP INDEX IF EXISTS sqlite_autoindex_memory_facts_1",
-            [],
-        );
+        let _ = conn.execute("DROP INDEX IF EXISTS sqlite_autoindex_memory_facts_1", []);
         // Create the new unique constraint including ward_id
         let _ = conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS uq_memory_facts_agent_scope_ward_key ON memory_facts(agent_id, scope, ward_id, key)",
@@ -482,7 +481,7 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             key, content, category,
             content='memory_facts',
             content_rowid='rowid'
-        );"
+        );",
     )?;
 
     // Triggers to keep FTS index in sync with memory_facts table.
@@ -503,7 +502,7 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             VALUES ('delete', old.rowid, old.key, old.content, old.category);
             INSERT INTO memory_facts_fts(rowid, key, content, category)
             VALUES (new.rowid, new.key, new.content, new.category);
-        END;"
+        END;",
     )?;
 
     // =========================================================================
@@ -761,7 +760,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert_eq!(ward_id, "__global__", "default ward_id should be '__global__'");
+        assert_eq!(
+            ward_id, "__global__",
+            "default ward_id should be '__global__'"
+        );
     }
 
     #[test]
@@ -805,7 +807,10 @@ mod tests {
              VALUES ('f2', 'agent1', 'agent', 'pref', 'color', 'red', 'ward_a', datetime('now'), datetime('now'))",
             [],
         );
-        assert!(result.is_err(), "duplicate (agent_id, scope, ward_id, key) should be rejected");
+        assert!(
+            result.is_err(),
+            "duplicate (agent_id, scope, ward_id, key) should be rejected"
+        );
     }
 
     #[test]
@@ -889,11 +894,9 @@ mod tests {
         .expect("insert session");
 
         let archived: i32 = conn
-            .query_row(
-                "SELECT archived FROM sessions WHERE id = 's1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT archived FROM sessions WHERE id = 's1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(archived, 0, "default archived should be 0");
 
@@ -902,11 +905,9 @@ mod tests {
             .expect("update archived");
 
         let archived: i32 = conn
-            .query_row(
-                "SELECT archived FROM sessions WHERE id = 's1'",
-                [],
-                |row| row.get(0),
-            )
+            .query_row("SELECT archived FROM sessions WHERE id = 's1'", [], |row| {
+                row.get(0)
+            })
             .unwrap();
         assert_eq!(archived, 1, "archived should be 1 after update");
     }
@@ -929,7 +930,10 @@ mod tests {
                 |row| row.get(0),
             )
             .unwrap();
-        assert!(contradicted_by.is_none(), "default contradicted_by should be NULL");
+        assert!(
+            contradicted_by.is_none(),
+            "default contradicted_by should be NULL"
+        );
 
         // Update contradicted_by
         conn.execute(

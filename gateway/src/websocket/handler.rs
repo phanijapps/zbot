@@ -2,9 +2,11 @@
 //!
 //! Handles WebSocket connections and message routing.
 
-use super::{ClientMessage, ServerMessage, SubscriptionErrorCode, SubscriptionScope};
 use super::session::{SessionRegistry, WsSession};
-use super::subscriptions::{EventMetadata, SubscribeError, SubscribeResult, SessionScopeState, SubscriptionManager};
+use super::subscriptions::{
+    EventMetadata, SessionScopeState, SubscribeError, SubscribeResult, SubscriptionManager,
+};
+use super::{ClientMessage, ServerMessage, SubscriptionErrorCode, SubscriptionScope};
 use crate::error::{GatewayError, Result};
 use crate::events::{EventBus, GatewayEvent};
 use crate::hooks::HookContext;
@@ -286,8 +288,14 @@ async fn handle_connection(
                 if let Message::Text(text) = msg {
                     match serde_json::from_str::<ClientMessage>(&text) {
                         Ok(client_msg) => {
-                            if let Err(e) =
-                                handle_client_message(&session_id, client_msg, &sessions, &runtime, subscriptions.clone()).await
+                            if let Err(e) = handle_client_message(
+                                &session_id,
+                                client_msg,
+                                &sessions,
+                                &runtime,
+                                subscriptions.clone(),
+                            )
+                            .await
                             {
                                 warn!("Error handling message: {}", e);
                             }
@@ -340,12 +348,14 @@ async fn handle_client_message(
             // Pre-subscribe to the session_id if continuing an existing session.
             // For new sessions, the on_session_ready callback handles it.
             if let Some(ref sid) = exec_session_id {
-                let _ = subscriptions.subscribe_with_scope(
-                    &session_id.to_string(),
-                    sid.clone(),
-                    SubscriptionScope::Session,
-                    Some(SessionScopeState::default()),
-                ).await;
+                let _ = subscriptions
+                    .subscribe_with_scope(
+                        &session_id.to_string(),
+                        sid.clone(),
+                        SubscriptionScope::Session,
+                        Some(SessionScopeState::default()),
+                    )
+                    .await;
             }
 
             // Create hook context for WebSocket connection
@@ -359,23 +369,30 @@ async fn handle_client_message(
             // This ensures IntentAnalysisStarted/Complete reach the subscriber.
             let subs = subscriptions.clone();
             let ws_sid = session_id.to_string();
-            let on_ready: gateway_execution::OnSessionReady = Box::new(move |agent_session_id: String| {
-                Box::pin(async move {
-                    let _ = subs.subscribe_with_scope(
-                        &ws_sid,
-                        agent_session_id,
-                        SubscriptionScope::Session,
-                        Some(SessionScopeState::default()),
-                    ).await;
-                })
-            });
+            let on_ready: gateway_execution::OnSessionReady =
+                Box::new(move |agent_session_id: String| {
+                    Box::pin(async move {
+                        let _ = subs
+                            .subscribe_with_scope(
+                                &ws_sid,
+                                agent_session_id,
+                                SubscriptionScope::Session,
+                                Some(SessionScopeState::default()),
+                            )
+                            .await;
+                    })
+                });
 
             // Invoke the agent via runtime service with hook context and callback
             let invoke_mode = if mode == "deep" { None } else { Some(mode) };
             match runtime
                 .invoke_with_hook_and_callback(
-                    &agent_id, &conversation_id, &message,
-                    hook_context, exec_session_id, Some(on_ready),
+                    &agent_id,
+                    &conversation_id,
+                    &message,
+                    hook_context,
+                    exec_session_id,
+                    Some(on_ready),
                     invoke_mode,
                 )
                 .await
@@ -428,15 +445,24 @@ async fn handle_client_message(
                 }
             }
         }
-        ClientMessage::Continue { conversation_id, additional_iterations } => {
+        ClientMessage::Continue {
+            conversation_id,
+            additional_iterations,
+        } => {
             debug!(
                 "Session {} continuing conversation {} with {} more iterations",
                 session_id, conversation_id, additional_iterations
             );
 
-            match runtime.continue_execution(&conversation_id, additional_iterations).await {
+            match runtime
+                .continue_execution(&conversation_id, additional_iterations)
+                .await
+            {
                 Ok(()) => {
-                    debug!("Continuation requested for conversation {}", conversation_id);
+                    debug!(
+                        "Continuation requested for conversation {}",
+                        conversation_id
+                    );
                 }
                 Err(e) => {
                     warn!("Failed to continue conversation {}: {}", conversation_id, e);
@@ -457,7 +483,9 @@ async fn handle_client_message(
                 let _ = session.send(ServerMessage::Pong);
             }
         }
-        ClientMessage::Pause { session_id: exec_session_id } => {
+        ClientMessage::Pause {
+            session_id: exec_session_id,
+        } => {
             debug!(
                 "Session {} pausing execution session {}",
                 session_id, exec_session_id
@@ -475,16 +503,14 @@ async fn handle_client_message(
                 Err(e) => {
                     warn!("Failed to pause session {}: {}", exec_session_id, e);
                     if let Some(session) = sessions.get(session_id).await {
-                        let _ = session.send(ServerMessage::error(
-                            None,
-                            "pause_failed",
-                            &e,
-                        ));
+                        let _ = session.send(ServerMessage::error(None, "pause_failed", &e));
                     }
                 }
             }
         }
-        ClientMessage::Resume { session_id: exec_session_id } => {
+        ClientMessage::Resume {
+            session_id: exec_session_id,
+        } => {
             debug!(
                 "Session {} resuming execution session {}",
                 session_id, exec_session_id
@@ -502,16 +528,14 @@ async fn handle_client_message(
                 Err(e) => {
                     warn!("Failed to resume session {}: {}", exec_session_id, e);
                     if let Some(session) = sessions.get(session_id).await {
-                        let _ = session.send(ServerMessage::error(
-                            None,
-                            "resume_failed",
-                            &e,
-                        ));
+                        let _ = session.send(ServerMessage::error(None, "resume_failed", &e));
                     }
                 }
             }
         }
-        ClientMessage::Cancel { session_id: exec_session_id } => {
+        ClientMessage::Cancel {
+            session_id: exec_session_id,
+        } => {
             debug!(
                 "Session {} cancelling execution session {}",
                 session_id, exec_session_id
@@ -529,16 +553,14 @@ async fn handle_client_message(
                 Err(e) => {
                     warn!("Failed to cancel session {}: {}", exec_session_id, e);
                     if let Some(session) = sessions.get(session_id).await {
-                        let _ = session.send(ServerMessage::error(
-                            None,
-                            "cancel_failed",
-                            &e,
-                        ));
+                        let _ = session.send(ServerMessage::error(None, "cancel_failed", &e));
                     }
                 }
             }
         }
-        ClientMessage::EndSession { session_id: exec_session_id } => {
+        ClientMessage::EndSession {
+            session_id: exec_session_id,
+        } => {
             debug!(
                 "Session {} ending execution session {}",
                 session_id, exec_session_id
@@ -556,16 +578,15 @@ async fn handle_client_message(
                 Err(e) => {
                     warn!("Failed to end session {}: {}", exec_session_id, e);
                     if let Some(session) = sessions.get(session_id).await {
-                        let _ = session.send(ServerMessage::error(
-                            None,
-                            "end_session_failed",
-                            &e,
-                        ));
+                        let _ = session.send(ServerMessage::error(None, "end_session_failed", &e));
                     }
                 }
             }
         }
-        ClientMessage::Subscribe { conversation_id, scope } => {
+        ClientMessage::Subscribe {
+            conversation_id,
+            scope,
+        } => {
             debug!(
                 "Session {} subscribing to conversation {} with scope {:?}",
                 session_id, conversation_id, scope
@@ -575,56 +596,67 @@ async fn handle_client_message(
             subscriptions.touch_client(&session_id.to_string()).await;
 
             // For Session scope, query root execution IDs from state service
-            let (scope_state, root_ids_for_response) = if matches!(scope, SubscriptionScope::Session) {
-                // conversation_id is actually the session_id in our data model
-                if let Some(runner) = runtime.runner() {
-                    let state_service = runner.state_service();
+            let (scope_state, root_ids_for_response) =
+                if matches!(scope, SubscriptionScope::Session) {
+                    // conversation_id is actually the session_id in our data model
+                    if let Some(runner) = runtime.runner() {
+                        let state_service = runner.state_service();
 
-                    // Query root executions for this session
-                    let filter = ExecutionFilter {
-                        session_id: Some(conversation_id.clone()),
-                        ..Default::default()
-                    };
+                        // Query root executions for this session
+                        let filter = ExecutionFilter {
+                            session_id: Some(conversation_id.clone()),
+                            ..Default::default()
+                        };
 
-                    match state_service.list_executions(&filter) {
-                        Ok(executions) => {
-                            // Filter to root executions only (parent_execution_id is None and delegation_type is Root)
-                            let root_ids: HashSet<String> = executions
-                                .into_iter()
-                                .filter(|exec| exec.parent_execution_id.is_none() && exec.delegation_type == DelegationType::Root)
-                                .map(|exec| exec.id)
-                                .collect();
+                        match state_service.list_executions(&filter) {
+                            Ok(executions) => {
+                                // Filter to root executions only (parent_execution_id is None and delegation_type is Root)
+                                let root_ids: HashSet<String> = executions
+                                    .into_iter()
+                                    .filter(|exec| {
+                                        exec.parent_execution_id.is_none()
+                                            && exec.delegation_type == DelegationType::Root
+                                    })
+                                    .map(|exec| exec.id)
+                                    .collect();
 
-                            debug!(
-                                "Found {} root executions for session {} scope subscription",
-                                root_ids.len(), conversation_id
-                            );
+                                debug!(
+                                    "Found {} root executions for session {} scope subscription",
+                                    root_ids.len(),
+                                    conversation_id
+                                );
 
-                            let scope_state = SessionScopeState::new(root_ids.clone());
-                            (Some(scope_state), Some(root_ids))
+                                let scope_state = SessionScopeState::new(root_ids.clone());
+                                (Some(scope_state), Some(root_ids))
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Failed to query root executions for session {}: {}",
+                                    conversation_id, e
+                                );
+                                // Fall back to empty cache - events will still work, just without filtering
+                                (Some(SessionScopeState::default()), Some(HashSet::new()))
+                            }
                         }
-                        Err(e) => {
-                            warn!("Failed to query root executions for session {}: {}", conversation_id, e);
-                            // Fall back to empty cache - events will still work, just without filtering
-                            (Some(SessionScopeState::default()), Some(HashSet::new()))
-                        }
+                    } else {
+                        warn!("Runtime not initialized - cannot query root executions");
+                        (Some(SessionScopeState::default()), Some(HashSet::new()))
                     }
                 } else {
-                    warn!("Runtime not initialized - cannot query root executions");
-                    (Some(SessionScopeState::default()), Some(HashSet::new()))
-                }
-            } else {
-                // For All or Execution scopes, no session scope state needed
-                (None, None)
-            };
+                    // For All or Execution scopes, no session scope state needed
+                    (None, None)
+                };
 
             // Subscribe with scope and state
-            match subscriptions.subscribe_with_scope(
-                &session_id.to_string(),
-                conversation_id.clone(),
-                scope.clone(),
-                scope_state,
-            ).await {
+            match subscriptions
+                .subscribe_with_scope(
+                    &session_id.to_string(),
+                    conversation_id.clone(),
+                    scope.clone(),
+                    scope_state,
+                )
+                .await
+            {
                 Ok(SubscribeResult::Subscribed { current_sequence }) => {
                     debug!(
                         "Session {} subscribed to {} (seq: {}, scope: {:?})",
@@ -662,7 +694,10 @@ async fn handle_client_message(
                     }
                 }
                 Err(SubscribeError::TooManySubscriptions { limit }) => {
-                    warn!("Subscribe failed: client {} exceeded limit of {}", session_id, limit);
+                    warn!(
+                        "Subscribe failed: client {} exceeded limit of {}",
+                        session_id, limit
+                    );
                     if let Some(session) = sessions.get(session_id).await {
                         let _ = session.send(ServerMessage::subscription_error(
                             &conversation_id,
@@ -672,7 +707,10 @@ async fn handle_client_message(
                     }
                 }
                 Err(SubscribeError::ConversationFull { limit }) => {
-                    warn!("Subscribe failed: conversation {} at limit of {}", conversation_id, limit);
+                    warn!(
+                        "Subscribe failed: conversation {} at limit of {}",
+                        conversation_id, limit
+                    );
                     if let Some(session) = sessions.get(session_id).await {
                         let _ = session.send(ServerMessage::subscription_error(
                             &conversation_id,
@@ -691,7 +729,9 @@ async fn handle_client_message(
 
             // Update last activity to prevent stale cleanup
             subscriptions.touch_client(&session_id.to_string()).await;
-            subscriptions.unsubscribe(&session_id.to_string(), &conversation_id).await;
+            subscriptions
+                .unsubscribe(&session_id.to_string(), &conversation_id)
+                .await;
 
             if let Some(session) = sessions.get(session_id).await {
                 let _ = session.send(ServerMessage::Unsubscribed { conversation_id });
@@ -705,125 +745,181 @@ async fn handle_client_message(
 /// Convert a GatewayEvent to a ServerMessage.
 fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage> {
     match event {
-        GatewayEvent::AgentStarted { agent_id, session_id, execution_id, conversation_id, .. } => {
-            Some(ServerMessage::AgentStarted {
-                agent_id,
-                session_id,
-                execution_id,
-                conversation_id,
-                seq: None,
-            })
-        }
-        GatewayEvent::AgentCompleted { agent_id, session_id, execution_id, result, conversation_id, .. } => {
-            Some(ServerMessage::AgentCompleted {
-                agent_id,
-                session_id,
-                execution_id,
-                conversation_id,
-                result,
-                seq: None,
-            })
-        }
-        GatewayEvent::AgentStopped { agent_id, session_id, execution_id, iteration, conversation_id, .. } => {
-            Some(ServerMessage::AgentStopped {
-                agent_id,
-                session_id,
-                execution_id,
-                conversation_id,
-                iteration,
-                seq: None,
-            })
-        }
-        GatewayEvent::Token { session_id, execution_id, delta, conversation_id, .. } => {
-            Some(ServerMessage::Token {
-                session_id,
-                execution_id,
-                conversation_id,
-                delta,
-                seq: None,
-            })
-        }
-        GatewayEvent::Thinking { session_id, execution_id, content, conversation_id, .. } => {
-            Some(ServerMessage::Thinking {
-                session_id,
-                execution_id,
-                conversation_id,
-                content,
-                seq: None,
-            })
-        }
-        GatewayEvent::ToolCall { session_id, execution_id, tool_id, tool_name, args, conversation_id, .. } => {
-            Some(ServerMessage::ToolCall {
-                session_id,
-                execution_id,
-                conversation_id,
-                tool_call_id: tool_id,
-                tool: tool_name,
-                args,
-                seq: None,
-            })
-        }
-        GatewayEvent::ToolResult { session_id, execution_id, tool_id, result, error, conversation_id, .. } => {
-            Some(ServerMessage::ToolResult {
-                session_id,
-                execution_id,
-                conversation_id,
-                tool_call_id: tool_id,
-                result,
-                error,
-                seq: None,
-            })
-        }
-        GatewayEvent::TurnComplete { session_id, execution_id, message, conversation_id, .. } => {
-            Some(ServerMessage::TurnComplete {
-                session_id,
-                execution_id,
-                conversation_id,
-                final_message: Some(message),
-                seq: None,
-            })
-        }
-        GatewayEvent::Error { session_id, execution_id, message, conversation_id, .. } => {
-            Some(ServerMessage::Error {
-                session_id,
-                execution_id,
-                conversation_id,
-                code: "execution_error".to_string(),
-                message,
-                seq: None,
-            })
-        }
-        GatewayEvent::IterationUpdate { session_id, execution_id, current, max, conversation_id, .. } => {
-            Some(ServerMessage::Iteration {
-                session_id,
-                execution_id,
-                conversation_id,
-                current,
-                max,
-                seq: None,
-            })
-        }
-        GatewayEvent::ContinuationPrompt { session_id, execution_id, iteration, message, conversation_id, .. } => {
-            Some(ServerMessage::ContinuationPrompt {
-                session_id,
-                execution_id,
-                conversation_id,
-                iteration,
-                message,
-                seq: None,
-            })
-        }
+        GatewayEvent::AgentStarted {
+            agent_id,
+            session_id,
+            execution_id,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::AgentStarted {
+            agent_id,
+            session_id,
+            execution_id,
+            conversation_id,
+            seq: None,
+        }),
+        GatewayEvent::AgentCompleted {
+            agent_id,
+            session_id,
+            execution_id,
+            result,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::AgentCompleted {
+            agent_id,
+            session_id,
+            execution_id,
+            conversation_id,
+            result,
+            seq: None,
+        }),
+        GatewayEvent::AgentStopped {
+            agent_id,
+            session_id,
+            execution_id,
+            iteration,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::AgentStopped {
+            agent_id,
+            session_id,
+            execution_id,
+            conversation_id,
+            iteration,
+            seq: None,
+        }),
+        GatewayEvent::Token {
+            session_id,
+            execution_id,
+            delta,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::Token {
+            session_id,
+            execution_id,
+            conversation_id,
+            delta,
+            seq: None,
+        }),
+        GatewayEvent::Thinking {
+            session_id,
+            execution_id,
+            content,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::Thinking {
+            session_id,
+            execution_id,
+            conversation_id,
+            content,
+            seq: None,
+        }),
+        GatewayEvent::ToolCall {
+            session_id,
+            execution_id,
+            tool_id,
+            tool_name,
+            args,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::ToolCall {
+            session_id,
+            execution_id,
+            conversation_id,
+            tool_call_id: tool_id,
+            tool: tool_name,
+            args,
+            seq: None,
+        }),
+        GatewayEvent::ToolResult {
+            session_id,
+            execution_id,
+            tool_id,
+            result,
+            error,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::ToolResult {
+            session_id,
+            execution_id,
+            conversation_id,
+            tool_call_id: tool_id,
+            result,
+            error,
+            seq: None,
+        }),
+        GatewayEvent::TurnComplete {
+            session_id,
+            execution_id,
+            message,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::TurnComplete {
+            session_id,
+            execution_id,
+            conversation_id,
+            final_message: Some(message),
+            seq: None,
+        }),
+        GatewayEvent::Error {
+            session_id,
+            execution_id,
+            message,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::Error {
+            session_id,
+            execution_id,
+            conversation_id,
+            code: "execution_error".to_string(),
+            message,
+            seq: None,
+        }),
+        GatewayEvent::IterationUpdate {
+            session_id,
+            execution_id,
+            current,
+            max,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::Iteration {
+            session_id,
+            execution_id,
+            conversation_id,
+            current,
+            max,
+            seq: None,
+        }),
+        GatewayEvent::ContinuationPrompt {
+            session_id,
+            execution_id,
+            iteration,
+            message,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::ContinuationPrompt {
+            session_id,
+            execution_id,
+            conversation_id,
+            iteration,
+            message,
+            seq: None,
+        }),
 
         // Respond events are handled by the hook system, not WebSocket directly
-        GatewayEvent::Respond { session_id, execution_id, message, conversation_id, .. } => {
-            Some(ServerMessage::TurnComplete {
-                session_id,
-                execution_id,
-                conversation_id,
-                final_message: Some(message),
-                seq: None,
-            })
-        }
+        GatewayEvent::Respond {
+            session_id,
+            execution_id,
+            message,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::TurnComplete {
+            session_id,
+            execution_id,
+            conversation_id,
+            final_message: Some(message),
+            seq: None,
+        }),
 
         // Delegation events - sent to frontend for UI updates
         GatewayEvent::DelegationStarted {
@@ -869,55 +965,74 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
         }),
 
         // Heartbeat signals execution alive during silent phases (LLM reasoning)
-        GatewayEvent::Heartbeat { session_id, execution_id, conversation_id } => {
-            Some(ServerMessage::Heartbeat {
-                session_id,
-                execution_id,
-                conversation_id,
-                seq: None,
-            })
-        }
+        GatewayEvent::Heartbeat {
+            session_id,
+            execution_id,
+            conversation_id,
+        } => Some(ServerMessage::Heartbeat {
+            session_id,
+            execution_id,
+            conversation_id,
+            seq: None,
+        }),
 
         // Internal continuation events are handled by the system, not WebSocket
         GatewayEvent::SessionContinuationReady { .. } => None,
 
         // New message added - notify frontend to refresh
-        GatewayEvent::MessageAdded { session_id, execution_id, role, content, conversation_id, .. } => {
-            Some(ServerMessage::MessageAdded {
-                session_id,
-                execution_id,
-                conversation_id,
-                role,
-                content,
-                seq: None,
-            })
-        }
+        GatewayEvent::MessageAdded {
+            session_id,
+            execution_id,
+            role,
+            content,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::MessageAdded {
+            session_id,
+            execution_id,
+            conversation_id,
+            role,
+            content,
+            seq: None,
+        }),
 
         // Token usage update for real-time metrics
-        GatewayEvent::TokenUsage { session_id, execution_id, tokens_in, tokens_out, conversation_id, .. } => {
-            Some(ServerMessage::TokenUsage {
-                session_id,
-                execution_id,
-                conversation_id,
-                tokens_in,
-                tokens_out,
-                seq: None,
-            })
-        }
+        GatewayEvent::TokenUsage {
+            session_id,
+            execution_id,
+            tokens_in,
+            tokens_out,
+            conversation_id,
+            ..
+        } => Some(ServerMessage::TokenUsage {
+            session_id,
+            execution_id,
+            conversation_id,
+            tokens_in,
+            tokens_out,
+            seq: None,
+        }),
 
         // Ward changed - agent switched project directory
-        GatewayEvent::WardChanged { session_id, execution_id, ward_id } => {
-            Some(ServerMessage::WardChanged {
-                session_id,
-                execution_id,
-                ward_id,
-                seq: None,
-            })
-        }
+        GatewayEvent::WardChanged {
+            session_id,
+            execution_id,
+            ward_id,
+        } => Some(ServerMessage::WardChanged {
+            session_id,
+            execution_id,
+            ward_id,
+            seq: None,
+        }),
 
         // Iterations auto-extended by executor
         GatewayEvent::IterationsExtended {
-            session_id, execution_id, iterations_used, iterations_added, reason, conversation_id,
+            session_id,
+            execution_id,
+            iterations_used,
+            iterations_added,
+            reason,
+            conversation_id,
         } => Some(ServerMessage::IterationsExtended {
             session_id,
             execution_id,
@@ -930,7 +1045,11 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
 
         // Plan update from update_plan tool
         GatewayEvent::PlanUpdate {
-            session_id, execution_id, plan, explanation, conversation_id,
+            session_id,
+            execution_id,
+            plan,
+            explanation,
+            conversation_id,
         } => Some(ServerMessage::PlanUpdate {
             session_id,
             execution_id,
@@ -952,8 +1071,14 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
 
         // Intent analysis complete — forwarded so UI sidebar can display results
         GatewayEvent::IntentAnalysisComplete {
-            session_id, execution_id, primary_intent, hidden_intents,
-            recommended_skills, recommended_agents, ward_recommendation, execution_strategy,
+            session_id,
+            execution_id,
+            primary_intent,
+            hidden_intents,
+            recommended_skills,
+            recommended_agents,
+            ward_recommendation,
+            execution_strategy,
         } => Some(ServerMessage::IntentAnalysisComplete {
             session_id,
             execution_id,

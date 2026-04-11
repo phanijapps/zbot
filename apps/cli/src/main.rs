@@ -133,7 +133,10 @@ async fn main() -> Result<()> {
     let ws_url = format!("ws://{}:{}", cli.host, cli.port - 1); // WS is typically port - 1
 
     match cli.command {
-        Some(Commands::Chat { agent, conversation }) => {
+        Some(Commands::Chat {
+            agent,
+            conversation,
+        }) => {
             let conv_id = conversation.unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             app::run_chat_tui(&gateway_url, &ws_url, &agent, &conv_id).await?;
         }
@@ -181,7 +184,13 @@ async fn main() -> Result<()> {
 
         None => {
             // Default: run interactive chat TUI with agent selector
-            app::run_chat_tui(&gateway_url, &ws_url, "assistant", &uuid::Uuid::new_v4().to_string()).await?;
+            app::run_chat_tui(
+                &gateway_url,
+                &ws_url,
+                "assistant",
+                &uuid::Uuid::new_v4().to_string(),
+            )
+            .await?;
         }
     }
 
@@ -423,7 +432,10 @@ async fn run_distill_backfill(gateway_url: &str, _concurrency: usize) -> Result<
     }
 
     println!();
-    println!("Backfill complete: {} succeeded, {} failed", success_count, fail_count);
+    println!(
+        "Backfill complete: {} succeeded, {} failed",
+        success_count, fail_count
+    );
 
     Ok(())
 }
@@ -530,7 +542,10 @@ async fn run_session_restore(gateway_url: &str, session_id: &str) -> Result<()> 
     println!("Restoring session {}...", short_id);
 
     let resp = client
-        .post(format!("{}/api/sessions/restore/{}", gateway_url, session_id))
+        .post(format!(
+            "{}/api/sessions/restore/{}",
+            gateway_url, session_id
+        ))
         .send()
         .await?;
 
@@ -542,7 +557,10 @@ async fn run_session_restore(gateway_url: &str, session_id: &str) -> Result<()> 
     }
 
     let body: RestoreResponse = resp.json().await?;
-    println!("Restored {} records for session {}", body.records_restored, short_id);
+    println!(
+        "Restored {} records for session {}",
+        body.records_restored, short_id
+    );
 
     Ok(())
 }

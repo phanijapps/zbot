@@ -24,11 +24,7 @@ use tracing::debug;
 /// # Returns
 ///
 /// A sanitized schema compatible with LLM function calling.
-pub fn sanitize_tool_schema(
-    schema: &Value,
-    server_id: &str,
-    tool_name: &str,
-) -> Value {
+pub fn sanitize_tool_schema(schema: &Value, server_id: &str, tool_name: &str) -> Value {
     let mut sanitized = schema.clone();
     sanitize_value(&mut sanitized);
     debug!(
@@ -76,10 +72,7 @@ fn sanitize_value(value: &mut Value) {
 
 /// Check if a value is "complex" (not a primitive).
 fn is_complex_value(value: &Value) -> bool {
-    matches!(
-        value,
-        Value::Object(_) | Value::Array(_) | Value::Null
-    )
+    matches!(value, Value::Object(_) | Value::Array(_) | Value::Null)
 }
 
 /// Extracts the relevant schema content for a tool.

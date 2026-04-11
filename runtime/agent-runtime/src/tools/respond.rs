@@ -158,10 +158,6 @@ mod tests {
 
         let schema = tool.parameters_schema().unwrap();
         assert!(schema.get("properties").is_some());
-        assert!(schema
-            .get("properties")
-            .unwrap()
-            .get("message")
-            .is_some());
+        assert!(schema.get("properties").unwrap().get("message").is_some());
     }
 }

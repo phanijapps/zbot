@@ -267,8 +267,8 @@ mod tests {
 
     #[test]
     fn session_request_continue_session() {
-        let request = SessionRequest::new("root", "Follow up message")
-            .with_session_id("sess-existing");
+        let request =
+            SessionRequest::new("root", "Follow up message").with_session_id("sess-existing");
 
         assert_eq!(request.session_id, Some("sess-existing".to_string()));
         assert_eq!(request.message, "Follow up message");

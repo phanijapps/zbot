@@ -3,9 +3,9 @@
 // Core message types for LLM communication
 // ============================================================================
 
+use serde::Serializer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use serde::Serializer;
 use zero_core::types::Part;
 
 /// A chat message in the conversation
@@ -172,16 +172,19 @@ impl Serialize for ToolCall {
         use serde::ser::SerializeStruct;
 
         // OpenAI format: { id, type: "function", function: { name, arguments: "..." } }
-        let arguments_str = serde_json::to_string(&self.arguments)
-            .map_err(serde::ser::Error::custom)?;
+        let arguments_str =
+            serde_json::to_string(&self.arguments).map_err(serde::ser::Error::custom)?;
 
         let mut s = serializer.serialize_struct("ToolCall", 3)?;
         s.serialize_field("id", &self.id)?;
         s.serialize_field("type", "function")?;
-        s.serialize_field("function", &ToolCallFunctionSerialization {
-            name: &self.name,
-            arguments: &arguments_str,
-        })?;
+        s.serialize_field(
+            "function",
+            &ToolCallFunctionSerialization {
+                name: &self.name,
+                arguments: &arguments_str,
+            },
+        )?;
         s.end()
     }
 }
@@ -197,7 +200,11 @@ impl ToolCall {
     /// Create a new tool call
     #[must_use]
     pub fn new(id: String, name: String, arguments: Value) -> Self {
-        Self { id, name, arguments }
+        Self {
+            id,
+            name,
+            arguments,
+        }
     }
 }
 
@@ -236,7 +243,9 @@ mod tests {
         let msg = ChatMessage {
             role: "user".to_string(),
             content: vec![
-                Part::Text { text: "What is this?".to_string() },
+                Part::Text {
+                    text: "What is this?".to_string(),
+                },
                 Part::Image {
                     source: ContentSource::Base64("aGVsbG8=".to_string()),
                     mime_type: "image/png".to_string(),
@@ -263,7 +272,9 @@ mod tests {
         let msg = ChatMessage {
             role: "user".to_string(),
             content: vec![
-                Part::Text { text: "Describe".to_string() },
+                Part::Text {
+                    text: "Describe".to_string(),
+                },
                 Part::Image {
                     source: ContentSource::Url("https://example.com/img.png".to_string()),
                     mime_type: "image/png".to_string(),

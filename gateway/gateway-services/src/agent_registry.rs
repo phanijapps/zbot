@@ -74,7 +74,7 @@ impl AgentRegistry {
         let relationships = self.relationships.read().await;
         match relationships.get(agent_id) {
             Some(Some(set)) => Some(set.iter().cloned().collect()),
-            Some(None) => None, // Can delegate to any
+            Some(None) => None,   // Can delegate to any
             None => Some(vec![]), // Cannot delegate
         }
     }

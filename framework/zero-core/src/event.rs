@@ -35,7 +35,7 @@ pub struct Event {
     pub content: Option<Content>,
 
     /// Actions triggered by this event
- pub actions: EventActions,
+    pub actions: EventActions,
 
     /// Whether the turn is complete
     #[serde(default)]

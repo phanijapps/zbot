@@ -24,9 +24,9 @@
 //! ));
 //! ```
 
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ============================================================================
 // TRACE EVENT KIND
@@ -287,33 +287,27 @@ impl ExecutionTrace {
     pub fn complete(&mut self, message: impl Into<String>) {
         self.ended_at = Some(Utc::now());
         self.outcome = TraceOutcome::Success;
-        self.metrics.total_duration_ms = (self.ended_at.unwrap() - self.started_at).num_milliseconds();
-        self.record(TraceEvent::new(
-            TraceEventKind::ExecutionCompleted,
-            message,
-        ));
+        self.metrics.total_duration_ms =
+            (self.ended_at.unwrap() - self.started_at).num_milliseconds();
+        self.record(TraceEvent::new(TraceEventKind::ExecutionCompleted, message));
     }
 
     /// Record failure.
     pub fn fail(&mut self, message: impl Into<String>) {
         self.ended_at = Some(Utc::now());
         self.outcome = TraceOutcome::Failure;
-        self.metrics.total_duration_ms = (self.ended_at.unwrap() - self.started_at).num_milliseconds();
-        self.record(TraceEvent::new(
-            TraceEventKind::ExecutionFailed,
-            message,
-        ));
+        self.metrics.total_duration_ms =
+            (self.ended_at.unwrap() - self.started_at).num_milliseconds();
+        self.record(TraceEvent::new(TraceEventKind::ExecutionFailed, message));
     }
 
     /// Record cancellation.
     pub fn cancel(&mut self, message: impl Into<String>) {
         self.ended_at = Some(Utc::now());
         self.outcome = TraceOutcome::Cancelled;
-        self.metrics.total_duration_ms = (self.ended_at.unwrap() - self.started_at).num_milliseconds();
-        self.record(TraceEvent::new(
-            TraceEventKind::ExecutionCancelled,
-            message,
-        ));
+        self.metrics.total_duration_ms =
+            (self.ended_at.unwrap() - self.started_at).num_milliseconds();
+        self.record(TraceEvent::new(TraceEventKind::ExecutionCancelled, message));
     }
 
     /// Get events for a specific task.
@@ -472,8 +466,7 @@ impl TraceBuilder {
 
     /// Record a task start.
     pub fn task_started(&mut self, task_id: impl Into<String>, message: impl Into<String>) {
-        let mut event = TraceEvent::new(TraceEventKind::TaskStarted, message)
-            .with_task(task_id);
+        let mut event = TraceEvent::new(TraceEventKind::TaskStarted, message).with_task(task_id);
         if let Some(ref span) = self.current_span {
             event = event.with_span(span.clone());
         }
@@ -481,7 +474,12 @@ impl TraceBuilder {
     }
 
     /// Record a task completion.
-    pub fn task_completed(&mut self, task_id: impl Into<String>, message: impl Into<String>, duration_ms: i64) {
+    pub fn task_completed(
+        &mut self,
+        task_id: impl Into<String>,
+        message: impl Into<String>,
+        duration_ms: i64,
+    ) {
         let mut event = TraceEvent::new(TraceEventKind::TaskCompleted, message)
             .with_task(task_id)
             .with_duration(duration_ms);
@@ -493,8 +491,7 @@ impl TraceBuilder {
 
     /// Record a task failure.
     pub fn task_failed(&mut self, task_id: impl Into<String>, message: impl Into<String>) {
-        let mut event = TraceEvent::new(TraceEventKind::TaskFailed, message)
-            .with_task(task_id);
+        let mut event = TraceEvent::new(TraceEventKind::TaskFailed, message).with_task(task_id);
         if let Some(ref span) = self.current_span {
             event = event.with_span(span.clone());
         }
@@ -503,8 +500,7 @@ impl TraceBuilder {
 
     /// Record an agent selection.
     pub fn agent_selected(&mut self, agent_id: impl Into<String>, reason: impl Into<String>) {
-        let mut event = TraceEvent::new(TraceEventKind::AgentSelected, reason)
-            .with_agent(agent_id);
+        let mut event = TraceEvent::new(TraceEventKind::AgentSelected, reason).with_agent(agent_id);
         if let Some(ref span) = self.current_span {
             event = event.with_span(span.clone());
         }
@@ -568,7 +564,8 @@ mod tests {
         let mut trace = ExecutionTrace::new("exec-1");
         trace.start();
 
-        trace.record(TraceEvent::new(TraceEventKind::TaskStarted, "Task 1 started").with_task("t1"));
+        trace
+            .record(TraceEvent::new(TraceEventKind::TaskStarted, "Task 1 started").with_task("t1"));
         trace.record(TraceEvent::new(TraceEventKind::TaskCompleted, "Task 1 done").with_task("t1"));
 
         assert_eq!(trace.events.len(), 3); // start + 2 task events
@@ -617,11 +614,20 @@ mod tests {
         trace.start();
 
         for i in 0..5 {
-            trace.record(TraceEvent::new(TraceEventKind::TaskStarted, format!("Task {}", i)));
+            trace.record(TraceEvent::new(
+                TraceEventKind::TaskStarted,
+                format!("Task {}", i),
+            ));
             if i < 4 {
-                trace.record(TraceEvent::new(TraceEventKind::TaskCompleted, format!("Task {} done", i)));
+                trace.record(TraceEvent::new(
+                    TraceEventKind::TaskCompleted,
+                    format!("Task {} done", i),
+                ));
             } else {
-                trace.record(TraceEvent::new(TraceEventKind::TaskFailed, format!("Task {} failed", i)));
+                trace.record(TraceEvent::new(
+                    TraceEventKind::TaskFailed,
+                    format!("Task {} failed", i),
+                ));
             }
         }
 

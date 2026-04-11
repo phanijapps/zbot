@@ -2,10 +2,10 @@
 //!
 //! In-memory key-value state storage with key prefix support.
 
-use std::collections::HashMap;
 use serde_json::Value;
-use zero_core::{Result, ZeroError};
+use std::collections::HashMap;
 use zero_core::context::State;
+use zero_core::{Result, ZeroError};
 
 /// In-memory state storage.
 ///
@@ -100,9 +100,8 @@ impl State for InMemoryState {
 ///
 /// Ensures keys use proper prefixes (user:, app:, temp:).
 pub fn validate_key(key: &str) -> Result<String> {
-    let has_prefix = key.starts_with("user:")
-        || key.starts_with("app:")
-        || key.starts_with("temp:");
+    let has_prefix =
+        key.starts_with("user:") || key.starts_with("app:") || key.starts_with("temp:");
 
     if !has_prefix {
         return Err(ZeroError::Config(format!(
@@ -117,8 +116,8 @@ pub fn validate_key(key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::KEY_PREFIX_USER;
     use zero_core::KEY_PREFIX_APP;
+    use zero_core::KEY_PREFIX_USER;
 
     #[test]
     fn test_state_new() {
@@ -137,15 +136,27 @@ mod tests {
     fn test_state_trait() {
         let mut state = InMemoryState::new();
         <dyn State>::set(&mut state, "test".to_string(), serde_json::json!(42));
-        assert_eq!(<dyn State>::get(&state, "test"), Some(serde_json::json!(42)));
+        assert_eq!(
+            <dyn State>::get(&state, "test"),
+            Some(serde_json::json!(42))
+        );
     }
 
     #[test]
     fn test_state_prefixes() {
         let mut state = InMemoryState::new();
-        state.set(format!("{}name", KEY_PREFIX_USER), serde_json::json!("Alice"));
-        state.set(format!("{}theme", KEY_PREFIX_USER), serde_json::json!("dark"));
-        state.set(format!("{}version", KEY_PREFIX_APP), serde_json::json!("1.0"));
+        state.set(
+            format!("{}name", KEY_PREFIX_USER),
+            serde_json::json!("Alice"),
+        );
+        state.set(
+            format!("{}theme", KEY_PREFIX_USER),
+            serde_json::json!("dark"),
+        );
+        state.set(
+            format!("{}version", KEY_PREFIX_APP),
+            serde_json::json!("1.0"),
+        );
 
         let user_data = state.get_by_prefix(KEY_PREFIX_USER);
         assert_eq!(user_data.len(), 2);

@@ -5,7 +5,7 @@
 //! Used for hot-reloading skills and agents when files are modified.
 
 use notify::{EventKind, RecursiveMode};
-use notify_debouncer_full::{DebounceEventResult, new_debouncer};
+use notify_debouncer_full::{new_debouncer, DebounceEventResult};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;

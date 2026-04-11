@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
 
@@ -182,7 +182,10 @@ impl Condition {
     /// Evaluate condition against completed node results.
     /// Returns Ok(true) if passed, Ok(false) if failed.
     /// Returns Err with prompt for llm_eval (agent evaluates).
-    pub fn evaluate(&self, nodes: &HashMap<String, GraphNode>) -> std::result::Result<bool, String> {
+    pub fn evaluate(
+        &self,
+        nodes: &HashMap<String, GraphNode>,
+    ) -> std::result::Result<bool, String> {
         let node = nodes
             .get(&self.ref_node)
             .ok_or_else(|| format!("Referenced node '{}' not found", self.ref_node))?;
@@ -209,8 +212,8 @@ impl Condition {
                 Ok(a < b)
             }
             ConditionOp::Regex => {
-                let re = regex::Regex::new(&self.value)
-                    .map_err(|e| format!("Invalid regex: {}", e))?;
+                let re =
+                    regex::Regex::new(&self.value).map_err(|e| format!("Invalid regex: {}", e))?;
                 Ok(re.is_match(&field_value))
             }
             ConditionOp::LlmEval => Err(format!(
@@ -253,13 +256,11 @@ impl ExecutionGraph {
 
             // Check dependencies
             let deps_met = match node.depend_mode {
-                DependMode::All => {
-                    node.depends_on.iter().all(|dep| {
-                        self.nodes.get(dep).map_or(false, |n| {
-                            n.status == NodeStatus::Completed || n.status == NodeStatus::Skipped
-                        })
+                DependMode::All => node.depends_on.iter().all(|dep| {
+                    self.nodes.get(dep).map_or(false, |n| {
+                        n.status == NodeStatus::Completed || n.status == NodeStatus::Skipped
                     })
-                }
+                }),
                 DependMode::AnyCompleted => {
                     node.depends_on.is_empty()
                         || node.depends_on.iter().any(|dep| {
@@ -336,10 +337,7 @@ impl ExecutionGraph {
                 )
             });
             if all_done {
-                let any_failed = self
-                    .nodes
-                    .values()
-                    .any(|n| n.status == NodeStatus::Failed);
+                let any_failed = self.nodes.values().any(|n| n.status == NodeStatus::Failed);
                 self.status = if any_failed {
                     GraphStatus::Failed
                 } else {
@@ -556,9 +554,9 @@ impl Tool for ExecutionGraphTool {
 
 impl ExecutionGraphTool {
     async fn handle_create(&self, ctx: Arc<dyn ToolContext>, args: &Value) -> Result<Value> {
-        let nodes_val = args
-            .get("nodes")
-            .ok_or_else(|| ZeroError::Tool("Missing 'nodes' array for create action".to_string()))?;
+        let nodes_val = args.get("nodes").ok_or_else(|| {
+            ZeroError::Tool("Missing 'nodes' array for create action".to_string())
+        })?;
 
         let nodes: Vec<GraphNode> = serde_json::from_value(nodes_val.clone())
             .map_err(|e| ZeroError::Tool(format!("Invalid node definitions: {}", e)))?;
@@ -630,11 +628,7 @@ impl ExecutionGraphTool {
         }))
     }
 
-    async fn handle_execute_next(
-        &self,
-        ctx: Arc<dyn ToolContext>,
-        args: &Value,
-    ) -> Result<Value> {
+    async fn handle_execute_next(&self, ctx: Arc<dyn ToolContext>, args: &Value) -> Result<Value> {
         let graph_id = args
             .get("graph_id")
             .and_then(|v| v.as_str())

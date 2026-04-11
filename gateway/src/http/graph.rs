@@ -189,8 +189,16 @@ pub struct SubgraphResponse {
 impl From<Subgraph> for SubgraphResponse {
     fn from(subgraph: Subgraph) -> Self {
         Self {
-            entities: subgraph.entities.into_iter().map(EntityResponse::from).collect(),
-            relationships: subgraph.relationships.into_iter().map(RelationshipResponse::from).collect(),
+            entities: subgraph
+                .entities
+                .into_iter()
+                .map(EntityResponse::from)
+                .collect(),
+            relationships: subgraph
+                .relationships
+                .into_iter()
+                .map(RelationshipResponse::from)
+                .collect(),
             center: subgraph.center,
             max_hops: subgraph.max_hops,
         }
@@ -311,7 +319,10 @@ pub async fn list_relationships(
         Ok(relationships) => {
             let total = relationships.len();
             Ok(Json(RelationshipListResponse {
-                relationships: relationships.into_iter().map(RelationshipResponse::from).collect(),
+                relationships: relationships
+                    .into_iter()
+                    .map(RelationshipResponse::from)
+                    .collect(),
                 total,
             }))
         }
@@ -351,7 +362,10 @@ pub async fn get_entity_neighbors(
     };
 
     // Get neighbors through GraphService
-    match graph_service.get_neighbors(&agent_id, &entity_id, direction, query.limit).await {
+    match graph_service
+        .get_neighbors(&agent_id, &entity_id, direction, query.limit)
+        .await
+    {
         Ok(neighbors) => {
             let neighbor_entries: Vec<NeighborEntry> = neighbors
                 .into_iter()
@@ -399,7 +413,10 @@ pub async fn get_entity_subgraph(
         }
     };
 
-    match graph_service.get_subgraph(&agent_id, &entity_id, query.max_hops).await {
+    match graph_service
+        .get_subgraph(&agent_id, &entity_id, query.max_hops)
+        .await
+    {
         Ok(subgraph) => Ok(Json(SubgraphResponse::from(subgraph))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -429,7 +446,10 @@ pub async fn search_entities(
         }
     };
 
-    match graph_service.search_entities(&agent_id, &query.q, query.limit.unwrap_or(20)).await {
+    match graph_service
+        .search_entities(&agent_id, &query.q, query.limit.unwrap_or(20))
+        .await
+    {
         Ok(entities) => {
             let total = entities.len();
             Ok(Json(EntityListResponse {
@@ -673,7 +693,10 @@ pub async fn all_relationships(
         Ok(relationships) => {
             let total = relationships.len();
             Ok(Json(RelationshipListResponse {
-                relationships: relationships.into_iter().map(RelationshipResponse::from).collect(),
+                relationships: relationships
+                    .into_iter()
+                    .map(RelationshipResponse::from)
+                    .collect(),
                 total,
             }))
         }

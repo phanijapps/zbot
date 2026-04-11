@@ -2,26 +2,36 @@
 //!
 //! Builds agent executors with all required components.
 
-use gateway_services::agents::Agent;
-use gateway_services::models::ModelRegistry;
-use gateway_services::providers::Provider;
-use gateway_services::{McpService, SettingsService, SkillService};
 use agent_runtime::{
     AgentExecutor, ContextEditingConfig, ContextEditingMiddleware, DelegateTool, ExecutorConfig,
     LlmConfig, McpManager, MiddlewarePipeline, OpenAiClient, RespondTool, RetryPolicy,
     RetryingLlmClient, ToolCallDecision, ToolRegistry,
 };
 use agent_tools::{
-    ListAgentsTool, QueryResourceTool, ToolSettings,
-    // Subagent tools
-    ShellTool, LoadSkillTool, WriteFileTool, EditFileTool,
+    EditFileTool,
+    GlobTool,
+    GrepTool,
+    ListAgentsTool,
+    LoadSkillTool,
     // Root orchestrator tools
-    MemoryTool, WardTool, UpdatePlanTool, SetSessionTitleTool, GrepTool,
-    // Optional file reading tools
-    ReadTool, GlobTool,
+    MemoryTool,
     // Multimodal vision fallback
     MultimodalAnalyzeTool,
+    QueryResourceTool,
+    // Optional file reading tools
+    ReadTool,
+    SetSessionTitleTool,
+    // Subagent tools
+    ShellTool,
+    ToolSettings,
+    UpdatePlanTool,
+    WardTool,
+    WriteFileTool,
 };
+use gateway_services::agents::Agent;
+use gateway_services::models::ModelRegistry;
+use gateway_services::providers::Provider;
+use gateway_services::{McpService, SettingsService, SkillService};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -174,14 +184,18 @@ impl ExecutorBuilder {
 
         // Cache available agents for list_agents tool
         if !available_agents.is_empty() {
-            executor_config = executor_config
-                .with_initial_state("available_agents", serde_json::Value::Array(available_agents.to_vec()));
+            executor_config = executor_config.with_initial_state(
+                "available_agents",
+                serde_json::Value::Array(available_agents.to_vec()),
+            );
         }
 
         // Cache available skills for list_skills tool
         if !available_skills.is_empty() {
-            executor_config = executor_config
-                .with_initial_state("available_skills", serde_json::Value::Array(available_skills.to_vec()));
+            executor_config = executor_config.with_initial_state(
+                "available_skills",
+                serde_json::Value::Array(available_skills.to_vec()),
+            );
         }
 
         // Load workspace context (from cache if available, otherwise disk)
@@ -191,14 +205,19 @@ impl ExecutorBuilder {
             load_workspace_from_disk(&self.config_dir)
         };
         if let Some(ws) = workspace {
-            tracing::debug!("Loaded workspace context: {:?}", ws.keys().collect::<Vec<_>>());
+            tracing::debug!(
+                "Loaded workspace context: {:?}",
+                ws.keys().collect::<Vec<_>>()
+            );
             executor_config =
                 executor_config.with_initial_state("workspace", serde_json::json!(ws));
         }
 
         // Inject session_id so tools (e.g., shell) can scope working directories
-        executor_config = executor_config
-            .with_initial_state("session_id", serde_json::Value::String(session_id.to_string()));
+        executor_config = executor_config.with_initial_state(
+            "session_id",
+            serde_json::Value::String(session_id.to_string()),
+        );
 
         // Restore ward_id from session so continuations keep the active ward
         if let Some(ward) = ward_id {
@@ -228,11 +247,13 @@ impl ExecutorBuilder {
                 let providers_path = self.config_dir.join("config/providers.json");
                 let provider_creds = std::fs::read_to_string(&providers_path)
                     .ok()
-                    .and_then(|content| serde_json::from_str::<Vec<serde_json::Value>>(&content).ok())
+                    .and_then(|content| {
+                        serde_json::from_str::<Vec<serde_json::Value>>(&content).ok()
+                    })
                     .and_then(|providers| {
-                        providers.into_iter().find(|p| {
-                            p.get("id").and_then(|v| v.as_str()) == Some(provider_id)
-                        })
+                        providers
+                            .into_iter()
+                            .find(|p| p.get("id").and_then(|v| v.as_str()) == Some(provider_id))
                     });
 
                 if let Some(prov) = provider_creds {
@@ -256,7 +277,9 @@ impl ExecutorBuilder {
         // Validate thinking capability against model registry
         let thinking_enabled = if agent.thinking_enabled {
             if let Some(ref registry) = self.model_registry {
-                if !registry.has_capability(&agent.model, gateway_services::models::Capability::Thinking) {
+                if !registry
+                    .has_capability(&agent.model, gateway_services::models::Capability::Thinking)
+                {
                     tracing::warn!(
                         model = %agent.model,
                         "thinking_enabled but model lacks thinking capability — disabling"
@@ -293,11 +316,15 @@ impl ExecutorBuilder {
             Arc::new(RetryingLlmClient::new(raw_client, RetryPolicy::default()));
 
         // Wrap with shared rate limiter if configured (limits concurrent calls and RPM per provider)
-        let llm_client: Arc<dyn agent_runtime::LlmClient> = if let Some(ref limiter) = self.rate_limiter {
-            Arc::new(agent_runtime::RateLimitedLlmClient::new(retrying_client, limiter.clone()))
-        } else {
-            retrying_client
-        };
+        let llm_client: Arc<dyn agent_runtime::LlmClient> =
+            if let Some(ref limiter) = self.rate_limiter {
+                Arc::new(agent_runtime::RateLimitedLlmClient::new(
+                    retrying_client,
+                    limiter.clone(),
+                ))
+            } else {
+                retrying_client
+            };
         // Stream decode errors are handled by openai.rs fallback (stream error → retry non-streaming).
         // All agents stream — no NonStreamingLlmClient wrapper needed.
 
@@ -355,7 +382,8 @@ impl ExecutorBuilder {
 
         // Resolve context window: provider override > model registry > default 8192
         executor_config.context_window_tokens = provider.context_window.unwrap_or_else(|| {
-            self.model_registry.as_ref()
+            self.model_registry
+                .as_ref()
                 .map(|r| r.context_window(&agent.model).input)
                 .unwrap_or(8192)
         });
@@ -369,24 +397,24 @@ impl ExecutorBuilder {
             let pipeline = MiddlewarePipeline::new();
             let pipeline = if executor_config.context_window_tokens > 0 {
                 let (trigger_pct, keep_results) = if self.fast_mode {
-                    (80, 5)  // Chat: 80% trigger, keep 5 recent tool results
+                    (80, 5) // Chat: 80% trigger, keep 5 recent tool results
                 } else {
-                    (70, 8)  // Deep: 70% trigger, keep 8 recent tool results
+                    (70, 8) // Deep: 70% trigger, keep 8 recent tool results
                 };
-                pipeline.add_pre_processor(Box::new(
-                    ContextEditingMiddleware::new(
-                        ContextEditingConfig {
-                            enabled: true,
-                            trigger_tokens: (executor_config.context_window_tokens as usize * trigger_pct) / 100,
-                            keep_tool_results: keep_results,
-                            min_reclaim: 500,
-                            clear_tool_inputs: true,
-                            cascade_unload: true,
-                            skill_aware_placeholders: true,
-                            ..Default::default()
-                        }
-                    )
-                ))
+                pipeline.add_pre_processor(Box::new(ContextEditingMiddleware::new(
+                    ContextEditingConfig {
+                        enabled: true,
+                        trigger_tokens: (executor_config.context_window_tokens as usize
+                            * trigger_pct)
+                            / 100,
+                        keep_tool_results: keep_results,
+                        min_reclaim: 500,
+                        clear_tool_inputs: true,
+                        cascade_unload: true,
+                        skill_aware_placeholders: true,
+                        ..Default::default()
+                    },
+                )))
             } else {
                 pipeline
             };
@@ -408,14 +436,15 @@ impl ExecutorBuilder {
             // beforeToolCall: block shell-as-file-writer bypass
             executor_config.before_tool_call = Some(Arc::new(|tool_name, args| {
                 if tool_name == "shell" {
-                    let cmd = args.get("command")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
                     // Block shell commands that create/write files — use write_file instead
-                    if cmd.contains("> ") || cmd.contains("cat <<") || cmd.contains("heredoc")
+                    if cmd.contains("> ")
+                        || cmd.contains("cat <<")
+                        || cmd.contains("heredoc")
                         || cmd.contains("echo \"") && cmd.contains("> ")
                         || cmd.contains("printf") && cmd.contains("> ")
-                        || cmd.contains("tee ") {
+                        || cmd.contains("tee ")
+                    {
                         return ToolCallDecision::Block {
                             reason: "Use write_file to create files, not shell redirects. Shell is for running commands and reading output.".to_string()
                         };
@@ -425,22 +454,24 @@ impl ExecutorBuilder {
             }));
 
             // afterToolCall: inject guidance after errors to reduce fix-retry loops
-            executor_config.after_tool_call = Some(Arc::new(|tool_name, _args, result, succeeded| {
-                if !succeeded && tool_name == "shell" {
-                    Some(format!(
+            executor_config.after_tool_call = Some(Arc::new(
+                |tool_name, _args, result, succeeded| {
+                    if !succeeded && tool_name == "shell" {
+                        Some(format!(
                         "{}\n\n[SYSTEM: Command failed. Read the error. Fix the ROOT CAUSE in your code, \
                          not the symptom. Do not retry the same command — fix the file first with edit_file.]",
                         result
                     ))
-                } else if !succeeded {
-                    Some(format!(
+                    } else if !succeeded {
+                        Some(format!(
                         "{}\n\n[SYSTEM: Tool failed. Read the error carefully before retrying.]",
                         result
                     ))
-                } else {
-                    None // Pass through unchanged
-                }
-            }));
+                    } else {
+                        None // Pass through unchanged
+                    }
+                },
+            ));
         }
 
         // Configure tool result offload settings
@@ -469,8 +500,14 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(GrepTool));
-            tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
-            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(WardTool::new(
+                fs_context.clone(),
+                self.fact_store.clone(),
+            )));
+            tool_registry.register(Arc::new(MemoryTool::new(
+                fs_context.clone(),
+                self.fact_store.clone(),
+            )));
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
         } else {
@@ -480,8 +517,14 @@ impl ExecutorBuilder {
 
             // Orchestrator essentials
             tool_registry.register(Arc::new(ShellTool::new()));
-            tool_registry.register(Arc::new(MemoryTool::new(fs_context.clone(), self.fact_store.clone())));
-            tool_registry.register(Arc::new(WardTool::new(fs_context.clone(), self.fact_store.clone())));
+            tool_registry.register(Arc::new(MemoryTool::new(
+                fs_context.clone(),
+                self.fact_store.clone(),
+            )));
+            tool_registry.register(Arc::new(WardTool::new(
+                fs_context.clone(),
+                self.fact_store.clone(),
+            )));
             tool_registry.register(Arc::new(UpdatePlanTool::new()));
             tool_registry.register(Arc::new(SetSessionTitleTool::new()));
             tool_registry.register(Arc::new(GrepTool));

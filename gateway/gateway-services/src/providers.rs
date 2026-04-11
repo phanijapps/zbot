@@ -27,7 +27,10 @@ pub struct Provider {
     pub models: Vec<String>,
     #[serde(rename = "embeddingModels", skip_serializing_if = "Option::is_none")]
     pub embedding_models: Option<Vec<String>>,
-    #[serde(rename = "embeddingDimensions", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "embeddingDimensions",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub embedding_dimensions: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub verified: Option<bool>,
@@ -37,7 +40,10 @@ pub struct Provider {
     pub created_at: Option<String>,
     /// Maximum concurrent LLM requests for this provider (default: 3).
     /// Set lower for rate-limited providers (e.g., 1 for free tiers).
-    #[serde(rename = "maxConcurrentRequests", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "maxConcurrentRequests",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub max_concurrent_requests: Option<u32>,
     /// Context window size in tokens. Overrides the hardcoded model lookup.
     /// Set this when using models not in the built-in lookup table.
@@ -48,10 +54,18 @@ pub struct Provider {
     #[serde(rename = "defaultModel", skip_serializing_if = "Option::is_none")]
     pub default_model: Option<String>,
     /// Rate limiting configuration for this provider.
-    #[serde(rename = "rateLimits", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "rateLimits",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub rate_limits: Option<RateLimits>,
     /// Enriched model configurations with capabilities and limits.
-    #[serde(rename = "modelConfigs", skip_serializing_if = "Option::is_none", default)]
+    #[serde(
+        rename = "modelConfigs",
+        skip_serializing_if = "Option::is_none",
+        default
+    )]
     pub model_configs: Option<HashMap<String, ModelConfig>>,
 }
 
@@ -90,12 +104,19 @@ pub struct RateLimits {
     pub concurrent_requests: u32,
 }
 
-fn default_rpm() -> u32 { 30 }
-fn default_concurrent() -> u32 { 2 }
+fn default_rpm() -> u32 {
+    30
+}
+fn default_concurrent() -> u32 {
+    2
+}
 
 impl Default for RateLimits {
     fn default() -> Self {
-        Self { requests_per_minute: default_rpm(), concurrent_requests: default_concurrent() }
+        Self {
+            requests_per_minute: default_rpm(),
+            concurrent_requests: default_concurrent(),
+        }
     }
 }
 
@@ -116,7 +137,9 @@ pub struct ModelConfig {
     pub source: String,
 }
 
-fn default_source() -> String { "registry".to_string() }
+fn default_source() -> String {
+    "registry".to_string()
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ProviderTestResult {

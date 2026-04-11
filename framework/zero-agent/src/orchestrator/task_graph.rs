@@ -29,9 +29,9 @@
 //! let order = graph.execution_order().unwrap();
 //! ```
 
-use std::collections::{HashMap, HashSet, VecDeque};
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 // ============================================================================
 // TASK STATUS
@@ -69,7 +69,10 @@ impl TaskStatus {
     pub fn is_terminal(&self) -> bool {
         matches!(
             self,
-            TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Skipped | TaskStatus::Cancelled
+            TaskStatus::Completed
+                | TaskStatus::Failed
+                | TaskStatus::Skipped
+                | TaskStatus::Cancelled
         )
     }
 
@@ -424,11 +427,7 @@ impl TaskGraph {
 
         // Calculate in-degrees
         for task_id in self.tasks.keys() {
-            let degree = self
-                .dependencies
-                .get(task_id)
-                .map(|d| d.len())
-                .unwrap_or(0);
+            let degree = self.dependencies.get(task_id).map(|d| d.len()).unwrap_or(0);
             in_degree.insert(task_id.as_str(), degree);
             if degree == 0 {
                 queue.push_back(task_id.as_str());
@@ -702,7 +701,10 @@ mod tests {
         assert_eq!(ready[0].id, "t1");
 
         // Complete t1
-        graph.get_task_mut(&t1).unwrap().complete(serde_json::json!({}));
+        graph
+            .get_task_mut(&t1)
+            .unwrap()
+            .complete(serde_json::json!({}));
 
         // Now t2 is ready
         let ready = graph.ready_tasks();

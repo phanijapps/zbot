@@ -28,7 +28,6 @@
 #![warn(clippy::all)]
 #![warn(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
-
 // ============================================================================
 // PUBLIC API RE-EXPORTS
 // ============================================================================
@@ -65,58 +64,41 @@ pub mod logging;
 // CONVENIENT RE-EXPORTS
 // ============================================================================
 
-pub use types::{
-    ChatMessage, StreamEvent, ToolCall, ToolResult, ToolError
-};
+pub use types::{ChatMessage, StreamEvent, ToolCall, ToolError, ToolResult};
 
 pub use llm::{
-    LlmClient, LlmError, LlmConfig, OpenAiClient, StreamChunk, StreamCallback,
-    ToolCallChunk, ChatResponse, TokenUsage,
-    RetryingLlmClient, RetryPolicy, ThrottledLlmClient,
-    ProviderRateLimiter, RateLimitedLlmClient, NonStreamingLlmClient,
-    EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError,
-    OpenAiEmbeddingClient, LocalEmbeddingClient, content_hash,
+    content_hash, ChatResponse, EmbeddingClient, EmbeddingConfig, EmbeddingError,
+    EmbeddingProviderType, LlmClient, LlmConfig, LlmError, LocalEmbeddingClient,
+    NonStreamingLlmClient, OpenAiClient, OpenAiEmbeddingClient, ProviderRateLimiter,
+    RateLimitedLlmClient, RetryPolicy, RetryingLlmClient, StreamCallback, StreamChunk,
+    ThrottledLlmClient, TokenUsage, ToolCallChunk,
 };
 
-pub use tools::{
-    Tool, ToolRegistry, ToolContext,
-    FileSystemContext, NoFileSystemContext,
-    RespondTool, DelegateTool,
-};
 pub use tools::error::ToolError as ToolExecError;
-
-pub use mcp::{
-    McpManager, McpClient, McpServerConfig, McpTool, McpError
+pub use tools::{
+    DelegateTool, FileSystemContext, NoFileSystemContext, RespondTool, Tool, ToolContext,
+    ToolRegistry,
 };
+
+pub use mcp::{McpClient, McpError, McpManager, McpServerConfig, McpTool};
 
 pub use middleware::{
-    MiddlewarePipeline,
-    PreProcessMiddleware,
-    EventMiddleware,
-    MiddlewareContext,
-    MiddlewareEffect,
-    MiddlewareConfig,
-    SummarizationMiddleware,
-    ContextEditingMiddleware,
-    SummarizationConfig,
-    ContextEditingConfig,
-    TriggerCondition,
-    KeepPolicy,
+    ContextEditingConfig, ContextEditingMiddleware, EventMiddleware, KeepPolicy, MiddlewareConfig,
+    MiddlewareContext, MiddlewareEffect, MiddlewarePipeline, PreProcessMiddleware,
+    SummarizationConfig, SummarizationMiddleware, TriggerCondition,
 };
 
 pub use executor::{
-    AgentExecutor, ExecutorConfig, ExecutorError, RecallHook, RecallHookResult, create_executor,
-    ToolCallDecision, ToolExecutionMode, BeforeToolCallHook, AfterToolCallHook,
+    create_executor, AfterToolCallHook, AgentExecutor, BeforeToolCallHook, ExecutorConfig,
+    ExecutorError, RecallHook, RecallHookResult, ToolCallDecision, ToolExecutionMode,
     TransformContextHook,
 };
 
 pub use steering::{
-    SteeringQueue, SteeringHandle, SteeringMessage, SteeringSource, SteeringPriority,
+    SteeringHandle, SteeringMessage, SteeringPriority, SteeringQueue, SteeringSource,
 };
 
-pub use logging::{
-    init_logging, init_logging_from_env, LogLevel
-};
+pub use logging::{init_logging, init_logging_from_env, LogLevel};
 
 // Logging macros are available at crate root via #[macro_export] in logging module
 // Use: agent_info!, agent_warn!, agent_error!, agent_debug!

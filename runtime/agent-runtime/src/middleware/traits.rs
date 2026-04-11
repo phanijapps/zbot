@@ -9,10 +9,10 @@
 
 use std::collections::HashMap;
 
+use crate::types::{ChatMessage, StreamEvent};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use crate::types::{ChatMessage, StreamEvent};
 
 // ============================================================================
 // EXECUTION STATE
@@ -55,29 +55,34 @@ impl ExecutionState {
                 for tool_call in tool_calls {
                     if tool_call.name == "load_skill" {
                         // Extract skill name from arguments
-                        if let Some(skill_name) = tool_call.arguments.get("skill")
-                            .and_then(|v| v.as_str())
+                        if let Some(skill_name) =
+                            tool_call.arguments.get("skill").and_then(|v| v.as_str())
                         {
                             // This is a main skill load
-                            let entry = loaded_skills.entry(skill_name.to_string())
-                                .or_insert_with(|| SkillInfo {
-                                    name: skill_name.to_string(),
-                                    tool_call_id: tool_call.id.clone(),
-                                    resource_tool_call_ids: vec![],
-                                });
+                            let entry =
+                                loaded_skills
+                                    .entry(skill_name.to_string())
+                                    .or_insert_with(|| SkillInfo {
+                                        name: skill_name.to_string(),
+                                        tool_call_id: tool_call.id.clone(),
+                                        resource_tool_call_ids: vec![],
+                                    });
                             // Update tool_call_id if this is a newer load
                             entry.tool_call_id = tool_call.id.clone();
-                        } else if let Some(file_path) = tool_call.arguments.get("file")
-                            .and_then(|v| v.as_str())
+                        } else if let Some(file_path) =
+                            tool_call.arguments.get("file").and_then(|v| v.as_str())
                         {
                             // This is a resource file load - try to extract skill name
-                            let skill_name = Self::extract_skill_from_file_arg(file_path, messages, idx);
+                            let skill_name =
+                                Self::extract_skill_from_file_arg(file_path, messages, idx);
                             if let Some(name) = skill_name {
-                                let entry = loaded_skills.entry(name.clone())
-                                    .or_insert_with(|| SkillInfo {
-                                        name,
-                                        tool_call_id: String::new(),
-                                        resource_tool_call_ids: vec![],
+                                let entry =
+                                    loaded_skills.entry(name.clone()).or_insert_with(|| {
+                                        SkillInfo {
+                                            name,
+                                            tool_call_id: String::new(),
+                                            resource_tool_call_ids: vec![],
+                                        }
                                     });
                                 entry.resource_tool_call_ids.push(tool_call.id.clone());
                             }
@@ -104,9 +109,11 @@ impl ExecutionState {
                 return Some(parts[0].to_string());
             }
             // Just skill name without path
-            let has_extension = [".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".rs", ".py", ".js", ".ts"]
-                .iter()
-                .any(|ext| path.ends_with(ext));
+            let has_extension = [
+                ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".rs", ".py", ".js", ".ts",
+            ]
+            .iter()
+            .any(|ext| path.ends_with(ext));
             if !has_extension {
                 return Some(path.to_string());
             }
@@ -192,7 +199,10 @@ pub enum MiddlewareEffect {
     /// Emit an event and continue
     EmitEvent(StreamEvent),
     /// Emit event AND modify messages
-    EmitAndModify { event: StreamEvent, messages: Vec<ChatMessage> },
+    EmitAndModify {
+        event: StreamEvent,
+        messages: Vec<ChatMessage>,
+    },
 }
 
 /// Trait for middleware that pre-processes messages before LLM execution

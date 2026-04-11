@@ -250,15 +250,16 @@ impl<D: DbProvider> LogsRepository<D> {
     /// Get the status from the sessions table (not execution_logs).
     /// Returns the raw status string: "running", "completed", "crashed", "error", etc.
     pub fn get_session_status_from_sessions_table(&self, conversation_id: &str) -> Option<String> {
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT status FROM sessions WHERE id = ?1 LIMIT 1"
-            )?;
-            let status = stmt.query_row([conversation_id], |row| {
-                row.get::<_, String>(0)
-            }).ok();
-            Ok(status)
-        }).ok().flatten()
+        self.db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare("SELECT status FROM sessions WHERE id = ?1 LIMIT 1")?;
+                let status = stmt
+                    .query_row([conversation_id], |row| row.get::<_, String>(0))
+                    .ok();
+                Ok(status)
+            })
+            .ok()
+            .flatten()
     }
 
     /// Get all logs for a session.
@@ -303,7 +304,9 @@ impl<D: DbProvider> LogsRepository<D> {
     pub fn has_category_log(&self, session_id: &str, category: &str) -> Result<bool, String> {
         self.db.with_connection(|conn| {
             let exists: bool = conn
-                .prepare("SELECT 1 FROM execution_logs WHERE session_id = ? AND category = ? LIMIT 1")?
+                .prepare(
+                    "SELECT 1 FROM execution_logs WHERE session_id = ? AND category = ? LIMIT 1",
+                )?
                 .exists(params![session_id, category])?;
             Ok(exists)
         })

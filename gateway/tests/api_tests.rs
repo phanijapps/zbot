@@ -5,7 +5,7 @@
 
 use axum::http::StatusCode;
 use axum_test::TestServer;
-use execution_state::{StateService, DelegationType};
+use execution_state::{DelegationType, StateService};
 use gateway::database::DatabaseManager;
 use gateway::{http::create_http_router, AppState, GatewayConfig};
 use serde_json::{json, Value};
@@ -39,7 +39,8 @@ async fn setup_test_server() -> (TestServer, TempDir) {
 /// Create a test server with access to the state service for data insertion.
 ///
 /// This is useful for tests that need to insert test data before making API calls.
-async fn setup_test_server_with_state() -> (TestServer, Arc<StateService<DatabaseManager>>, TempDir) {
+async fn setup_test_server_with_state() -> (TestServer, Arc<StateService<DatabaseManager>>, TempDir)
+{
     let dir = TempDir::new().expect("Failed to create temp dir");
 
     // Create agents and skills directories
@@ -165,7 +166,9 @@ async fn sessions_list_with_filter_params() {
 async fn session_not_found_returns_404() {
     let (server, _dir) = setup_test_server().await;
 
-    let response = server.get("/api/executions/v2/sessions/nonexistent-session/full").await;
+    let response = server
+        .get("/api/executions/v2/sessions/nonexistent-session/full")
+        .await;
 
     // Should return 404 or empty result
     // The exact behavior depends on implementation
@@ -220,7 +223,11 @@ async fn create_agent_with_valid_data() {
 
     // Should succeed or fail gracefully
     let status = response.status_code();
-    assert!(status == StatusCode::OK || status == StatusCode::CREATED || status == StatusCode::BAD_REQUEST);
+    assert!(
+        status == StatusCode::OK
+            || status == StatusCode::CREATED
+            || status == StatusCode::BAD_REQUEST
+    );
 }
 
 // ============================================================================
@@ -238,7 +245,8 @@ async fn gateway_status_without_runner() {
     let status = response.status_code();
     assert!(
         status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::NOT_FOUND,
-        "Expected 500 (no runner) or 404 (not found), got {:?}", status
+        "Expected 500 (no runner) or 404 (not found), got {:?}",
+        status
     );
 }
 
@@ -252,7 +260,8 @@ async fn gateway_cancel_without_runner() {
     let status = response.status_code();
     assert!(
         status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::NOT_FOUND,
-        "Expected 500 (no runner) or 404 (not found), got {:?}", status
+        "Expected 500 (no runner) or 404 (not found), got {:?}",
+        status
     );
 }
 
@@ -266,7 +275,8 @@ async fn gateway_pause_without_runner() {
     let status = response.status_code();
     assert!(
         status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::NOT_FOUND,
-        "Expected 500 (no runner) or 404 (not found), got {:?}", status
+        "Expected 500 (no runner) or 404 (not found), got {:?}",
+        status
     );
 }
 
@@ -280,7 +290,8 @@ async fn gateway_resume_without_runner() {
     let status = response.status_code();
     assert!(
         status == StatusCode::INTERNAL_SERVER_ERROR || status == StatusCode::NOT_FOUND,
-        "Expected 500 (no runner) or 404 (not found), got {:?}", status
+        "Expected 500 (no runner) or 404 (not found), got {:?}",
+        status
     );
 }
 
@@ -300,10 +311,11 @@ async fn gateway_submit_requires_runner() {
     // with an internal server error indicating runner not initialized
     let status = response.status_code();
     assert!(
-        status == StatusCode::INTERNAL_SERVER_ERROR ||
-        status == StatusCode::SERVICE_UNAVAILABLE ||
-        status == StatusCode::OK,
-        "Expected error status or success, got {:?}", status
+        status == StatusCode::INTERNAL_SERVER_ERROR
+            || status == StatusCode::SERVICE_UNAVAILABLE
+            || status == StatusCode::OK,
+        "Expected error status or success, got {:?}",
+        status
     );
 }
 
@@ -439,7 +451,8 @@ async fn invalid_json_returns_bad_request() {
     let status = response.status_code();
     assert!(
         status == StatusCode::BAD_REQUEST || status == StatusCode::UNPROCESSABLE_ENTITY,
-        "Expected 400 or 422, got {:?}", status
+        "Expected 400 or 422, got {:?}",
+        status
     );
 }
 
@@ -481,7 +494,10 @@ async fn json_content_type_in_response() {
 
     let content_type = response.header("content-type");
     assert!(
-        content_type.to_str().unwrap_or("").contains("application/json"),
+        content_type
+            .to_str()
+            .unwrap_or("")
+            .contains("application/json"),
         "Expected application/json content type"
     );
 }
@@ -509,14 +525,31 @@ async fn session_messages_all_scope() {
         .unwrap();
 
     // Add messages
-    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
-    state_service.add_message(&root_exec.id, "assistant", "Root response", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+    state_service
+        .add_message(&root_exec.id, "user", "Hello root", None, None)
+        .unwrap();
+    state_service
+        .add_message(&root_exec.id, "assistant", "Root response", None, None)
+        .unwrap();
+    state_service
+        .add_message(&delegate_exec.id, "user", "Research this", None, None)
+        .unwrap();
+    state_service
+        .add_message(
+            &delegate_exec.id,
+            "assistant",
+            "Research results",
+            None,
+            None,
+        )
+        .unwrap();
 
     // Get all messages
     let response = server
-        .get(&format!("/api/executions/v2/sessions/{}/messages", session.id))
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages",
+            session.id
+        ))
         .await;
 
     response.assert_status_ok();
@@ -544,13 +577,22 @@ async fn session_messages_root_scope() {
         .unwrap();
 
     // Add messages
-    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
-    state_service.add_message(&root_exec.id, "assistant", "Root response", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
+    state_service
+        .add_message(&root_exec.id, "user", "Hello root", None, None)
+        .unwrap();
+    state_service
+        .add_message(&root_exec.id, "assistant", "Root response", None, None)
+        .unwrap();
+    state_service
+        .add_message(&delegate_exec.id, "user", "Research this", None, None)
+        .unwrap();
 
     // Get root messages only
     let response = server
-        .get(&format!("/api/executions/v2/sessions/{}/messages?scope=root", session.id))
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages?scope=root",
+            session.id
+        ))
         .await;
 
     response.assert_status_ok();
@@ -584,13 +626,28 @@ async fn session_messages_delegates_scope() {
         .unwrap();
 
     // Add messages
-    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+    state_service
+        .add_message(&root_exec.id, "user", "Hello root", None, None)
+        .unwrap();
+    state_service
+        .add_message(&delegate_exec.id, "user", "Research this", None, None)
+        .unwrap();
+    state_service
+        .add_message(
+            &delegate_exec.id,
+            "assistant",
+            "Research results",
+            None,
+            None,
+        )
+        .unwrap();
 
     // Get delegate messages only
     let response = server
-        .get(&format!("/api/executions/v2/sessions/{}/messages?scope=delegates", session.id))
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages?scope=delegates",
+            session.id
+        ))
         .await;
 
     response.assert_status_ok();
@@ -624,9 +681,21 @@ async fn session_messages_execution_scope() {
         .unwrap();
 
     // Add messages to both executions
-    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "user", "Research this", None, None).unwrap();
-    state_service.add_message(&delegate_exec.id, "assistant", "Research results", None, None).unwrap();
+    state_service
+        .add_message(&root_exec.id, "user", "Hello root", None, None)
+        .unwrap();
+    state_service
+        .add_message(&delegate_exec.id, "user", "Research this", None, None)
+        .unwrap();
+    state_service
+        .add_message(
+            &delegate_exec.id,
+            "assistant",
+            "Research results",
+            None,
+            None,
+        )
+        .unwrap();
 
     // Get messages for specific execution
     let response = server
@@ -639,7 +708,11 @@ async fn session_messages_execution_scope() {
     response.assert_status_ok();
 
     let messages: Vec<Value> = response.json();
-    assert_eq!(messages.len(), 2, "Should return only 2 messages from specified execution");
+    assert_eq!(
+        messages.len(),
+        2,
+        "Should return only 2 messages from specified execution"
+    );
 
     // Verify all messages are from the specified execution
     for msg in &messages {
@@ -656,7 +729,10 @@ async fn session_messages_execution_scope_requires_id() {
 
     // Try to get execution scope without execution_id - should return 400
     let response = server
-        .get(&format!("/api/executions/v2/sessions/{}/messages?scope=execution", session.id))
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages?scope=execution",
+            session.id
+        ))
         .await;
 
     response.assert_status(StatusCode::BAD_REQUEST);
@@ -691,9 +767,21 @@ async fn session_messages_agent_filter() {
         .unwrap();
 
     // Add messages
-    state_service.add_message(&root_exec.id, "user", "Hello root", None, None).unwrap();
-    state_service.add_message(&researcher_exec.id, "assistant", "Research done", None, None).unwrap();
-    state_service.add_message(&writer_exec.id, "assistant", "Writing done", None, None).unwrap();
+    state_service
+        .add_message(&root_exec.id, "user", "Hello root", None, None)
+        .unwrap();
+    state_service
+        .add_message(
+            &researcher_exec.id,
+            "assistant",
+            "Research done",
+            None,
+            None,
+        )
+        .unwrap();
+    state_service
+        .add_message(&writer_exec.id, "assistant", "Writing done", None, None)
+        .unwrap();
 
     // Filter by agent_id
     let response = server
@@ -706,7 +794,11 @@ async fn session_messages_agent_filter() {
     response.assert_status_ok();
 
     let messages: Vec<Value> = response.json();
-    assert_eq!(messages.len(), 1, "Should return only 1 message from researcher");
+    assert_eq!(
+        messages.len(),
+        1,
+        "Should return only 1 message from researcher"
+    );
     assert_eq!(messages[0]["agent_id"], "researcher");
 }
 
@@ -734,11 +826,17 @@ async fn session_messages_empty_session() {
     let (session, _) = state_service.create_session("root-agent").unwrap();
 
     let response = server
-        .get(&format!("/api/executions/v2/sessions/{}/messages", session.id))
+        .get(&format!(
+            "/api/executions/v2/sessions/{}/messages",
+            session.id
+        ))
         .await;
 
     response.assert_status_ok();
 
     let messages: Vec<Value> = response.json();
-    assert!(messages.is_empty(), "Should return empty array for session with no messages");
+    assert!(
+        messages.is_empty(),
+        "Should return empty array for session with no messages"
+    );
 }

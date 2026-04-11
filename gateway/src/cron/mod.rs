@@ -49,7 +49,10 @@ pub struct CronScheduler {
 
 impl CronScheduler {
     /// Create a new cron scheduler.
-    pub async fn new(service: CronService, bus: Arc<dyn GatewayBus>) -> Result<Self, CronSchedulerError> {
+    pub async fn new(
+        service: CronService,
+        bus: Arc<dyn GatewayBus>,
+    ) -> Result<Self, CronSchedulerError> {
         let scheduler = JobScheduler::new().await?;
 
         Ok(Self {
@@ -177,7 +180,10 @@ impl CronScheduler {
         }
 
         // Store the UUID for later management
-        self.job_uuids.write().await.insert(job_config.id.clone(), uuid);
+        self.job_uuids
+            .write()
+            .await
+            .insert(job_config.id.clone(), uuid);
 
         info!(
             job_id = %job_config.id,

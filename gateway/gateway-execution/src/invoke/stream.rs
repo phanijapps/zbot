@@ -2,19 +2,19 @@
 //!
 //! Stream event processing and logging for agent execution.
 
+use agent_runtime::StreamEvent;
+use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
+use execution_state::{AgentExecution, DelegationType, StateService};
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::skills::{SkillFrontmatter, WardSetup};
-use api_logs::{ExecutionLog, LogCategory, LogLevel, LogService};
-use agent_runtime::StreamEvent;
-use execution_state::{AgentExecution, DelegationType, StateService};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 
-use super::batch_writer::BatchWriterHandle;
 use super::super::delegation::DelegationRequest;
 use super::super::events::convert_stream_event;
+use super::batch_writer::BatchWriterHandle;
 
 // ============================================================================
 // STREAM CONTEXT
@@ -118,7 +118,12 @@ pub fn log_delegation(ctx: &StreamContext, child_agent: &str, task: &str) {
 }
 
 /// Log a tool call start event.
-pub fn log_tool_call(ctx: &StreamContext, tool_id: &str, tool_name: &str, args: &serde_json::Value) {
+pub fn log_tool_call(
+    ctx: &StreamContext,
+    tool_id: &str,
+    tool_name: &str,
+    args: &serde_json::Value,
+) {
     let entry = ExecutionLog::new(
         &ctx.execution_id,
         &ctx.session_id,
@@ -141,12 +146,7 @@ pub fn log_tool_call(ctx: &StreamContext, tool_id: &str, tool_name: &str, args: 
 }
 
 /// Log a tool result event.
-pub fn log_tool_result(
-    ctx: &StreamContext,
-    tool_id: &str,
-    result: &str,
-    error: &Option<String>,
-) {
+pub fn log_tool_result(ctx: &StreamContext, tool_id: &str, result: &str, error: &Option<String>) {
     // Tool failures are expected behavior, use Warn not Error
     let level = if error.is_some() {
         LogLevel::Warn
@@ -375,7 +375,17 @@ pub fn process_stream_event(
         ..
     } = event
     {
-        handle_delegation(ctx, child_agent, task, context, *max_iterations, output_schema, skills, complexity, *parallel);
+        handle_delegation(
+            ctx,
+            child_agent,
+            task,
+            context,
+            *max_iterations,
+            output_schema,
+            skills,
+            complexity,
+            *parallel,
+        );
     }
 
     // Log based on event type
@@ -408,7 +418,10 @@ pub fn process_stream_event(
         }
         StreamEvent::WardChanged { ward_id, .. } => {
             // Persist ward_id to session so it survives across continuations
-            if let Err(e) = ctx.state_service.update_session_ward(&ctx.session_id, ward_id) {
+            if let Err(e) = ctx
+                .state_service
+                .update_session_ward(&ctx.session_id, ward_id)
+            {
                 tracing::warn!("Failed to update session ward: {}", e);
             }
 
@@ -448,7 +461,10 @@ pub fn process_stream_event(
         }
         StreamEvent::SessionTitleChanged { ref title, .. } => {
             // Persist title to session
-            if let Err(e) = ctx.state_service.update_session_title(&ctx.session_id, title) {
+            if let Err(e) = ctx
+                .state_service
+                .update_session_title(&ctx.session_id, title)
+            {
                 tracing::warn!("Failed to update session title: {}", e);
             }
         }

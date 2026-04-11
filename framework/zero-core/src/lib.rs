@@ -29,50 +29,45 @@
 // ============================================================================
 
 pub mod agent;
-pub mod tool;
-pub mod context;
-pub mod event;
-pub mod types;
-pub mod error;
 pub mod callbacks;
-pub mod filesystem;
-pub mod policy;
 pub mod capability;
-pub mod registry;
-pub mod memory;
 pub mod connectors;
+pub mod context;
+pub mod error;
+pub mod event;
+pub mod filesystem;
+pub mod memory;
 pub mod multimodal;
+pub mod policy;
+pub mod registry;
+pub mod tool;
+pub mod types;
 
 // ============================================================================
 // CONVENIENCE RE-EXPORTS
 // ============================================================================
 
 pub use agent::{Agent, EventStream};
-pub use tool::{Tool, Toolset, ToolPredicate};
-pub use context::{
-    InvocationContext,
-    ReadonlyContext,
-    CallbackContext,
-    ToolContext,
-    RunConfig,
-    StreamingMode,
-};
-pub use event::{Event, EventActions, RespondAction, DelegateAction};
-pub use types::{Content, Part};
-pub use error::{ZeroError, Result};
-pub use callbacks::{BeforeAgentCallback, AfterAgentCallback};
-pub use filesystem::{FileSystemContext, NoFileSystemContext};
-pub use policy::{ToolPermissions, ToolRiskLevel, ResourceLimits, CapabilityCategory};
+pub use callbacks::{AfterAgentCallback, BeforeAgentCallback};
 pub use capability::{
-    Capability, AgentCapabilities, CapabilityQuery,
-    CapabilityKind, CapabilityDescriptor, CapabilityProvider,
+    AgentCapabilities, Capability, CapabilityDescriptor, CapabilityKind, CapabilityProvider,
+    CapabilityQuery,
 };
-pub use registry::{
-    CapabilityRegistry, CapabilityRouter, RoutingResult, SharedCapabilityRegistry,
-    UnifiedCapabilityRegistry, SharedUnifiedRegistry, shared_unified_registry,
+pub use connectors::{CapabilityInfo, ConnectorResourceProvider};
+pub use context::{
+    CallbackContext, InvocationContext, ReadonlyContext, RunConfig, StreamingMode, ToolContext,
 };
+pub use error::{Result, ZeroError};
+pub use event::{DelegateAction, Event, EventActions, RespondAction};
+pub use filesystem::{FileSystemContext, NoFileSystemContext};
 pub use memory::MemoryFactStore;
-pub use connectors::{ConnectorResourceProvider, CapabilityInfo};
+pub use policy::{CapabilityCategory, ResourceLimits, ToolPermissions, ToolRiskLevel};
+pub use registry::{
+    shared_unified_registry, CapabilityRegistry, CapabilityRouter, RoutingResult,
+    SharedCapabilityRegistry, SharedUnifiedRegistry, UnifiedCapabilityRegistry,
+};
+pub use tool::{Tool, ToolPredicate, Toolset};
+pub use types::{Content, Part};
 
 // ============================================================================
 // STRING UTILITIES

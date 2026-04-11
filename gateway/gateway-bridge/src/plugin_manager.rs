@@ -11,7 +11,7 @@ use crate::stdio_plugin::StdioPlugin;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::{RwLock, Mutex};
+use tokio::sync::{Mutex, RwLock};
 
 /// Manages the lifecycle of STDIO plugins.
 pub struct PluginManager {
@@ -229,8 +229,7 @@ impl PluginManager {
         let plugins = self.plugins.clone();
 
         let handle = tokio::spawn(async move {
-            let mut plugin =
-                StdioPlugin::new(config, plugin_dir, registry, outbox, bus);
+            let mut plugin = StdioPlugin::new(config, plugin_dir, registry, outbox, bus);
 
             if let Err(e) = plugin.start().await {
                 tracing::error!(plugin_id = %plugin_id_owned, "Plugin failed to start: {}", e);
@@ -397,12 +396,7 @@ mod tests {
         let db = Arc::new(gateway_database::DatabaseManager::new(paths).unwrap());
         let outbox = Arc::new(OutboxRepository::new(db));
 
-        let manager = PluginManager::new(
-            dir.path().join("plugins"),
-            registry,
-            outbox,
-            None,
-        );
+        let manager = PluginManager::new(dir.path().join("plugins"), registry, outbox, None);
 
         assert!(manager.is_empty().await);
     }
@@ -416,12 +410,7 @@ mod tests {
         let db = Arc::new(gateway_database::DatabaseManager::new(paths).unwrap());
         let outbox = Arc::new(OutboxRepository::new(db));
 
-        let manager = PluginManager::new(
-            dir.path().join("plugins"),
-            registry,
-            outbox,
-            None,
-        );
+        let manager = PluginManager::new(dir.path().join("plugins"), registry, outbox, None);
 
         let discovered = manager.discover().await.unwrap();
         assert!(discovered.is_empty());

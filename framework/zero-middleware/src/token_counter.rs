@@ -100,7 +100,10 @@ mod tests {
         ];
 
         let tokens = estimate_tokens_batch(&messages);
-        assert_eq!(tokens, estimate_tokens(&messages[0]) + estimate_tokens(&messages[1]));
+        assert_eq!(
+            tokens,
+            estimate_tokens(&messages[0]) + estimate_tokens(&messages[1])
+        );
     }
 
     #[test]

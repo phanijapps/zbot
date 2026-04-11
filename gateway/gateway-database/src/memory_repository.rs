@@ -17,12 +17,18 @@ use crate::DatabaseManager;
 /// Extracts alphanumeric words (>2 chars), joins with OR.
 /// Raw messages contain commas, parens, dashes, dollar signs that break FTS5 syntax.
 pub fn sanitize_fts_query(raw: &str) -> String {
-    let words: Vec<&str> = raw.split(|c: char| !c.is_alphanumeric() && c != '_')
+    let words: Vec<&str> = raw
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
         .map(|w| w.trim())
         .filter(|w| w.len() > 2)
-        .filter(|w| !["the", "and", "for", "with", "that", "this", "from", "have",
-                      "been", "will", "should", "would", "could", "their", "there",
-                      "not", "are", "was", "can", "all", "has", "its", "than"].contains(w))
+        .filter(|w| {
+            ![
+                "the", "and", "for", "with", "that", "this", "from", "have", "been", "will",
+                "should", "would", "could", "their", "there", "not", "are", "was", "can", "all",
+                "has", "its", "than",
+            ]
+            .contains(w)
+        })
         .collect();
     words.join(" OR ")
 }
@@ -173,10 +179,7 @@ impl MemoryRepository {
     /// Delete a memory fact by ID.
     pub fn delete_memory_fact(&self, id: &str) -> Result<bool, String> {
         self.db.with_connection(|conn| {
-            let count = conn.execute(
-                "DELETE FROM memory_facts WHERE id = ?1",
-                params![id],
-            )?;
+            let count = conn.execute("DELETE FROM memory_facts WHERE id = ?1", params![id])?;
             Ok(count > 0)
         })
     }
@@ -283,7 +286,11 @@ impl MemoryRepository {
     ///
     /// Facts not updated in `older_than_days` have their confidence multiplied
     /// by `decay_factor` (e.g., 0.95). Returns number of facts decayed.
-    pub fn decay_stale_facts(&self, older_than_days: u32, decay_factor: f64) -> Result<usize, String> {
+    pub fn decay_stale_facts(
+        &self,
+        older_than_days: u32,
+        decay_factor: f64,
+    ) -> Result<usize, String> {
         self.db.with_connection(|conn| {
             let count = conn.execute(
                 "UPDATE memory_facts SET confidence = confidence * ?1, updated_at = datetime('now')
@@ -298,7 +305,11 @@ impl MemoryRepository {
     /// Mark a fact as contradicted by a newer fact with the given key.
     ///
     /// Reduces confidence by 0.15 (floor of 0.1) and records which key contradicted it.
-    pub fn mark_contradicted(&self, fact_id: &str, contradicted_by_key: &str) -> Result<(), String> {
+    pub fn mark_contradicted(
+        &self,
+        fact_id: &str,
+        contradicted_by_key: &str,
+    ) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "UPDATE memory_facts SET contradicted_by = ?1, confidence = MAX(0.1, confidence - 0.15) WHERE id = ?2",
@@ -339,7 +350,8 @@ impl MemoryRepository {
         limit: usize,
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
-        let mut results = self.search_memory_facts_vector(query_embedding, agent_id, limit, ward_id)?;
+        let mut results =
+            self.search_memory_facts_vector(query_embedding, agent_id, limit, ward_id)?;
         results.retain(|sf| sf.score >= min_similarity);
         Ok(results)
     }
@@ -508,7 +520,8 @@ impl MemoryRepository {
         ward_id: Option<&str>,
     ) -> Result<Vec<ScoredFact>, String> {
         // Step 1: FTS5 keyword results
-        let fts_results = self.search_memory_facts_fts(query_text, agent_id, 30, ward_id)
+        let fts_results = self
+            .search_memory_facts_fts(query_text, agent_id, 30, ward_id)
             .unwrap_or_default();
 
         // Step 2: Vector results (if embedding provided)
@@ -519,8 +532,10 @@ impl MemoryRepository {
         };
 
         // Step 3: Merge results by fact ID
-        let mut score_map: std::collections::HashMap<String, (Option<f64>, Option<f64>, MemoryFact)> =
-            std::collections::HashMap::new();
+        let mut score_map: std::collections::HashMap<
+            String,
+            (Option<f64>, Option<f64>, MemoryFact),
+        > = std::collections::HashMap::new();
 
         for sf in fts_results {
             score_map.insert(sf.fact.id.clone(), (None, Some(sf.score), sf.fact));
@@ -567,7 +582,11 @@ impl MemoryRepository {
             .collect();
 
         // Sort by score descending, take top-K
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
 
         Ok(results)
@@ -647,7 +666,7 @@ impl MemoryRepository {
     ) -> Result<Option<Vec<f32>>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT embedding FROM embedding_cache WHERE content_hash = ?1 AND model = ?2"
+                "SELECT embedding FROM embedding_cache WHERE content_hash = ?1 AND model = ?2",
             )?;
 
             let result = stmt.query_row(params![content_hash, model], |row| {
@@ -682,11 +701,7 @@ impl MemoryRepository {
     }
 
     /// Update the embedding for an existing fact.
-    pub fn update_fact_embedding(
-        &self,
-        fact_id: &str,
-        embedding: &[f32],
-    ) -> Result<(), String> {
+    pub fn update_fact_embedding(&self, fact_id: &str, embedding: &[f32]) -> Result<(), String> {
         let blob = f32_vec_to_blob(embedding);
         self.db.with_connection(|conn| {
             conn.execute(
@@ -903,11 +918,7 @@ impl MemoryRepository {
                     |row| row.get(0),
                 )?
             } else {
-                conn.query_row(
-                    "SELECT COUNT(*) FROM memory_facts",
-                    [],
-                    |row| row.get(0),
-                )?
+                conn.query_row("SELECT COUNT(*) FROM memory_facts", [], |row| row.get(0))?
             };
             Ok(count as usize)
         })
@@ -991,9 +1002,9 @@ mod tests {
     use super::*;
 
     fn create_test_db() -> Arc<DatabaseManager> {
-        use tempfile::TempDir;
         use gateway_services::VaultPaths;
-        
+        use tempfile::TempDir;
+
         let temp_dir = TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let _ = temp_dir.keep();
@@ -1081,7 +1092,9 @@ mod tests {
         let fact2 = make_fact("agent-1", "agent.key", "agent fact", "entity");
         repo.upsert_memory_fact(&fact2).unwrap();
 
-        let shared = repo.get_memory_facts("agent-1", Some("shared"), 10).unwrap();
+        let shared = repo
+            .get_memory_facts("agent-1", Some("shared"), 10)
+            .unwrap();
         assert_eq!(shared.len(), 1);
         assert_eq!(shared[0].key, "shared.key");
 
@@ -1095,12 +1108,36 @@ mod tests {
         let db = create_test_db();
         let repo = MemoryRepository::new(db);
 
-        repo.upsert_memory_fact(&make_fact("agent-1", "build.tool", "Uses cargo for building Rust projects", "pattern")).unwrap();
-        repo.upsert_memory_fact(&make_fact("agent-1", "editor.pref", "Prefers VS Code for editing", "preference")).unwrap();
-        repo.upsert_memory_fact(&make_fact("agent-1", "lang.main", "Primary language is Rust", "decision")).unwrap();
+        repo.upsert_memory_fact(&make_fact(
+            "agent-1",
+            "build.tool",
+            "Uses cargo for building Rust projects",
+            "pattern",
+        ))
+        .unwrap();
+        repo.upsert_memory_fact(&make_fact(
+            "agent-1",
+            "editor.pref",
+            "Prefers VS Code for editing",
+            "preference",
+        ))
+        .unwrap();
+        repo.upsert_memory_fact(&make_fact(
+            "agent-1",
+            "lang.main",
+            "Primary language is Rust",
+            "decision",
+        ))
+        .unwrap();
 
-        let results = repo.search_memory_facts_fts("Rust", "agent-1", 10, None).unwrap();
-        assert!(results.len() >= 2, "Should find 'Rust' in at least 2 facts, got {}", results.len());
+        let results = repo
+            .search_memory_facts_fts("Rust", "agent-1", 10, None)
+            .unwrap();
+        assert!(
+            results.len() >= 2,
+            "Should find 'Rust' in at least 2 facts, got {}",
+            results.len()
+        );
     }
 
     #[test]
@@ -1119,9 +1156,9 @@ mod tests {
 
         // Search with query embedding close to fact1
         let query = vec![0.9, 0.1, 0.0];
-        let results = repo.search_memory_facts_hybrid(
-            "hello", Some(&query), "agent-1", 10, 0.7, 0.3, None,
-        ).unwrap();
+        let results = repo
+            .search_memory_facts_hybrid("hello", Some(&query), "agent-1", 10, 0.7, 0.3, None)
+            .unwrap();
 
         assert!(!results.is_empty(), "Should find at least one result");
     }
@@ -1177,8 +1214,14 @@ mod tests {
     #[test]
     fn test_sanitize_fts_query() {
         assert_eq!(sanitize_fts_query("hello world"), "hello OR world");
-        assert_eq!(sanitize_fts_query("PTON, NVDA, TSLA"), "PTON OR NVDA OR TSLA");
-        assert_eq!(sanitize_fts_query("portfolio risk (VaR 95%)"), "portfolio OR risk OR VaR");
+        assert_eq!(
+            sanitize_fts_query("PTON, NVDA, TSLA"),
+            "PTON OR NVDA OR TSLA"
+        );
+        assert_eq!(
+            sanitize_fts_query("portfolio risk (VaR 95%)"),
+            "portfolio OR risk OR VaR"
+        );
         assert_eq!(sanitize_fts_query(""), "");
         assert_eq!(sanitize_fts_query("a b"), ""); // words <= 2 chars filtered
     }
@@ -1188,7 +1231,12 @@ mod tests {
         let db = create_test_db();
         let repo = MemoryRepository::new(db);
 
-        let mut high = make_fact("agent-1", "important", "always remember this", "instruction");
+        let mut high = make_fact(
+            "agent-1",
+            "important",
+            "always remember this",
+            "instruction",
+        );
         high.confidence = 0.95;
         repo.upsert_memory_fact(&high).unwrap();
 

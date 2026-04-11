@@ -13,8 +13,8 @@ mod events;
 mod gateway_bus;
 mod graph;
 mod health;
-mod memory;
 mod mcps;
+mod memory;
 mod models;
 mod openapi;
 mod plugins;
@@ -67,8 +67,14 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/agents/:id", delete(agents::delete_agent))
         // Conversation endpoints
         .route("/api/conversations", get(conversations::list_conversations))
-        .route("/api/conversations", post(conversations::create_conversation))
-        .route("/api/conversations/:id", get(conversations::get_conversation))
+        .route(
+            "/api/conversations",
+            post(conversations::create_conversation),
+        )
+        .route(
+            "/api/conversations/:id",
+            get(conversations::get_conversation),
+        )
         .route(
             "/api/conversations/:id",
             delete(conversations::delete_conversation),
@@ -104,12 +110,24 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/connectors/:id", get(connectors::get_connector))
         .route("/api/connectors/:id", put(connectors::update_connector))
         .route("/api/connectors/:id", delete(connectors::delete_connector))
-        .route("/api/connectors/:id/metadata", get(connectors::get_connector_metadata))
+        .route(
+            "/api/connectors/:id/metadata",
+            get(connectors::get_connector_metadata),
+        )
         .route("/api/connectors/:id/test", post(connectors::test_connector))
-        .route("/api/connectors/:id/enable", post(connectors::enable_connector))
-        .route("/api/connectors/:id/disable", post(connectors::disable_connector))
+        .route(
+            "/api/connectors/:id/enable",
+            post(connectors::enable_connector),
+        )
+        .route(
+            "/api/connectors/:id/disable",
+            post(connectors::disable_connector),
+        )
         .route("/api/connectors/:id/inbound", post(connectors::inbound))
-        .route("/api/connectors/:id/inbound-log", get(connectors::get_inbound_log))
+        .route(
+            "/api/connectors/:id/inbound-log",
+            get(connectors::get_inbound_log),
+        )
         // Cron job endpoints
         .route("/api/cron", get(cron::list_cron_jobs))
         .route("/api/cron", post(cron::create_cron_job))
@@ -144,48 +162,99 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/settings/tools", put(settings::update_tool_settings))
         .route("/api/settings/logs", get(settings::get_log_settings))
         .route("/api/settings/logs", put(settings::update_log_settings))
-        .route("/api/settings/execution", get(settings::get_execution_settings))
-        .route("/api/settings/execution", put(settings::update_execution_settings))
+        .route(
+            "/api/settings/execution",
+            get(settings::get_execution_settings),
+        )
+        .route(
+            "/api/settings/execution",
+            put(settings::update_execution_settings),
+        )
         // Setup wizard endpoints
         .route("/api/setup/status", get(setup::get_setup_status))
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route("/api/memory/search", get(memory::search_all_memory_facts))
-        .route("/api/memory/:agent_id", get(memory::list_memory_facts).post(memory::create_memory_fact))
-        .route("/api/memory/:agent_id/search", get(memory::search_memory_facts))
-        .route("/api/memory/:agent_id/facts/:fact_id", get(memory::get_memory_fact))
-        .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
+        .route(
+            "/api/memory/:agent_id",
+            get(memory::list_memory_facts).post(memory::create_memory_fact),
+        )
+        .route(
+            "/api/memory/:agent_id/search",
+            get(memory::search_memory_facts),
+        )
+        .route(
+            "/api/memory/:agent_id/facts/:fact_id",
+            get(memory::get_memory_fact),
+        )
+        .route(
+            "/api/memory/:agent_id/facts/:fact_id",
+            delete(memory::delete_memory_fact),
+        )
         // Upload endpoint
-        .route("/api/upload", post(upload::upload_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        .route(
+            "/api/upload",
+            post(upload::upload_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)),
+        )
         // Chat session endpoints
         .route("/api/chat/init", post(chat::init_chat_session))
-        .route("/api/sessions/:session_id/messages", get(chat::get_session_messages))
+        .route(
+            "/api/sessions/:session_id/messages",
+            get(chat::get_session_messages),
+        )
         // Session archive endpoints
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))
         .route("/api/sessions/:id/state", get(sessions::get_session_state))
         // Artifact endpoints
-        .route("/api/sessions/:session_id/artifacts", get(artifacts::list_session_artifacts))
-        .route("/api/artifacts/:artifact_id/content", get(artifacts::serve_artifact_content))
+        .route(
+            "/api/sessions/:session_id/artifacts",
+            get(artifacts::list_session_artifacts),
+        )
+        .route(
+            "/api/artifacts/:artifact_id/content",
+            get(artifacts::serve_artifact_content),
+        )
         // Knowledge Graph endpoints (cross-agent observatory routes first)
         .route("/api/graph/stats", get(graph::graph_stats))
         .route("/api/graph/all/entities", get(graph::all_entities))
-        .route("/api/graph/all/relationships", get(graph::all_relationships))
+        .route(
+            "/api/graph/all/relationships",
+            get(graph::all_relationships),
+        )
         .route("/api/graph/:agent_id/stats", get(graph::get_graph_stats))
         .route("/api/graph/:agent_id/entities", get(graph::list_entities))
-        .route("/api/graph/:agent_id/relationships", get(graph::list_relationships))
+        .route(
+            "/api/graph/:agent_id/relationships",
+            get(graph::list_relationships),
+        )
         .route("/api/graph/:agent_id/search", get(graph::search_entities))
-        .route("/api/graph/:agent_id/entities/:entity_id/neighbors", get(graph::get_entity_neighbors))
-        .route("/api/graph/:agent_id/entities/:entity_id/subgraph", get(graph::get_entity_subgraph))
+        .route(
+            "/api/graph/:agent_id/entities/:entity_id/neighbors",
+            get(graph::get_entity_neighbors),
+        )
+        .route(
+            "/api/graph/:agent_id/entities/:entity_id/subgraph",
+            get(graph::get_entity_subgraph),
+        )
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
-        .route("/api/distillation/undistilled", get(graph::undistilled_sessions))
-        .route("/api/distillation/trigger/:session_id", post(graph::trigger_distillation))
+        .route(
+            "/api/distillation/undistilled",
+            get(graph::undistilled_sessions),
+        )
+        .route(
+            "/api/distillation/trigger/:session_id",
+            post(graph::trigger_distillation),
+        )
         // Logs endpoints (from api-logs crate)
         .nest_service("/api/logs", api_logs::routes(state.log_service.clone()))
         // Execution state endpoints (from execution-state crate)
-        .nest_service("/api/executions", execution_state::routes(state.state_service.clone()))
+        .nest_service(
+            "/api/executions",
+            execution_state::routes(state.state_service.clone()),
+        )
         // Gateway Bus endpoints (for external connectors and API integrations)
         .nest("/api/gateway", gateway_bus::routes())
         // Bridge endpoints
@@ -198,10 +267,22 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/plugins/:id/stop", post(plugins::stop_plugin))
         .route("/api/plugins/:id/restart", post(plugins::restart_plugin))
         .route("/api/plugins/:id/config", get(plugins::get_plugin_config))
-        .route("/api/plugins/:id/config", put(plugins::update_plugin_config))
-        .route("/api/plugins/:id/secrets", get(plugins::list_plugin_secrets))
-        .route("/api/plugins/:id/secrets/:key", put(plugins::set_plugin_secret))
-        .route("/api/plugins/:id/secrets/:key", delete(plugins::delete_plugin_secret))
+        .route(
+            "/api/plugins/:id/config",
+            put(plugins::update_plugin_config),
+        )
+        .route(
+            "/api/plugins/:id/secrets",
+            get(plugins::list_plugin_secrets),
+        )
+        .route(
+            "/api/plugins/:id/secrets/:key",
+            put(plugins::set_plugin_secret),
+        )
+        .route(
+            "/api/plugins/:id/secrets/:key",
+            delete(plugins::delete_plugin_secret),
+        )
         .route("/api/plugins/discover", post(plugins::discover_plugins))
         // State
         .with_state(state);
@@ -213,8 +294,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
             if path.exists() {
                 info!("Serving dashboard from: {}", static_dir);
                 let index_file = path.join("index.html");
-                let serve_dir = ServeDir::new(&path)
-                    .not_found_service(ServeFile::new(&index_file));
+                let serve_dir = ServeDir::new(&path).not_found_service(ServeFile::new(&index_file));
                 router = router.fallback_service(serve_dir);
             } else {
                 tracing::warn!("Static directory not found: {}", static_dir);
@@ -222,7 +302,5 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         }
     }
 
-    router
-        .layer(cors)
-        .layer(TraceLayer::new_for_http())
+    router.layer(cors).layer(TraceLayer::new_for_http())
 }

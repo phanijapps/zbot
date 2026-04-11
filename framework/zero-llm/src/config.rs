@@ -99,7 +99,9 @@ impl LlmConfig {
 
     /// Get the base URL to use for requests.
     pub fn base_url(&self) -> &str {
-        self.base_url.as_deref().unwrap_or("https://api.openai.com/v1")
+        self.base_url
+            .as_deref()
+            .unwrap_or("https://api.openai.com/v1")
     }
 }
 
@@ -117,11 +119,7 @@ mod tests {
 
     #[test]
     fn test_config_compatible() {
-        let config = LlmConfig::compatible(
-            "sk-test",
-            "https://api.example.com",
-            "model"
-        );
+        let config = LlmConfig::compatible("sk-test", "https://api.example.com", "model");
         assert_eq!(config.base_url, Some("https://api.example.com".to_string()));
         assert_eq!(config.base_url(), "https://api.example.com");
     }

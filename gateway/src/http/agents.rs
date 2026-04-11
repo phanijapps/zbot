@@ -130,7 +130,9 @@ pub async fn create_agent(
         thinking_enabled: false,
         voice_recording_enabled: true,
         system_instruction: None,
-        instructions: request.instructions.unwrap_or_else(|| "You are a helpful AI assistant.".to_string()),
+        instructions: request
+            .instructions
+            .unwrap_or_else(|| "You are a helpful AI assistant.".to_string()),
         mcps: request.mcps.unwrap_or_default(),
         skills: request.skills.unwrap_or_default(),
         middleware: None,
@@ -183,8 +185,12 @@ pub async fn update_agent(
         model: request.model.unwrap_or(existing.model),
         temperature: request.temperature.unwrap_or(existing.temperature),
         max_tokens: request.max_tokens.unwrap_or(existing.max_tokens),
-        thinking_enabled: request.thinking_enabled.unwrap_or(existing.thinking_enabled),
-        voice_recording_enabled: request.voice_recording_enabled.unwrap_or(existing.voice_recording_enabled),
+        thinking_enabled: request
+            .thinking_enabled
+            .unwrap_or(existing.thinking_enabled),
+        voice_recording_enabled: request
+            .voice_recording_enabled
+            .unwrap_or(existing.voice_recording_enabled),
         system_instruction: existing.system_instruction,
         instructions: request.instructions.unwrap_or(existing.instructions),
         mcps: request.mcps.unwrap_or(existing.mcps),
@@ -203,10 +209,7 @@ pub async fn update_agent(
 }
 
 /// DELETE /api/agents/:id - Delete an agent.
-pub async fn delete_agent(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> StatusCode {
+pub async fn delete_agent(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
     match state.agents.delete(&id).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(e) => {

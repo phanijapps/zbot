@@ -170,7 +170,8 @@ impl Tool for DelegateTool {
         // Guard: Prevent self-delegation
         if target_agent_id == parent_agent_id {
             return Err(zero_core::ZeroError::Tool(
-                "Cannot delegate to yourself. Use a different agent or handle the task directly.".to_string()
+                "Cannot delegate to yourself. Use a different agent or handle the task directly."
+                    .to_string(),
             ));
         }
 
@@ -216,7 +217,11 @@ impl Tool for DelegateTool {
         let child_conversation_id = format!(
             "{}-sub-{}",
             parent_conversation_id,
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0")
         );
 
         // Enrich task with platform hint so subagents use correct shell syntax

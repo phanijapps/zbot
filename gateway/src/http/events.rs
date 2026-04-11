@@ -61,10 +61,7 @@ pub async fn event_stream(
 
     let stream = stream::unfold(
         (receiver, target_conversation),
-        |(mut rx, target_conv): (
-            tokio::sync::broadcast::Receiver<GatewayEvent>,
-            String,
-        )| async move {
+        |(mut rx, target_conv): (tokio::sync::broadcast::Receiver<GatewayEvent>, String)| async move {
             loop {
                 match rx.recv().await {
                     Ok(event) => {
@@ -314,12 +311,7 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
         _ => return None,
     };
 
-    Some(
-        Event::default()
-            .event(event_type)
-            .json_data(data)
-            .ok()?,
-    )
+    Some(Event::default().event(event_type).json_data(data).ok()?)
 }
 
 #[cfg(test)]

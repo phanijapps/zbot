@@ -3,10 +3,10 @@
 // High-level session management operations
 // ============================================================================
 
-use std::sync::Arc;
-use crate::types::{DailySession, SessionMessage, DaySummary};
 use crate::repository::DailySessionRepository;
+use crate::types::{DailySession, DaySummary, SessionMessage};
 use crate::Result;
+use std::sync::Arc;
 
 pub struct DailySessionManager {
     repository: Arc<dyn DailySessionRepository>,
@@ -24,7 +24,11 @@ impl DailySessionManager {
     }
 
     /// List previous days for an agent
-    pub async fn list_previous_days(&self, agent_id: &str, limit: usize) -> Result<Vec<DaySummary>> {
+    pub async fn list_previous_days(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> Result<Vec<DaySummary>> {
         self.repository.list_previous_days(agent_id, limit).await
     }
 
@@ -40,7 +44,9 @@ impl DailySessionManager {
         // Simple summary for now
         let summary = format!("Session with {} messages.", messages.len());
 
-        self.repository.update_session_summary(session_id, summary.clone()).await?;
+        self.repository
+            .update_session_summary(session_id, summary.clone())
+            .await?;
         Ok(summary)
     }
 
@@ -51,6 +57,8 @@ impl DailySessionManager {
 
     /// Clear agent history before a certain date
     pub async fn clear_agent_history(&self, agent_id: &str, before_date: &str) -> Result<usize> {
-        self.repository.delete_sessions_before(agent_id, before_date).await
+        self.repository
+            .delete_sessions_before(agent_id, before_date)
+            .await
     }
 }

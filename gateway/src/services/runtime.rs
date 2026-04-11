@@ -5,14 +5,17 @@
 //! This service coordinates agent execution through the ExecutionRunner
 //! and provides a high-level API for invoking agents.
 
-use api_logs::LogService;
-use execution_state::StateService;
 use crate::connectors::ConnectorRegistry;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::{EventBus, GatewayEvent};
-use crate::execution::{new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall, SessionDistiller, WorkspaceCache};
+use crate::execution::{
+    new_workspace_cache, ExecutionConfig, ExecutionHandle, ExecutionRunner, MemoryRecall,
+    SessionDistiller, WorkspaceCache,
+};
 use crate::hooks::HookContext;
 use crate::services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
+use api_logs::LogService;
+use execution_state::StateService;
 use gateway_database::MemoryRepository;
 use std::sync::Arc;
 
@@ -129,9 +132,10 @@ impl RuntimeService {
         let bundled_models = gateway_templates::Templates::get("models_registry.json")
             .map(|f| f.data.to_vec())
             .unwrap_or_default();
-        runner.set_model_registry(Arc::new(
-            gateway_services::models::ModelRegistry::load(&bundled_models, &paths.vault_dir()),
-        ));
+        runner.set_model_registry(Arc::new(gateway_services::models::ModelRegistry::load(
+            &bundled_models,
+            &paths.vault_dir(),
+        )));
 
         Self {
             event_bus,
@@ -161,7 +165,8 @@ impl RuntimeService {
         conversation_id: &str,
         message: &str,
     ) -> Result<(ExecutionHandle, String), String> {
-        self.invoke_with_session(agent_id, conversation_id, message, None).await
+        self.invoke_with_session(agent_id, conversation_id, message, None)
+            .await
     }
 
     /// Invoke an agent with a message and explicit session ID.
@@ -178,9 +183,10 @@ impl RuntimeService {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
 
-        let paths = self.paths.clone().ok_or_else(|| {
-            "Vault paths not set".to_string()
-        })?;
+        let paths = self
+            .paths
+            .clone()
+            .ok_or_else(|| "Vault paths not set".to_string())?;
 
         let mut config = ExecutionConfig::new(
             agent_id.to_string(),
@@ -211,15 +217,17 @@ impl RuntimeService {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
 
-        let paths = self.paths.clone().ok_or_else(|| {
-            "Vault paths not set".to_string()
-        })?;
+        let paths = self
+            .paths
+            .clone()
+            .ok_or_else(|| "Vault paths not set".to_string())?;
 
         let mut config = ExecutionConfig::new(
             agent_id.to_string(),
             conversation_id.to_string(),
             paths.vault_dir().clone(),
-        ).with_hook_context(hook_context);
+        )
+        .with_hook_context(hook_context);
 
         if let Some(sid) = session_id {
             config = config.with_session_id(sid);
@@ -246,15 +254,17 @@ impl RuntimeService {
             "Runtime not initialized with executor. Call with_runner() first.".to_string()
         })?;
 
-        let paths = self.paths.clone().ok_or_else(|| {
-            "Vault paths not set".to_string()
-        })?;
+        let paths = self
+            .paths
+            .clone()
+            .ok_or_else(|| "Vault paths not set".to_string())?;
 
         let mut config = ExecutionConfig::new(
             agent_id.to_string(),
             conversation_id.to_string(),
             paths.vault_dir().clone(),
-        ).with_hook_context(hook_context);
+        )
+        .with_hook_context(hook_context);
 
         if let Some(sid) = session_id {
             config = config.with_session_id(sid);
@@ -264,7 +274,9 @@ impl RuntimeService {
             config = config.with_mode(m);
         }
 
-        runner.invoke_with_callback(config, message.to_string(), on_session_ready).await
+        runner
+            .invoke_with_callback(config, message.to_string(), on_session_ready)
+            .await
     }
 
     /// Invoke with a placeholder response (for testing without LLM).
@@ -330,7 +342,9 @@ impl RuntimeService {
         additional_iterations: u32,
     ) -> Result<(), String> {
         if let Some(runner) = &self.runner {
-            runner.continue_execution(conversation_id, additional_iterations).await
+            runner
+                .continue_execution(conversation_id, additional_iterations)
+                .await
         } else {
             Err("Runtime not initialized with executor".to_string())
         }
@@ -410,5 +424,15 @@ pub fn shared_runtime_service_with_runner(
     log_service: Arc<LogService<DatabaseManager>>,
     state_service: Arc<StateService<DatabaseManager>>,
 ) -> Arc<RuntimeService> {
-    Arc::new(RuntimeService::with_runner(event_bus, agent_service, provider_service, paths, conversation_repo, mcp_service, skill_service, log_service, state_service))
+    Arc::new(RuntimeService::with_runner(
+        event_bus,
+        agent_service,
+        provider_service,
+        paths,
+        conversation_repo,
+        mcp_service,
+        skill_service,
+        log_service,
+        state_service,
+    ))
 }

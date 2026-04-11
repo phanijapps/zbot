@@ -133,7 +133,11 @@ Respond with ONLY a JSON object (no markdown fences):
 /// `spec_guidance` is optional domain-specific guidance for writing specs
 /// (e.g., "Cover data sources and rate limits"). When provided, it is appended
 /// after the ward rules section.
-pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option<&str>, original_message: Option<&str>) -> String {
+pub fn format_intent_injection(
+    analysis: &IntentAnalysis,
+    _spec_guidance: Option<&str>,
+    original_message: Option<&str>,
+) -> String {
     let mut out = String::from("\n\n## Task Analysis\n\n");
 
     // Original user request — verbatim, unmodified
@@ -169,7 +173,10 @@ pub fn format_intent_injection(analysis: &IntentAnalysis, _spec_guidance: Option
             out.push_str(&format!("- skill: `{}` (load with load_skill)\n", skill));
         }
         for agent in &analysis.recommended_agents {
-            out.push_str(&format!("- agent: `{}` (delegate with delegate_to_agent)\n", agent));
+            out.push_str(&format!(
+                "- agent: `{}` (delegate with delegate_to_agent)\n",
+                agent
+            ));
         }
     }
 
@@ -241,7 +248,11 @@ pub fn format_user_template(
     let wards_list = if wards.is_empty() {
         "(none — all new)".to_string()
     } else {
-        wards.iter().map(|w| format!("- {}", w)).collect::<Vec<_>>().join("\n")
+        wards
+            .iter()
+            .map(|w| format!("- {}", w))
+            .collect::<Vec<_>>()
+            .join("\n")
     };
 
     format!(
@@ -262,9 +273,21 @@ fn is_simple_message(message: &str) -> bool {
 
     // Common greetings and simple phrases — must match exactly or start with
     let simple_patterns = [
-        "hello", "hi", "hey", "good morning", "good afternoon", "good evening",
-        "thanks", "thank you", "bye", "goodbye", "what's up", "how are you",
-        "help", "what can you do", "who are you",
+        "hello",
+        "hi",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "thanks",
+        "thank you",
+        "bye",
+        "goodbye",
+        "what's up",
+        "how are you",
+        "help",
+        "what can you do",
+        "who are you",
     ];
     let lower = trimmed.to_lowercase();
     for pattern in &simple_patterns {
@@ -324,7 +347,10 @@ pub async fn analyze_intent(
 
     // Step 0: Query memory for relevant past context (corrections, strategies, episodes)
     let memory_context = if let Some(recall) = memory_recall {
-        recall.recall_for_intent(user_message, 5).await.unwrap_or_default()
+        recall
+            .recall_for_intent(user_message, 5)
+            .await
+            .unwrap_or_default()
     } else {
         String::new()
     };
@@ -335,7 +361,9 @@ pub async fn analyze_intent(
             "Memory context retrieved for intent analysis"
         );
     } else {
-        tracing::debug!("No memory context for intent analysis (recall returned empty or unavailable)");
+        tracing::debug!(
+            "No memory context for intent analysis (recall returned empty or unavailable)"
+        );
     }
 
     // Step 1: Semantic search for relevant resources
@@ -409,7 +437,12 @@ async fn count_filesystem_resources(
     let skill_count = skill_service.list().await.map(|s| s.len()).unwrap_or(0);
     let agent_count = agent_service.list().await.map(|a| a.len()).unwrap_or(0);
     let ward_count = std::fs::read_dir(vault_paths.wards_dir())
-        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_dir()).count())
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().is_dir())
+                .count()
+        })
         .unwrap_or(0);
     skill_count + agent_count + ward_count
 }
@@ -457,8 +490,14 @@ pub async fn index_resources(
             tracing::info!(count = skills.len(), "Indexing skills into memory");
             for skill in &skills {
                 let key = format!("skill:{}", skill.name);
-                let content = format!("{} | {} | category: {}", skill.name, skill.description, skill.category);
-                if let Err(e) = fact_store.save_fact("root", "skill", &key, &content, 1.0, None).await {
+                let content = format!(
+                    "{} | {} | category: {}",
+                    skill.name, skill.description, skill.category
+                );
+                if let Err(e) = fact_store
+                    .save_fact("root", "skill", &key, &content, 1.0, None)
+                    .await
+                {
                     tracing::debug!("Failed to index skill {}: {}", skill.name, e);
                 }
             }
@@ -473,7 +512,10 @@ pub async fn index_resources(
             for agent in &agents {
                 let key = format!("agent:{}", agent.id);
                 let content = format!("{} | {}", agent.id, agent.description);
-                if let Err(e) = fact_store.save_fact("root", "agent", &key, &content, 1.0, None).await {
+                if let Err(e) = fact_store
+                    .save_fact("root", "agent", &key, &content, 1.0, None)
+                    .await
+                {
                     tracing::debug!("Failed to index agent {}: {}", agent.id, e);
                 }
             }
@@ -513,7 +555,10 @@ pub async fn index_resources(
                 } else {
                     format!("{} | {}", name, purpose)
                 };
-                if let Err(e) = fact_store.save_fact("root", "ward", &key, &content, 1.0, None).await {
+                if let Err(e) = fact_store
+                    .save_fact("root", "ward", &key, &content, 1.0, None)
+                    .await
+                {
                     tracing::debug!("Failed to index ward {}: {}", name, e);
                 }
             }
@@ -600,7 +645,11 @@ async fn search_resources(fact_store: &dyn MemoryFactStore, user_message: &str) 
         "Filtered by relevance score"
     );
 
-    SearchResults { skills, agents, wards }
+    SearchResults {
+        skills,
+        agents,
+        wards,
+    }
 }
 
 /// Strip optional markdown code-fences that LLMs sometimes wrap around JSON.
@@ -617,7 +666,6 @@ fn strip_markdown_fences(content: &str) -> String {
     }
     trimmed.to_string()
 }
-
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -763,9 +811,7 @@ mod tests {
             json!({"name": "code-gen", "description": "Generates code from specs"}),
             json!({"name": "testing", "description": "Runs unit tests"}),
         ];
-        let agents = vec![
-            json!({"name": "coder", "description": "Writes production code"}),
-        ];
+        let agents = vec![json!({"name": "coder", "description": "Writes production code"})];
 
         let result = format_user_template("Build a REST API", &skills, &agents, &[]);
 
@@ -878,7 +924,13 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Tell me about the weather forecast for tomorrow", &fact_store, None).await;
+        let result = analyze_intent(
+            &mock,
+            "Tell me about the weather forecast for tomorrow",
+            &fact_store,
+            None,
+        )
+        .await;
         let analysis = result.expect("should parse simple intent");
         assert_eq!(analysis.primary_intent, "greeting");
         assert_eq!(analysis.execution_strategy.approach, "simple");
@@ -931,7 +983,13 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Build me a web scraper for news articles", &fact_store, None).await;
+        let result = analyze_intent(
+            &mock,
+            "Build me a web scraper for news articles",
+            &fact_store,
+            None,
+        )
+        .await;
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
@@ -961,7 +1019,13 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Analyze this dataset and create visualizations", &fact_store, None).await;
+        let result = analyze_intent(
+            &mock,
+            "Analyze this dataset and create visualizations",
+            &fact_store,
+            None,
+        )
+        .await;
         let analysis = result.expect("should strip fences and parse");
         assert_eq!(analysis.primary_intent, "greeting");
     }
@@ -1047,7 +1111,8 @@ mod tests {
             rewritten_prompt: String::new(),
         };
 
-        let injection = format_intent_injection(&analysis, Some("Cover data sources and rate limits"), None);
+        let injection =
+            format_intent_injection(&analysis, Some("Cover data sources and rate limits"), None);
         // Should still produce valid injection without spec guidance section
         assert!(injection.contains("## Task Analysis"));
         assert!(injection.contains("test-ward"));

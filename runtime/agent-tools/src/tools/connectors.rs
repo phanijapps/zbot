@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use zero_core::connectors::ConnectorResourceProvider;
 use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
@@ -163,20 +163,17 @@ impl Tool for QueryResourceTool {
                     .get("resource")
                     .and_then(|v| v.as_str())
                     .ok_or_else(|| {
-                        ZeroError::Tool(
-                            "Missing 'resource' parameter for query action".to_string(),
-                        )
+                        ZeroError::Tool("Missing 'resource' parameter for query action".to_string())
                     })?;
 
                 // Parse params from JSON object to HashMap<String, String>
-                let params: Option<HashMap<String, String>> =
-                    args.get("params").and_then(|v| {
-                        v.as_object().map(|obj| {
-                            obj.iter()
-                                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                                .collect()
-                        })
-                    });
+                let params: Option<HashMap<String, String>> = args.get("params").and_then(|v| {
+                    v.as_object().map(|obj| {
+                        obj.iter()
+                            .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                            .collect()
+                    })
+                });
 
                 let result = self
                     .provider
@@ -197,32 +194,23 @@ impl Tool for QueryResourceTool {
                         )
                     })?;
 
-                let capability = args
-                    .get("capability")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| {
-                        ZeroError::Tool(
-                            "Missing 'capability' parameter for invoke action".to_string(),
-                        )
-                    })?;
+                let capability =
+                    args.get("capability")
+                        .and_then(|v| v.as_str())
+                        .ok_or_else(|| {
+                            ZeroError::Tool(
+                                "Missing 'capability' parameter for invoke action".to_string(),
+                            )
+                        })?;
 
-                let payload = args
-                    .get("payload")
-                    .cloned()
-                    .unwrap_or(json!({}));
+                let payload = args.get("payload").cloned().unwrap_or(json!({}));
 
                 let session_id = ctx.session_id().to_string();
                 let agent_id = ctx.agent_name().to_string();
 
                 let result = self
                     .provider
-                    .invoke_capability(
-                        connector_id,
-                        capability,
-                        payload,
-                        &session_id,
-                        &agent_id,
-                    )
+                    .invoke_capability(connector_id, capability, payload, &session_id, &agent_id)
                     .await
                     .map_err(|e| ZeroError::Tool(e))?;
 
@@ -241,9 +229,9 @@ impl Tool for QueryResourceTool {
 mod tests {
     use super::*;
     use zero_core::connectors::{CapabilityInfo, ConnectorInfo, ResourceInfo};
+    use zero_core::context::{CallbackContext, ReadonlyContext};
     use zero_core::event::EventActions;
     use zero_core::types::Content;
-    use zero_core::context::{ReadonlyContext, CallbackContext};
 
     /// Mock provider for testing.
     struct MockProvider {
@@ -313,13 +301,11 @@ mod tests {
                         description: Some("Get messages for a thread".to_string()),
                     },
                 ],
-                capabilities: vec![
-                    CapabilityInfo {
-                        name: "send_message".to_string(),
-                        schema: json!({"type": "object", "properties": {"text": {"type": "string"}, "recipient": {"type": "string"}}}),
-                        description: Some("Send a message via Signal".to_string()),
-                    },
-                ],
+                capabilities: vec![CapabilityInfo {
+                    name: "send_message".to_string(),
+                    schema: json!({"type": "object", "properties": {"text": {"type": "string"}, "recipient": {"type": "string"}}}),
+                    description: Some("Send a message via Signal".to_string()),
+                }],
             }],
         })
     }
@@ -327,12 +313,24 @@ mod tests {
     struct MockToolContext;
 
     impl ReadonlyContext for MockToolContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test-agent" }
-        fn user_id(&self) -> &str { "test" }
-        fn app_name(&self) -> &str { "test" }
-        fn session_id(&self) -> &str { "test" }
-        fn branch(&self) -> &str { "test" }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test-agent"
+        }
+        fn user_id(&self) -> &str {
+            "test"
+        }
+        fn app_name(&self) -> &str {
+            "test"
+        }
+        fn session_id(&self) -> &str {
+            "test"
+        }
+        fn branch(&self) -> &str {
+            "test"
+        }
         fn user_content(&self) -> &Content {
             use std::sync::LazyLock;
             static CONTENT: LazyLock<Content> = LazyLock::new(|| Content {
@@ -344,13 +342,19 @@ mod tests {
     }
 
     impl CallbackContext for MockToolContext {
-        fn get_state(&self, _key: &str) -> Option<Value> { None }
+        fn get_state(&self, _key: &str) -> Option<Value> {
+            None
+        }
         fn set_state(&self, _key: String, _value: Value) {}
     }
 
     impl ToolContext for MockToolContext {
-        fn function_call_id(&self) -> String { "test-call".to_string() }
-        fn actions(&self) -> EventActions { EventActions::default() }
+        fn function_call_id(&self) -> String {
+            "test-call".to_string()
+        }
+        fn actions(&self) -> EventActions {
+            EventActions::default()
+        }
         fn set_actions(&self, _actions: EventActions) {}
     }
 
@@ -447,9 +451,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_empty_connectors() {
-        let provider: Arc<dyn ConnectorResourceProvider> = Arc::new(MockProvider {
-            connectors: vec![],
-        });
+        let provider: Arc<dyn ConnectorResourceProvider> =
+            Arc::new(MockProvider { connectors: vec![] });
         let tool = QueryResourceTool::new(provider);
         let ctx = mock_context();
 

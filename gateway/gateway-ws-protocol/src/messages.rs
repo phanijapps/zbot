@@ -112,7 +112,6 @@ pub enum ServerMessage {
     // =========================================================================
     // SUBSCRIPTION RESPONSES
     // =========================================================================
-
     /// Subscription confirmed.
     ///
     /// Includes `root_execution_ids` for Session scope subscriptions to enable
@@ -140,7 +139,6 @@ pub enum ServerMessage {
     // CONVERSATION EVENTS (with sequence numbers)
     // All events include session_id and execution_id for client-side filtering
     // =========================================================================
-
     /// Agent started executing.
     AgentStarted {
         agent_id: String,
@@ -350,7 +348,6 @@ pub enum ServerMessage {
     // =========================================================================
     // GLOBAL/CONNECTION MESSAGES (no sequence numbers)
     // =========================================================================
-
     /// Pong response.
     Pong,
 
@@ -465,7 +462,12 @@ impl ServerMessage {
     }
 
     /// Create a token message.
-    pub fn token(session_id: &str, execution_id: &str, conversation_id: Option<String>, delta: &str) -> Self {
+    pub fn token(
+        session_id: &str,
+        execution_id: &str,
+        conversation_id: Option<String>,
+        delta: &str,
+    ) -> Self {
         Self::Token {
             session_id: session_id.to_string(),
             execution_id: execution_id.to_string(),
@@ -476,7 +478,12 @@ impl ServerMessage {
     }
 
     /// Create a turn complete message.
-    pub fn turn_complete(session_id: &str, execution_id: &str, conversation_id: Option<String>, final_message: Option<String>) -> Self {
+    pub fn turn_complete(
+        session_id: &str,
+        execution_id: &str,
+        conversation_id: Option<String>,
+        final_message: Option<String>,
+    ) -> Self {
         Self::TurnComplete {
             session_id: session_id.to_string(),
             execution_id: execution_id.to_string(),
@@ -502,34 +509,83 @@ impl ServerMessage {
     /// Get the conversation_id for this message, if any.
     pub fn conversation_id(&self) -> Option<&str> {
         match self {
-            Self::AgentStarted { conversation_id, .. } => conversation_id.as_deref(),
-            Self::AgentCompleted { conversation_id, .. } => conversation_id.as_deref(),
-            Self::AgentStopped { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Token { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Thinking { conversation_id, .. } => conversation_id.as_deref(),
-            Self::ToolCall { conversation_id, .. } => conversation_id.as_deref(),
-            Self::ToolResult { conversation_id, .. } => conversation_id.as_deref(),
-            Self::TurnComplete { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Error { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Iteration { conversation_id, .. } => conversation_id.as_deref(),
-            Self::ContinuationPrompt { conversation_id, .. } => conversation_id.as_deref(),
-            Self::MessageAdded { conversation_id, .. } => conversation_id.as_deref(),
-            Self::TokenUsage { conversation_id, .. } => conversation_id.as_deref(),
-            Self::Heartbeat { conversation_id, .. } => conversation_id.as_deref(),
-            Self::DelegationStarted { parent_conversation_id, .. } => parent_conversation_id.as_deref(),
-            Self::DelegationCompleted { parent_conversation_id, .. } => parent_conversation_id.as_deref(),
-            Self::Subscribed { conversation_id, .. } => Some(conversation_id),
-            Self::Unsubscribed { conversation_id, .. } => Some(conversation_id),
-            Self::SubscriptionError { conversation_id, .. } => Some(conversation_id),
-            Self::InvokeAccepted { conversation_id, .. } => Some(conversation_id),
+            Self::AgentStarted {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::AgentCompleted {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::AgentStopped {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Token {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Thinking {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::ToolCall {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::ToolResult {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::TurnComplete {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Error {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Iteration {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::ContinuationPrompt {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::MessageAdded {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::TokenUsage {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::Heartbeat {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::DelegationStarted {
+                parent_conversation_id,
+                ..
+            } => parent_conversation_id.as_deref(),
+            Self::DelegationCompleted {
+                parent_conversation_id,
+                ..
+            } => parent_conversation_id.as_deref(),
+            Self::Subscribed {
+                conversation_id, ..
+            } => Some(conversation_id),
+            Self::Unsubscribed {
+                conversation_id, ..
+            } => Some(conversation_id),
+            Self::SubscriptionError {
+                conversation_id, ..
+            } => Some(conversation_id),
+            Self::InvokeAccepted {
+                conversation_id, ..
+            } => Some(conversation_id),
             Self::WardChanged { .. } => None,
-            Self::IterationsExtended { conversation_id, .. } => conversation_id.as_deref(),
-            Self::PlanUpdate { conversation_id, .. } => conversation_id.as_deref(),
+            Self::IterationsExtended {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
+            Self::PlanUpdate {
+                conversation_id, ..
+            } => conversation_id.as_deref(),
             Self::SessionTitleChanged { .. } => None,
             Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
-            Self::Pong | Self::Connected { .. } | Self::SessionPaused { .. }
-            | Self::SessionResumed { .. } | Self::SessionCancelled { .. }
+            Self::Pong
+            | Self::Connected { .. }
+            | Self::SessionPaused { .. }
+            | Self::SessionResumed { .. }
+            | Self::SessionCancelled { .. }
             | Self::SessionEnded { .. } => None,
         }
     }
@@ -537,84 +593,330 @@ impl ServerMessage {
     /// Return a copy of this message with the sequence number set.
     pub fn with_sequence(self, seq: u64) -> Self {
         match self {
-            Self::AgentStarted { agent_id, session_id, execution_id, conversation_id, .. } => {
-                Self::AgentStarted { agent_id, session_id, execution_id, conversation_id, seq: Some(seq) }
-            }
-            Self::AgentCompleted { agent_id, session_id, execution_id, conversation_id, result, .. } => {
-                Self::AgentCompleted { agent_id, session_id, execution_id, conversation_id, result, seq: Some(seq) }
-            }
-            Self::AgentStopped { agent_id, session_id, execution_id, conversation_id, iteration, .. } => {
-                Self::AgentStopped { agent_id, session_id, execution_id, conversation_id, iteration, seq: Some(seq) }
-            }
-            Self::Token { session_id, execution_id, conversation_id, delta, .. } => {
-                Self::Token { session_id, execution_id, conversation_id, delta, seq: Some(seq) }
-            }
-            Self::Thinking { session_id, execution_id, conversation_id, content, .. } => {
-                Self::Thinking { session_id, execution_id, conversation_id, content, seq: Some(seq) }
-            }
-            Self::ToolCall { session_id, execution_id, conversation_id, tool_call_id, tool, args, .. } => {
-                Self::ToolCall { session_id, execution_id, conversation_id, tool_call_id, tool, args, seq: Some(seq) }
-            }
-            Self::ToolResult { session_id, execution_id, conversation_id, tool_call_id, result, error, .. } => {
-                Self::ToolResult { session_id, execution_id, conversation_id, tool_call_id, result, error, seq: Some(seq) }
-            }
-            Self::TurnComplete { session_id, execution_id, conversation_id, final_message, .. } => {
-                Self::TurnComplete { session_id, execution_id, conversation_id, final_message, seq: Some(seq) }
-            }
-            Self::Error { session_id, execution_id, conversation_id, code, message, .. } => {
-                Self::Error { session_id, execution_id, conversation_id, code, message, seq: Some(seq) }
-            }
-            Self::Iteration { session_id, execution_id, conversation_id, current, max, .. } => {
-                Self::Iteration { session_id, execution_id, conversation_id, current, max, seq: Some(seq) }
-            }
-            Self::ContinuationPrompt { session_id, execution_id, conversation_id, iteration, message, .. } => {
-                Self::ContinuationPrompt { session_id, execution_id, conversation_id, iteration, message, seq: Some(seq) }
-            }
-            Self::MessageAdded { session_id, execution_id, conversation_id, role, content, .. } => {
-                Self::MessageAdded { session_id, execution_id, conversation_id, role, content, seq: Some(seq) }
-            }
-            Self::TokenUsage { session_id, execution_id, conversation_id, tokens_in, tokens_out, .. } => {
-                Self::TokenUsage { session_id, execution_id, conversation_id, tokens_in, tokens_out, seq: Some(seq) }
-            }
-            Self::Heartbeat { session_id, execution_id, conversation_id, .. } => {
-                Self::Heartbeat { session_id, execution_id, conversation_id, seq: Some(seq) }
-            }
+            Self::AgentStarted {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                ..
+            } => Self::AgentStarted {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                seq: Some(seq),
+            },
+            Self::AgentCompleted {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                result,
+                ..
+            } => Self::AgentCompleted {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                result,
+                seq: Some(seq),
+            },
+            Self::AgentStopped {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                iteration,
+                ..
+            } => Self::AgentStopped {
+                agent_id,
+                session_id,
+                execution_id,
+                conversation_id,
+                iteration,
+                seq: Some(seq),
+            },
+            Self::Token {
+                session_id,
+                execution_id,
+                conversation_id,
+                delta,
+                ..
+            } => Self::Token {
+                session_id,
+                execution_id,
+                conversation_id,
+                delta,
+                seq: Some(seq),
+            },
+            Self::Thinking {
+                session_id,
+                execution_id,
+                conversation_id,
+                content,
+                ..
+            } => Self::Thinking {
+                session_id,
+                execution_id,
+                conversation_id,
+                content,
+                seq: Some(seq),
+            },
+            Self::ToolCall {
+                session_id,
+                execution_id,
+                conversation_id,
+                tool_call_id,
+                tool,
+                args,
+                ..
+            } => Self::ToolCall {
+                session_id,
+                execution_id,
+                conversation_id,
+                tool_call_id,
+                tool,
+                args,
+                seq: Some(seq),
+            },
+            Self::ToolResult {
+                session_id,
+                execution_id,
+                conversation_id,
+                tool_call_id,
+                result,
+                error,
+                ..
+            } => Self::ToolResult {
+                session_id,
+                execution_id,
+                conversation_id,
+                tool_call_id,
+                result,
+                error,
+                seq: Some(seq),
+            },
+            Self::TurnComplete {
+                session_id,
+                execution_id,
+                conversation_id,
+                final_message,
+                ..
+            } => Self::TurnComplete {
+                session_id,
+                execution_id,
+                conversation_id,
+                final_message,
+                seq: Some(seq),
+            },
+            Self::Error {
+                session_id,
+                execution_id,
+                conversation_id,
+                code,
+                message,
+                ..
+            } => Self::Error {
+                session_id,
+                execution_id,
+                conversation_id,
+                code,
+                message,
+                seq: Some(seq),
+            },
+            Self::Iteration {
+                session_id,
+                execution_id,
+                conversation_id,
+                current,
+                max,
+                ..
+            } => Self::Iteration {
+                session_id,
+                execution_id,
+                conversation_id,
+                current,
+                max,
+                seq: Some(seq),
+            },
+            Self::ContinuationPrompt {
+                session_id,
+                execution_id,
+                conversation_id,
+                iteration,
+                message,
+                ..
+            } => Self::ContinuationPrompt {
+                session_id,
+                execution_id,
+                conversation_id,
+                iteration,
+                message,
+                seq: Some(seq),
+            },
+            Self::MessageAdded {
+                session_id,
+                execution_id,
+                conversation_id,
+                role,
+                content,
+                ..
+            } => Self::MessageAdded {
+                session_id,
+                execution_id,
+                conversation_id,
+                role,
+                content,
+                seq: Some(seq),
+            },
+            Self::TokenUsage {
+                session_id,
+                execution_id,
+                conversation_id,
+                tokens_in,
+                tokens_out,
+                ..
+            } => Self::TokenUsage {
+                session_id,
+                execution_id,
+                conversation_id,
+                tokens_in,
+                tokens_out,
+                seq: Some(seq),
+            },
+            Self::Heartbeat {
+                session_id,
+                execution_id,
+                conversation_id,
+                ..
+            } => Self::Heartbeat {
+                session_id,
+                execution_id,
+                conversation_id,
+                seq: Some(seq),
+            },
             Self::DelegationStarted {
-                session_id, parent_execution_id, child_execution_id,
-                parent_agent_id, child_agent_id, task,
-                parent_conversation_id, child_conversation_id, ..
+                session_id,
+                parent_execution_id,
+                child_execution_id,
+                parent_agent_id,
+                child_agent_id,
+                task,
+                parent_conversation_id,
+                child_conversation_id,
+                ..
             } => Self::DelegationStarted {
-                session_id, parent_execution_id, child_execution_id,
-                parent_agent_id, child_agent_id, task,
-                parent_conversation_id, child_conversation_id, seq: Some(seq),
+                session_id,
+                parent_execution_id,
+                child_execution_id,
+                parent_agent_id,
+                child_agent_id,
+                task,
+                parent_conversation_id,
+                child_conversation_id,
+                seq: Some(seq),
             },
             Self::DelegationCompleted {
-                session_id, parent_execution_id, child_execution_id,
-                parent_agent_id, child_agent_id, result,
-                parent_conversation_id, child_conversation_id, ..
+                session_id,
+                parent_execution_id,
+                child_execution_id,
+                parent_agent_id,
+                child_agent_id,
+                result,
+                parent_conversation_id,
+                child_conversation_id,
+                ..
             } => Self::DelegationCompleted {
-                session_id, parent_execution_id, child_execution_id,
-                parent_agent_id, child_agent_id, result,
-                parent_conversation_id, child_conversation_id, seq: Some(seq),
+                session_id,
+                parent_execution_id,
+                child_execution_id,
+                parent_agent_id,
+                child_agent_id,
+                result,
+                parent_conversation_id,
+                child_conversation_id,
+                seq: Some(seq),
             },
-            Self::WardChanged { session_id, execution_id, ward_id, .. } => {
-                Self::WardChanged { session_id, execution_id, ward_id, seq: Some(seq) }
-            }
-            Self::IterationsExtended { session_id, execution_id, iterations_used, iterations_added, reason, conversation_id, .. } => {
-                Self::IterationsExtended { session_id, execution_id, iterations_used, iterations_added, reason, conversation_id, seq: Some(seq) }
-            }
-            Self::PlanUpdate { session_id, execution_id, plan, explanation, conversation_id, .. } => {
-                Self::PlanUpdate { session_id, execution_id, plan, explanation, conversation_id, seq: Some(seq) }
-            }
-            Self::SessionTitleChanged { session_id, title, .. } => {
-                Self::SessionTitleChanged { session_id, title, seq: Some(seq) }
-            }
-            Self::IntentAnalysisStarted { session_id, execution_id, seq: _ } => {
-                Self::IntentAnalysisStarted { session_id, execution_id, seq: Some(seq) }
-            }
-            Self::IntentAnalysisComplete { session_id, execution_id, primary_intent, hidden_intents, recommended_skills, recommended_agents, ward_recommendation, execution_strategy, .. } => {
-                Self::IntentAnalysisComplete { session_id, execution_id, primary_intent, hidden_intents, recommended_skills, recommended_agents, ward_recommendation, execution_strategy, seq: Some(seq) }
-            }
+            Self::WardChanged {
+                session_id,
+                execution_id,
+                ward_id,
+                ..
+            } => Self::WardChanged {
+                session_id,
+                execution_id,
+                ward_id,
+                seq: Some(seq),
+            },
+            Self::IterationsExtended {
+                session_id,
+                execution_id,
+                iterations_used,
+                iterations_added,
+                reason,
+                conversation_id,
+                ..
+            } => Self::IterationsExtended {
+                session_id,
+                execution_id,
+                iterations_used,
+                iterations_added,
+                reason,
+                conversation_id,
+                seq: Some(seq),
+            },
+            Self::PlanUpdate {
+                session_id,
+                execution_id,
+                plan,
+                explanation,
+                conversation_id,
+                ..
+            } => Self::PlanUpdate {
+                session_id,
+                execution_id,
+                plan,
+                explanation,
+                conversation_id,
+                seq: Some(seq),
+            },
+            Self::SessionTitleChanged {
+                session_id, title, ..
+            } => Self::SessionTitleChanged {
+                session_id,
+                title,
+                seq: Some(seq),
+            },
+            Self::IntentAnalysisStarted {
+                session_id,
+                execution_id,
+                seq: _,
+            } => Self::IntentAnalysisStarted {
+                session_id,
+                execution_id,
+                seq: Some(seq),
+            },
+            Self::IntentAnalysisComplete {
+                session_id,
+                execution_id,
+                primary_intent,
+                hidden_intents,
+                recommended_skills,
+                recommended_agents,
+                ward_recommendation,
+                execution_strategy,
+                ..
+            } => Self::IntentAnalysisComplete {
+                session_id,
+                execution_id,
+                primary_intent,
+                hidden_intents,
+                recommended_skills,
+                recommended_agents,
+                ward_recommendation,
+                execution_strategy,
+                seq: Some(seq),
+            },
             // Messages without sequence numbers pass through unchanged
             other => other,
         }
@@ -664,7 +966,10 @@ mod tests {
         let json = r#"{"type": "subscribe", "conversation_id": "sess-123", "scope": "all"}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ClientMessage::Subscribe { conversation_id, scope } => {
+            ClientMessage::Subscribe {
+                conversation_id,
+                scope,
+            } => {
                 assert_eq!(conversation_id, "sess-123");
                 assert_eq!(scope, SubscriptionScope::All);
             }
@@ -677,7 +982,10 @@ mod tests {
         let json = r#"{"type": "subscribe", "conversation_id": "sess-123", "scope": "session"}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ClientMessage::Subscribe { conversation_id, scope } => {
+            ClientMessage::Subscribe {
+                conversation_id,
+                scope,
+            } => {
                 assert_eq!(conversation_id, "sess-123");
                 assert_eq!(scope, SubscriptionScope::Session);
             }
@@ -690,7 +998,10 @@ mod tests {
         let json = r#"{"type": "subscribe", "conversation_id": "sess-123", "scope": {"execution": "exec-456"}}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ClientMessage::Subscribe { conversation_id, scope } => {
+            ClientMessage::Subscribe {
+                conversation_id,
+                scope,
+            } => {
                 assert_eq!(conversation_id, "sess-123");
                 assert_eq!(scope, SubscriptionScope::Execution("exec-456".to_string()));
             }
@@ -704,7 +1015,10 @@ mod tests {
         let json = r#"{"type": "subscribe", "conversation_id": "sess-123"}"#;
         let msg: ClientMessage = serde_json::from_str(json).unwrap();
         match msg {
-            ClientMessage::Subscribe { conversation_id, scope } => {
+            ClientMessage::Subscribe {
+                conversation_id,
+                scope,
+            } => {
                 assert_eq!(conversation_id, "sess-123");
                 assert_eq!(scope, SubscriptionScope::All); // Default
             }

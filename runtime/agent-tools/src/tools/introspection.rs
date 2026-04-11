@@ -4,9 +4,9 @@
 // ============================================================================
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::sync::Arc;
-use zero_core::{FileSystemContext, Tool, ToolContext, Result};
+use zero_core::{FileSystemContext, Result, Tool, ToolContext};
 
 use super::guards::has_placeholder_specs;
 
@@ -55,7 +55,8 @@ impl Tool for ListSkillsTool {
         }
 
         // Get list of currently loaded skills from context state
-        let loaded_skills: Vec<String> = ctx.get_state("skill:loaded_skills")
+        let loaded_skills: Vec<String> = ctx
+            .get_state("skill:loaded_skills")
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
 
@@ -63,17 +64,18 @@ impl Tool for ListSkillsTool {
         if let Some(cached_skills) = ctx.get_state("available_skills") {
             if let Some(skills_array) = cached_skills.as_array() {
                 // Annotate skills with loaded status
-                let annotated_skills: Vec<Value> = skills_array.iter().map(|skill| {
-                    let skill_name = skill.get("name")
-                        .and_then(|n| n.as_str())
-                        .unwrap_or("");
-                    let is_loaded = loaded_skills.contains(&skill_name.to_string());
-                    let mut skill_obj = skill.clone();
-                    if let Some(obj) = skill_obj.as_object_mut() {
-                        obj.insert("loaded".to_string(), json!(is_loaded));
-                    }
-                    skill_obj
-                }).collect();
+                let annotated_skills: Vec<Value> = skills_array
+                    .iter()
+                    .map(|skill| {
+                        let skill_name = skill.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let is_loaded = loaded_skills.contains(&skill_name.to_string());
+                        let mut skill_obj = skill.clone();
+                        if let Some(obj) = skill_obj.as_object_mut() {
+                            obj.insert("loaded".to_string(), json!(is_loaded));
+                        }
+                        skill_obj
+                    })
+                    .collect();
 
                 let loaded_count = loaded_skills.len();
                 return Ok(json!({
@@ -89,10 +91,12 @@ impl Tool for ListSkillsTool {
         // Fall back to reading from disk if no cache
         let skills_dir = match self.fs.skills_dir() {
             Some(dir) => dir,
-            None => return Ok(json!({
-                "error": "Skills directory not configured",
-                "skills": []
-            })),
+            None => {
+                return Ok(json!({
+                    "error": "Skills directory not configured",
+                    "skills": []
+                }));
+            }
         };
 
         if !skills_dir.exists() {
@@ -109,7 +113,8 @@ impl Tool for ListSkillsTool {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir() {
-                    let skill_name = path.file_name()
+                    let skill_name = path
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown")
                         .to_string();
@@ -157,7 +162,12 @@ fn extract_skill_description(content: &str) -> Option<String> {
             let frontmatter = parts[1];
             for line in frontmatter.lines() {
                 if line.starts_with("description:") {
-                    return Some(line.trim_start_matches("description:").trim().trim_matches('"').to_string());
+                    return Some(
+                        line.trim_start_matches("description:")
+                            .trim()
+                            .trim_matches('"')
+                            .to_string(),
+                    );
                 }
             }
         }
@@ -216,7 +226,8 @@ impl Tool for ListToolsTool {
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, _args: Value) -> Result<Value> {
         // Try to get tool list from context state
-        let tools = ctx.get_state("app:available_tools")
+        let tools = ctx
+            .get_state("app:available_tools")
             .and_then(|v| v.as_array().cloned())
             .unwrap_or_default();
 
@@ -297,10 +308,12 @@ impl Tool for ListMcpsTool {
         // Fall back to reading mcps.json from vault
         let mcps_file = match self.fs.mcps_config() {
             Some(p) => p,
-            None => return Ok(json!({
-                "mcps": [],
-                "message": "Vault path not configured"
-            })),
+            None => {
+                return Ok(json!({
+                    "mcps": [],
+                    "message": "Vault path not configured"
+                }));
+            }
         };
 
         if !mcps_file.exists() {
@@ -312,22 +325,27 @@ impl Tool for ListMcpsTool {
 
         let content = match std::fs::read_to_string(&mcps_file) {
             Ok(c) => c,
-            Err(e) => return Ok(json!({
-                "mcps": [],
-                "error": format!("Failed to read mcps.json: {}", e)
-            })),
+            Err(e) => {
+                return Ok(json!({
+                    "mcps": [],
+                    "error": format!("Failed to read mcps.json: {}", e)
+                }));
+            }
         };
 
         let mcps: Value = match serde_json::from_str(&content) {
             Ok(v) => v,
-            Err(e) => return Ok(json!({
-                "mcps": [],
-                "error": format!("Failed to parse mcps.json: {}", e)
-            })),
+            Err(e) => {
+                return Ok(json!({
+                    "mcps": [],
+                    "error": format!("Failed to parse mcps.json: {}", e)
+                }));
+            }
         };
 
         // Extract just the useful info
-        let mcp_list: Vec<Value> = mcps.as_array()
+        let mcp_list: Vec<Value> = mcps
+            .as_array()
             .map(|arr| {
                 arr.iter().map(|mcp| {
                     json!({
@@ -375,6 +393,9 @@ Some content here.
 This is a test skill that does things.
 "#;
         let desc = extract_skill_description(content);
-        assert_eq!(desc, Some("This is a test skill that does things.".to_string()));
+        assert_eq!(
+            desc,
+            Some("This is a test skill that does things.".to_string())
+        );
     }
 }

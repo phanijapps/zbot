@@ -14,4 +14,4 @@ pub use gateway_ws_protocol::{
 
 pub use handler::WebSocketHandler;
 pub use session::{SessionRegistry, WsSession};
-pub use subscriptions::{SubscriptionManager, SubscribeError, SubscribeResult, RoutingResult};
+pub use subscriptions::{RoutingResult, SubscribeError, SubscribeResult, SubscriptionManager};

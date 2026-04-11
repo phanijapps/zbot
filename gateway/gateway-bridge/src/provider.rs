@@ -12,7 +12,9 @@ use std::sync::Arc;
 use crate::outbox::OutboxRepository;
 use crate::protocol::BridgeServerMessage;
 use crate::registry::BridgeRegistry;
-use zero_core::connectors::{CapabilityInfo, ConnectorInfo, ConnectorResourceProvider, ResourceInfo};
+use zero_core::connectors::{
+    CapabilityInfo, ConnectorInfo, ConnectorResourceProvider, ResourceInfo,
+};
 
 /// Timeout for worker resource/capability requests.
 const REQUEST_TIMEOUT_SECONDS: u64 = 30;
@@ -101,11 +103,8 @@ impl ConnectorResourceProvider for BridgeResourceProvider {
             .map_err(|e| format!("Failed to send query: {}", e))?;
 
         // Wait for response with timeout
-        match tokio::time::timeout(
-            std::time::Duration::from_secs(REQUEST_TIMEOUT_SECONDS),
-            rx,
-        )
-        .await
+        match tokio::time::timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECONDS), rx)
+            .await
         {
             Ok(Ok(result)) => result,
             Ok(Err(_)) => Err(format!(
@@ -154,11 +153,8 @@ impl ConnectorResourceProvider for BridgeResourceProvider {
                 .await
                 .map_err(|e| format!("Failed to send capability invoke: {}", e))?;
 
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(REQUEST_TIMEOUT_SECONDS),
-                rx,
-            )
-            .await
+            match tokio::time::timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECONDS), rx)
+                .await
             {
                 Ok(Ok(result)) => result,
                 Ok(Err(_)) => Err(format!(
@@ -204,12 +200,10 @@ mod tests {
 
     fn setup() -> (Arc<BridgeRegistry>, Arc<OutboxRepository>) {
         use gateway_services::VaultPaths;
-        
+
         let dir = tempfile::TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
-        let db = Arc::new(
-            gateway_database::DatabaseManager::new(paths).unwrap(),
-        );
+        let db = Arc::new(gateway_database::DatabaseManager::new(paths).unwrap());
         let outbox = Arc::new(OutboxRepository::new(db));
         let registry = Arc::new(BridgeRegistry::new());
         (registry, outbox)
@@ -283,10 +277,7 @@ mod tests {
             if let Some(msg) = rx.recv().await {
                 match msg {
                     BridgeServerMessage::ResourceQuery { request_id, .. } => {
-                        pending_clone.resolve(
-                            &request_id,
-                            serde_json::json!([{"name": "Alice"}]),
-                        );
+                        pending_clone.resolve(&request_id, serde_json::json!([{"name": "Alice"}]));
                     }
                     _ => {}
                 }

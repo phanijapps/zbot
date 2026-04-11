@@ -22,12 +22,7 @@ pub struct OpenAiEmbeddingClient {
 
 impl OpenAiEmbeddingClient {
     /// Create a new OpenAI-compatible embedding client.
-    pub fn new(
-        base_url: String,
-        api_key: String,
-        model: String,
-        dimensions: usize,
-    ) -> Self {
+    pub fn new(base_url: String, api_key: String, model: String, dimensions: usize) -> Self {
         Self {
             base_url,
             api_key,
@@ -45,10 +40,7 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
             return Ok(Vec::new());
         }
 
-        let url = format!(
-            "{}/embeddings",
-            self.base_url.trim_end_matches('/')
-        );
+        let url = format!("{}/embeddings", self.base_url.trim_end_matches('/'));
 
         let body = json!({
             "model": self.model,
@@ -105,7 +97,9 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
                 .get("embedding")
                 .and_then(|e| e.as_array())
                 .ok_or_else(|| {
-                    EmbeddingError::ParseError("Missing 'embedding' array in response item".to_string())
+                    EmbeddingError::ParseError(
+                        "Missing 'embedding' array in response item".to_string(),
+                    )
                 })?
                 .iter()
                 .filter_map(|v| v.as_f64().map(|f| f as f32))

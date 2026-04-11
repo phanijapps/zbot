@@ -76,13 +76,14 @@ pub async fn init_chat_session(
 
     // Create the session record in the database so get_or_create_session finds it
     let runner = state.runtime.runner().ok_or_else(|| {
-        (StatusCode::SERVICE_UNAVAILABLE, "Runtime not available".to_string())
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Runtime not available".to_string(),
+        )
     })?;
 
-    let mut session = execution_state::Session::new_with_source(
-        "root",
-        execution_state::TriggerSource::Web,
-    );
+    let mut session =
+        execution_state::Session::new_with_source("root", execution_state::TriggerSource::Web);
     session.id = session_id.clone();
     if let Err(e) = runner.state_service().create_session_from(&session) {
         tracing::warn!("Failed to create chat session in DB: {}", e);

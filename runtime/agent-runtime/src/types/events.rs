@@ -24,17 +24,11 @@ pub enum StreamEvent {
 
     /// A token from the LLM response
     #[serde(rename = "token")]
-    Token {
-        timestamp: u64,
-        content: String,
-    },
+    Token { timestamp: u64, content: String },
 
     /// Reasoning/thinking content from the LLM
     #[serde(rename = "reasoning")]
-    Reasoning {
-        timestamp: u64,
-        content: String,
-    },
+    Reasoning { timestamp: u64, content: String },
 
     /// A tool call has started
     #[serde(rename = "tool_call_start")]
@@ -82,7 +76,6 @@ pub enum StreamEvent {
     // ========================================================================
     // GENERATIVE UI EVENTS
     // ========================================================================
-
     /// Request to display content to the user
     #[serde(rename = "show_content")]
     ShowContent {
@@ -111,7 +104,6 @@ pub enum StreamEvent {
     // ========================================================================
     // ACTION EVENTS
     // ========================================================================
-
     /// Respond action from the respond tool.
     /// Signals that a response should be sent to the originating hook.
     #[serde(rename = "action_respond")]
@@ -154,7 +146,6 @@ pub enum StreamEvent {
     // ========================================================================
     // METRICS EVENTS
     // ========================================================================
-
     /// Token usage update after an LLM call.
     /// Cumulative counts of tokens consumed in the session.
     #[serde(rename = "token_update")]
@@ -169,13 +160,10 @@ pub enum StreamEvent {
     // ========================================================================
     // CHECKPOINT EVENTS
     // ========================================================================
-
     /// Execution heartbeat — emitted during silent phases (e.g., LLM reasoning)
     /// to signal the execution is still alive.
     #[serde(rename = "heartbeat")]
-    Heartbeat {
-        timestamp: u64,
-    },
+    Heartbeat { timestamp: u64 },
 
     /// Execution context state for checkpoint persistence.
     ///
@@ -193,7 +181,6 @@ pub enum StreamEvent {
     // ========================================================================
     // WARD EVENTS
     // ========================================================================
-
     /// Agent switched to a different ward (project directory).
     #[serde(rename = "ward_changed")]
     WardChanged {
@@ -217,7 +204,6 @@ pub enum StreamEvent {
     // ========================================================================
     // SESSION EVENTS
     // ========================================================================
-
     /// Session title changed via set_session_title tool.
     #[serde(rename = "session_title_changed")]
     SessionTitleChanged {
@@ -292,17 +278,20 @@ mod tests {
             timestamp: 0,
             final_message: String::new(),
             token_count: 0,
-        }.is_terminal());
+        }
+        .is_terminal());
 
         assert!(StreamEvent::Error {
             timestamp: 0,
             error: String::new(),
             recoverable: false,
-        }.is_terminal());
+        }
+        .is_terminal());
 
         assert!(!StreamEvent::Token {
             timestamp: 0,
             content: String::new(),
-        }.is_terminal());
+        }
+        .is_terminal());
     }
 }

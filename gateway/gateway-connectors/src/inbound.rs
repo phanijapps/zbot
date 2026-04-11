@@ -93,7 +93,10 @@ mod tests {
         assert_eq!(payload.message, "Hello");
         assert_eq!(payload.thread_id.unwrap(), "thread-123");
         assert_eq!(payload.sender.as_ref().unwrap().id, "U123");
-        assert_eq!(payload.sender.as_ref().unwrap().name.as_deref(), Some("Alice"));
+        assert_eq!(
+            payload.sender.as_ref().unwrap().name.as_deref(),
+            Some("Alice")
+        );
         assert_eq!(payload.agent_id.unwrap(), "researcher");
         assert_eq!(payload.respond_to.unwrap().len(), 2);
     }

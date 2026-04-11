@@ -7,7 +7,9 @@ use async_trait::async_trait;
 use gateway_connectors::ConnectorRegistry;
 use std::collections::HashMap;
 use std::sync::Arc;
-use zero_core::connectors::{CapabilityInfo, ConnectorInfo, ConnectorResourceProvider, ResourceInfo};
+use zero_core::connectors::{
+    CapabilityInfo, ConnectorInfo, ConnectorResourceProvider, ResourceInfo,
+};
 
 /// Gateway implementation of `ConnectorResourceProvider`.
 ///
@@ -122,8 +124,7 @@ impl ConnectorResourceProvider for GatewayResourceProvider {
         }
 
         // Also apply connector transport headers (for auth etc.)
-        if let gateway_connectors::ConnectorTransport::Http { headers, .. } = &connector.transport
-        {
+        if let gateway_connectors::ConnectorTransport::Http { headers, .. } = &connector.transport {
             for (key, value) in headers {
                 request = request.header(key, value);
             }

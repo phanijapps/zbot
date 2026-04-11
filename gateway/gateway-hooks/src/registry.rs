@@ -1,8 +1,8 @@
 //! Hook registry for managing and routing to different hooks.
 
 use crate::{Hook, HookContext, HookType};
-use gateway_events::EventBus;
 use async_trait::async_trait;
+use gateway_events::EventBus;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -106,10 +106,12 @@ impl HookRegistry {
         }
 
         // Find the hook
-        let hook = self
-            .get(&ctx.hook_type)
-            .await
-            .ok_or_else(|| format!("No hook registered for type '{}'", ctx.hook_type.type_name()))?;
+        let hook = self.get(&ctx.hook_type).await.ok_or_else(|| {
+            format!(
+                "No hook registered for type '{}'",
+                ctx.hook_type.type_name()
+            )
+        })?;
 
         // Check if hook can handle this context
         if !hook.can_handle(ctx) {

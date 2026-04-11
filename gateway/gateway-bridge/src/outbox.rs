@@ -52,8 +52,8 @@ impl OutboxRepository {
         agent_id: Option<&str>,
     ) -> Result<String, BridgeError> {
         let id = format!("obx-{}", uuid::Uuid::new_v4());
-        let payload_str =
-            serde_json::to_string(payload).map_err(|e| BridgeError::Serialization(e.to_string()))?;
+        let payload_str = serde_json::to_string(payload)
+            .map_err(|e| BridgeError::Serialization(e.to_string()))?;
 
         let id_clone = id.clone();
         let adapter_id = adapter_id.to_string();
@@ -298,7 +298,7 @@ mod tests {
 
     fn setup_db() -> Arc<gateway_database::DatabaseManager> {
         use gateway_services::VaultPaths;
-        
+
         let dir = tempfile::TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
         Arc::new(gateway_database::DatabaseManager::new(paths).unwrap())

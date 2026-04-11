@@ -31,18 +31,20 @@ impl ToolFilter {
     /// Add a name pattern filter (prefix match).
     pub fn with_name_prefix(mut self, prefix: impl Into<String>) -> Self {
         let prefix = prefix.into();
-        self.predicates.push(Box::new(move |tool: &McpToolDefinition| {
-            tool.name.starts_with(&prefix)
-        }));
+        self.predicates
+            .push(Box::new(move |tool: &McpToolDefinition| {
+                tool.name.starts_with(&prefix)
+            }));
         self
     }
 
     /// Add a name pattern filter (suffix match).
     pub fn with_name_suffix(mut self, suffix: impl Into<String>) -> Self {
         let suffix = suffix.into();
-        self.predicates.push(Box::new(move |tool: &McpToolDefinition| {
-            tool.name.ends_with(&suffix)
-        }));
+        self.predicates
+            .push(Box::new(move |tool: &McpToolDefinition| {
+                tool.name.ends_with(&suffix)
+            }));
         self
     }
 
@@ -50,7 +52,9 @@ impl ToolFilter {
     pub fn with_name_contains(mut self, pattern: impl Into<String>) -> Self {
         let pattern = pattern.into();
         self.predicates
-            .push(Box::new(move |tool: &McpToolDefinition| tool.name.contains(&pattern)));
+            .push(Box::new(move |tool: &McpToolDefinition| {
+                tool.name.contains(&pattern)
+            }));
         self
     }
 
@@ -59,7 +63,9 @@ impl ToolFilter {
         let pattern = pattern.into();
         self.predicates
             .push(Box::new(move |tool: &McpToolDefinition| {
-                tool.description.to_lowercase().contains(&pattern.to_lowercase())
+                tool.description
+                    .to_lowercase()
+                    .contains(&pattern.to_lowercase())
             }));
         self
     }
@@ -119,9 +125,7 @@ pub fn accept_none() -> ToolFilter {
 
 /// Filter tools by name patterns.
 pub fn by_names(names: Vec<String>) -> ToolFilter {
-    ToolFilter::new().with_predicate(Box::new(move |tool| {
-        names.iter().any(|n| tool.name == *n)
-    }))
+    ToolFilter::new().with_predicate(Box::new(move |tool| names.iter().any(|n| tool.name == *n)))
 }
 
 /// Filter tools by name prefix.
@@ -131,16 +135,15 @@ pub fn by_prefix(prefix: impl Into<String>) -> ToolFilter {
 
 /// Filter tools excluding certain names.
 pub fn exclude_names(names: Vec<String>) -> ToolFilter {
-    ToolFilter::new().with_predicate(Box::new(move |tool| {
-        !names.iter().any(|n| tool.name == *n)
-    }))
+    ToolFilter::new().with_predicate(Box::new(move |tool| !names.iter().any(|n| tool.name == *n)))
 }
 
 /// Filter tools to only those that have a specific property in their schema.
 pub fn with_property(property: impl Into<String>) -> ToolFilter {
     let prop = property.into();
     ToolFilter::new().with_predicate(Box::new(move |tool| {
-        tool.input_schema.get("properties")
+        tool.input_schema
+            .get("properties")
             .and_then(|p| p.as_object())
             .map(|props| props.contains_key(&prop))
             .unwrap_or(false)

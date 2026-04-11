@@ -16,21 +16,31 @@ use gateway_database::{MemoryFact, MemoryRepository};
 /// Two facts are considered duplicates if they share 60%+ of their words.
 fn dedup_facts(mut facts: Vec<MemoryFact>, max: usize) -> Vec<MemoryFact> {
     // Sort by confidence descending — keep the best version
-    facts.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap_or(std::cmp::Ordering::Equal));
+    facts.sort_by(|a, b| {
+        b.confidence
+            .partial_cmp(&a.confidence)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let mut result: Vec<MemoryFact> = Vec::new();
     for fact in facts {
         let dominated = result.iter().any(|existing| {
-            let a_words: std::collections::HashSet<&str> = existing.content.split_whitespace().collect();
-            let b_words: std::collections::HashSet<&str> = fact.content.split_whitespace().collect();
-            if a_words.is_empty() || b_words.is_empty() { return false; }
+            let a_words: std::collections::HashSet<&str> =
+                existing.content.split_whitespace().collect();
+            let b_words: std::collections::HashSet<&str> =
+                fact.content.split_whitespace().collect();
+            if a_words.is_empty() || b_words.is_empty() {
+                return false;
+            }
             let overlap = a_words.intersection(&b_words).count();
             let smaller = a_words.len().min(b_words.len());
             overlap as f64 / smaller as f64 > 0.6
         });
         if !dominated {
             result.push(fact);
-            if result.len() >= max { break; }
+            if result.len() >= max {
+                break;
+            }
         }
     }
     result
@@ -50,12 +60,14 @@ pub fn generate_ward_knowledge_file(
 
     // 1. Corrections — max 5, highest confidence, deduped
     let corrections = dedup_facts(
-        memory_repo.get_facts_by_category("root", "correction", 10)
+        memory_repo
+            .get_facts_by_category("root", "correction", 10)
             .unwrap_or_default()
             .into_iter()
             .chain(
-                memory_repo.get_facts_by_category("root", "instruction", 10)
-                    .unwrap_or_default()
+                memory_repo
+                    .get_facts_by_category("root", "instruction", 10)
+                    .unwrap_or_default(),
             )
             .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
             .collect(),
@@ -64,7 +76,8 @@ pub fn generate_ward_knowledge_file(
 
     // 2. Architecture decisions — max 3 strategies
     let strategies = dedup_facts(
-        memory_repo.get_facts_by_category("root", "strategy", 5)
+        memory_repo
+            .get_facts_by_category("root", "strategy", 5)
             .unwrap_or_default()
             .into_iter()
             .filter(|f| f.ward_id == ward_id || f.ward_id == "__global__")
@@ -74,7 +87,8 @@ pub fn generate_ward_knowledge_file(
 
     // 3. Active warnings — max 2 patterns (only high-confidence operational ones)
     let patterns = dedup_facts(
-        memory_repo.get_facts_by_category("root", "pattern", 5)
+        memory_repo
+            .get_facts_by_category("root", "pattern", 5)
             .unwrap_or_default()
             .into_iter()
             .filter(|f| (f.ward_id == ward_id || f.ward_id == "__global__") && f.confidence >= 0.8)
@@ -120,8 +134,7 @@ pub fn generate_ward_knowledge_file(
         return Err(format!("Failed to create memory dir: {}", e));
     }
     let file_path = memory_dir.join("ward.md");
-    std::fs::write(&file_path, md)
-        .map_err(|e| format!("Failed to write ward.md: {}", e))?;
+    std::fs::write(&file_path, md).map_err(|e| format!("Failed to write ward.md: {}", e))?;
 
     tracing::info!(ward = %ward_id, path = ?file_path, "Updated ward knowledge file");
     Ok(())

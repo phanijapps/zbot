@@ -368,7 +368,10 @@ impl Session {
     }
 
     /// Create a child session for a subagent (isolated conversation context).
-    pub fn new_child(root_agent_id: impl Into<String>, parent_session_id: impl Into<String>) -> Self {
+    pub fn new_child(
+        root_agent_id: impl Into<String>,
+        parent_session_id: impl Into<String>,
+    ) -> Self {
         Self {
             id: format!("sess-{}", uuid::Uuid::new_v4()),
             status: SessionStatus::Running,
@@ -629,7 +632,6 @@ pub struct DashboardStats {
     // =========================================================================
     // SESSION COUNTS
     // =========================================================================
-
     /// Number of queued sessions (waiting to start)
     pub sessions_queued: u64,
 
@@ -648,7 +650,6 @@ pub struct DashboardStats {
     // =========================================================================
     // EXECUTION COUNTS
     // =========================================================================
-
     /// Number of queued executions (waiting to start)
     pub executions_queued: u64,
 
@@ -667,7 +668,6 @@ pub struct DashboardStats {
     // =========================================================================
     // DAILY STATS
     // =========================================================================
-
     /// Total sessions today
     pub today_sessions: u64,
 
@@ -677,7 +677,6 @@ pub struct DashboardStats {
     // =========================================================================
     // BREAKDOWN BY SOURCE
     // =========================================================================
-
     /// Sessions count by trigger source (web, cli, cron, api, connector)
     pub sessions_by_source: std::collections::HashMap<String, u64>,
 }
@@ -706,7 +705,6 @@ pub struct SessionFilter {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset: Option<u32>,
-
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub thread_id: Option<String>,
@@ -849,11 +847,26 @@ mod tests {
 
     #[test]
     fn session_status_from_str() {
-        assert_eq!("queued".parse::<SessionStatus>().unwrap(), SessionStatus::Queued);
-        assert_eq!("running".parse::<SessionStatus>().unwrap(), SessionStatus::Running);
-        assert_eq!("PAUSED".parse::<SessionStatus>().unwrap(), SessionStatus::Paused);
-        assert_eq!("Completed".parse::<SessionStatus>().unwrap(), SessionStatus::Completed);
-        assert_eq!("crashed".parse::<SessionStatus>().unwrap(), SessionStatus::Crashed);
+        assert_eq!(
+            "queued".parse::<SessionStatus>().unwrap(),
+            SessionStatus::Queued
+        );
+        assert_eq!(
+            "running".parse::<SessionStatus>().unwrap(),
+            SessionStatus::Running
+        );
+        assert_eq!(
+            "PAUSED".parse::<SessionStatus>().unwrap(),
+            SessionStatus::Paused
+        );
+        assert_eq!(
+            "Completed".parse::<SessionStatus>().unwrap(),
+            SessionStatus::Completed
+        );
+        assert_eq!(
+            "crashed".parse::<SessionStatus>().unwrap(),
+            SessionStatus::Crashed
+        );
     }
 
     #[test]
@@ -918,10 +931,19 @@ mod tests {
     fn trigger_source_from_str() {
         assert_eq!("web".parse::<TriggerSource>().unwrap(), TriggerSource::Web);
         assert_eq!("CLI".parse::<TriggerSource>().unwrap(), TriggerSource::Cli);
-        assert_eq!("Cron".parse::<TriggerSource>().unwrap(), TriggerSource::Cron);
+        assert_eq!(
+            "Cron".parse::<TriggerSource>().unwrap(),
+            TriggerSource::Cron
+        );
         assert_eq!("api".parse::<TriggerSource>().unwrap(), TriggerSource::Api);
-        assert_eq!("connector".parse::<TriggerSource>().unwrap(), TriggerSource::Connector);
-        assert_eq!("plugin".parse::<TriggerSource>().unwrap(), TriggerSource::Connector); // backward compat
+        assert_eq!(
+            "connector".parse::<TriggerSource>().unwrap(),
+            TriggerSource::Connector
+        );
+        assert_eq!(
+            "plugin".parse::<TriggerSource>().unwrap(),
+            TriggerSource::Connector
+        ); // backward compat
     }
 
     #[test]
@@ -979,9 +1001,18 @@ mod tests {
 
     #[test]
     fn execution_status_from_str() {
-        assert_eq!("queued".parse::<ExecutionStatus>().unwrap(), ExecutionStatus::Queued);
-        assert_eq!("RUNNING".parse::<ExecutionStatus>().unwrap(), ExecutionStatus::Running);
-        assert_eq!("completed".parse::<ExecutionStatus>().unwrap(), ExecutionStatus::Completed);
+        assert_eq!(
+            "queued".parse::<ExecutionStatus>().unwrap(),
+            ExecutionStatus::Queued
+        );
+        assert_eq!(
+            "RUNNING".parse::<ExecutionStatus>().unwrap(),
+            ExecutionStatus::Running
+        );
+        assert_eq!(
+            "completed".parse::<ExecutionStatus>().unwrap(),
+            ExecutionStatus::Completed
+        );
     }
 
     // ========================================================================
@@ -997,9 +1028,18 @@ mod tests {
 
     #[test]
     fn delegation_type_from_str() {
-        assert_eq!("root".parse::<DelegationType>().unwrap(), DelegationType::Root);
-        assert_eq!("SEQUENTIAL".parse::<DelegationType>().unwrap(), DelegationType::Sequential);
-        assert_eq!("Parallel".parse::<DelegationType>().unwrap(), DelegationType::Parallel);
+        assert_eq!(
+            "root".parse::<DelegationType>().unwrap(),
+            DelegationType::Root
+        );
+        assert_eq!(
+            "SEQUENTIAL".parse::<DelegationType>().unwrap(),
+            DelegationType::Sequential
+        );
+        assert_eq!(
+            "Parallel".parse::<DelegationType>().unwrap(),
+            DelegationType::Parallel
+        );
     }
 
     // ========================================================================
@@ -1098,7 +1138,11 @@ mod tests {
     fn agent_execution_is_root() {
         let root = AgentExecution::new_root("sess", "agent");
         let delegated = AgentExecution::new_delegated(
-            "sess", "sub", "parent", DelegationType::Sequential, "task"
+            "sess",
+            "sub",
+            "parent",
+            DelegationType::Sequential,
+            "task",
         );
 
         assert!(root.is_root());
@@ -1173,7 +1217,8 @@ mod tests {
         let not_found = ApiError::NotFound("Session not found".to_string());
         let db_error = ApiError::Database("Connection failed".to_string());
         let bad_request = ApiError::BadRequest("Invalid input".to_string());
-        let invalid_transition = ApiError::InvalidTransition("Cannot pause completed session".to_string());
+        let invalid_transition =
+            ApiError::InvalidTransition("Cannot pause completed session".to_string());
 
         assert!(not_found.to_string().contains("Session not found"));
         assert!(db_error.to_string().contains("Connection failed"));
@@ -1188,7 +1233,7 @@ mod tests {
     #[test]
     fn session_serialization_roundtrip() {
         let session = Session::new_with_source("agent", TriggerSource::Connector);
-        
+
         let json = serde_json::to_string(&session).unwrap();
         let parsed: Session = serde_json::from_str(&json).unwrap();
 

@@ -24,7 +24,9 @@ pub fn routes() -> Router<AppState> {
         .route("/", get(list_providers).post(create_provider))
         .route(
             "/:id",
-            get(get_provider).put(update_provider).delete(delete_provider),
+            get(get_provider)
+                .put(update_provider)
+                .delete(delete_provider),
         )
         .route("/:id/test", post(test_provider))
         .route("/:id/default", post(set_default_provider))
@@ -50,12 +52,15 @@ fn enrich_provider(provider: &mut Provider, registry: &ModelRegistry) {
     let mut configs = std::collections::HashMap::new();
     for model_id in &provider.models {
         let profile = registry.get(model_id);
-        configs.insert(model_id.clone(), ModelConfig {
-            capabilities: profile.capabilities.clone(),
-            max_input: Some(profile.context.input),
-            max_output: profile.context.output,
-            source: "registry".to_string(),
-        });
+        configs.insert(
+            model_id.clone(),
+            ModelConfig {
+                capabilities: profile.capabilities.clone(),
+                max_input: Some(profile.context.input),
+                max_output: profile.context.output,
+                source: "registry".to_string(),
+            },
+        );
     }
 
     if !configs.is_empty() {
@@ -81,10 +86,7 @@ async fn list_providers(State(state): State<AppState>) -> impl IntoResponse {
 }
 
 /// Get a single provider
-async fn get_provider(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn get_provider(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.provider_service.get(&id) {
         Ok(mut provider) => {
             enrich_provider(&mut provider, &state.model_registry);
@@ -140,10 +142,7 @@ async fn set_default_provider(
 }
 
 /// Test a provider connection (by ID)
-async fn test_provider(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> impl IntoResponse {
+async fn test_provider(State(state): State<AppState>, Path(id): Path<String>) -> impl IntoResponse {
     match state.provider_service.get(&id) {
         Ok(mut provider) => {
             let result = state.provider_service.test(&provider).await;

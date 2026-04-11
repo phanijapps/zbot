@@ -132,19 +132,16 @@ impl SqliteGraphTraversal {
             .map_err(|e| format!("prepare traverse: {e}"))?;
 
         let rows = stmt
-            .query_map(
-                params![entity_id, max_hops as i64, limit as i64],
-                |row| {
-                    Ok((
-                        row.get::<_, String>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, i64>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, i64>(5)?,
-                    ))
-                },
-            )
+            .query_map(params![entity_id, max_hops as i64, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, i64>(5)?,
+                ))
+            })
             .map_err(|e| format!("query traverse: {e}"))?;
 
         let decay = self.hop_decay;
@@ -191,9 +188,7 @@ impl GraphTraversal for SqliteGraphTraversal {
         let mut seed_ids: Vec<String> = Vec::new();
         for name in names {
             let mut stmt = conn
-                .prepare(
-                    "SELECT id FROM kg_entities WHERE name COLLATE NOCASE = ?1 LIMIT 1",
-                )
+                .prepare("SELECT id FROM kg_entities WHERE name COLLATE NOCASE = ?1 LIMIT 1")
                 .map_err(|e| format!("prepare name lookup: {e}"))?;
 
             let mut rows = stmt
@@ -315,10 +310,8 @@ mod tests {
         // Should find both Rust (hop 1) and Systems (hop 2)
         assert_eq!(results.len(), 2, "expected 2 nodes, got: {results:?}");
 
-        let hop1: Vec<&TraversalNode> =
-            results.iter().filter(|n| n.hop_distance == 1).collect();
-        let hop2: Vec<&TraversalNode> =
-            results.iter().filter(|n| n.hop_distance == 2).collect();
+        let hop1: Vec<&TraversalNode> = results.iter().filter(|n| n.hop_distance == 1).collect();
+        let hop2: Vec<&TraversalNode> = results.iter().filter(|n| n.hop_distance == 2).collect();
 
         assert_eq!(hop1.len(), 1, "expected 1 node at hop 1");
         assert_eq!(hop1[0].entity_name, "Rust");
@@ -374,7 +367,11 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(results.len(), 2, "case-insensitive lookup failed: {results:?}");
+        assert_eq!(
+            results.len(),
+            2,
+            "case-insensitive lookup failed: {results:?}"
+        );
     }
 
     #[tokio::test]
@@ -387,13 +384,22 @@ mod tests {
         let c = Entity::new("agent1".into(), EntityType::Concept, "NodeC".into());
 
         let rel_ab = Relationship::new(
-            "agent1".into(), a.id.clone(), b.id.clone(), RelationshipType::RelatedTo,
+            "agent1".into(),
+            a.id.clone(),
+            b.id.clone(),
+            RelationshipType::RelatedTo,
         );
         let rel_bc = Relationship::new(
-            "agent1".into(), b.id.clone(), c.id.clone(), RelationshipType::RelatedTo,
+            "agent1".into(),
+            b.id.clone(),
+            c.id.clone(),
+            RelationshipType::RelatedTo,
         );
         let rel_ca = Relationship::new(
-            "agent1".into(), c.id.clone(), a.id.clone(), RelationshipType::RelatedTo,
+            "agent1".into(),
+            c.id.clone(),
+            a.id.clone(),
+            RelationshipType::RelatedTo,
         );
 
         let knowledge = ExtractedKnowledge {
@@ -414,6 +420,10 @@ mod tests {
         let results = traversal.traverse(&a_id, 10, 100).await.unwrap();
 
         // Should find B and C, no duplicates, no infinite loop
-        assert_eq!(results.len(), 2, "cycle graph: expected 2 nodes, got: {results:?}");
+        assert_eq!(
+            results.len(),
+            2,
+            "cycle graph: expected 2 nodes, got: {results:?}"
+        );
     }
 }

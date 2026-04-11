@@ -246,11 +246,7 @@ impl SubscriptionManager {
     }
 
     /// Register a new client - atomic operation.
-    pub async fn connect(
-        &self,
-        client_id: ClientId,
-        sender: mpsc::UnboundedSender<ServerMessage>,
-    ) {
+    pub async fn connect(&self, client_id: ClientId, sender: mpsc::UnboundedSender<ServerMessage>) {
         let mut state = self.state.write().await;
         state.clients.insert(
             client_id.clone(),
@@ -263,9 +259,7 @@ impl SubscriptionManager {
                 channel_healthy: true,
             },
         );
-        state
-            .client_subscriptions
-            .insert(client_id, HashSet::new());
+        state.client_subscriptions.insert(client_id, HashSet::new());
         self.metrics.total_clients.fetch_add(1, Ordering::Relaxed);
     }
 
@@ -322,7 +316,8 @@ impl SubscriptionManager {
         conversation_id: String,
     ) -> Result<SubscribeResult, SubscribeError> {
         // Backward-compatible: default to All scope with no scope state
-        self.subscribe_with_scope(client_id, conversation_id, SubscriptionScope::All, None).await
+        self.subscribe_with_scope(client_id, conversation_id, SubscriptionScope::All, None)
+            .await
     }
 
     /// Subscribe to a conversation with explicit scope and state.
@@ -371,7 +366,9 @@ impl SubscriptionManager {
                 }
             }
             let current_seq = *state.sequence_numbers.get(&conversation_id).unwrap_or(&0);
-            return Ok(SubscribeResult::AlreadySubscribed { current_sequence: current_seq });
+            return Ok(SubscribeResult::AlreadySubscribed {
+                current_sequence: current_seq,
+            });
         }
 
         // Check conversation subscriber limit
@@ -421,7 +418,9 @@ impl SubscriptionManager {
             .total_subscriptions
             .fetch_add(1, Ordering::Relaxed);
 
-        Ok(SubscribeResult::Subscribed { current_sequence: current_seq })
+        Ok(SubscribeResult::Subscribed {
+            current_sequence: current_seq,
+        })
     }
 
     /// Unsubscribe from a conversation - atomic.
@@ -794,9 +793,10 @@ impl SubscriptionManager {
     ) -> Option<(SubscriptionScope, Option<SessionScopeState>)> {
         let state = self.state.read().await;
         let entry_key = (conversation_id.to_string(), client_id.clone());
-        state.subscription_entries.get(&entry_key).map(|entry| {
-            (entry.scope.clone(), entry.scope_state.clone())
-        })
+        state
+            .subscription_entries
+            .get(&entry_key)
+            .map(|entry| (entry.scope.clone(), entry.scope_state.clone()))
     }
 
     /// Get all subscription entries for a conversation (for scoped routing).
@@ -818,9 +818,10 @@ impl SubscriptionManager {
             .into_iter()
             .filter_map(|client_id| {
                 let entry_key = (conversation_id.to_string(), client_id.clone());
-                state.subscription_entries.get(&entry_key).map(|entry| {
-                    (client_id, entry.scope.clone(), entry.scope_state.clone())
-                })
+                state
+                    .subscription_entries
+                    .get(&entry_key)
+                    .map(|entry| (client_id, entry.scope.clone(), entry.scope_state.clone()))
             })
             .collect()
     }
@@ -866,20 +867,34 @@ mod tests {
         let result = manager
             .subscribe(&"client-1".to_string(), "conv-1".to_string())
             .await;
-        assert!(matches!(result, Ok(SubscribeResult::Subscribed { current_sequence: 0 })));
-        assert!(manager.is_subscribed(&"client-1".to_string(), "conv-1").await);
+        assert!(matches!(
+            result,
+            Ok(SubscribeResult::Subscribed {
+                current_sequence: 0
+            })
+        ));
+        assert!(
+            manager
+                .is_subscribed(&"client-1".to_string(), "conv-1")
+                .await
+        );
 
         // Double subscribe returns AlreadySubscribed
         let result = manager
             .subscribe(&"client-1".to_string(), "conv-1".to_string())
             .await;
-        assert!(matches!(result, Ok(SubscribeResult::AlreadySubscribed { .. })));
+        assert!(matches!(
+            result,
+            Ok(SubscribeResult::AlreadySubscribed { .. })
+        ));
 
         // Unsubscribe
-        manager
-            .unsubscribe(&"client-1".to_string(), "conv-1")
-            .await;
-        assert!(!manager.is_subscribed(&"client-1".to_string(), "conv-1").await);
+        manager.unsubscribe(&"client-1".to_string(), "conv-1").await;
+        assert!(
+            !manager
+                .is_subscribed(&"client-1".to_string(), "conv-1")
+                .await
+        );
     }
 
     #[tokio::test]
@@ -899,12 +914,12 @@ mod tests {
 
         // Next subscription should fail
         let result = manager
-            .subscribe(
-                &"client-1".to_string(),
-                "conv-overflow".to_string(),
-            )
+            .subscribe(&"client-1".to_string(), "conv-overflow".to_string())
             .await;
-        assert!(matches!(result, Err(SubscribeError::TooManySubscriptions { .. })));
+        assert!(matches!(
+            result,
+            Err(SubscribeError::TooManySubscriptions { .. })
+        ));
     }
 
     #[tokio::test]
@@ -1249,7 +1264,9 @@ mod tests {
             execution_id: Some("exec-subagent".to_string()),
             is_delegation_event: false,
         };
-        let result = manager.route_event_scoped("sess-1", subagent_msg, &metadata).await;
+        let result = manager
+            .route_event_scoped("sess-1", subagent_msg, &metadata)
+            .await;
 
         // Event was filtered, nothing sent
         assert_eq!(result.sent, 0);
@@ -1267,7 +1284,9 @@ mod tests {
             execution_id: Some("exec-root".to_string()),
             is_delegation_event: false,
         };
-        let result = manager.route_event_scoped("sess-1", root_msg, &root_metadata).await;
+        let result = manager
+            .route_event_scoped("sess-1", root_msg, &root_metadata)
+            .await;
 
         assert_eq!(result.sent, 1);
         let received = rx.recv().await.unwrap();
@@ -1389,8 +1408,13 @@ mod tests {
             seq: None,
         };
         let metadata = EventMetadata::with_execution("exec-subagent");
-        let result = manager.route_event_scoped("sess-1", subagent_msg.clone(), &metadata).await;
-        assert_eq!(result.sent, 0, "Session scope should filter subagent events");
+        let result = manager
+            .route_event_scoped("sess-1", subagent_msg.clone(), &metadata)
+            .await;
+        assert_eq!(
+            result.sent, 0,
+            "Session scope should filter subagent events"
+        );
 
         // Now re-subscribe with Execution scope targeting the subagent
         let result = manager
@@ -1403,11 +1427,19 @@ mod tests {
             .await;
 
         // Should return AlreadySubscribed (but scope was updated internally)
-        assert!(matches!(result, Ok(SubscribeResult::AlreadySubscribed { .. })));
+        assert!(matches!(
+            result,
+            Ok(SubscribeResult::AlreadySubscribed { .. })
+        ));
 
         // Verify scope was updated - subagent events should now pass
-        let result = manager.route_event_scoped("sess-1", subagent_msg, &metadata).await;
-        assert_eq!(result.sent, 1, "Execution scope should allow subagent events");
+        let result = manager
+            .route_event_scoped("sess-1", subagent_msg, &metadata)
+            .await;
+        assert_eq!(
+            result.sent, 1,
+            "Execution scope should allow subagent events"
+        );
 
         // Verify we received the event
         let received = rx.recv().await.unwrap();

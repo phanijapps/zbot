@@ -94,7 +94,10 @@ impl McpService {
     /// List MCP server summaries (lightweight for UI).
     pub fn list_summaries(&self) -> Result<Vec<McpServerSummary>, String> {
         let configs = self.list()?;
-        Ok(configs.into_iter().map(|c| self.config_to_summary(&c)).collect())
+        Ok(configs
+            .into_iter()
+            .map(|c| self.config_to_summary(&c))
+            .collect())
     }
 
     /// Get a specific MCP server configuration by ID.
@@ -187,28 +190,52 @@ impl McpService {
     /// Convert a config to a summary.
     fn config_to_summary(&self, config: &McpServerConfig) -> McpServerSummary {
         match config {
-            McpServerConfig::Stdio { id, name, description, enabled, .. } => McpServerSummary {
+            McpServerConfig::Stdio {
+                id,
+                name,
+                description,
+                enabled,
+                ..
+            } => McpServerSummary {
                 id: id.clone().unwrap_or_else(|| name.clone()),
                 name: name.clone(),
                 description: description.clone(),
                 transport_type: "stdio".to_string(),
                 enabled: *enabled,
             },
-            McpServerConfig::Http { id, name, description, enabled, .. } => McpServerSummary {
+            McpServerConfig::Http {
+                id,
+                name,
+                description,
+                enabled,
+                ..
+            } => McpServerSummary {
                 id: id.clone().unwrap_or_else(|| name.clone()),
                 name: name.clone(),
                 description: description.clone(),
                 transport_type: "http".to_string(),
                 enabled: *enabled,
             },
-            McpServerConfig::Sse { id, name, description, enabled, .. } => McpServerSummary {
+            McpServerConfig::Sse {
+                id,
+                name,
+                description,
+                enabled,
+                ..
+            } => McpServerSummary {
                 id: id.clone().unwrap_or_else(|| name.clone()),
                 name: name.clone(),
                 description: description.clone(),
                 transport_type: "sse".to_string(),
                 enabled: *enabled,
             },
-            McpServerConfig::StreamableHttp { id, name, description, enabled, .. } => McpServerSummary {
+            McpServerConfig::StreamableHttp {
+                id,
+                name,
+                description,
+                enabled,
+                ..
+            } => McpServerSummary {
                 id: id.clone().unwrap_or_else(|| name.clone()),
                 name: name.clone(),
                 description: description.clone(),

@@ -2,12 +2,14 @@
 //!
 //! Executes sub-agents concurrently.
 
-use async_trait::async_trait;
 use async_stream::stream;
+use async_trait::async_trait;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::sync::Arc;
 
-use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, InvocationContext, Result};
+use zero_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 
 /// Parallel agent executes sub-agents concurrently.
 ///
@@ -162,8 +164,7 @@ mod tests {
             description: "Test".to_string(),
         }) as Arc<dyn Agent>;
 
-        let parallel = ParallelAgent::new("par", vec![agent])
-            .with_description("Parallel team");
+        let parallel = ParallelAgent::new("par", vec![agent]).with_description("Parallel team");
 
         assert_eq!(parallel.description(), "Parallel team");
     }

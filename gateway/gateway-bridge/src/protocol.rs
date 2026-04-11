@@ -206,7 +206,12 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: WorkerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            WorkerMessage::Hello { adapter_id, capabilities, resources, .. } => {
+            WorkerMessage::Hello {
+                adapter_id,
+                capabilities,
+                resources,
+                ..
+            } => {
                 assert_eq!(adapter_id, "slack-1");
                 assert_eq!(capabilities.len(), 1);
                 assert_eq!(resources.len(), 1);
@@ -220,7 +225,12 @@ mod tests {
         let json = r#"{"type":"hello","adapter_id":"test-1"}"#;
         let msg: WorkerMessage = serde_json::from_str(json).unwrap();
         match msg {
-            WorkerMessage::Hello { adapter_id, capabilities, resources, resume } => {
+            WorkerMessage::Hello {
+                adapter_id,
+                capabilities,
+                resources,
+                resume,
+            } => {
                 assert_eq!(adapter_id, "test-1");
                 assert!(capabilities.is_empty());
                 assert!(resources.is_empty());
@@ -257,7 +267,12 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: WorkerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            WorkerMessage::Inbound { text, thread_id, sender, .. } => {
+            WorkerMessage::Inbound {
+                text,
+                thread_id,
+                sender,
+                ..
+            } => {
                 assert_eq!(text, "Hello from Slack");
                 assert_eq!(thread_id.unwrap(), "thread-456");
                 assert_eq!(sender.unwrap().id, "U123");
@@ -286,7 +301,11 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: WorkerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            WorkerMessage::Fail { outbox_id, error, retry_after_seconds } => {
+            WorkerMessage::Fail {
+                outbox_id,
+                error,
+                retry_after_seconds,
+            } => {
                 assert_eq!(outbox_id, "obx-abc");
                 assert_eq!(error, "Timeout");
                 assert_eq!(retry_after_seconds, Some(30));
@@ -337,7 +356,9 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: BridgeServerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            BridgeServerMessage::HelloAck { heartbeat_seconds, .. } => {
+            BridgeServerMessage::HelloAck {
+                heartbeat_seconds, ..
+            } => {
                 assert_eq!(heartbeat_seconds, 20);
             }
             _ => panic!("Expected HelloAck"),
@@ -354,7 +375,11 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: BridgeServerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            BridgeServerMessage::OutboxItem { outbox_id, capability, payload } => {
+            BridgeServerMessage::OutboxItem {
+                outbox_id,
+                capability,
+                payload,
+            } => {
                 assert_eq!(outbox_id, "obx-123");
                 assert_eq!(capability, "send_message");
                 assert_eq!(payload["text"], "Hello");
@@ -373,7 +398,11 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: BridgeServerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            BridgeServerMessage::ResourceQuery { request_id, resource, params } => {
+            BridgeServerMessage::ResourceQuery {
+                request_id,
+                resource,
+                params,
+            } => {
                 assert_eq!(request_id, "req-1");
                 assert_eq!(resource, "contacts");
                 assert_eq!(params.unwrap()["limit"], 10);
@@ -392,7 +421,11 @@ mod tests {
         let json = serde_json::to_string(&msg).unwrap();
         let parsed: BridgeServerMessage = serde_json::from_str(&json).unwrap();
         match parsed {
-            BridgeServerMessage::CapabilityInvoke { request_id, capability, .. } => {
+            BridgeServerMessage::CapabilityInvoke {
+                request_id,
+                capability,
+                ..
+            } => {
                 assert_eq!(request_id, "req-2");
                 assert_eq!(capability, "send_message");
             }

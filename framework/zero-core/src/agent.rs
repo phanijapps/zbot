@@ -39,9 +39,11 @@ use crate::event::Event;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::context::{
+        CallbackContext, InvocationContext, ReadonlyContext, RunConfig, Session, State,
+    };
     use crate::event::Event;
     use crate::event::EventActions;
-    use crate::context::{InvocationContext, Session, State, ReadonlyContext, CallbackContext, RunConfig};
     use crate::types::{Content, Part};
 
     struct TestAgent {
@@ -56,35 +58,61 @@ mod tests {
     }
 
     impl ReadonlyContext for MockInvocationContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test" }
-        fn user_id(&self) -> &str { "user" }
-        fn app_name(&self) -> &str { "app" }
-        fn session_id(&self) -> &str { "session" }
-        fn branch(&self) -> &str { "" }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test"
+        }
+        fn user_id(&self) -> &str {
+            "user"
+        }
+        fn app_name(&self) -> &str {
+            "app"
+        }
+        fn session_id(&self) -> &str {
+            "session"
+        }
+        fn branch(&self) -> &str {
+            ""
+        }
         fn user_content(&self) -> &Content {
             use std::sync::LazyLock;
             static CONTENT: LazyLock<Content> = LazyLock::new(|| Content {
                 role: "user".to_string(),
-                parts: vec![Part::Text { text: "test".to_string() }],
+                parts: vec![Part::Text {
+                    text: "test".to_string(),
+                }],
             });
             &CONTENT
         }
     }
 
     impl CallbackContext for MockInvocationContext {
-        fn get_state(&self, _key: &str) -> Option<serde_json::Value> { None }
+        fn get_state(&self, _key: &str) -> Option<serde_json::Value> {
+            None
+        }
         fn set_state(&self, _key: String, _value: serde_json::Value) {}
     }
 
     impl InvocationContext for MockInvocationContext {
-        fn agent(&self) -> Arc<dyn Agent> { self.agent.clone() }
-        fn session(&self) -> Arc<dyn Session> { unimplemented!() }
-        fn run_config(&self) -> &RunConfig { &self.run_config }
-        fn actions(&self) -> EventActions { EventActions::default() }
+        fn agent(&self) -> Arc<dyn Agent> {
+            self.agent.clone()
+        }
+        fn session(&self) -> Arc<dyn Session> {
+            unimplemented!()
+        }
+        fn run_config(&self) -> &RunConfig {
+            &self.run_config
+        }
+        fn actions(&self) -> EventActions {
+            EventActions::default()
+        }
         fn set_actions(&self, _actions: EventActions) {}
         fn end_invocation(&self) {}
-        fn ended(&self) -> bool { false }
+        fn ended(&self) -> bool {
+            false
+        }
         fn add_content(&self, _content: Content) {
             // Mock implementation - does nothing
         }

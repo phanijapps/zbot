@@ -112,7 +112,9 @@ pub async fn enqueue_and_push(
     outbox_repo: &OutboxRepository,
     registry: &BridgeRegistry,
 ) -> Result<String, crate::error::BridgeError> {
-    let id = outbox_repo.insert(adapter_id, capability, payload, session_id, thread_id, agent_id)?;
+    let id = outbox_repo.insert(
+        adapter_id, capability, payload, session_id, thread_id, agent_id,
+    )?;
 
     if registry.is_connected(adapter_id).await {
         push_pending(adapter_id, outbox_repo, registry).await;
@@ -130,12 +132,10 @@ mod tests {
 
     fn setup() -> (Arc<OutboxRepository>, Arc<BridgeRegistry>) {
         use gateway_services::VaultPaths;
-        
+
         let dir = tempfile::TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(dir.path().to_path_buf()));
-        let db = Arc::new(
-            gateway_database::DatabaseManager::new(paths).unwrap(),
-        );
+        let db = Arc::new(gateway_database::DatabaseManager::new(paths).unwrap());
         let outbox = Arc::new(OutboxRepository::new(db));
         let registry = Arc::new(BridgeRegistry::new());
         (outbox, registry)
@@ -153,7 +153,14 @@ mod tests {
             .unwrap();
 
         outbox
-            .insert("w1", "send_msg", &serde_json::json!({"text": "hi"}), None, None, None)
+            .insert(
+                "w1",
+                "send_msg",
+                &serde_json::json!({"text": "hi"}),
+                None,
+                None,
+                None,
+            )
             .unwrap();
 
         push_pending("w1", &outbox, &registry).await;
@@ -161,7 +168,11 @@ mod tests {
         // Should receive the outbox item
         let msg = rx.recv().await.unwrap();
         match msg {
-            BridgeServerMessage::OutboxItem { capability, payload, .. } => {
+            BridgeServerMessage::OutboxItem {
+                capability,
+                payload,
+                ..
+            } => {
                 assert_eq!(capability, "send_msg");
                 assert_eq!(payload["text"], "hi");
             }

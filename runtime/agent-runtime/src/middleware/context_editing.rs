@@ -10,12 +10,14 @@
 //!
 //! Manage conversation context by clearing older tool call outputs.
 
-use crate::types::{ChatMessage, StreamEvent, ToolCall};
-use zero_core::types::Part;
-use crate::middleware::traits::{PreProcessMiddleware, MiddlewareContext, MiddlewareEffect, ExecutionState};
 use crate::middleware::config::ContextEditingConfig;
 use crate::middleware::token_counter::estimate_total_tokens;
+use crate::middleware::traits::{
+    ExecutionState, MiddlewareContext, MiddlewareEffect, PreProcessMiddleware,
+};
+use crate::types::{ChatMessage, StreamEvent, ToolCall};
 use serde_json::json;
+use zero_core::types::Part;
 
 /// Compress an assistant message into a one-line summary.
 ///
@@ -25,13 +27,16 @@ use serde_json::json;
 /// Format: `[Turn N: tool1(file1), tool2(file2)]` or `[Turn N: <truncated reasoning>]`
 pub(crate) fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) -> String {
     if let Some(ref tool_calls) = msg.tool_calls {
-        let summaries: Vec<String> = tool_calls.iter().map(|tc| {
-            let path = extract_file_path(&tc.arguments);
-            match path {
-                Some(p) => format!("{}({})", tc.name, p),
-                None => tc.name.clone(),
-            }
-        }).collect();
+        let summaries: Vec<String> = tool_calls
+            .iter()
+            .map(|tc| {
+                let path = extract_file_path(&tc.arguments);
+                match path {
+                    Some(p) => format!("{}({})", tc.name, p),
+                    None => tc.name.clone(),
+                }
+            })
+            .collect();
 
         format!("[Turn {}: {}]", turn_number, summaries.join(", "))
     } else if !msg.content.is_empty() {
@@ -120,9 +125,7 @@ pub struct ContextEditingMiddleware {
 impl ContextEditingMiddleware {
     /// Create a new context editing middleware
     pub fn new(config: ContextEditingConfig) -> Self {
-        Self {
-            config,
-        }
+        Self { config }
     }
 
     /// Find tool result messages that should be cleared
@@ -142,7 +145,8 @@ impl ContextEditingMiddleware {
     ) -> Vec<usize> {
         let tool_call_index = build_tool_call_index(messages);
         let mut tool_result_indices = Vec::new();
-        let mut tool_call_id_to_idx: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut tool_call_id_to_idx: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
 
         // Find all tool role messages (these contain tool results)
         for (idx, message) in messages.iter().enumerate() {
@@ -195,9 +199,13 @@ impl ContextEditingMiddleware {
                                 );
 
                                 for resource_id in &info.resource_tool_call_ids {
-                                    if let Some(&resource_idx) = tool_call_id_to_idx.get(resource_id) {
+                                    if let Some(&resource_idx) =
+                                        tool_call_id_to_idx.get(resource_id)
+                                    {
                                         // Only add if not already in the clear list
-                                        if !indices_to_clear.contains(&resource_idx) && !cascade_indices.contains(&resource_idx) {
+                                        if !indices_to_clear.contains(&resource_idx)
+                                            && !cascade_indices.contains(&resource_idx)
+                                        {
                                             cascade_indices.push(resource_idx);
                                         }
                                     }
@@ -243,11 +251,15 @@ impl ContextEditingMiddleware {
                         {
                             if is_main_skill {
                                 // This is a SKILL.md load - use skill-specific placeholder
-                                message.content = vec![Part::Text { text: self.format_skill_placeholder(&skill_name) }];
+                                message.content = vec![Part::Text {
+                                    text: self.format_skill_placeholder(&skill_name),
+                                }];
                                 unloaded_skills.push(skill_name);
                             } else {
                                 // This is a resource file under a skill
-                                message.content = vec![Part::Text { text: self.format_resource_placeholder(&skill_name) }];
+                                message.content = vec![Part::Text {
+                                    text: self.format_resource_placeholder(&skill_name),
+                                }];
                             }
                             // Optionally clear tool call inputs from the assistant message
                             if self.config.clear_tool_inputs {
@@ -258,7 +270,9 @@ impl ContextEditingMiddleware {
                     }
 
                     // Regular tool result or skill_aware_placeholders is disabled - use generic placeholder
-                    message.content = vec![Part::Text { text: self.config.placeholder.clone() }];
+                    message.content = vec![Part::Text {
+                        text: self.config.placeholder.clone(),
+                    }];
 
                     // Optionally clear tool call inputs from the assistant message
                     if self.config.clear_tool_inputs {
@@ -305,7 +319,10 @@ impl ContextEditingMiddleware {
                 return Some((skill_name.clone(), true));
             }
             // Check if it's a resource under this skill
-            if info.resource_tool_call_ids.contains(&tool_call_id.to_string()) {
+            if info
+                .resource_tool_call_ids
+                .contains(&tool_call_id.to_string())
+            {
                 return Some((skill_name.clone(), false));
             }
         }
@@ -315,7 +332,8 @@ impl ContextEditingMiddleware {
     /// Clear tool call inputs (arguments) from assistant messages
     fn clear_tool_call_inputs(&self, messages: &mut Vec<ChatMessage>, tool_result_idx: usize) {
         // First, extract the tool_call_id we need to find
-        let tool_call_id_to_clear = messages.get(tool_result_idx)
+        let tool_call_id_to_clear = messages
+            .get(tool_result_idx)
             .and_then(|msg| msg.tool_call_id.as_ref())
             .map(|id| id.clone());
 
@@ -329,7 +347,7 @@ impl ContextEditingMiddleware {
                             tool_calls[i] = ToolCall::new(
                                 tool_calls[i].id.clone(),
                                 tool_calls[i].name.clone(),
-                                json!( {})
+                                json!({}),
                             );
                             break;
                         }
@@ -352,7 +370,9 @@ impl ContextEditingMiddleware {
 /// Estimate tokens for a single message without cloning.
 fn estimate_message_tokens(msg: &ChatMessage) -> usize {
     let content_tokens = msg.content.len() / 4;
-    let tool_call_tokens = msg.tool_calls.as_ref()
+    let tool_call_tokens = msg
+        .tool_calls
+        .as_ref()
         .map(|tc| serde_json::to_string(tc).unwrap_or_default().len() / 4)
         .unwrap_or(0);
     content_tokens + tool_call_tokens + 4 // +4 for message overhead
@@ -393,7 +413,8 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
         }
 
         // Find tool results to clear (with cascade unloading for skills and their resources)
-        let indices_to_clear = self.find_tool_results_to_clear_with_cascade(&messages, &context.execution_state);
+        let indices_to_clear =
+            self.find_tool_results_to_clear_with_cascade(&messages, &context.execution_state);
 
         if indices_to_clear.is_empty() {
             return Ok(MiddlewareEffect::Proceed);
@@ -616,13 +637,17 @@ mod tests {
         let messages_with_skill = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "# Rust Development\n\nLots of instructions here...".to_string() }],
+                content: vec![Part::Text {
+                    text: "# Rust Development\n\nLots of instructions here...".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
@@ -630,11 +655,14 @@ mod tests {
 
         // Create execution state that knows about the skill
         let mut loaded_skills = HashMap::new();
-        loaded_skills.insert("rust-development".to_string(), SkillInfo {
-            name: "rust-development".to_string(),
-            tool_call_id: "call_skill_1".to_string(),
-            resource_tool_call_ids: vec![],
-        });
+        loaded_skills.insert(
+            "rust-development".to_string(),
+            SkillInfo {
+                name: "rust-development".to_string(),
+                tool_call_id: "call_skill_1".to_string(),
+                resource_tool_call_ids: vec![],
+            },
+        );
         let execution_state = ExecutionState { loaded_skills };
 
         let middleware = ContextEditingMiddleware::new(config);
@@ -672,24 +700,31 @@ mod tests {
         let messages_with_skill = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "# Rust Development\n\nContent...".to_string() }],
+                content: vec![Part::Text {
+                    text: "# Rust Development\n\nContent...".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
         ];
 
         let mut loaded_skills = HashMap::new();
-        loaded_skills.insert("rust-development".to_string(), SkillInfo {
-            name: "rust-development".to_string(),
-            tool_call_id: "call_skill_1".to_string(),
-            resource_tool_call_ids: vec![],
-        });
+        loaded_skills.insert(
+            "rust-development".to_string(),
+            SkillInfo {
+                name: "rust-development".to_string(),
+                tool_call_id: "call_skill_1".to_string(),
+                resource_tool_call_ids: vec![],
+            },
+        );
         let execution_state = ExecutionState { loaded_skills };
 
         let middleware = ContextEditingMiddleware::new(config);
@@ -726,24 +761,31 @@ mod tests {
         let messages_with_skill = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "# My Skill\n\nContent...".to_string() }],
+                content: vec![Part::Text {
+                    text: "# My Skill\n\nContent...".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
         ];
 
         let mut loaded_skills = HashMap::new();
-        loaded_skills.insert("my-skill".to_string(), SkillInfo {
-            name: "my-skill".to_string(),
-            tool_call_id: "call_skill_1".to_string(),
-            resource_tool_call_ids: vec![],
-        });
+        loaded_skills.insert(
+            "my-skill".to_string(),
+            SkillInfo {
+                name: "my-skill".to_string(),
+                tool_call_id: "call_skill_1".to_string(),
+                resource_tool_call_ids: vec![],
+            },
+        );
         let execution_state = ExecutionState { loaded_skills };
 
         let middleware = ContextEditingMiddleware::new(config);
@@ -765,7 +807,7 @@ mod tests {
         let config = ContextEditingConfig {
             enabled: true,
             trigger_tokens: 100,
-            keep_tool_results: 1, // Keep only the last one
+            keep_tool_results: 1,  // Keep only the last one
             cascade_unload: false, // Disabled!
             ..Default::default()
         };
@@ -785,43 +827,55 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "# My Skill Content".to_string() }],
+                content: vec![Part::Text {
+                    text: "# My Skill Content".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "fn example() { }".to_string() }],
+                content: vec![Part::Text {
+                    text: "fn example() { }".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_resource_1".to_string()),
             },
         ];
 
         let mut loaded_skills = HashMap::new();
-        loaded_skills.insert("my-skill".to_string(), SkillInfo {
-            name: "my-skill".to_string(),
-            tool_call_id: "call_skill_1".to_string(),
-            resource_tool_call_ids: vec!["call_resource_1".to_string()],
-        });
+        loaded_skills.insert(
+            "my-skill".to_string(),
+            SkillInfo {
+                name: "my-skill".to_string(),
+                tool_call_id: "call_skill_1".to_string(),
+                resource_tool_call_ids: vec!["call_resource_1".to_string()],
+            },
+        );
         let execution_state = ExecutionState { loaded_skills };
 
         let middleware = ContextEditingMiddleware::new(config);
 
         // With cascade disabled, only the first tool result should be marked for clearing
         // (because keep_tool_results=1 keeps the last one)
-        let indices = middleware.find_tool_results_to_clear_with_cascade(&messages, &execution_state);
+        let indices =
+            middleware.find_tool_results_to_clear_with_cascade(&messages, &execution_state);
 
         // Should only clear index 1 (the skill), not cascade to index 3 (the resource)
         assert_eq!(indices.len(), 1);
@@ -858,42 +912,54 @@ mod tests {
         let messages = vec![
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "# My Skill Content".to_string() }],
+                content: vec![Part::Text {
+                    text: "# My Skill Content".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_skill_1".to_string()),
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text {
+                    text: "".to_string(),
+                }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: "fn example() { }".to_string() }],
+                content: vec![Part::Text {
+                    text: "fn example() { }".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: Some("call_resource_1".to_string()),
             },
         ];
 
         let mut loaded_skills = HashMap::new();
-        loaded_skills.insert("my-skill".to_string(), SkillInfo {
-            name: "my-skill".to_string(),
-            tool_call_id: "call_skill_1".to_string(),
-            resource_tool_call_ids: vec!["call_resource_1".to_string()],
-        });
+        loaded_skills.insert(
+            "my-skill".to_string(),
+            SkillInfo {
+                name: "my-skill".to_string(),
+                tool_call_id: "call_skill_1".to_string(),
+                resource_tool_call_ids: vec!["call_resource_1".to_string()],
+            },
+        );
         let execution_state = ExecutionState { loaded_skills };
 
         let middleware = ContextEditingMiddleware::new(config);
 
         // With cascade enabled, both skill and resource should be cleared
-        let indices = middleware.find_tool_results_to_clear_with_cascade(&messages, &execution_state);
+        let indices =
+            middleware.find_tool_results_to_clear_with_cascade(&messages, &execution_state);
 
         // Should clear both the skill (index 1) and the resource (index 3)
         assert_eq!(indices.len(), 2);
@@ -915,7 +981,9 @@ mod tests {
         );
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: vec![Part::Text { text: "Let me create the main file and read the lib file for context.".to_string() }],
+            content: vec![Part::Text {
+                text: "Let me create the main file and read the lib file for context.".to_string(),
+            }],
             tool_calls: Some(vec![tool1, tool2]),
             tool_call_id: None,
         };
@@ -1016,7 +1084,9 @@ mod tests {
         );
         let msg = ChatMessage {
             role: "assistant".to_string(),
-            content: vec![Part::Text { text: "".to_string() }],
+            content: vec![Part::Text {
+                text: "".to_string(),
+            }],
             tool_calls: Some(vec![tool]),
             tool_call_id: None,
         };

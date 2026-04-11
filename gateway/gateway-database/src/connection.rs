@@ -38,7 +38,7 @@ impl r2d2::CustomizeConnection<Connection, rusqlite::Error> for PragmaCustomizer
              PRAGMA busy_timeout = 5000;
              PRAGMA wal_autocheckpoint = 1000;
              PRAGMA temp_store = MEMORY;
-             PRAGMA foreign_keys = ON;"
+             PRAGMA foreign_keys = ON;",
         )?;
         Ok(())
     }

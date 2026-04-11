@@ -52,7 +52,9 @@ pub use config::GatewayConfig;
 pub use connectors::{ConnectorConfig, ConnectorRegistry, ConnectorService, DispatchContext};
 pub use cron::{CronJobConfig, CronScheduler, CronService};
 pub use error::{GatewayError, Result};
-pub use execution::{DelegationContext, DelegationRegistry, ExecutionRunner, ExecutionConfig, ExecutionHandle};
+pub use execution::{
+    DelegationContext, DelegationRegistry, ExecutionConfig, ExecutionHandle, ExecutionRunner,
+};
 pub use hooks::{Attachment, Hook, HookContext, HookRegistry, HookType, ResponseFormat};
 pub use server::GatewayServer;
 pub use services::{AgentRegistry, AgentService, RuntimeService};

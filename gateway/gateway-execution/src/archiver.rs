@@ -52,14 +52,8 @@ impl SessionArchiver {
     ///
     /// `archive_path` is the directory where `.jsonl.gz` files will be written.
     /// It will be created on first archive if it doesn't exist.
-    pub fn new(
-        db: Arc<DatabaseManager>,
-        archive_path: PathBuf,
-    ) -> Self {
-        Self {
-            db,
-            archive_path,
-        }
+    pub fn new(db: Arc<DatabaseManager>, archive_path: PathBuf) -> Self {
+        Self { db, archive_path }
     }
 
     /// Archive a single session: serialize messages + logs to a compressed

@@ -24,18 +24,18 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-mod config;
-mod manager;
 mod client;
-mod http;
-mod stdio;
-mod sse;
+mod config;
 mod error;
+mod http;
+mod manager;
+mod sse;
+mod stdio;
 mod tool;
 
 // Public exports
-pub use config::McpServerConfig;
-pub use manager::McpManager;
 pub use client::McpClient;
+pub use config::McpServerConfig;
 pub use error::McpError;
+pub use manager::McpManager;
 pub use tool::McpTool;

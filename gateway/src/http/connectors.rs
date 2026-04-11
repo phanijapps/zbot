@@ -87,9 +87,11 @@ pub async fn create_connector(
                     Json(ErrorResponse::already_exists(id)),
                 )
                     .into_response(),
-                ConnectorServiceError::InvalidId(msg) => {
-                    (StatusCode::BAD_REQUEST, Json(ErrorResponse::invalid_id(msg))).into_response()
-                }
+                ConnectorServiceError::InvalidId(msg) => (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::invalid_id(msg)),
+                )
+                    .into_response(),
                 _ => {
                     error!(error = %e, "Failed to create connector");
                     (
@@ -388,9 +390,7 @@ pub async fn inbound(
 
     // Build SessionRequest
     let agent_id = payload.agent_id.as_deref().unwrap_or("root");
-    let respond_to = payload
-        .respond_to
-        .unwrap_or_else(|| vec![id.clone()]);
+    let respond_to = payload.respond_to.unwrap_or_else(|| vec![id.clone()]);
 
     let mut request = SessionRequest::new(agent_id, &payload.message)
         .with_source(TriggerSource::Connector)

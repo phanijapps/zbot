@@ -135,20 +135,18 @@ impl LlmResponse {
     }
 
     /// Create a response with tool calls.
-    pub fn with_tool_calls(
-        tool_calls: Vec<ToolCall>,
-        turn_complete: bool,
-    ) -> Self {
+    pub fn with_tool_calls(tool_calls: Vec<ToolCall>, turn_complete: bool) -> Self {
         use zero_core::types::Part;
 
         // Build content with function call parts
-        let parts = tool_calls.into_iter().map(|tc| {
-            Part::FunctionCall {
+        let parts = tool_calls
+            .into_iter()
+            .map(|tc| Part::FunctionCall {
                 name: tc.name,
                 args: tc.arguments,
                 id: Some(tc.id),
-            }
-        }).collect();
+            })
+            .collect();
 
         Self {
             content: Some(Content {
@@ -241,7 +239,10 @@ mod tests {
     fn test_response_text() {
         let response = LlmResponse::text("Hello world");
         assert!(response.content.is_some());
-        assert_eq!(response.content.as_ref().unwrap().text(), Some("Hello world"));
+        assert_eq!(
+            response.content.as_ref().unwrap().text(),
+            Some("Hello world")
+        );
         assert!(response.turn_complete);
     }
 

@@ -2,7 +2,10 @@
 //!
 //! Pipeline that orchestrates middleware execution.
 
-use super::traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext, MiddlewareEffect, MiddlewareMessage, MiddlewareEvent};
+use super::traits::{
+    EventMiddleware, MiddlewareContext, MiddlewareEffect, MiddlewareEvent, MiddlewareMessage,
+    PreProcessMiddleware,
+};
 
 /// Middleware pipeline that orchestrates preprocessing and event handling
 #[derive(Clone, Default)]
@@ -70,7 +73,10 @@ impl MiddlewarePipeline {
                 continue;
             }
 
-            match middleware.process(std::mem::take(&mut current_messages), context).await? {
+            match middleware
+                .process(std::mem::take(&mut current_messages), context)
+                .await?
+            {
                 MiddlewareEffect::ModifiedMessages(msgs) => {
                     current_messages = msgs;
                 }
@@ -81,7 +87,10 @@ impl MiddlewarePipeline {
                 MiddlewareEffect::EmitEvent(event) => {
                     on_event(event);
                 }
-                MiddlewareEffect::EmitAndModify { event, messages: msgs } => {
+                MiddlewareEffect::EmitAndModify {
+                    event,
+                    messages: msgs,
+                } => {
                     on_event(event);
                     current_messages = msgs;
                 }
@@ -108,7 +117,11 @@ impl MiddlewarePipeline {
 
             // Continue processing even if one handler fails
             if let Err(e) = handler.on_event(event, context).await {
-                tracing::warn!("Middleware {} failed to handle event: {}", handler.name(), e);
+                tracing::warn!(
+                    "Middleware {} failed to handle event: {}",
+                    handler.name(),
+                    e
+                );
             }
         }
 
@@ -207,11 +220,11 @@ mod tests {
 
     #[test]
     fn test_pipeline_clone() {
-        let pipeline = MiddlewarePipeline::new()
-            .add_pre_processor(Box::new(MockPreProcessor {
-                enabled: true,
-                name: "test",
-            }) as Box<dyn PreProcessMiddleware>);
+        let pipeline = MiddlewarePipeline::new().add_pre_processor(Box::new(MockPreProcessor {
+            enabled: true,
+            name: "test",
+        })
+            as Box<dyn PreProcessMiddleware>);
 
         let _cloned = pipeline.clone();
     }

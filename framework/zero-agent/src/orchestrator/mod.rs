@@ -64,14 +64,15 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex as TokioMutex;
 
 use zero_core::{
-    Agent, AgentCapabilities, CapabilityQuery, CapabilityRegistry, CapabilityRouter,
-    CallbackContext, Content, Event, EventActions, EventStream, InvocationContext,
-    ReadonlyContext, Result, RunConfig, ZeroError,
-    context::Session,
+    context::Session, Agent, AgentCapabilities, CallbackContext, CapabilityQuery,
+    CapabilityRegistry, CapabilityRouter, Content, Event, EventActions, EventStream,
+    InvocationContext, ReadonlyContext, Result, RunConfig, ZeroError,
 };
 
 pub use task_graph::{TaskGraph, TaskGraphError, TaskNode, TaskStatus};
-pub use trace::{ExecutionTrace, TraceBuilder, TraceEvent, TraceEventKind, TraceMetrics, TraceOutcome};
+pub use trace::{
+    ExecutionTrace, TraceBuilder, TraceEvent, TraceEventKind, TraceMetrics, TraceOutcome,
+};
 
 // ============================================================================
 // ORCHESTRATOR CONFIG
@@ -307,7 +308,10 @@ impl InvocationContext for TaskInvocationContext {
     }
 
     fn actions(&self) -> EventActions {
-        self.actions.try_lock().map(|a| a.clone()).unwrap_or_default()
+        self.actions
+            .try_lock()
+            .map(|a| a.clone())
+            .unwrap_or_default()
     }
 
     fn set_actions(&self, actions: EventActions) {
@@ -465,12 +469,14 @@ impl OrchestratorAgent {
                 .map(|group| {
                     group
                         .into_iter()
-                        .map(|task| (
-                            task.id.clone(),
-                            task.required_capability.clone(),
-                            task.description.clone(),
-                            task.input.clone(),
-                        ))
+                        .map(|task| {
+                            (
+                                task.id.clone(),
+                                task.required_capability.clone(),
+                                task.description.clone(),
+                                task.input.clone(),
+                            )
+                        })
                         .collect()
                 })
                 .collect()
@@ -483,8 +489,7 @@ impl OrchestratorAgent {
             for (task_id, required_capability, description, input) in group {
                 // Find agent for this task
                 let agent_caps = if let Some(cap_id) = required_capability {
-                    let query = CapabilityQuery::new()
-                        .with_capability_ids(vec![cap_id.clone()]);
+                    let query = CapabilityQuery::new().with_capability_ids(vec![cap_id.clone()]);
                     self.find_agent(&query)
                 } else {
                     // Use first available agent
@@ -493,10 +498,10 @@ impl OrchestratorAgent {
 
                 let agent_id = match agent_caps {
                     Some(caps) => {
-                        trace.agent_selected(&caps.agent_id, format!(
-                            "Selected {} for task {}",
-                            caps.agent_name, task_id
-                        ));
+                        trace.agent_selected(
+                            &caps.agent_id,
+                            format!("Selected {} for task {}", caps.agent_name, task_id),
+                        );
                         caps.agent_id.clone()
                     }
                     None => {
@@ -512,7 +517,10 @@ impl OrchestratorAgent {
                 let agent = match self.get_agent(&agent_id) {
                     Some(a) => a,
                     None => {
-                        trace.error(format!("Agent {} not found in store for task {}", agent_id, task_id));
+                        trace.error(format!(
+                            "Agent {} not found in store for task {}",
+                            agent_id, task_id
+                        ));
                         if let Some(t) = graph.get_task_mut(task_id) {
                             t.fail(&format!("Agent {} not found in store", agent_id));
                         }
@@ -529,7 +537,11 @@ impl OrchestratorAgent {
 
                 // Build task prompt from description and input
                 let task_prompt = if let Some(input_data) = input {
-                    format!("{}\n\nInput data:\n{}", description, serde_json::to_string_pretty(input_data).unwrap_or_default())
+                    format!(
+                        "{}\n\nInput data:\n{}",
+                        description,
+                        serde_json::to_string_pretty(input_data).unwrap_or_default()
+                    )
                 } else {
                     description.clone()
                 };
@@ -559,7 +571,8 @@ impl OrchestratorAgent {
                                     }
                                 }
                                 Err(e) => {
-                                    trace.error(format!("Stream error for task {}: {}", task_id, e));
+                                    trace
+                                        .error(format!("Stream error for task {}: {}", task_id, e));
                                 }
                             }
                         }
@@ -578,7 +591,11 @@ impl OrchestratorAgent {
                         if let Some(t) = graph.get_task_mut(task_id) {
                             t.complete(output);
                         }
-                        trace.task_completed(task_id, format!("Task {} completed", task_id), duration_ms);
+                        trace.task_completed(
+                            task_id,
+                            format!("Task {} completed", task_id),
+                            duration_ms,
+                        );
                     }
                     Err(e) => {
                         let error_msg = e.to_string();
@@ -696,14 +713,20 @@ impl OrchestratorBuilder {
     /// Add a sub-agent.
     pub fn agent(mut self, agent: Arc<dyn Agent>) -> Self {
         // Store in agent_store by name
-        self.agent_store.insert(agent.name().to_string(), Arc::clone(&agent));
+        self.agent_store
+            .insert(agent.name().to_string(), Arc::clone(&agent));
         self.sub_agents.push(agent);
         self
     }
 
     /// Register an agent with its capabilities.
-    pub fn register_agent(mut self, agent: Arc<dyn Agent>, capabilities: AgentCapabilities) -> Self {
-        self.agent_store.insert(capabilities.agent_id.clone(), Arc::clone(&agent));
+    pub fn register_agent(
+        mut self,
+        agent: Arc<dyn Agent>,
+        capabilities: AgentCapabilities,
+    ) -> Self {
+        self.agent_store
+            .insert(capabilities.agent_id.clone(), Arc::clone(&agent));
         self.registry.register(capabilities);
         self
     }
@@ -799,9 +822,15 @@ mod tests {
 
         #[async_trait]
         impl Agent for MockAgent {
-            fn name(&self) -> &str { &self.name }
-            fn description(&self) -> &str { "Mock agent" }
-            fn sub_agents(&self) -> &[Arc<dyn Agent>] { &[] }
+            fn name(&self) -> &str {
+                &self.name
+            }
+            fn description(&self) -> &str {
+                "Mock agent"
+            }
+            fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+                &[]
+            }
             async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
                 let s = stream! {
                     yield Ok(Event::new("test"));
@@ -813,39 +842,43 @@ mod tests {
         // Create orchestrator and register agents with capabilities
         let orchestrator = OrchestratorAgent::new(Arc::clone(&registry));
 
-        let code_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "code-agent".to_string() });
-        let research_agent: Arc<dyn Agent> = Arc::new(MockAgent { name: "research-agent".to_string() });
+        let code_agent: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "code-agent".to_string(),
+        });
+        let research_agent: Arc<dyn Agent> = Arc::new(MockAgent {
+            name: "research-agent".to_string(),
+        });
 
         orchestrator.register_agent(
             code_agent,
             AgentCapabilities::builder("code-agent")
                 .add_capability(common::code_review())
-                .build()
+                .build(),
         );
         orchestrator.register_agent(
             research_agent,
             AgentCapabilities::builder("research-agent")
                 .add_capability(common::web_search())
-                .build()
+                .build(),
         );
 
         let mut graph = TaskGraph::new("test-graph");
-        graph.add_task(
-            TaskNode::new("t1", "Review code")
-                .with_capability("code_review"),
-        );
-        graph.add_task(
-            TaskNode::new("t2", "Search docs")
-                .with_capability("web_search"),
-        );
+        graph.add_task(TaskNode::new("t1", "Review code").with_capability("code_review"));
+        graph.add_task(TaskNode::new("t2", "Search docs").with_capability("web_search"));
 
         // Create a task invocation context for the orchestrator itself
         struct MockOrchestratorAgent;
         #[async_trait]
         impl Agent for MockOrchestratorAgent {
-            fn name(&self) -> &str { "orchestrator" }
-            fn description(&self) -> &str { "Test orchestrator" }
-            fn sub_agents(&self) -> &[Arc<dyn Agent>] { &[] }
+            fn name(&self) -> &str {
+                "orchestrator"
+            }
+            fn description(&self) -> &str {
+                "Test orchestrator"
+            }
+            fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+                &[]
+            }
             async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
                 let s = stream! {
                     yield Ok(Event::new("orchestrator-test"));
@@ -855,9 +888,11 @@ mod tests {
         }
 
         let mock_orch: Arc<dyn Agent> = Arc::new(MockOrchestratorAgent);
-        let ctx: Arc<dyn InvocationContext> = Arc::new(
-            TaskInvocationContext::new(mock_orch, "test", "Execute test graph")
-        );
+        let ctx: Arc<dyn InvocationContext> = Arc::new(TaskInvocationContext::new(
+            mock_orch,
+            "test",
+            "Execute test graph",
+        ));
 
         let trace = orchestrator.execute_graph(&mut graph, ctx).await.unwrap();
 

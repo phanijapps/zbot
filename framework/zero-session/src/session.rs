@@ -2,9 +2,9 @@
 //!
 //! In-memory session implementation for agent conversations.
 
-use zero_core::types::Content;
-use zero_core::context::{Session, State};
 use crate::state::InMemoryState;
+use zero_core::context::{Session, State};
+use zero_core::types::Content;
 
 /// In-memory session for agent conversations.
 #[derive(Debug, Clone)]
@@ -160,10 +160,7 @@ mod tests {
     fn test_session_add_contents() {
         let mut session = InMemorySession::new("session-1", "test-app", "user-1");
 
-        let contents = vec![
-            Content::user("Hello"),
-            Content::assistant("Hi there!"),
-        ];
+        let contents = vec![Content::user("Hello"), Content::assistant("Hi there!")];
         session.add_contents(contents);
 
         assert_eq!(session.history_len(), 2);
@@ -194,7 +191,9 @@ mod tests {
     fn test_session_state() {
         let mut session = InMemorySession::new("session-1", "test-app", "user-1");
 
-        session.state_mut().set("user:theme".to_string(), serde_json::json!("dark"));
+        session
+            .state_mut()
+            .set("user:theme".to_string(), serde_json::json!("dark"));
         assert_eq!(
             session.state().get("user:theme"),
             Some(&serde_json::json!("dark"))
@@ -235,7 +234,12 @@ impl MutexSession {
     }
 
     /// Lock the session and get the inner mutex guard.
-    pub fn lock(&self) -> Result<std::sync::MutexGuard<'_, InMemorySession>, std::sync::PoisonError<std::sync::MutexGuard<'_, InMemorySession>>> {
+    pub fn lock(
+        &self,
+    ) -> Result<
+        std::sync::MutexGuard<'_, InMemorySession>,
+        std::sync::PoisonError<std::sync::MutexGuard<'_, InMemorySession>>,
+    > {
         self.0.lock()
     }
 }
@@ -262,13 +266,16 @@ impl Session for MutexSession {
         use std::collections::HashMap;
         struct EmptyState;
         impl State for EmptyState {
-            fn get(&self, _key: &str) -> Option<serde_json::Value> { None }
+            fn get(&self, _key: &str) -> Option<serde_json::Value> {
+                None
+            }
             fn set(&mut self, _key: String, _value: serde_json::Value) {}
-            fn all(&self) -> HashMap<String, serde_json::Value> { HashMap::new() }
+            fn all(&self) -> HashMap<String, serde_json::Value> {
+                HashMap::new()
+            }
         }
-        static EMPTY_STATE_BOX: Lazy<Box<dyn State>> = Lazy::new(|| {
-            Box::new(EmptyState) as Box<dyn State>
-        });
+        static EMPTY_STATE_BOX: Lazy<Box<dyn State>> =
+            Lazy::new(|| Box::new(EmptyState) as Box<dyn State>);
         &**EMPTY_STATE_BOX
     }
 

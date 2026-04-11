@@ -6,9 +6,9 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{Tool, ToolContext, Result};
+use zero_core::{Result, Tool, ToolContext};
 
 // ============================================================================
 // REQUEST INPUT TOOL
@@ -56,23 +56,32 @@ impl Tool for RequestInputTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let form_id = args.get("form_id")
+        let form_id = args
+            .get("form_id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'form_id' parameter".to_string()))?
             .to_string();
 
-        let title = args.get("title")
+        let title = args
+            .get("title")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'title' parameter".to_string()))?
             .to_string();
 
-        let description = args.get("description").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let description = args
+            .get("description")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
-        let schema = args.get("schema")
+        let schema = args
+            .get("schema")
             .cloned()
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'schema' parameter".to_string()))?;
 
-        let submit_button = args.get("submit_button").and_then(|v| v.as_str()).map(|s| s.to_string());
+        let submit_button = args
+            .get("submit_button")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
 
         tracing::debug!("Requesting input form: {}", form_id);
 
@@ -132,29 +141,38 @@ impl Tool for ShowContentTool {
     }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let content_type = args.get("content_type")
+        let content_type = args
+            .get("content_type")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'content_type' parameter".to_string()))?
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'content_type' parameter".to_string())
+            })?
             .to_string();
 
-        let title = args.get("title")
+        let title = args
+            .get("title")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'title' parameter".to_string()))?
             .to_string();
 
-        let content = args.get("content")
+        let content = args
+            .get("content")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
-        let file_path = args.get("file_path")
+        let file_path = args
+            .get("file_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
 
         // Get agent_id for constructing the proper relative path
-        let agent_id = ctx.get_state("app:root_agent_id")
+        let agent_id = ctx
+            .get_state("app:root_agent_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
-            .or_else(|| ctx.get_state("app:agent_id")
-                .and_then(|v| v.as_str().map(|s| s.to_owned())));
+            .or_else(|| {
+                ctx.get_state("app:agent_id")
+                    .and_then(|v| v.as_str().map(|s| s.to_owned()))
+            });
 
         // Normalize file_path to construct proper relative path for attachments
         // The write tool uses paths like "outputs/report.html" which resolves to
@@ -196,7 +214,10 @@ impl Tool for ShowContentTool {
                             Some(format!("outputs/{}", filename))
                         }
                     } else {
-                        tracing::warn!("show_content: could not extract filename from path: {}", fp);
+                        tracing::warn!(
+                            "show_content: could not extract filename from path: {}",
+                            fp
+                        );
                         None
                     }
                 }
@@ -216,15 +237,22 @@ impl Tool for ShowContentTool {
         let metadata = args.get("metadata").cloned();
 
         // Auto-detect is_attachment: true when file_path is provided
-        let is_attachment = args.get("is_attachment")
+        let is_attachment = args
+            .get("is_attachment")
             .and_then(|v| v.as_bool())
             .unwrap_or(normalized_file_path.is_some());
 
-        let base64 = args.get("base64")
-            .and_then(|v| v.as_bool());
+        let base64 = args.get("base64").and_then(|v| v.as_bool());
 
-        tracing::info!("show_content: type={}, title={}, is_attachment={}, original_path={:?}, normalized={:?}, agent_id={:?}",
-            content_type, title, is_attachment, file_path, normalized_file_path, agent_id);
+        tracing::info!(
+            "show_content: type={}, title={}, is_attachment={}, original_path={:?}, normalized={:?}, agent_id={:?}",
+            content_type,
+            title,
+            is_attachment,
+            file_path,
+            normalized_file_path,
+            agent_id
+        );
 
         // Return the content display request with the special marker
         Ok(json!({

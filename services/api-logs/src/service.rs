@@ -73,9 +73,7 @@ impl<D: DbProvider> LogService<D> {
         result_message: Option<&str>,
     ) -> Result<(), String> {
         let message = match status {
-            SessionStatus::Completed => {
-                result_message.unwrap_or("Session completed successfully")
-            }
+            SessionStatus::Completed => result_message.unwrap_or("Session completed successfully"),
             SessionStatus::Error => result_message.unwrap_or("Session ended with error"),
             SessionStatus::Stopped => result_message.unwrap_or("Session stopped by user"),
             SessionStatus::Running => "Session running", // Shouldn't happen
@@ -148,7 +146,10 @@ impl<D: DbProvider> LogService<D> {
 
         // Truncate result for storage
         let truncated_result = if result.len() > 1000 {
-            format!("{}...(truncated)", &result[..result.floor_char_boundary(1000)])
+            format!(
+                "{}...(truncated)",
+                &result[..result.floor_char_boundary(1000)]
+            )
         } else {
             result.to_string()
         };
@@ -270,7 +271,10 @@ impl<D: DbProvider> LogService<D> {
 
         // Batch-fetch titles from first user message
         let session_ids: Vec<String> = sessions.iter().map(|s| s.session_id.clone()).collect();
-        let titles = self.repo.get_session_titles(&session_ids).unwrap_or_default();
+        let titles = self
+            .repo
+            .get_session_titles(&session_ids)
+            .unwrap_or_default();
 
         // Enrich with child session IDs and titles
         for session in &mut sessions {
@@ -320,18 +324,16 @@ impl<D: DbProvider> LogService<D> {
                 }
 
                 // Enrich title from first user message
-                if let Ok(titles) =
-                    self.repo.get_session_titles(&[session_id.to_string()])
-                {
+                if let Ok(titles) = self.repo.get_session_titles(&[session_id.to_string()]) {
                     if let Some(title) = titles.get(session_id) {
                         session.title = Some(title.clone());
                     }
                 }
 
                 // Compute status — check sessions table first for crash state
-                let db_status = self.repo.get_session_status_from_sessions_table(
-                    &session.conversation_id
-                );
+                let db_status = self
+                    .repo
+                    .get_session_status_from_sessions_table(&session.conversation_id);
                 if matches!(db_status.as_deref(), Some("crashed") | Some("error")) {
                     session.status = SessionStatus::Error;
                 } else if session.error_count > 0 {

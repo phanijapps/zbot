@@ -165,8 +165,8 @@ impl PluginConfig {
             PluginError::ManifestRead(format!("{}: {}", manifest_path.display(), e))
         })?;
 
-        let config: Self =
-            serde_json::from_str(&content).map_err(|e| PluginError::ManifestParse(e.to_string()))?;
+        let config: Self = serde_json::from_str(&content)
+            .map_err(|e| PluginError::ManifestParse(e.to_string()))?;
 
         // Validate required fields
         if config.id.is_empty() {
@@ -276,8 +276,7 @@ impl PluginUserConfig {
     pub fn save(&self, path: &std::path::Path) -> Result<(), PluginError> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| PluginError::Io(e))?;
+            std::fs::create_dir_all(parent).map_err(|e| PluginError::Io(e))?;
         }
 
         let content = serde_json::to_string_pretty(self)
@@ -328,7 +327,10 @@ impl PluginUserConfig {
 
     /// Merge with environment variables from plugin.json.
     /// User config secrets take precedence over env var references.
-    pub fn resolve_env_with_secrets(&self, plugin_env: &HashMap<String, String>) -> HashMap<String, String> {
+    pub fn resolve_env_with_secrets(
+        &self,
+        plugin_env: &HashMap<String, String>,
+    ) -> HashMap<String, String> {
         let mut result = HashMap::new();
 
         // First, resolve env vars from plugin.json

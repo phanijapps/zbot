@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use zero_core::{FileSystemContext, Result, Tool, ToolContext, ZeroError};
 
@@ -80,11 +80,14 @@ impl Tool for EditFileTool {
         }
 
         // Sanitize path
-        let path = path.trim_start_matches("~/")
+        let path = path
+            .trim_start_matches("~/")
             .trim_start_matches("/")
             .trim_start_matches("./");
         if path.contains("..") {
-            return Err(ZeroError::Tool("Path cannot contain '..' — all paths must be relative to the ward".to_string()));
+            return Err(ZeroError::Tool(
+                "Path cannot contain '..' — all paths must be relative to the ward".to_string(),
+            ));
         }
 
         // Resolve CWD from ward context
@@ -99,9 +102,8 @@ impl Tool for EditFileTool {
         }
 
         // Read the file
-        let content = std::fs::read_to_string(&full_path).map_err(|e| {
-            ZeroError::Tool(format!("Failed to read {}: {}", path, e))
-        })?;
+        let content = std::fs::read_to_string(&full_path)
+            .map_err(|e| ZeroError::Tool(format!("Failed to read {}: {}", path, e)))?;
 
         // Count occurrences — old_text MUST be unique in the file
         let count = content.matches(old_text).count();
@@ -113,9 +115,8 @@ impl Tool for EditFileTool {
 
             if trimmed_count == 1 {
                 let new_content = content.replacen(trimmed_old, new_text, 1);
-                std::fs::write(&full_path, &new_content).map_err(|e| {
-                    ZeroError::Tool(format!("Failed to write {}: {}", path, e))
-                })?;
+                std::fs::write(&full_path, &new_content)
+                    .map_err(|e| ZeroError::Tool(format!("Failed to write {}: {}", path, e)))?;
                 tracing::debug!("edit_file: replaced (trimmed match) in {}", path);
                 return Ok(json!({
                     "success": true,
@@ -155,9 +156,8 @@ impl Tool for EditFileTool {
             }));
         }
 
-        std::fs::write(&full_path, &new_content).map_err(|e| {
-            ZeroError::Tool(format!("Failed to write {}: {}", path, e))
-        })?;
+        std::fs::write(&full_path, &new_content)
+            .map_err(|e| ZeroError::Tool(format!("Failed to write {}: {}", path, e)))?;
 
         tracing::debug!("edit_file: replaced unique match in {}", path);
 

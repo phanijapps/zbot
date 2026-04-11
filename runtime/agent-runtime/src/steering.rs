@@ -111,16 +111,20 @@ mod tests {
     #[test]
     fn test_steering_queue_send_and_drain() {
         let (mut queue, handle) = SteeringQueue::new();
-        handle.send(SteeringMessage {
-            content: "wrap up".to_string(),
-            source: SteeringSource::System,
-            priority: SteeringPriority::Normal,
-        }).unwrap();
-        handle.send(SteeringMessage {
-            content: "user says stop".to_string(),
-            source: SteeringSource::User,
-            priority: SteeringPriority::Interrupt,
-        }).unwrap();
+        handle
+            .send(SteeringMessage {
+                content: "wrap up".to_string(),
+                source: SteeringSource::System,
+                priority: SteeringPriority::Normal,
+            })
+            .unwrap();
+        handle
+            .send(SteeringMessage {
+                content: "user says stop".to_string(),
+                source: SteeringSource::User,
+                priority: SteeringPriority::Interrupt,
+            })
+            .unwrap();
 
         let messages = queue.drain();
         assert_eq!(messages.len(), 2);

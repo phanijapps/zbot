@@ -197,12 +197,27 @@ mod tests {
         let dir = tempdir().unwrap();
         let paths = VaultPaths::new(dir.path().to_path_buf());
 
-        assert_eq!(paths.settings(), dir.path().join("config").join("settings.json"));
-        assert_eq!(paths.providers(), dir.path().join("config").join("providers.json"));
+        assert_eq!(
+            paths.settings(),
+            dir.path().join("config").join("settings.json")
+        );
+        assert_eq!(
+            paths.providers(),
+            dir.path().join("config").join("providers.json")
+        );
         assert_eq!(paths.mcps(), dir.path().join("config").join("mcps.json"));
-        assert_eq!(paths.connectors(), dir.path().join("config").join("connectors.json"));
-        assert_eq!(paths.cron_jobs(), dir.path().join("config").join("cron_jobs.json"));
-        assert_eq!(paths.instructions(), dir.path().join("config").join("INSTRUCTIONS.md"));
+        assert_eq!(
+            paths.connectors(),
+            dir.path().join("config").join("connectors.json")
+        );
+        assert_eq!(
+            paths.cron_jobs(),
+            dir.path().join("config").join("cron_jobs.json")
+        );
+        assert_eq!(
+            paths.instructions(),
+            dir.path().join("config").join("INSTRUCTIONS.md")
+        );
     }
 
     #[test]
@@ -210,7 +225,10 @@ mod tests {
         let dir = tempdir().unwrap();
         let paths = VaultPaths::new(dir.path().to_path_buf());
 
-        assert_eq!(paths.conversations_db(), dir.path().join("data").join("conversations.db"));
+        assert_eq!(
+            paths.conversations_db(),
+            dir.path().join("data").join("conversations.db")
+        );
     }
 
     #[test]
@@ -230,8 +248,14 @@ mod tests {
         let dir = tempdir().unwrap();
         let paths = VaultPaths::new(dir.path().to_path_buf());
 
-        assert_eq!(paths.ward_dir("scratch"), dir.path().join("wards").join("scratch"));
-        assert_eq!(paths.ward_dir("root"), dir.path().join("wards").join("root"));
+        assert_eq!(
+            paths.ward_dir("scratch"),
+            dir.path().join("wards").join("scratch")
+        );
+        assert_eq!(
+            paths.ward_dir("root"),
+            dir.path().join("wards").join("root")
+        );
     }
 
     #[test]

@@ -113,12 +113,16 @@ pub async fn create_cron_job(
         Err(e) => {
             use crate::cron::CronServiceError;
             match &e {
-                CronServiceError::AlreadyExists(id) => {
-                    (StatusCode::CONFLICT, Json(ErrorResponse::already_exists(id))).into_response()
-                }
-                CronServiceError::InvalidId(msg) => {
-                    (StatusCode::BAD_REQUEST, Json(ErrorResponse::invalid_id(msg))).into_response()
-                }
+                CronServiceError::AlreadyExists(id) => (
+                    StatusCode::CONFLICT,
+                    Json(ErrorResponse::already_exists(id)),
+                )
+                    .into_response(),
+                CronServiceError::InvalidId(msg) => (
+                    StatusCode::BAD_REQUEST,
+                    Json(ErrorResponse::invalid_id(msg)),
+                )
+                    .into_response(),
                 CronServiceError::InvalidSchedule(msg) => (
                     StatusCode::BAD_REQUEST,
                     Json(ErrorResponse::invalid_schedule(msg)),

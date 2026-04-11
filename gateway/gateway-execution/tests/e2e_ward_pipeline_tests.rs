@@ -26,7 +26,9 @@ fn test_scaffolding_scoped_to_recommended_skills() {
     // Create coding skill with ward_setup
     let coding_dir = skills_dir.join("coding");
     std::fs::create_dir_all(&coding_dir).unwrap();
-    std::fs::write(coding_dir.join("SKILL.md"), r#"---
+    std::fs::write(
+        coding_dir.join("SKILL.md"),
+        r#"---
 name: coding
 description: Code stuff
 ward_setup:
@@ -36,12 +38,16 @@ ward_setup:
     - specs/
 ---
 Instructions here
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     // Create life-os skill with ward_setup (should NOT apply to coding wards)
     let lifeos_dir = skills_dir.join("life-os");
     std::fs::create_dir_all(&lifeos_dir).unwrap();
-    std::fs::write(lifeos_dir.join("SKILL.md"), r#"---
+    std::fs::write(
+        lifeos_dir.join("SKILL.md"),
+        r#"---
 name: life-os
 description: Life stuff
 ward_setup:
@@ -52,7 +58,9 @@ ward_setup:
     - areas/
 ---
 Instructions here
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     // Scaffold a ward with ONLY coding skill recommended
     let ward_dir = dir.path().join("wards").join("financial-analysis");
@@ -64,19 +72,36 @@ Instructions here
         &["coding".to_string()],
     );
     gateway_execution::middleware::ward_scaffold::scaffold_ward(
-        &ward_dir, "financial-analysis", &setups,
+        &ward_dir,
+        "financial-analysis",
+        &setups,
     );
 
     // Coding dirs should exist
     assert!(ward_dir.join("core").is_dir(), "core/ should be created");
-    assert!(ward_dir.join("output").is_dir(), "output/ should be created");
+    assert!(
+        ward_dir.join("output").is_dir(),
+        "output/ should be created"
+    );
     assert!(ward_dir.join("specs").is_dir(), "specs/ should be created");
 
     // Life-os dirs should NOT exist
-    assert!(!ward_dir.join("daily").exists(), "daily/ should NOT be created — wrong skill");
-    assert!(!ward_dir.join("weekly").exists(), "weekly/ should NOT be created — wrong skill");
-    assert!(!ward_dir.join("projects").exists(), "projects/ should NOT be created — wrong skill");
-    assert!(!ward_dir.join("areas").exists(), "areas/ should NOT be created — wrong skill");
+    assert!(
+        !ward_dir.join("daily").exists(),
+        "daily/ should NOT be created — wrong skill"
+    );
+    assert!(
+        !ward_dir.join("weekly").exists(),
+        "weekly/ should NOT be created — wrong skill"
+    );
+    assert!(
+        !ward_dir.join("projects").exists(),
+        "projects/ should NOT be created — wrong skill"
+    );
+    assert!(
+        !ward_dir.join("areas").exists(),
+        "areas/ should NOT be created — wrong skill"
+    );
 }
 
 /// Scaffolding with life-os skill should create life-os dirs, not coding dirs.
@@ -87,7 +112,9 @@ fn test_scaffolding_lifeos_skill_creates_lifeos_dirs() {
 
     let lifeos_dir = skills_dir.join("life-os");
     std::fs::create_dir_all(&lifeos_dir).unwrap();
-    std::fs::write(lifeos_dir.join("SKILL.md"), r#"---
+    std::fs::write(
+        lifeos_dir.join("SKILL.md"),
+        r#"---
 name: life-os
 description: Life stuff
 ward_setup:
@@ -97,7 +124,9 @@ ward_setup:
     - projects/
 ---
 Instructions here
-"#).unwrap();
+"#,
+    )
+    .unwrap();
 
     let ward_dir = dir.path().join("wards").join("personal-life");
     std::fs::create_dir_all(&ward_dir).unwrap();
@@ -107,13 +136,18 @@ Instructions here
         &["life-os".to_string()],
     );
     gateway_execution::middleware::ward_scaffold::scaffold_ward(
-        &ward_dir, "personal-life", &setups,
+        &ward_dir,
+        "personal-life",
+        &setups,
     );
 
     assert!(ward_dir.join("daily").is_dir());
     assert!(ward_dir.join("weekly").is_dir());
     assert!(ward_dir.join("projects").is_dir());
-    assert!(!ward_dir.join("core").exists(), "core/ should NOT exist — coding skill not recommended");
+    assert!(
+        !ward_dir.join("core").exists(),
+        "core/ should NOT exist — coding skill not recommended"
+    );
 }
 
 // ============================================================================
@@ -151,7 +185,11 @@ fn test_ralph_next_respects_dependencies() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"id\": 1"), "First task should be id 1, got: {}", stdout);
+    assert!(
+        stdout.contains("\"id\": 1"),
+        "First task should be id 1, got: {}",
+        stdout
+    );
 
     // Complete task 1
     let output = std::process::Command::new("python3")
@@ -168,7 +206,11 @@ fn test_ralph_next_respects_dependencies() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"id\": 2"), "Second task should be id 2, got: {}", stdout);
+    assert!(
+        stdout.contains("\"id\": 2"),
+        "Second task should be id 2, got: {}",
+        stdout
+    );
 
     // Complete task 2
     std::process::Command::new("python3")
@@ -184,7 +226,11 @@ fn test_ralph_next_respects_dependencies() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"id\": 3"), "Third task should be id 3, got: {}", stdout);
+    assert!(
+        stdout.contains("\"id\": 3"),
+        "Third task should be id 3, got: {}",
+        stdout
+    );
 
     // Complete task 3
     std::process::Command::new("python3")
@@ -200,7 +246,11 @@ fn test_ralph_next_respects_dependencies() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("\"done\": true"), "Should be done, got: {}", stdout);
+    assert!(
+        stdout.contains("\"done\": true"),
+        "Should be done, got: {}",
+        stdout
+    );
 }
 
 /// Failed task should block dependents.
@@ -235,7 +285,11 @@ fn test_ralph_fail_blocks_dependents() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("blocked_by_failures"), "Should be blocked, got: {}", stdout);
+    assert!(
+        stdout.contains("blocked_by_failures"),
+        "Should be blocked, got: {}",
+        stdout
+    );
 
     // Status should show 1 failed, 1 pending
     let output = std::process::Command::new("python3")
@@ -244,8 +298,16 @@ fn test_ralph_fail_blocks_dependents() {
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("Failed: 1"), "Should show 1 failed, got: {}", stdout);
-    assert!(stdout.contains("Pending: 1"), "Should show 1 pending, got: {}", stdout);
+    assert!(
+        stdout.contains("Failed: 1"),
+        "Should show 1 failed, got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("Pending: 1"),
+        "Should show 1 pending, got: {}",
+        stdout
+    );
 }
 
 // ============================================================================
@@ -262,7 +324,8 @@ fn test_subagent_rules_are_lean() {
     assert!(
         byte_count < 300,
         "Executor rules should be under 300 bytes, got {} bytes:\n{}",
-        byte_count, rules
+        byte_count,
+        rules
     );
 }
 
@@ -272,8 +335,14 @@ fn test_reviewer_rules_include_result_format() {
     let rules = gateway_execution::invoke::setup::subagent_rules(
         gateway_execution::invoke::setup::SubagentRole::Reviewer,
     );
-    assert!(rules.contains("RESULT: APPROVED"), "Reviewer rules must mention RESULT: APPROVED");
-    assert!(rules.contains("RESULT: DEFECTS"), "Reviewer rules must mention RESULT: DEFECTS");
+    assert!(
+        rules.contains("RESULT: APPROVED"),
+        "Reviewer rules must mention RESULT: APPROVED"
+    );
+    assert!(
+        rules.contains("RESULT: DEFECTS"),
+        "Reviewer rules must mention RESULT: DEFECTS"
+    );
 }
 
 /// Role detection should identify review tasks.
@@ -281,11 +350,26 @@ fn test_reviewer_rules_include_result_format() {
 fn test_role_detection() {
     use gateway_execution::invoke::setup::{detect_subagent_role, SubagentRole};
 
-    assert_eq!(detect_subagent_role("code-agent", "Build the data pipeline"), SubagentRole::Executor);
-    assert_eq!(detect_subagent_role("code-agent", "Review code against specs"), SubagentRole::Reviewer);
-    assert_eq!(detect_subagent_role("data-analyst", "Validate output quality"), SubagentRole::Reviewer);
-    assert_eq!(detect_subagent_role("data-analyst", "Run the analysis script"), SubagentRole::Executor);
-    assert_eq!(detect_subagent_role("code-agent", "Evaluate the implementation"), SubagentRole::Reviewer);
+    assert_eq!(
+        detect_subagent_role("code-agent", "Build the data pipeline"),
+        SubagentRole::Executor
+    );
+    assert_eq!(
+        detect_subagent_role("code-agent", "Review code against specs"),
+        SubagentRole::Reviewer
+    );
+    assert_eq!(
+        detect_subagent_role("data-analyst", "Validate output quality"),
+        SubagentRole::Reviewer
+    );
+    assert_eq!(
+        detect_subagent_role("data-analyst", "Run the analysis script"),
+        SubagentRole::Executor
+    );
+    assert_eq!(
+        detect_subagent_role("code-agent", "Evaluate the implementation"),
+        SubagentRole::Reviewer
+    );
 }
 
 // ============================================================================
@@ -301,7 +385,10 @@ fn test_callback_detects_approved() {
         "conv-123",
     );
     assert!(msg.contains("APPROVED"), "Should contain APPROVED");
-    assert!(msg.contains("Proceed to the next node"), "Should suggest proceeding");
+    assert!(
+        msg.contains("Proceed to the next node"),
+        "Should suggest proceeding"
+    );
 }
 
 /// Callback should detect DEFECTS and include defect list.
@@ -313,8 +400,14 @@ fn test_callback_detects_defects() {
         "conv-123",
     );
     assert!(msg.contains("DEFECTS found"), "Should mention DEFECTS");
-    assert!(msg.contains("RSI value is -5"), "Should include defect details");
-    assert!(msg.contains("Re-delegate to coding agent"), "Should suggest re-delegation");
+    assert!(
+        msg.contains("RSI value is -5"),
+        "Should include defect details"
+    );
+    assert!(
+        msg.contains("Re-delegate to coding agent"),
+        "Should suggest re-delegation"
+    );
 }
 
 /// Callback without RESULT marker should not add action hints.
@@ -325,7 +418,10 @@ fn test_callback_without_result_no_action() {
         "Here is the analysis of the data.\nIt shows interesting patterns.",
         "conv-123",
     );
-    assert!(!msg.contains("Action:"), "Should not contain Action hint for plain responses");
+    assert!(
+        !msg.contains("Action:"),
+        "Should not contain Action hint for plain responses"
+    );
 }
 
 // ============================================================================
@@ -360,10 +456,19 @@ fn test_intent_injection_sdlc_for_graph() {
     let injection = format_intent_injection(&analysis, None, None);
 
     // Graph approach should route to planner-agent
-    assert!(injection.contains("## Task Analysis"), "Graph approach should include task analysis");
+    assert!(
+        injection.contains("## Task Analysis"),
+        "Graph approach should include task analysis"
+    );
     assert!(injection.contains("Goal:"), "Should include the goal");
-    assert!(injection.contains("planner-agent"), "Should route to planner for graph tasks");
-    assert!(injection.contains("Ward Rule:"), "Should include ward discipline");
+    assert!(
+        injection.contains("planner-agent"),
+        "Should route to planner for graph tasks"
+    );
+    assert!(
+        injection.contains("Ward Rule:"),
+        "Should include ward discipline"
+    );
 }
 
 /// Simple approach should NOT inject SDLC pattern.
@@ -393,8 +498,14 @@ fn test_intent_injection_no_sdlc_for_simple() {
 
     let injection = format_intent_injection(&analysis, None, None);
 
-    assert!(!injection.contains("SDLC Pattern"), "Simple approach should NOT include SDLC");
-    assert!(!injection.contains("tasks.json"), "Simple approach should NOT mention tasks.json");
+    assert!(
+        !injection.contains("SDLC Pattern"),
+        "Simple approach should NOT include SDLC"
+    );
+    assert!(
+        !injection.contains("tasks.json"),
+        "Simple approach should NOT mention tasks.json"
+    );
 }
 
 /// Ward rules should not have hardcoded domain examples.
@@ -425,10 +536,22 @@ fn test_ward_rules_domain_agnostic() {
     let injection = format_intent_injection(&analysis, None, None);
 
     // Should NOT have financial domain terms
-    assert!(!injection.contains("SPY"), "Ward rules should not mention SPY");
-    assert!(!injection.contains("ohlcv"), "Ward rules should not mention ohlcv");
-    assert!(!injection.contains("RSI"), "Ward rules should not mention RSI");
-    assert!(!injection.contains("yfinance"), "Ward rules should not mention yfinance");
+    assert!(
+        !injection.contains("SPY"),
+        "Ward rules should not mention SPY"
+    );
+    assert!(
+        !injection.contains("ohlcv"),
+        "Ward rules should not mention ohlcv"
+    );
+    assert!(
+        !injection.contains("RSI"),
+        "Ward rules should not mention RSI"
+    );
+    assert!(
+        !injection.contains("yfinance"),
+        "Ward rules should not mention yfinance"
+    );
 }
 
 // ============================================================================
@@ -444,10 +567,18 @@ fn test_agents_md_includes_ralph_when_present() {
     std::fs::create_dir_all(&ward_dir).unwrap();
 
     // Create ralph.py
-    std::fs::write(ward_dir.join("ralph.py"), "#!/usr/bin/env python3\nprint('ralph')").unwrap();
+    std::fs::write(
+        ward_dir.join("ralph.py"),
+        "#!/usr/bin/env python3\nprint('ralph')",
+    )
+    .unwrap();
 
     // Create minimal AGENTS.md
-    std::fs::write(ward_dir.join("AGENTS.md"), "# test-ward\n\n## Purpose\nTest\n").unwrap();
+    std::fs::write(
+        ward_dir.join("AGENTS.md"),
+        "# test-ward\n\n## Purpose\nTest\n",
+    )
+    .unwrap();
 
     // Create lang configs dir
     let lang_dir = vault_dir.join("config").join("wards");
@@ -461,7 +592,10 @@ fn test_agents_md_includes_ralph_when_present() {
     );
 
     let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
-    assert!(content.contains("Task Runner"), "AGENTS.md should have Task Runner section when ralph.py exists");
+    assert!(
+        content.contains("Task Runner"),
+        "AGENTS.md should have Task Runner section when ralph.py exists"
+    );
     assert!(content.contains("ralph.py"), "Should reference ralph.py");
 }
 
@@ -473,7 +607,11 @@ fn test_agents_md_no_ralph_when_absent() {
     let ward_dir = vault_dir.join("wards").join("test-ward");
     std::fs::create_dir_all(&ward_dir).unwrap();
 
-    std::fs::write(ward_dir.join("AGENTS.md"), "# test-ward\n\n## Purpose\nTest\n").unwrap();
+    std::fs::write(
+        ward_dir.join("AGENTS.md"),
+        "# test-ward\n\n## Purpose\nTest\n",
+    )
+    .unwrap();
 
     let lang_dir = vault_dir.join("config").join("wards");
     std::fs::create_dir_all(&lang_dir).unwrap();
@@ -485,7 +623,10 @@ fn test_agents_md_no_ralph_when_absent() {
     );
 
     let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
-    assert!(!content.contains("Task Runner"), "AGENTS.md should NOT have Task Runner section without ralph.py");
+    assert!(
+        !content.contains("Task Runner"),
+        "AGENTS.md should NOT have Task Runner section without ralph.py"
+    );
 }
 
 /// AGENTS.md should reference memory-bank/, not memory/.
@@ -498,7 +639,11 @@ fn test_agents_md_uses_memory_bank_not_memory() {
     std::fs::create_dir_all(ward_dir.join("memory-bank")).unwrap();
     std::fs::write(ward_dir.join("memory-bank").join("ward.md"), "# Knowledge").unwrap();
 
-    std::fs::write(ward_dir.join("AGENTS.md"), "# test-ward\n\n## Purpose\nTest\n").unwrap();
+    std::fs::write(
+        ward_dir.join("AGENTS.md"),
+        "# test-ward\n\n## Purpose\nTest\n",
+    )
+    .unwrap();
 
     let lang_dir = vault_dir.join("config").join("wards");
     std::fs::create_dir_all(&lang_dir).unwrap();
@@ -510,6 +655,12 @@ fn test_agents_md_uses_memory_bank_not_memory() {
     );
 
     let content = std::fs::read_to_string(ward_dir.join("AGENTS.md")).unwrap();
-    assert!(content.contains("memory-bank/"), "Should reference memory-bank/");
-    assert!(!content.contains("memory/ward.md"), "Should NOT reference old memory/ path");
+    assert!(
+        content.contains("memory-bank/"),
+        "Should reference memory-bank/"
+    );
+    assert!(
+        !content.contains("memory/ward.md"),
+        "Should NOT reference old memory/ path"
+    );
 }

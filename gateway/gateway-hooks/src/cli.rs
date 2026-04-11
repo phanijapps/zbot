@@ -2,10 +2,10 @@
 //!
 //! Routes responses to stdout for command-line interfaces.
 
-use crate::{Hook, HookContext, HookType};
 use crate::registry::{Attachment, ResponseFormat};
-use gateway_events::{EventBus, GatewayEvent};
+use crate::{Hook, HookContext, HookType};
 use async_trait::async_trait;
+use gateway_events::{EventBus, GatewayEvent};
 use std::sync::Arc;
 
 /// CLI hook for routing responses to stdout.

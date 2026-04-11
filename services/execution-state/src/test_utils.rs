@@ -188,7 +188,7 @@ mod tests {
     #[test]
     fn test_mock_session_creates_valid_session() {
         let session = mock_session("sess-test", "root");
-        
+
         assert_eq!(session.id, "sess-test");
         assert_eq!(session.root_agent_id, "root");
         assert_eq!(session.status, SessionStatus::Running);
@@ -198,7 +198,7 @@ mod tests {
     #[test]
     fn test_mock_execution_creates_valid_execution() {
         let exec = mock_execution("exec-test", "sess-test", "root");
-        
+
         assert_eq!(exec.id, "exec-test");
         assert_eq!(exec.session_id, "sess-test");
         assert_eq!(exec.agent_id, "root");
@@ -216,7 +216,7 @@ mod tests {
             "exec-root",
             "Research AI topics",
         );
-        
+
         assert_eq!(exec.parent_execution_id, Some("exec-root".to_string()));
         assert_eq!(exec.delegation_type, DelegationType::Sequential);
         assert_eq!(exec.task, Some("Research AI topics".to_string()));
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn test_temp_db_path_creates_valid_path() {
         let (dir, path) = temp_db_path();
-        
+
         assert!(path.contains("test.db"));
         assert!(dir.path().exists());
     }

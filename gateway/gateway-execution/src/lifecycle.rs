@@ -5,12 +5,12 @@
 //! This module centralizes all state transitions for sessions and executions,
 //! including creation, completion, error handling, and cancellation.
 
+use api_logs::{LogService, SessionStatus};
+use execution_state::{AgentExecution, Session, StateService, TriggerSource};
 use gateway_bridge::{BridgeRegistry, OutboxRepository as BridgeOutbox};
 use gateway_connectors::{ConnectorRegistry, DispatchContext};
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
-use api_logs::{LogService, SessionStatus};
-use execution_state::{AgentExecution, Session, StateService, TriggerSource};
 use std::sync::Arc;
 
 // ============================================================================
@@ -117,12 +117,9 @@ pub fn start_execution(
     }
 
     // Log the execution start
-    if let Err(e) = log_service.log_session_start(
-        execution_id,
-        session_id,
-        agent_id,
-        parent_execution_id,
-    ) {
+    if let Err(e) =
+        log_service.log_session_start(execution_id, session_id, agent_id, parent_execution_id)
+    {
         tracing::warn!("Failed to log execution start: {}", e);
     }
 

@@ -3,7 +3,9 @@
 //! SQLite storage for knowledge graph entities and relationships.
 
 use crate::error::{GraphError, GraphResult};
-use crate::types::{Direction, Entity, EntityType, NeighborInfo, Relationship, RelationshipType, ExtractedKnowledge};
+use crate::types::{
+    Direction, Entity, EntityType, ExtractedKnowledge, NeighborInfo, Relationship, RelationshipType,
+};
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,8 +25,7 @@ impl GraphStorage {
                 .map_err(|e| GraphError::Config(format!("Failed to create directory: {}", e)))?;
         }
 
-        let conn = Connection::open(&db_path)
-            .map_err(|e| GraphError::Database(e))?;
+        let conn = Connection::open(&db_path).map_err(|e| GraphError::Database(e))?;
 
         // Initialize schema
         initialize_schema(&conn)?;
@@ -35,12 +36,17 @@ impl GraphStorage {
     }
 
     /// Store extracted knowledge (entities and relationships)
-    pub async fn store_knowledge(&self, agent_id: &str, knowledge: ExtractedKnowledge) -> GraphResult<()> {
+    pub async fn store_knowledge(
+        &self,
+        agent_id: &str,
+        knowledge: ExtractedKnowledge,
+    ) -> GraphResult<()> {
         let conn = self.conn.lock().await;
 
         // Store entities and build ID mapping (new_id → actual_id)
         // When an entity deduplicates, the actual_id is the existing entity's ID
-        let mut entity_id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut entity_id_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for entity in knowledge.entities {
             let original_id = entity.id.clone();
             let actual_id = store_entity(&conn, agent_id, entity)?;
@@ -70,22 +76,33 @@ impl GraphStorage {
              FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'"
         ).map_err(|e| GraphError::Database(e))?;
 
-        let rows = stmt.query_map(params![agent_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        }).map_err(|e| GraphError::Database(e))?;
+        let rows = stmt
+            .query_map(params![agent_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })
+            .map_err(|e| GraphError::Database(e))?;
 
         let mut entities = Vec::new();
         for row in rows {
-            let (id, agent_id, entity_type_str, name, properties_json, first_seen_at, last_seen_at, mention_count) = row?;
+            let (
+                id,
+                agent_id,
+                entity_type_str,
+                name,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row?;
 
             let entity_type = EntityType::from_str(&entity_type_str);
             let properties = if let Some(json) = properties_json {
@@ -122,23 +139,35 @@ impl GraphStorage {
              FROM kg_relationships WHERE agent_id = ?1 OR agent_id = '__global__'"
         ).map_err(|e| GraphError::Database(e))?;
 
-        let rows = stmt.query_map(params![agent_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, i64>(8)?,
-            ))
-        }).map_err(|e| GraphError::Database(e))?;
+        let rows = stmt
+            .query_map(params![agent_id], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            })
+            .map_err(|e| GraphError::Database(e))?;
 
         let mut relationships = Vec::new();
         for row in rows {
-            let (id, agent_id, source_entity_id, target_entity_id, rel_type_str, properties_json, first_seen_at, last_seen_at, mention_count) = row?;
+            let (
+                id,
+                agent_id,
+                source_entity_id,
+                target_entity_id,
+                rel_type_str,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row?;
 
             let relationship_type = RelationshipType::from_str(&rel_type_str);
             let properties = if let Some(json) = properties_json {
@@ -179,22 +208,33 @@ impl GraphStorage {
         ).map_err(|e| GraphError::Database(e))?;
 
         let pattern = format!("%{}%", query);
-        let rows = stmt.query_map(params![agent_id, pattern], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        }).map_err(|e| GraphError::Database(e))?;
+        let rows = stmt
+            .query_map(params![agent_id, pattern], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })
+            .map_err(|e| GraphError::Database(e))?;
 
         let mut entities = Vec::new();
         for row in rows {
-            let (id, agent_id, entity_type_str, name, properties_json, first_seen_at, last_seen_at, mention_count) = row?;
+            let (
+                id,
+                agent_id,
+                entity_type_str,
+                name,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row?;
 
             let entity_type = EntityType::from_str(&entity_type_str);
             let properties = if let Some(json) = properties_json {
@@ -223,7 +263,11 @@ impl GraphStorage {
     }
 
     /// Find an existing entity by agent_id + name (case-insensitive), returning its ID.
-    pub async fn find_entity_by_name(&self, agent_id: &str, name: &str) -> GraphResult<Option<String>> {
+    pub async fn find_entity_by_name(
+        &self,
+        agent_id: &str,
+        name: &str,
+    ) -> GraphResult<Option<String>> {
         let conn = self.conn.lock().await;
         find_entity_by_name(&conn, agent_id, name)
     }
@@ -239,16 +283,20 @@ impl GraphStorage {
         let conn = self.conn.lock().await;
 
         // Delete relationships
-        let rel_count = conn.execute(
-            "DELETE FROM kg_relationships WHERE agent_id = ?1",
-            params![agent_id],
-        ).map_err(|e| GraphError::Database(e))?;
+        let rel_count = conn
+            .execute(
+                "DELETE FROM kg_relationships WHERE agent_id = ?1",
+                params![agent_id],
+            )
+            .map_err(|e| GraphError::Database(e))?;
 
         // Delete entities
-        let ent_count = conn.execute(
-            "DELETE FROM kg_entities WHERE agent_id = ?1",
-            params![agent_id],
-        ).map_err(|e| GraphError::Database(e))?;
+        let ent_count = conn
+            .execute(
+                "DELETE FROM kg_entities WHERE agent_id = ?1",
+                params![agent_id],
+            )
+            .map_err(|e| GraphError::Database(e))?;
 
         Ok((rel_count + ent_count) as usize)
     }
@@ -297,8 +345,11 @@ impl GraphStorage {
         };
 
         let rows = if let Some(type_filter) = entity_type {
-            stmt.query_map(params![agent_id, type_filter, limit as i64, offset as i64], parse_entity)
-                .map_err(|e| GraphError::Database(e))?
+            stmt.query_map(
+                params![agent_id, type_filter, limit as i64, offset as i64],
+                parse_entity,
+            )
+            .map_err(|e| GraphError::Database(e))?
         } else {
             stmt.query_map(params![agent_id, limit as i64, offset as i64], parse_entity)
                 .map_err(|e| GraphError::Database(e))?
@@ -306,7 +357,16 @@ impl GraphStorage {
 
         let mut entities = Vec::new();
         for row_result in rows {
-            let (id, agent_id, entity_type_str, name, properties_json, first_seen_at, last_seen_at, mention_count) = row_result?;
+            let (
+                id,
+                agent_id,
+                entity_type_str,
+                name,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row_result?;
 
             let entity_type = EntityType::from_str(&entity_type_str);
             let properties = if let Some(json) = properties_json {
@@ -377,16 +437,32 @@ impl GraphStorage {
         };
 
         let rows = if let Some(type_filter) = relationship_type {
-            stmt.query_map(params![agent_id, type_filter, limit as i64, offset as i64], parse_relationship)
-                .map_err(|e| GraphError::Database(e))?
+            stmt.query_map(
+                params![agent_id, type_filter, limit as i64, offset as i64],
+                parse_relationship,
+            )
+            .map_err(|e| GraphError::Database(e))?
         } else {
-            stmt.query_map(params![agent_id, limit as i64, offset as i64], parse_relationship)
-                .map_err(|e| GraphError::Database(e))?
+            stmt.query_map(
+                params![agent_id, limit as i64, offset as i64],
+                parse_relationship,
+            )
+            .map_err(|e| GraphError::Database(e))?
         };
 
         let mut relationships = Vec::new();
         for row_result in rows {
-            let (id, agent_id, source_entity_id, target_entity_id, rel_type_str, properties_json, first_seen_at, last_seen_at, mention_count) = row_result?;
+            let (
+                id,
+                agent_id,
+                source_entity_id,
+                target_entity_id,
+                rel_type_str,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row_result?;
 
             let relationship_type = RelationshipType::from_str(&rel_type_str);
             let properties = if let Some(json) = properties_json {
@@ -431,21 +507,32 @@ impl GraphStorage {
         ).map_err(|e| GraphError::Database(e))?;
 
         let lower_name = name.to_lowercase();
-        let mut rows = stmt.query_map(params![agent_id, lower_name], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, String>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)?,
-            ))
-        }).map_err(|e| GraphError::Database(e))?;
+        let mut rows = stmt
+            .query_map(params![agent_id, lower_name], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })
+            .map_err(|e| GraphError::Database(e))?;
 
         if let Some(row) = rows.next() {
-            let (id, agent_id, entity_type_str, name, properties_json, first_seen_at, last_seen_at, mention_count) = row?;
+            let (
+                id,
+                agent_id,
+                entity_type_str,
+                name,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row?;
 
             let entity_type = EntityType::from_str(&entity_type_str);
             let properties = if let Some(json) = properties_json {
@@ -497,40 +584,61 @@ impl GraphStorage {
                  LIMIT ?2"
             ).map_err(|e| GraphError::Database(e))?;
 
-            let rows = stmt.query_map(params![entity_id, limit as i64], |row| {
-                Ok((
-                    // Entity fields
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                    // Relationship fields
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, Option<String>>(13)?,
-                    row.get::<_, String>(14)?,
-                    row.get::<_, String>(15)?,
-                    row.get::<_, i64>(16)?,
-                ))
-            }).map_err(|e| GraphError::Database(e))?;
+            let rows = stmt
+                .query_map(params![entity_id, limit as i64], |row| {
+                    Ok((
+                        // Entity fields
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        // Relationship fields
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, String>(14)?,
+                        row.get::<_, String>(15)?,
+                        row.get::<_, i64>(16)?,
+                    ))
+                })
+                .map_err(|e| GraphError::Database(e))?;
 
             for row in rows {
-                let (e_id, e_agent_id, e_type_str, e_name, e_props_json, e_first, e_last, e_mentions,
-                     r_id, r_agent_id, r_source, r_target, r_type_str, r_props_json, r_first, r_last, r_mentions) = row?;
+                let (
+                    e_id,
+                    e_agent_id,
+                    e_type_str,
+                    e_name,
+                    e_props_json,
+                    e_first,
+                    e_last,
+                    e_mentions,
+                    r_id,
+                    r_agent_id,
+                    r_source,
+                    r_target,
+                    r_type_str,
+                    r_props_json,
+                    r_first,
+                    r_last,
+                    r_mentions,
+                ) = row?;
 
                 let entity = Entity {
                     id: e_id,
                     agent_id: e_agent_id,
                     entity_type: EntityType::from_str(&e_type_str),
                     name: e_name,
-                    properties: e_props_json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
+                    properties: e_props_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                     first_seen_at: chrono::DateTime::parse_from_rfc3339(&e_first)
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
@@ -546,7 +654,9 @@ impl GraphStorage {
                     source_entity_id: r_source,
                     target_entity_id: r_target,
                     relationship_type: RelationshipType::from_str(&r_type_str),
-                    properties: r_props_json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
+                    properties: r_props_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                     first_seen_at: chrono::DateTime::parse_from_rfc3339(&r_first)
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
@@ -576,40 +686,61 @@ impl GraphStorage {
                  LIMIT ?2"
             ).map_err(|e| GraphError::Database(e))?;
 
-            let rows = stmt.query_map(params![entity_id, limit as i64], |row| {
-                Ok((
-                    // Entity fields
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                    // Relationship fields
-                    row.get::<_, String>(8)?,
-                    row.get::<_, String>(9)?,
-                    row.get::<_, String>(10)?,
-                    row.get::<_, String>(11)?,
-                    row.get::<_, String>(12)?,
-                    row.get::<_, Option<String>>(13)?,
-                    row.get::<_, String>(14)?,
-                    row.get::<_, String>(15)?,
-                    row.get::<_, i64>(16)?,
-                ))
-            }).map_err(|e| GraphError::Database(e))?;
+            let rows = stmt
+                .query_map(params![entity_id, limit as i64], |row| {
+                    Ok((
+                        // Entity fields
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, Option<String>>(4)?,
+                        row.get::<_, String>(5)?,
+                        row.get::<_, String>(6)?,
+                        row.get::<_, i64>(7)?,
+                        // Relationship fields
+                        row.get::<_, String>(8)?,
+                        row.get::<_, String>(9)?,
+                        row.get::<_, String>(10)?,
+                        row.get::<_, String>(11)?,
+                        row.get::<_, String>(12)?,
+                        row.get::<_, Option<String>>(13)?,
+                        row.get::<_, String>(14)?,
+                        row.get::<_, String>(15)?,
+                        row.get::<_, i64>(16)?,
+                    ))
+                })
+                .map_err(|e| GraphError::Database(e))?;
 
             for row in rows {
-                let (e_id, e_agent_id, e_type_str, e_name, e_props_json, e_first, e_last, e_mentions,
-                     r_id, r_agent_id, r_source, r_target, r_type_str, r_props_json, r_first, r_last, r_mentions) = row?;
+                let (
+                    e_id,
+                    e_agent_id,
+                    e_type_str,
+                    e_name,
+                    e_props_json,
+                    e_first,
+                    e_last,
+                    e_mentions,
+                    r_id,
+                    r_agent_id,
+                    r_source,
+                    r_target,
+                    r_type_str,
+                    r_props_json,
+                    r_first,
+                    r_last,
+                    r_mentions,
+                ) = row?;
 
                 let entity = Entity {
                     id: e_id,
                     agent_id: e_agent_id,
                     entity_type: EntityType::from_str(&e_type_str),
                     name: e_name,
-                    properties: e_props_json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
+                    properties: e_props_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                     first_seen_at: chrono::DateTime::parse_from_rfc3339(&e_first)
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
@@ -625,7 +756,9 @@ impl GraphStorage {
                     source_entity_id: r_source,
                     target_entity_id: r_target,
                     relationship_type: RelationshipType::from_str(&r_type_str),
-                    properties: r_props_json.and_then(|j| serde_json::from_str(&j).ok()).unwrap_or_default(),
+                    properties: r_props_json
+                        .and_then(|j| serde_json::from_str(&j).ok())
+                        .unwrap_or_default(),
                     first_seen_at: chrono::DateTime::parse_from_rfc3339(&r_first)
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
@@ -650,11 +783,13 @@ impl GraphStorage {
     pub async fn count_entities(&self, agent_id: &str) -> GraphResult<usize> {
         let conn = self.conn.lock().await;
 
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'",
-            params![agent_id],
-            |row| row.get(0),
-        ).map_err(|e| GraphError::Database(e))?;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'",
+                params![agent_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| GraphError::Database(e))?;
 
         Ok(count as usize)
     }
@@ -675,22 +810,20 @@ impl GraphStorage {
     /// Count all entities across all agents.
     pub async fn count_all_entities(&self) -> GraphResult<usize> {
         let conn = self.conn.lock().await;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM kg_entities",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| GraphError::Database(e))?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM kg_entities", [], |row| row.get(0))
+            .map_err(|e| GraphError::Database(e))?;
         Ok(count as usize)
     }
 
     /// Count all relationships across all agents.
     pub async fn count_all_relationships(&self) -> GraphResult<usize> {
         let conn = self.conn.lock().await;
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM kg_relationships",
-            [],
-            |row| row.get(0),
-        ).map_err(|e| GraphError::Database(e))?;
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM kg_relationships", [], |row| {
+                row.get(0)
+            })
+            .map_err(|e| GraphError::Database(e))?;
         Ok(count as usize)
     }
 
@@ -707,23 +840,35 @@ impl GraphStorage {
              LIMIT ?1"
         ).map_err(|e| GraphError::Database(e))?;
 
-        let rows = stmt.query_map(params![limit as i64], |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-                row.get::<_, String>(7)?,
-                row.get::<_, i64>(8)?,
-            ))
-        }).map_err(|e| GraphError::Database(e))?;
+        let rows = stmt
+            .query_map(params![limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, i64>(8)?,
+                ))
+            })
+            .map_err(|e| GraphError::Database(e))?;
 
         let mut relationships = Vec::new();
         for row in rows {
-            let (id, agent_id, source_entity_id, target_entity_id, rel_type_str, properties_json, first_seen_at, last_seen_at, mention_count) = row?;
+            let (
+                id,
+                agent_id,
+                source_entity_id,
+                target_entity_id,
+                rel_type_str,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row?;
 
             let relationship_type = RelationshipType::from_str(&rel_type_str);
             let properties = if let Some(json) = properties_json {
@@ -794,7 +939,8 @@ impl GraphStorage {
 
         param_values.push(Box::new(limit as i64));
 
-        let params_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|p| p.as_ref()).collect();
         let mut stmt = conn.prepare(&sql).map_err(|e| GraphError::Database(e))?;
 
         let parse_entity = |row: &rusqlite::Row| {
@@ -810,12 +956,22 @@ impl GraphStorage {
             ))
         };
 
-        let rows = stmt.query_map(params_refs.as_slice(), parse_entity)
+        let rows = stmt
+            .query_map(params_refs.as_slice(), parse_entity)
             .map_err(|e| GraphError::Database(e))?;
 
         let mut entities = Vec::new();
         for row_result in rows {
-            let (id, agent_id, entity_type_str, name, properties_json, first_seen_at, last_seen_at, mention_count) = row_result?;
+            let (
+                id,
+                agent_id,
+                entity_type_str,
+                name,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row_result?;
 
             let entity_type = EntityType::from_str(&entity_type_str);
             let properties = if let Some(json) = properties_json {
@@ -859,18 +1015,21 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
             mention_count INTEGER DEFAULT 1
         )",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     // Create indexes for entities
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_entities_agent ON kg_entities(agent_id)",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_entities_name ON kg_entities(name)",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     // Create relationships table
     conn.execute(
@@ -888,69 +1047,83 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
             FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
         )",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     // Create indexes for relationships
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_relationships_agent ON kg_relationships(agent_id)",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_relationships_source ON kg_relationships(source_entity_id)",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_relationships_target ON kg_relationships(target_entity_id)",
         [],
-    ).map_err(|e| GraphError::Database(e))?;
+    )
+    .map_err(|e| GraphError::Database(e))?;
 
     // Migration: Add mention_count column if it doesn't exist (for databases created before this feature)
     // Check if mention_count column exists in kg_entities
-    let has_entities_mention_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('kg_entities') WHERE name='mention_count'",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let has_entities_mention_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('kg_entities') WHERE name='mention_count'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     if has_entities_mention_count == 0 {
         tracing::info!("Migrating kg_entities: adding mention_count column");
         conn.execute(
             "ALTER TABLE kg_entities ADD COLUMN mention_count INTEGER DEFAULT 1",
             [],
-        ).map_err(|e| GraphError::Database(e))?;
+        )
+        .map_err(|e| GraphError::Database(e))?;
     }
 
     // Check if mention_count column exists in kg_relationships
-    let has_relationships_mention_count: i64 = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('kg_relationships') WHERE name='mention_count'",
-        [],
-        |row| row.get(0),
-    ).unwrap_or(0);
+    let has_relationships_mention_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('kg_relationships') WHERE name='mention_count'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(0);
 
     if has_relationships_mention_count == 0 {
         tracing::info!("Migrating kg_relationships: adding mention_count column");
         conn.execute(
             "ALTER TABLE kg_relationships ADD COLUMN mention_count INTEGER DEFAULT 1",
             [],
-        ).map_err(|e| GraphError::Database(e))?;
+        )
+        .map_err(|e| GraphError::Database(e))?;
     }
 
     // One-time migration: dedup existing relationships before adding unique index
     // Keep the row with lowest rowid per (source, target, type) triple
-    conn.execute_batch("
+    conn.execute_batch(
+        "
         DELETE FROM kg_relationships WHERE rowid NOT IN (
             SELECT MIN(rowid) FROM kg_relationships
             GROUP BY source_entity_id, target_entity_id, relationship_type
         );
-    ").map_err(GraphError::Database)?;
+    ",
+    )
+    .map_err(GraphError::Database)?;
 
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_rel_unique
          ON kg_relationships(source_entity_id, target_entity_id, relationship_type)",
         [],
-    ).map_err(GraphError::Database)?;
+    )
+    .map_err(GraphError::Database)?;
 
     Ok(())
 }
@@ -979,22 +1152,25 @@ fn normalize_entity_name(name: &str, entity_type: &str) -> String {
 /// remap relationship references.
 fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResult<String> {
     let entity_type_str = entity.entity_type.as_str();
-    let properties_json = serde_json::to_string(&entity.properties)
-        .unwrap_or_else(|_| "".to_string());
+    let properties_json =
+        serde_json::to_string(&entity.properties).unwrap_or_else(|_| "".to_string());
 
     // Check for existing entity with same name + type across ALL agents
     let normalized_name = normalize_entity_name(&entity.name, entity_type_str);
-    if let Some(existing_id) = find_entity_by_name_global(conn, &normalized_name, entity_type_str)? {
+    if let Some(existing_id) = find_entity_by_name_global(conn, &normalized_name, entity_type_str)?
+    {
         // Bump existing entity — dedup
         // Store full path as alias if different from matched name
-        let mut existing_props: serde_json::Value = conn.query_row(
-            "SELECT properties FROM kg_entities WHERE id = ?1",
-            params![existing_id],
-            |row| {
-                let s: String = row.get(0)?;
-                Ok(serde_json::from_str(&s).unwrap_or(serde_json::json!({})))
-            },
-        ).unwrap_or(serde_json::json!({}));
+        let mut existing_props: serde_json::Value = conn
+            .query_row(
+                "SELECT properties FROM kg_entities WHERE id = ?1",
+                params![existing_id],
+                |row| {
+                    let s: String = row.get(0)?;
+                    Ok(serde_json::from_str(&s).unwrap_or(serde_json::json!({})))
+                },
+            )
+            .unwrap_or(serde_json::json!({}));
 
         if entity.name != normalized_name {
             if let Some(obj) = existing_props.as_object_mut() {
@@ -1041,7 +1217,11 @@ fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResu
 }
 
 /// Find an existing entity by name + type across ALL agents (case-insensitive).
-fn find_entity_by_name_global(conn: &Connection, name: &str, entity_type: &str) -> GraphResult<Option<String>> {
+fn find_entity_by_name_global(
+    conn: &Connection,
+    name: &str,
+    entity_type: &str,
+) -> GraphResult<Option<String>> {
     // Exact match first (case-insensitive)
     let mut stmt = conn.prepare(
         "SELECT id FROM kg_entities WHERE name = ?1 COLLATE NOCASE AND entity_type = ?2 LIMIT 1"
@@ -1049,7 +1229,7 @@ fn find_entity_by_name_global(conn: &Connection, name: &str, entity_type: &str) 
 
     match stmt.query_row(params![name, entity_type], |row| row.get::<_, String>(0)) {
         Ok(id) => return Ok(Some(id)),
-        Err(rusqlite::Error::QueryReturnedNoRows) => {},
+        Err(rusqlite::Error::QueryReturnedNoRows) => {}
         Err(e) => return Err(GraphError::Database(e)),
     }
 
@@ -1060,9 +1240,11 @@ fn find_entity_by_name_global(conn: &Connection, name: &str, entity_type: &str) 
             "SELECT id FROM kg_entities WHERE name LIKE ?1 COLLATE NOCASE AND entity_type = ?2 LIMIT 1"
         ).map_err(GraphError::Database)?;
 
-        match stmt2.query_row(params![like_pattern, entity_type], |row| row.get::<_, String>(0)) {
+        match stmt2.query_row(params![like_pattern, entity_type], |row| {
+            row.get::<_, String>(0)
+        }) {
             Ok(id) => return Ok(Some(id)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {},
+            Err(rusqlite::Error::QueryReturnedNoRows) => {}
             Err(e) => return Err(GraphError::Database(e)),
         }
     }
@@ -1072,7 +1254,11 @@ fn find_entity_by_name_global(conn: &Connection, name: &str, entity_type: &str) 
 
 /// Find an existing entity by agent_id + name (case-insensitive).
 /// Also checks `__global__` entities since store_entity now deduplicates cross-agent.
-fn find_entity_by_name(conn: &Connection, agent_id: &str, name: &str) -> GraphResult<Option<String>> {
+fn find_entity_by_name(
+    conn: &Connection,
+    agent_id: &str,
+    name: &str,
+) -> GraphResult<Option<String>> {
     let mut stmt = conn.prepare(
         "SELECT id FROM kg_entities WHERE (agent_id = ?1 OR agent_id = '__global__') AND name = ?2 COLLATE NOCASE LIMIT 1"
     ).map_err(GraphError::Database)?;
@@ -1089,15 +1275,20 @@ fn bump_entity_mention(conn: &Connection, entity_id: &str) -> GraphResult<()> {
     conn.execute(
         "UPDATE kg_entities SET mention_count = mention_count + 1, last_seen_at = ?1 WHERE id = ?2",
         params![chrono::Utc::now().to_rfc3339(), entity_id],
-    ).map_err(GraphError::Database)?;
+    )
+    .map_err(GraphError::Database)?;
     Ok(())
 }
 
 /// Store a relationship (upsert based on source + target + type)
-fn store_relationship(conn: &Connection, agent_id: &str, relationship: Relationship) -> GraphResult<()> {
+fn store_relationship(
+    conn: &Connection,
+    agent_id: &str,
+    relationship: Relationship,
+) -> GraphResult<()> {
     let rel_type_str = relationship.relationship_type.as_str();
-    let properties_json = serde_json::to_string(&relationship.properties)
-        .unwrap_or_else(|_| "".to_string());
+    let properties_json =
+        serde_json::to_string(&relationship.properties).unwrap_or_else(|_| "".to_string());
 
     conn.execute(
         "INSERT INTO kg_relationships (id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count)
@@ -1143,7 +1334,11 @@ mod tests {
         let storage = create_test_storage().await;
 
         // Store some entities
-        let entity1 = Entity::new("agent1".to_string(), EntityType::Person, "Alice".to_string());
+        let entity1 = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
         let entity2 = Entity::new("agent1".to_string(), EntityType::Tool, "Rust".to_string());
         let entity3 = Entity::new("agent1".to_string(), EntityType::Person, "Bob".to_string());
 
@@ -1162,7 +1357,10 @@ mod tests {
         assert_eq!(entities.len(), 1);
 
         // List with type filter
-        let entities = storage.list_entities("agent1", Some("person"), 10, 0).await.unwrap();
+        let entities = storage
+            .list_entities("agent1", Some("person"), 10, 0)
+            .await
+            .unwrap();
         assert_eq!(entities.len(), 2);
     }
 
@@ -1171,9 +1369,17 @@ mod tests {
         let storage = create_test_storage().await;
 
         // Store entities and relationships
-        let entity1 = Entity::new("agent1".to_string(), EntityType::Person, "Alice".to_string());
+        let entity1 = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
         let entity2 = Entity::new("agent1".to_string(), EntityType::Tool, "Rust".to_string());
-        let entity3 = Entity::new("agent1".to_string(), EntityType::Project, "ProjectX".to_string());
+        let entity3 = Entity::new(
+            "agent1".to_string(),
+            EntityType::Project,
+            "ProjectX".to_string(),
+        );
 
         let rel1 = Relationship::new(
             "agent1".to_string(),
@@ -1195,11 +1401,17 @@ mod tests {
         storage.store_knowledge("agent1", knowledge).await.unwrap();
 
         // List with limit
-        let rels = storage.list_relationships("agent1", None, 1, 0).await.unwrap();
+        let rels = storage
+            .list_relationships("agent1", None, 1, 0)
+            .await
+            .unwrap();
         assert_eq!(rels.len(), 1);
 
         // List with type filter
-        let rels = storage.list_relationships("agent1", Some("uses"), 10, 0).await.unwrap();
+        let rels = storage
+            .list_relationships("agent1", Some("uses"), 10, 0)
+            .await
+            .unwrap();
         assert_eq!(rels.len(), 1);
         assert!(matches!(rels[0].relationship_type, RelationshipType::Uses));
     }
@@ -1209,7 +1421,11 @@ mod tests {
         let storage = create_test_storage().await;
 
         // Store entity
-        let entity = Entity::new("agent1".to_string(), EntityType::Person, "Alice".to_string());
+        let entity = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
         let knowledge = ExtractedKnowledge {
             entities: vec![entity],
             relationships: vec![],
@@ -1234,7 +1450,11 @@ mod tests {
         let storage = create_test_storage().await;
 
         // Create a small graph: Alice -> uses -> Rust, Bob -> uses -> Rust
-        let alice = Entity::new("agent1".to_string(), EntityType::Person, "Alice".to_string());
+        let alice = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
         let bob = Entity::new("agent1".to_string(), EntityType::Person, "Bob".to_string());
         let rust = Entity::new("agent1".to_string(), EntityType::Tool, "Rust".to_string());
 
@@ -1258,17 +1478,26 @@ mod tests {
         storage.store_knowledge("agent1", knowledge).await.unwrap();
 
         // Get Alice's outgoing neighbors (Alice -> Rust)
-        let neighbors = storage.get_neighbors("agent1", &alice.id, Direction::Outgoing, 10).await.unwrap();
+        let neighbors = storage
+            .get_neighbors("agent1", &alice.id, Direction::Outgoing, 10)
+            .await
+            .unwrap();
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].entity.name, "Rust");
         assert_eq!(neighbors[0].direction, Direction::Outgoing);
 
         // Get Rust's incoming neighbors (Alice -> Rust, Bob -> Rust)
-        let neighbors = storage.get_neighbors("agent1", &rust.id, Direction::Incoming, 10).await.unwrap();
+        let neighbors = storage
+            .get_neighbors("agent1", &rust.id, Direction::Incoming, 10)
+            .await
+            .unwrap();
         assert_eq!(neighbors.len(), 2);
 
         // Get both directions
-        let neighbors = storage.get_neighbors("agent1", &alice.id, Direction::Both, 10).await.unwrap();
+        let neighbors = storage
+            .get_neighbors("agent1", &alice.id, Direction::Both, 10)
+            .await
+            .unwrap();
         assert_eq!(neighbors.len(), 1); // Only outgoing
     }
 
@@ -1281,7 +1510,11 @@ mod tests {
         assert_eq!(storage.count_relationships("agent1").await.unwrap(), 0);
 
         // Store some data
-        let entity1 = Entity::new("agent1".to_string(), EntityType::Person, "Alice".to_string());
+        let entity1 = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
         let entity2 = Entity::new("agent1".to_string(), EntityType::Tool, "Rust".to_string());
         let rel = Relationship::new(
             "agent1".to_string(),

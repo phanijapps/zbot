@@ -159,7 +159,10 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     /// Get session with all its executions.
-    pub fn get_session_with_executions(&self, id: &str) -> Result<Option<SessionWithExecutions>, String> {
+    pub fn get_session_with_executions(
+        &self,
+        id: &str,
+    ) -> Result<Option<SessionWithExecutions>, String> {
         let session = self.get_session(id)?;
 
         match session {
@@ -169,7 +172,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                     ..Default::default()
                 })?;
 
-                let subagent_count = executions.iter()
+                let subagent_count = executions
+                    .iter()
                     .filter(|e| e.delegation_type != DelegationType::Root)
                     .count() as u32;
 
@@ -197,7 +201,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                 ..Default::default()
             })?;
 
-            let subagent_count = executions.iter()
+            let subagent_count = executions
+                .iter()
                 .filter(|e| e.delegation_type != DelegationType::Root)
                 .count() as u32;
 
@@ -411,7 +416,11 @@ impl<D: StateDbProvider> StateRepository<D> {
                     execution.completed_at,
                     execution.tokens_in as i64,
                     execution.tokens_out as i64,
-                    execution.checkpoint.as_ref().map(|c| serde_json::to_string(c).ok()).flatten(),
+                    execution
+                        .checkpoint
+                        .as_ref()
+                        .map(|c| serde_json::to_string(c).ok())
+                        .flatten(),
                     execution.error,
                     execution.log_path,
                     execution.child_session_id,
@@ -502,7 +511,10 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     /// Get child executions for a parent.
-    pub fn get_child_executions(&self, parent_execution_id: &str) -> Result<Vec<AgentExecution>, String> {
+    pub fn get_child_executions(
+        &self,
+        parent_execution_id: &str,
+    ) -> Result<Vec<AgentExecution>, String> {
         self.list_executions(&ExecutionFilter {
             parent_execution_id: Some(parent_execution_id.to_string()),
             ..Default::default()
@@ -573,7 +585,12 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     /// Update execution tokens.
-    pub fn update_execution_tokens(&self, id: &str, tokens_in: u64, tokens_out: u64) -> Result<(), String> {
+    pub fn update_execution_tokens(
+        &self,
+        id: &str,
+        tokens_in: u64,
+        tokens_out: u64,
+    ) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "UPDATE agent_executions SET tokens_in = ?1, tokens_out = ?2 WHERE id = ?3",
@@ -584,7 +601,11 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     /// Save execution checkpoint.
-    pub fn save_execution_checkpoint(&self, id: &str, checkpoint: &Checkpoint) -> Result<(), String> {
+    pub fn save_execution_checkpoint(
+        &self,
+        id: &str,
+        checkpoint: &Checkpoint,
+    ) -> Result<(), String> {
         let json = serde_json::to_string(checkpoint)
             .map_err(|e| format!("Failed to serialize checkpoint: {}", e))?;
 
@@ -598,7 +619,11 @@ impl<D: StateDbProvider> StateRepository<D> {
     }
 
     /// Set child_session_id on an execution (for smart resume).
-    pub fn set_child_session_id(&self, execution_id: &str, child_session_id: &str) -> Result<(), String> {
+    pub fn set_child_session_id(
+        &self,
+        execution_id: &str,
+        child_session_id: &str,
+    ) -> Result<(), String> {
         self.db.with_connection(|conn| {
             conn.execute(
                 "UPDATE agent_executions SET child_session_id = ?1 WHERE id = ?2",
@@ -610,7 +635,10 @@ impl<D: StateDbProvider> StateRepository<D> {
 
     /// Find the most recently crashed subagent execution for a session.
     /// Returns None if only the root execution crashed or no crashes exist.
-    pub fn get_last_crashed_subagent(&self, session_id: &str) -> Result<Option<AgentExecution>, String> {
+    pub fn get_last_crashed_subagent(
+        &self,
+        session_id: &str,
+    ) -> Result<Option<AgentExecution>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, parent_execution_id,
@@ -815,28 +843,28 @@ impl<D: StateDbProvider> StateRepository<D> {
             let mut stmt = conn.prepare(&sql)?;
 
             // Build params based on scope and filters
-            let messages: Vec<crate::handlers::SessionMessage> = match (scope, execution_id, agent_id) {
-                ("execution", Some(exec_id), Some(agent)) => {
-                    stmt.query_map(params![session_id, exec_id, agent], Self::row_to_session_message)?
+            let messages: Vec<crate::handlers::SessionMessage> =
+                match (scope, execution_id, agent_id) {
+                    ("execution", Some(exec_id), Some(agent)) => stmt
+                        .query_map(
+                            params![session_id, exec_id, agent],
+                            Self::row_to_session_message,
+                        )?
                         .filter_map(|r| r.ok())
-                        .collect()
-                }
-                ("execution", Some(exec_id), None) => {
-                    stmt.query_map(params![session_id, exec_id], Self::row_to_session_message)?
+                        .collect(),
+                    ("execution", Some(exec_id), None) => stmt
+                        .query_map(params![session_id, exec_id], Self::row_to_session_message)?
                         .filter_map(|r| r.ok())
-                        .collect()
-                }
-                (_, _, Some(agent)) => {
-                    stmt.query_map(params![session_id, agent], Self::row_to_session_message)?
+                        .collect(),
+                    (_, _, Some(agent)) => stmt
+                        .query_map(params![session_id, agent], Self::row_to_session_message)?
                         .filter_map(|r| r.ok())
-                        .collect()
-                }
-                _ => {
-                    stmt.query_map(params![session_id], Self::row_to_session_message)?
+                        .collect(),
+                    _ => stmt
+                        .query_map(params![session_id], Self::row_to_session_message)?
                         .filter_map(|r| r.ok())
-                        .collect()
-                }
-            };
+                        .collect(),
+                };
 
             Ok(messages)
         })
@@ -1017,8 +1045,8 @@ impl<D: StateDbProvider> StateRepository<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
     use rusqlite::Connection;
+    use std::sync::Mutex;
 
     /// Test database provider using in-memory SQLite.
     struct TestDbProvider {
@@ -1028,7 +1056,7 @@ mod tests {
     impl TestDbProvider {
         fn new() -> Self {
             let conn = Connection::open_in_memory().expect("Failed to create in-memory database");
-            
+
             // Create tables matching the actual schema
             conn.execute_batch(
                 r#"
@@ -1126,19 +1154,23 @@ mod tests {
         let session = Session::new("root-agent");
 
         let result = repo.create_session(&session);
-        assert!(result.is_ok(), "Failed to create session: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "Failed to create session: {:?}",
+            result.err()
+        );
     }
 
     #[test]
     fn get_session_success() {
         let repo = setup_repo();
         let session = Session::new_with_source("test-agent", TriggerSource::Cli);
-        
+
         repo.create_session(&session).unwrap();
-        
+
         let retrieved = repo.get_session(&session.id).unwrap();
         assert!(retrieved.is_some());
-        
+
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.id, session.id);
         assert_eq!(retrieved.status, SessionStatus::Running);
@@ -1149,7 +1181,7 @@ mod tests {
     #[test]
     fn get_session_not_found() {
         let repo = setup_repo();
-        
+
         let result = repo.get_session("nonexistent-session");
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -1159,7 +1191,7 @@ mod tests {
     fn list_sessions_empty() {
         let repo = setup_repo();
         let filter = SessionFilter::default();
-        
+
         let sessions = repo.list_sessions(&filter).unwrap();
         assert!(sessions.is_empty());
     }
@@ -1167,15 +1199,15 @@ mod tests {
     #[test]
     fn list_sessions_with_data() {
         let repo = setup_repo();
-        
+
         let s1 = Session::new("agent1");
         let s2 = Session::new("agent2");
         let s3 = Session::new_with_source("agent3", TriggerSource::Cron);
-        
+
         repo.create_session(&s1).unwrap();
         repo.create_session(&s2).unwrap();
         repo.create_session(&s3).unwrap();
-        
+
         let filter = SessionFilter::default();
         let sessions = repo.list_sessions(&filter).unwrap();
         assert_eq!(sessions.len(), 3);
@@ -1184,12 +1216,12 @@ mod tests {
     #[test]
     fn list_sessions_with_limit() {
         let repo = setup_repo();
-        
+
         for i in 0..5 {
             let session = Session::new(format!("agent{}", i));
             repo.create_session(&session).unwrap();
         }
-        
+
         let filter = SessionFilter {
             limit: Some(2),
             ..Default::default()
@@ -1202,10 +1234,11 @@ mod tests {
     fn update_session_status() {
         let repo = setup_repo();
         let session = Session::new("agent");
-        
+
         repo.create_session(&session).unwrap();
-        repo.update_session_status(&session.id, SessionStatus::Completed).unwrap();
-        
+        repo.update_session_status(&session.id, SessionStatus::Completed)
+            .unwrap();
+
         let updated = repo.get_session(&session.id).unwrap().unwrap();
         assert_eq!(updated.status, SessionStatus::Completed);
         assert!(updated.completed_at.is_some());
@@ -1216,16 +1249,16 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         // Create an execution with tokens
         let mut exec = AgentExecution::new_root(&session.id, "agent");
         exec.tokens_in = 100;
         exec.tokens_out = 50;
         repo.create_execution(&exec).unwrap();
-        
+
         // Update session tokens from execution totals
         repo.update_session_tokens(&session.id).unwrap();
-        
+
         let updated = repo.get_session(&session.id).unwrap().unwrap();
         assert_eq!(updated.total_tokens_in, 100);
         assert_eq!(updated.total_tokens_out, 50);
@@ -1235,10 +1268,10 @@ mod tests {
     fn delete_session() {
         let repo = setup_repo();
         let session = Session::new("agent");
-        
+
         repo.create_session(&session).unwrap();
         assert!(repo.get_session(&session.id).unwrap().is_some());
-        
+
         repo.delete_session(&session.id).unwrap();
         assert!(repo.get_session(&session.id).unwrap().is_none());
     }
@@ -1252,11 +1285,15 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec = AgentExecution::new_root(&session.id, "root-agent");
         let result = repo.create_execution(&exec);
-        
-        assert!(result.is_ok(), "Failed to create execution: {:?}", result.err());
+
+        assert!(
+            result.is_ok(),
+            "Failed to create execution: {:?}",
+            result.err()
+        );
     }
 
     #[test]
@@ -1264,13 +1301,13 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec = AgentExecution::new_root(&session.id, "root-agent");
         repo.create_execution(&exec).unwrap();
-        
+
         let retrieved = repo.get_execution(&exec.id).unwrap();
         assert!(retrieved.is_some());
-        
+
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.id, exec.id);
         assert_eq!(retrieved.session_id, session.id);
@@ -1281,7 +1318,7 @@ mod tests {
     #[test]
     fn get_execution_not_found() {
         let repo = setup_repo();
-        
+
         let result = repo.get_execution("nonexistent");
         assert!(result.is_ok());
         assert!(result.unwrap().is_none());
@@ -1292,10 +1329,10 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let root_exec = AgentExecution::new_root(&session.id, "root");
         repo.create_execution(&root_exec).unwrap();
-        
+
         let sub_exec = AgentExecution::new_delegated(
             &session.id,
             "researcher",
@@ -1304,7 +1341,7 @@ mod tests {
             "Research AI topics",
         );
         repo.create_execution(&sub_exec).unwrap();
-        
+
         let retrieved = repo.get_execution(&sub_exec.id).unwrap().unwrap();
         assert_eq!(retrieved.parent_execution_id, Some(root_exec.id.clone()));
         assert_eq!(retrieved.delegation_type, DelegationType::Sequential);
@@ -1316,20 +1353,24 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec1 = AgentExecution::new_root(&session.id, "agent1");
         let exec2 = AgentExecution::new_delegated(
-            &session.id, "agent2", &exec1.id, DelegationType::Sequential, "task"
+            &session.id,
+            "agent2",
+            &exec1.id,
+            DelegationType::Sequential,
+            "task",
         );
-        
+
         repo.create_execution(&exec1).unwrap();
         repo.create_execution(&exec2).unwrap();
-        
+
         let filter = ExecutionFilter {
             session_id: Some(session.id.clone()),
             ..Default::default()
         };
-        
+
         let executions = repo.list_executions(&filter).unwrap();
         assert_eq!(executions.len(), 2);
     }
@@ -1339,20 +1380,28 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let root = AgentExecution::new_root(&session.id, "root");
         repo.create_execution(&root).unwrap();
-        
+
         let child1 = AgentExecution::new_delegated(
-            &session.id, "child1", &root.id, DelegationType::Sequential, "task1"
+            &session.id,
+            "child1",
+            &root.id,
+            DelegationType::Sequential,
+            "task1",
         );
         let child2 = AgentExecution::new_delegated(
-            &session.id, "child2", &root.id, DelegationType::Parallel, "task2"
+            &session.id,
+            "child2",
+            &root.id,
+            DelegationType::Parallel,
+            "task2",
         );
-        
+
         repo.create_execution(&child1).unwrap();
         repo.create_execution(&child2).unwrap();
-        
+
         let children = repo.get_child_executions(&root.id).unwrap();
         assert_eq!(children.len(), 2);
     }
@@ -1362,16 +1411,18 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec = AgentExecution::new_root(&session.id, "agent");
         repo.create_execution(&exec).unwrap();
-        
-        repo.update_execution_status(&exec.id, ExecutionStatus::Running).unwrap();
+
+        repo.update_execution_status(&exec.id, ExecutionStatus::Running)
+            .unwrap();
         let updated = repo.get_execution(&exec.id).unwrap().unwrap();
         assert_eq!(updated.status, ExecutionStatus::Running);
         assert!(updated.started_at.is_some());
-        
-        repo.update_execution_status(&exec.id, ExecutionStatus::Completed).unwrap();
+
+        repo.update_execution_status(&exec.id, ExecutionStatus::Completed)
+            .unwrap();
         let updated = repo.get_execution(&exec.id).unwrap().unwrap();
         assert_eq!(updated.status, ExecutionStatus::Completed);
         assert!(updated.completed_at.is_some());
@@ -1382,12 +1433,12 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec = AgentExecution::new_root(&session.id, "agent");
         repo.create_execution(&exec).unwrap();
-        
+
         repo.update_execution_tokens(&exec.id, 200, 100).unwrap();
-        
+
         let updated = repo.get_execution(&exec.id).unwrap().unwrap();
         assert_eq!(updated.tokens_in, 200);
         assert_eq!(updated.tokens_out, 100);
@@ -1398,12 +1449,13 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec = AgentExecution::new_root(&session.id, "agent");
         repo.create_execution(&exec).unwrap();
-        
-        repo.set_execution_error(&exec.id, "Something went wrong").unwrap();
-        
+
+        repo.set_execution_error(&exec.id, "Something went wrong")
+            .unwrap();
+
         let updated = repo.get_execution(&exec.id).unwrap().unwrap();
         assert_eq!(updated.error, Some("Something went wrong".to_string()));
         // Note: set_execution_error only sets the error message, not the status
@@ -1419,18 +1471,22 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let root = AgentExecution::new_root(&session.id, "root");
         let sub = AgentExecution::new_delegated(
-            &session.id, "sub", &root.id, DelegationType::Sequential, "task"
+            &session.id,
+            "sub",
+            &root.id,
+            DelegationType::Sequential,
+            "task",
         );
-        
+
         repo.create_execution(&root).unwrap();
         repo.create_execution(&sub).unwrap();
-        
+
         let result = repo.get_session_with_executions(&session.id).unwrap();
         assert!(result.is_some());
-        
+
         let swe = result.unwrap();
         assert_eq!(swe.session.id, session.id);
         assert_eq!(swe.executions.len(), 2);
@@ -1440,23 +1496,23 @@ mod tests {
     #[test]
     fn list_sessions_with_executions() {
         let repo = setup_repo();
-        
+
         let s1 = Session::new("agent1");
         let s2 = Session::new("agent2");
-        
+
         repo.create_session(&s1).unwrap();
         repo.create_session(&s2).unwrap();
-        
+
         let e1 = AgentExecution::new_root(&s1.id, "agent1");
         let e2 = AgentExecution::new_root(&s2.id, "agent2");
-        
+
         repo.create_execution(&e1).unwrap();
         repo.create_execution(&e2).unwrap();
-        
+
         let filter = SessionFilter::default();
         let sessions = repo.list_sessions_with_executions(&filter).unwrap();
         assert_eq!(sessions.len(), 2);
-        
+
         for swe in sessions {
             assert!(!swe.executions.is_empty());
         }
@@ -1469,9 +1525,9 @@ mod tests {
     #[test]
     fn get_dashboard_stats_empty() {
         let repo = setup_repo();
-        
+
         let stats = repo.get_dashboard_stats().unwrap();
-        
+
         assert_eq!(stats.sessions_running, 0);
         assert_eq!(stats.sessions_queued, 0);
         assert_eq!(stats.sessions_completed, 0);
@@ -1481,39 +1537,41 @@ mod tests {
     #[test]
     fn get_dashboard_stats_with_data() {
         let repo = setup_repo();
-        
+
         // Create sessions with different statuses and sources
         let s1 = Session::new_with_source("agent1", TriggerSource::Web);
         let s2 = Session::new_with_source("agent2", TriggerSource::Web);
         let s3 = Session::new_with_source("agent3", TriggerSource::Cli);
         let s4 = Session::new_queued("agent4", TriggerSource::Cron);
-        
+
         repo.create_session(&s1).unwrap();
         repo.create_session(&s2).unwrap();
         repo.create_session(&s3).unwrap();
         repo.create_session(&s4).unwrap();
-        
+
         // Complete one session
-        repo.update_session_status(&s2.id, SessionStatus::Completed).unwrap();
-        
+        repo.update_session_status(&s2.id, SessionStatus::Completed)
+            .unwrap();
+
         // Create executions
         let e1 = AgentExecution::new_root(&s1.id, "agent1");
         let e3 = AgentExecution::new_root(&s3.id, "agent3");
-        
+
         repo.create_execution(&e1).unwrap();
         repo.create_execution(&e3).unwrap();
-        
+
         // Start one execution
-        repo.update_execution_status(&e1.id, ExecutionStatus::Running).unwrap();
-        
+        repo.update_execution_status(&e1.id, ExecutionStatus::Running)
+            .unwrap();
+
         let stats = repo.get_dashboard_stats().unwrap();
-        
+
         assert_eq!(stats.sessions_running, 2); // s1, s3 (s2 completed, s4 queued)
         assert_eq!(stats.sessions_queued, 1); // s4
         assert_eq!(stats.sessions_completed, 1); // s2
         assert_eq!(stats.executions_running, 1); // e1
         assert_eq!(stats.executions_queued, 1); // e3 (not started yet)
-        
+
         // Check by source
         assert_eq!(*stats.sessions_by_source.get("web").unwrap_or(&0), 2);
         assert_eq!(*stats.sessions_by_source.get("cli").unwrap_or(&0), 1);
@@ -1529,16 +1587,17 @@ mod tests {
         let repo = setup_repo();
         let session = Session::new("agent");
         repo.create_session(&session).unwrap();
-        
+
         let exec = AgentExecution::new_root(&session.id, "agent");
         repo.create_execution(&exec).unwrap();
-        
+
         let checkpoint = Checkpoint::new(5, "msg-last");
-        repo.save_execution_checkpoint(&exec.id, &checkpoint).unwrap();
-        
+        repo.save_execution_checkpoint(&exec.id, &checkpoint)
+            .unwrap();
+
         let updated = repo.get_execution(&exec.id).unwrap().unwrap();
         assert!(updated.checkpoint.is_some());
-        
+
         let saved_checkpoint = updated.checkpoint.unwrap();
         assert_eq!(saved_checkpoint.llm_turn, 5);
         assert_eq!(saved_checkpoint.last_message_id, "msg-last");
@@ -1549,7 +1608,12 @@ mod tests {
     // ========================================================================
 
     /// Helper to add a message to an execution
-    fn add_message(repo: &StateRepository<TestDbProvider>, execution_id: &str, role: &str, content: &str) {
+    fn add_message(
+        repo: &StateRepository<TestDbProvider>,
+        execution_id: &str,
+        role: &str,
+        content: &str,
+    ) {
         repo.db.with_connection(|conn| {
             let id = format!("msg-{}", uuid::Uuid::new_v4());
             let created_at = chrono::Utc::now().to_rfc3339();
@@ -1574,7 +1638,11 @@ mod tests {
 
         // Create subagent execution
         let mut sub_exec = AgentExecution::new_delegated(
-            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research AI"
+            &session.id,
+            "research-agent",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research AI",
         );
         sub_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub_exec).unwrap();
@@ -1586,7 +1654,9 @@ mod tests {
         add_message(&repo, &sub_exec.id, "assistant", "Research result");
 
         // Get all messages
-        let messages = repo.get_session_messages(&session.id, "all", None, None).unwrap();
+        let messages = repo
+            .get_session_messages(&session.id, "all", None, None)
+            .unwrap();
         assert_eq!(messages.len(), 4);
     }
 
@@ -1603,7 +1673,11 @@ mod tests {
 
         // Create subagent execution
         let mut sub_exec = AgentExecution::new_delegated(
-            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research AI"
+            &session.id,
+            "research-agent",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research AI",
         );
         sub_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub_exec).unwrap();
@@ -1615,7 +1689,9 @@ mod tests {
         add_message(&repo, &sub_exec.id, "assistant", "Research result");
 
         // Get only root messages
-        let messages = repo.get_session_messages(&session.id, "root", None, None).unwrap();
+        let messages = repo
+            .get_session_messages(&session.id, "root", None, None)
+            .unwrap();
         assert_eq!(messages.len(), 2);
         assert!(messages.iter().all(|m| m.delegation_type == "root"));
     }
@@ -1633,7 +1709,11 @@ mod tests {
 
         // Create subagent execution
         let mut sub_exec = AgentExecution::new_delegated(
-            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research AI"
+            &session.id,
+            "research-agent",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research AI",
         );
         sub_exec.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub_exec).unwrap();
@@ -1644,7 +1724,9 @@ mod tests {
         add_message(&repo, &sub_exec.id, "assistant", "Research result");
 
         // Get only specific execution messages
-        let messages = repo.get_session_messages(&session.id, "execution", Some(&sub_exec.id), None).unwrap();
+        let messages = repo
+            .get_session_messages(&session.id, "execution", Some(&sub_exec.id), None)
+            .unwrap();
         assert_eq!(messages.len(), 2);
         assert!(messages.iter().all(|m| m.execution_id == sub_exec.id));
     }
@@ -1662,13 +1744,21 @@ mod tests {
 
         // Create two subagent executions
         let mut sub1 = AgentExecution::new_delegated(
-            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research"
+            &session.id,
+            "research-agent",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research",
         );
         sub1.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub1).unwrap();
 
         let mut sub2 = AgentExecution::new_delegated(
-            &session.id, "writer-agent", &root_exec.id, DelegationType::Parallel, "Write"
+            &session.id,
+            "writer-agent",
+            &root_exec.id,
+            DelegationType::Parallel,
+            "Write",
         );
         sub2.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub2).unwrap();
@@ -1679,7 +1769,9 @@ mod tests {
         add_message(&repo, &sub2.id, "assistant", "Writing result");
 
         // Get only delegate messages
-        let messages = repo.get_session_messages(&session.id, "delegates", None, None).unwrap();
+        let messages = repo
+            .get_session_messages(&session.id, "delegates", None, None)
+            .unwrap();
         assert_eq!(messages.len(), 2);
         assert!(messages.iter().all(|m| m.delegation_type != "root"));
     }
@@ -1697,13 +1789,21 @@ mod tests {
 
         // Create two different agent executions
         let mut sub1 = AgentExecution::new_delegated(
-            &session.id, "research-agent", &root_exec.id, DelegationType::Sequential, "Research 1"
+            &session.id,
+            "research-agent",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Research 1",
         );
         sub1.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub1).unwrap();
 
         let mut sub2 = AgentExecution::new_delegated(
-            &session.id, "writer-agent", &root_exec.id, DelegationType::Sequential, "Write"
+            &session.id,
+            "writer-agent",
+            &root_exec.id,
+            DelegationType::Sequential,
+            "Write",
         );
         sub2.started_at = Some(chrono::Utc::now().to_rfc3339());
         repo.create_execution(&sub2).unwrap();
@@ -1714,7 +1814,9 @@ mod tests {
         add_message(&repo, &sub2.id, "assistant", "Writing result");
 
         // Filter by agent_id
-        let messages = repo.get_session_messages(&session.id, "all", None, Some("research-agent")).unwrap();
+        let messages = repo
+            .get_session_messages(&session.id, "all", None, Some("research-agent"))
+            .unwrap();
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].agent_id, "research-agent");
     }

@@ -26,15 +26,18 @@ pub mod skills;
 pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
-pub use lang_config::{load_all_lang_configs, load_lang_config, LangConfig};
 pub use agents::AgentService;
-pub use models::ModelRegistry;
+pub use lang_config::{load_all_lang_configs, load_lang_config, LangConfig};
 pub use logging::LogSettings;
 pub use mcp::McpService;
+pub use models::ModelRegistry;
 pub use paths::{SharedVaultPaths, VaultPaths};
 pub use plugin_service::PluginService;
 pub use providers::ProviderService;
 pub use recall_config::RecallConfig;
-pub use settings::{AppSettings, ChatConfig, DistillationConfig, ExecutionSettings, MultimodalConfig, OrchestratorConfig, SettingsService};
+pub use settings::{
+    AppSettings, ChatConfig, DistillationConfig, ExecutionSettings, MultimodalConfig,
+    OrchestratorConfig, SettingsService,
+};
 pub use skills::{SkillFrontmatter, SkillService, WardAgentsMdConfig, WardSetup};
 pub use watcher::{FileWatcher, WatchConfig};

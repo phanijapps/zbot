@@ -3,30 +3,74 @@
 // Database operations for daily sessions
 // ============================================================================
 
+use crate::types::{
+    Agent, DailySession, DailySessionError, DaySummary, SessionMessage, SystemPromptCheck,
+};
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, ToSql};
 use std::sync::Arc;
-use crate::types::{DailySession, SessionMessage, DaySummary, Agent, SystemPromptCheck, DailySessionError};
-use chrono::{DateTime, Utc};
 
 /// Async trait for daily session repository operations
 #[async_trait]
 pub trait DailySessionRepository: Send + Sync {
-    async fn get_or_create_today_session(&self, agent_id: &str) -> std::result::Result<DailySession, DailySessionError>;
-    async fn get_or_create_today_session_with_prompt(&self, agent_id: &str, system_prompt: &str) -> std::result::Result<(DailySession, SystemPromptCheck), DailySessionError>;
-    async fn get_session(&self, session_id: &str) -> std::result::Result<Option<DailySession>, DailySessionError>;
-    async fn list_previous_days(&self, agent_id: &str, limit: usize) -> std::result::Result<Vec<DaySummary>, DailySessionError>;
-    async fn update_session_summary(&self, session_id: &str, summary: String) -> std::result::Result<(), DailySessionError>;
-    async fn increment_message_count(&self, session_id: &str) -> std::result::Result<(), DailySessionError>;
-    async fn add_token_count(&self, session_id: &str, tokens: i64) -> std::result::Result<(), DailySessionError>;
-    async fn delete_sessions_before(&self, agent_id: &str, before_date: &str) -> std::result::Result<usize, DailySessionError>;
-    async fn get_session_messages(&self, session_id: &str) -> std::result::Result<Vec<SessionMessage>, DailySessionError>;
-    async fn create_message(&self, message: SessionMessage) -> std::result::Result<(), DailySessionError>;
+    async fn get_or_create_today_session(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<DailySession, DailySessionError>;
+    async fn get_or_create_today_session_with_prompt(
+        &self,
+        agent_id: &str,
+        system_prompt: &str,
+    ) -> std::result::Result<(DailySession, SystemPromptCheck), DailySessionError>;
+    async fn get_session(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<DailySession>, DailySessionError>;
+    async fn list_previous_days(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<DaySummary>, DailySessionError>;
+    async fn update_session_summary(
+        &self,
+        session_id: &str,
+        summary: String,
+    ) -> std::result::Result<(), DailySessionError>;
+    async fn increment_message_count(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<(), DailySessionError>;
+    async fn add_token_count(
+        &self,
+        session_id: &str,
+        tokens: i64,
+    ) -> std::result::Result<(), DailySessionError>;
+    async fn delete_sessions_before(
+        &self,
+        agent_id: &str,
+        before_date: &str,
+    ) -> std::result::Result<usize, DailySessionError>;
+    async fn get_session_messages(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Vec<SessionMessage>, DailySessionError>;
+    async fn create_message(
+        &self,
+        message: SessionMessage,
+    ) -> std::result::Result<(), DailySessionError>;
 
     // Agent and system prompt methods
     async fn upsert_agent(&self, agent: Agent) -> std::result::Result<(), DailySessionError>;
-    async fn get_agent(&self, agent_id: &str) -> std::result::Result<Option<Agent>, DailySessionError>;
-    async fn check_system_prompt(&self, agent_id: &str, system_prompt: &str) -> std::result::Result<SystemPromptCheck, DailySessionError>;
+    async fn get_agent(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<Option<Agent>, DailySessionError>;
+    async fn check_system_prompt(
+        &self,
+        agent_id: &str,
+        system_prompt: &str,
+    ) -> std::result::Result<SystemPromptCheck, DailySessionError>;
 }
 
 pub struct SqlDailySessionRepository {
@@ -41,15 +85,14 @@ impl SqlDailySessionRepository {
                 .map_err(|e| DailySessionError::NotFound(e.to_string()))?;
         }
 
-        let conn = Connection::open(db_path)
-            .map_err(|e| DailySessionError::Database(e))?;
+        let conn = Connection::open(db_path).map_err(|e| DailySessionError::Database(e))?;
 
         // Enable foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON", [])
             .map_err(|e| DailySessionError::Database(e))?;
 
         let repo = Self {
-            conn: Arc::new(tokio::sync::Mutex::new(conn))
+            conn: Arc::new(tokio::sync::Mutex::new(conn)),
         };
 
         repo.init_schema()?;
@@ -100,7 +143,10 @@ impl SqlDailySessionRepository {
         )?;
 
         // Migration: Add system_prompt_version column if it doesn't exist (for existing databases)
-        if conn.prepare("SELECT system_prompt_version FROM daily_sessions LIMIT 1").is_err() {
+        if conn
+            .prepare("SELECT system_prompt_version FROM daily_sessions LIMIT 1")
+            .is_err()
+        {
             conn.execute(
                 "ALTER TABLE daily_sessions ADD COLUMN system_prompt_version INTEGER DEFAULT 1",
                 [],
@@ -141,7 +187,10 @@ impl SqlDailySessionRepository {
 
 #[async_trait]
 impl DailySessionRepository for SqlDailySessionRepository {
-    async fn get_or_create_today_session(&self, agent_id: &str) -> std::result::Result<DailySession, DailySessionError> {
+    async fn get_or_create_today_session(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<DailySession, DailySessionError> {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let session_id = DailySession::generate_id(agent_id, &today);
 
@@ -151,7 +200,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, session_date, summary, previous_session_ids,
                     message_count, token_count, system_prompt_version, created_at, updated_at
-             FROM daily_sessions WHERE id = ?1"
+             FROM daily_sessions WHERE id = ?1",
         )?;
 
         let result = stmt.query_row([&*session_id], |row| {
@@ -201,11 +250,15 @@ impl DailySessionRepository for SqlDailySessionRepository {
 
                 Ok(new_session)
             }
-            Err(e) => Err(DailySessionError::Database(e))
+            Err(e) => Err(DailySessionError::Database(e)),
         }
     }
 
-    async fn get_or_create_today_session_with_prompt(&self, agent_id: &str, system_prompt: &str) -> std::result::Result<(DailySession, SystemPromptCheck), DailySessionError> {
+    async fn get_or_create_today_session_with_prompt(
+        &self,
+        agent_id: &str,
+        system_prompt: &str,
+    ) -> std::result::Result<(DailySession, SystemPromptCheck), DailySessionError> {
         let today = Utc::now().format("%Y-%m-%d").to_string();
         let session_id = DailySession::generate_id(agent_id, &today);
 
@@ -218,7 +271,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, session_date, summary, previous_session_ids,
                     message_count, token_count, system_prompt_version, created_at, updated_at
-             FROM daily_sessions WHERE id = ?1"
+             FROM daily_sessions WHERE id = ?1",
         )?;
 
         let result = stmt.query_row([&*session_id], |row| {
@@ -278,13 +331,16 @@ impl DailySessionRepository for SqlDailySessionRepository {
         Ok((session, prompt_check))
     }
 
-    async fn get_session(&self, session_id: &str) -> std::result::Result<Option<DailySession>, DailySessionError> {
+    async fn get_session(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Option<DailySession>, DailySessionError> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, session_date, summary, previous_session_ids,
                     message_count, token_count, system_prompt_version, created_at, updated_at
-             FROM daily_sessions WHERE id = ?1"
+             FROM daily_sessions WHERE id = ?1",
         )?;
 
         let result = stmt.query_row([&*session_id], |row| {
@@ -312,11 +368,15 @@ impl DailySessionRepository for SqlDailySessionRepository {
         match result {
             Ok(session) => Ok(Some(session)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(DailySessionError::Database(e))
+            Err(e) => Err(DailySessionError::Database(e)),
         }
     }
 
-    async fn list_previous_days(&self, agent_id: &str, limit: usize) -> std::result::Result<Vec<DaySummary>, DailySessionError> {
+    async fn list_previous_days(
+        &self,
+        agent_id: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<DaySummary>, DailySessionError> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
@@ -324,7 +384,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
              FROM daily_sessions
              WHERE agent_id = ?1 AND session_date < date('now')
              ORDER BY session_date DESC
-             LIMIT ?2"
+             LIMIT ?2",
         )?;
 
         let rows = stmt.query_map([agent_id, &(limit as i64).to_string()], |row| {
@@ -345,19 +405,26 @@ impl DailySessionRepository for SqlDailySessionRepository {
         Ok(results)
     }
 
-    async fn update_session_summary(&self, session_id: &str, summary: String) -> std::result::Result<(), DailySessionError> {
+    async fn update_session_summary(
+        &self,
+        session_id: &str,
+        summary: String,
+    ) -> std::result::Result<(), DailySessionError> {
         let conn = self.conn.lock().await;
         let now = Utc::now().to_rfc3339();
 
         conn.execute(
             "UPDATE daily_sessions SET summary = ?1, updated_at = ?2 WHERE id = ?3",
-            [&*summary, &*now, &*session_id]
+            [&*summary, &*now, &*session_id],
         )?;
 
         Ok(())
     }
 
-    async fn increment_message_count(&self, session_id: &str) -> std::result::Result<(), DailySessionError> {
+    async fn increment_message_count(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<(), DailySessionError> {
         let conn = self.conn.lock().await;
         let now = Utc::now().to_rfc3339();
 
@@ -369,7 +436,11 @@ impl DailySessionRepository for SqlDailySessionRepository {
         Ok(())
     }
 
-    async fn add_token_count(&self, session_id: &str, tokens: i64) -> std::result::Result<(), DailySessionError> {
+    async fn add_token_count(
+        &self,
+        session_id: &str,
+        tokens: i64,
+    ) -> std::result::Result<(), DailySessionError> {
         let conn = self.conn.lock().await;
         let now = Utc::now().to_rfc3339();
 
@@ -381,18 +452,25 @@ impl DailySessionRepository for SqlDailySessionRepository {
         Ok(())
     }
 
-    async fn delete_sessions_before(&self, agent_id: &str, before_date: &str) -> std::result::Result<usize, DailySessionError> {
+    async fn delete_sessions_before(
+        &self,
+        agent_id: &str,
+        before_date: &str,
+    ) -> std::result::Result<usize, DailySessionError> {
         let conn = self.conn.lock().await;
 
         let rows = conn.execute(
             "DELETE FROM daily_sessions WHERE agent_id = ?1 AND session_date < ?2",
-            [agent_id, before_date]
+            [agent_id, before_date],
         )?;
 
         Ok(rows as usize)
     }
 
-    async fn get_session_messages(&self, session_id: &str) -> std::result::Result<Vec<SessionMessage>, DailySessionError> {
+    async fn get_session_messages(
+        &self,
+        session_id: &str,
+    ) -> std::result::Result<Vec<SessionMessage>, DailySessionError> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
@@ -425,14 +503,19 @@ impl DailySessionRepository for SqlDailySessionRepository {
         Ok(results)
     }
 
-    async fn create_message(&self, message: SessionMessage) -> std::result::Result<(), DailySessionError> {
+    async fn create_message(
+        &self,
+        message: SessionMessage,
+    ) -> std::result::Result<(), DailySessionError> {
         let conn = self.conn.lock().await;
 
-        let tool_calls_str = message.tool_calls
+        let tool_calls_str = message
+            .tool_calls
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
 
-        let tool_results_str = message.tool_results
+        let tool_results_str = message
+            .tool_results
             .as_ref()
             .map(|v| serde_json::to_string(v).unwrap_or_default());
 
@@ -466,18 +549,15 @@ impl DailySessionRepository for SqlDailySessionRepository {
         )?;
 
         // Update session counts
-        let update_params: &[&dyn ToSql] = &[
-            &message.token_count,
-            &created_at_str,
-            &message.session_id,
-        ];
+        let update_params: &[&dyn ToSql] =
+            &[&message.token_count, &created_at_str, &message.session_id];
         conn.execute(
             "UPDATE daily_sessions
              SET message_count = message_count + 1,
                  token_count = token_count + ?1,
                  updated_at = ?2
              WHERE id = ?3",
-            update_params
+            update_params,
         )?;
 
         Ok(())
@@ -514,7 +594,10 @@ impl DailySessionRepository for SqlDailySessionRepository {
         Ok(())
     }
 
-    async fn get_agent(&self, agent_id: &str) -> std::result::Result<Option<Agent>, DailySessionError> {
+    async fn get_agent(
+        &self,
+        agent_id: &str,
+    ) -> std::result::Result<Option<Agent>, DailySessionError> {
         let conn = self.conn.lock().await;
 
         let mut stmt = conn.prepare(
@@ -543,11 +626,15 @@ impl DailySessionRepository for SqlDailySessionRepository {
         match result {
             Ok(agent) => Ok(Some(agent)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(DailySessionError::Database(e))
+            Err(e) => Err(DailySessionError::Database(e)),
         }
     }
 
-    async fn check_system_prompt(&self, agent_id: &str, system_prompt: &str) -> std::result::Result<SystemPromptCheck, DailySessionError> {
+    async fn check_system_prompt(
+        &self,
+        agent_id: &str,
+        system_prompt: &str,
+    ) -> std::result::Result<SystemPromptCheck, DailySessionError> {
         let conn = self.conn.lock().await;
 
         // Get current agent record
@@ -571,7 +658,11 @@ impl DailySessionRepository for SqlDailySessionRepository {
                              current_system_prompt = ?2,
                              updated_at = datetime('now')
                          WHERE id = ?3",
-                        &[&new_version as &dyn ToSql, &system_prompt as &dyn ToSql, &agent_id as &dyn ToSql] as &[&dyn ToSql]
+                        &[
+                            &new_version as &dyn ToSql,
+                            &system_prompt as &dyn ToSql,
+                            &agent_id as &dyn ToSql,
+                        ] as &[&dyn ToSql],
                     )?;
 
                     Ok(SystemPromptCheck {

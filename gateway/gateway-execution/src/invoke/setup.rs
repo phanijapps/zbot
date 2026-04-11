@@ -2,9 +2,9 @@
 //!
 //! Provider resolution and agent loading utilities for execution setup.
 
+use agent_tools::ToolSettings;
 use gateway_services::providers::Provider;
 use gateway_services::{AgentService, ProviderService, SettingsService, SharedVaultPaths};
-use agent_tools::ToolSettings;
 use std::sync::Arc;
 
 // ============================================================================
@@ -153,7 +153,8 @@ impl<'a> AgentLoader<'a> {
 
         // Append OS context and shards to agent instructions
         // so subagents know platform commands and tool syntax
-        agent.instructions = append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
+        agent.instructions =
+            append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
 
         let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
 
@@ -172,21 +173,21 @@ impl<'a> AgentLoader<'a> {
             }
             Err(_) if agent_id == "root" => {
                 // Read orchestrator config from settings.json
-                let orch = self.settings
+                let orch = self
+                    .settings
                     .and_then(|s| s.get_execution_settings().ok())
                     .map(|s| s.orchestrator)
                     .unwrap_or_default();
 
                 // Resolve provider: orchestrator config → default provider
                 let provider = match &orch.provider_id {
-                    Some(id) if !id.is_empty() => {
-                        self.provider_resolver.get_or_default(id)?
-                    }
+                    Some(id) if !id.is_empty() => self.provider_resolver.get_or_default(id)?,
                     _ => self.provider_resolver.get_default()?,
                 };
 
                 // Resolve model: orchestrator config → provider default
-                let model = orch.model
+                let model = orch
+                    .model
                     .filter(|m| !m.is_empty())
                     .unwrap_or_else(|| provider.default_model().to_string());
 
@@ -211,7 +212,11 @@ impl<'a> AgentLoader<'a> {
                 };
 
                 // Chat mode: higher temperature for creative, personality-forward responses
-                let temperature = if self.fast_mode { 1.0 } else { orch.temperature };
+                let temperature = if self.fast_mode {
+                    1.0
+                } else {
+                    orch.temperature
+                };
 
                 let agent = gateway_services::agents::Agent {
                     id: "root".to_string(),
@@ -250,7 +255,8 @@ impl<'a> AgentLoader<'a> {
             Ok(mut agent) => {
                 // Append OS context and shards so pre-configured agents
                 // also know platform commands (PowerShell vs bash, etc.)
-                agent.instructions = append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
+                agent.instructions =
+                    append_system_context(&agent.instructions, &self.paths, SubagentRole::Executor);
                 let provider = self.provider_resolver.get_or_default(&agent.provider_id)?;
                 Ok((agent, provider))
             }
@@ -314,8 +320,14 @@ pub enum SubagentRole {
 pub fn detect_subagent_role(_agent_id: &str, task: &str) -> SubagentRole {
     let task_lower = task.to_lowercase();
     let review_signals = [
-        "review", "validate", "verify", "evaluate",
-        "check quality", "assess", "qa", "audit",
+        "review",
+        "validate",
+        "verify",
+        "evaluate",
+        "check quality",
+        "assess",
+        "qa",
+        "audit",
     ];
     if review_signals.iter().any(|s| task_lower.contains(s)) {
         SubagentRole::Reviewer
@@ -351,10 +363,14 @@ pub fn subagent_rules(role: SubagentRole) -> &'static str {
 /// This ensures ALL agents (pre-configured and auto-created) know:
 /// - Platform commands (PowerShell vs bash)
 /// - Tool syntax (write_file/edit_file, shell, etc.)
-pub fn append_system_context(instructions: &str, paths: &SharedVaultPaths, role: SubagentRole) -> String {
+pub fn append_system_context(
+    instructions: &str,
+    paths: &SharedVaultPaths,
+    role: SubagentRole,
+) -> String {
     // OS context: platform-correct commands (bash vs PowerShell). ~500B.
-    let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
-        .unwrap_or_default();
+    let os_context =
+        std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md")).unwrap_or_default();
 
     // Rules: only append if not already present (delegated agents prepend rules in spawn.rs)
     let rules = if instructions.contains("# RULES") {
@@ -382,25 +398,26 @@ fn build_specialist_instructions(agent_id: &str, paths: &SharedVaultPaths) -> St
     let role_preamble = generate_role_preamble(agent_id);
 
     // Load OS context for platform-native commands
-    let os_context = std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md"))
-        .unwrap_or_default();
+    let os_context =
+        std::fs::read_to_string(paths.vault_dir().join("config").join("OS.md")).unwrap_or_default();
 
     // Load tooling shard for write_file/edit_file syntax and tool docs
     let tooling = gateway_templates::Templates::get("shards/tooling_skills.md")
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
-    format!(
-        "{}\n\n{}\n\n{}",
-        role_preamble, os_context, tooling
-    )
+    format!("{}\n\n{}\n\n{}", role_preamble, os_context, tooling)
 }
 
 /// Generate a role-specific preamble based on the agent name.
 fn generate_role_preamble(agent_id: &str) -> String {
     let name_lower = agent_id.to_lowercase();
 
-    let role_description = if name_lower.contains("coder") || name_lower.contains("code") || name_lower.contains("developer") || name_lower.contains("programmer") {
+    let role_description = if name_lower.contains("coder")
+        || name_lower.contains("code")
+        || name_lower.contains("developer")
+        || name_lower.contains("programmer")
+    {
         "You are a coding specialist. Write clean, modular, reusable code.\n\
          Use write_file/edit_file for all file creation and editing.\n\
          Follow the coding skill protocol: explore ward, plan, build core/ first, then task scripts.\n\
@@ -452,7 +469,10 @@ mod tests {
     #[test]
     fn test_format_agent_display_name() {
         assert_eq!(format_agent_display_name("python-coder"), "Python Coder");
-        assert_eq!(format_agent_display_name("research-agent"), "Research Agent");
+        assert_eq!(
+            format_agent_display_name("research-agent"),
+            "Research Agent"
+        );
         assert_eq!(format_agent_display_name("analyst"), "Analyst");
     }
 

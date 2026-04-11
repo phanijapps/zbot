@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{Tool, ToolContext, Result};
 use zero_core::FileSystemContext;
+use zero_core::{Result, Tool, ToolContext};
 
 // ============================================================================
 // LIST AGENTS TOOL
@@ -185,60 +185,89 @@ impl Tool for CreateAgentTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let name = args.get("name")
+        let name = args
+            .get("name")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'name' parameter".to_string()))?;
 
-        let display_name = args.get("displayName")
+        let display_name = args
+            .get("displayName")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'displayName' parameter".to_string()))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'displayName' parameter".to_string())
+            })?;
 
-        let description = args.get("description")
+        let description = args
+            .get("description")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'description' parameter".to_string()))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'description' parameter".to_string())
+            })?;
 
-        let provider_id = args.get("providerId")
+        let provider_id = args
+            .get("providerId")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'providerId' parameter".to_string()))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'providerId' parameter".to_string())
+            })?;
 
-        let model = args.get("model")
+        let model = args
+            .get("model")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'model' parameter".to_string()))?;
 
-        let instructions = args.get("instructions")
+        let instructions = args
+            .get("instructions")
             .and_then(|v| v.as_str())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'instructions' parameter".to_string()))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'instructions' parameter".to_string())
+            })?;
 
-        let temperature = args.get("temperature")
+        let temperature = args
+            .get("temperature")
             .and_then(|v| v.as_f64())
             .unwrap_or(0.7);
 
-        let max_tokens = args.get("maxTokens")
+        let max_tokens = args
+            .get("maxTokens")
             .and_then(|v| v.as_u64())
             .unwrap_or(2000) as u32;
 
-        let thinking_enabled = args.get("thinkingEnabled")
+        let thinking_enabled = args
+            .get("thinkingEnabled")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let skills: Vec<String> = args.get("skills")
+        let skills: Vec<String> = args
+            .get("skills")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let mcps: Vec<String> = args.get("mcps")
+        let mcps: Vec<String> = args
+            .get("mcps")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         // Get agents directory from file system context
-        let agents_dir = self.fs.agents_dir()
-            .ok_or_else(|| zero_core::ZeroError::Tool("Agents directory not configured".to_string()))?;
+        let agents_dir = self.fs.agents_dir().ok_or_else(|| {
+            zero_core::ZeroError::Tool("Agents directory not configured".to_string())
+        })?;
 
         // Create agent directory
         let agent_dir = agents_dir.join(name);
-        tokio::fs::create_dir_all(&agent_dir).await
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to create agent directory: {}", e)))?;
+        tokio::fs::create_dir_all(&agent_dir).await.map_err(|e| {
+            zero_core::ZeroError::Tool(format!("Failed to create agent directory: {}", e))
+        })?;
 
         // Create config.yaml
         let config = serde_json::json!({
@@ -254,15 +283,18 @@ impl Tool for CreateAgentTool {
             "mcps": mcps,
         });
 
-        let config_yaml = serde_yaml::to_string(&config)
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to serialize config: {}", e)))?;
+        let config_yaml = serde_yaml::to_string(&config).map_err(|e| {
+            zero_core::ZeroError::Tool(format!("Failed to serialize config: {}", e))
+        })?;
 
-        tokio::fs::write(agent_dir.join("config.yaml"), config_yaml).await
+        tokio::fs::write(agent_dir.join("config.yaml"), config_yaml)
+            .await
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write config: {}", e)))?;
 
         // Create AGENTS.md
         let agents_md = format!("{}\n", instructions);
-        tokio::fs::write(agent_dir.join("AGENTS.md"), agents_md).await
+        tokio::fs::write(agent_dir.join("AGENTS.md"), agents_md)
+            .await
             .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write AGENTS.md: {}", e)))?;
 
         tracing::info!("Created agent '{}' at {:?}", name, agent_dir);

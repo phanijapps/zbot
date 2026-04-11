@@ -7,10 +7,10 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
 use regex::Regex;
+use serde_json::{Value, json};
 
-use zero_core::{Tool, ToolContext, Result};
+use zero_core::{Result, Tool, ToolContext};
 
 // ============================================================================
 // GREP TOOL
@@ -55,26 +55,36 @@ impl Tool for GrepTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let pattern = args.get("pattern")
+        let pattern = args
+            .get("pattern")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'pattern' parameter".to_string()))?;
 
-        let path = args.get("path")
-            .and_then(|v| v.as_str())
-            .unwrap_or(".");
+        let path = args.get("path").and_then(|v| v.as_str()).unwrap_or(".");
 
-        let case_insensitive = args.get("case_insensitive")
+        let case_insensitive = args
+            .get("case_insensitive")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
-        let max_results = args.get("max_results")
+        let max_results = args
+            .get("max_results")
             .and_then(|v| v.as_u64())
             .unwrap_or(100) as usize;
 
-        tracing::debug!("Grep: pattern={}, path={}, case_insensitive={}", pattern, path, case_insensitive);
+        tracing::debug!(
+            "Grep: pattern={}, path={}, case_insensitive={}",
+            pattern,
+            path,
+            case_insensitive
+        );
 
-        let regex = Regex::new(&format!("(?{}){}", if case_insensitive { "i" } else { "" }, pattern))
-            .map_err(|e| zero_core::ZeroError::Tool(format!("Invalid regex: {}", e)))?;
+        let regex = Regex::new(&format!(
+            "(?{}){}",
+            if case_insensitive { "i" } else { "" },
+            pattern
+        ))
+        .map_err(|e| zero_core::ZeroError::Tool(format!("Invalid regex: {}", e)))?;
 
         let mut results = Vec::new();
 
@@ -95,7 +105,7 @@ impl Tool for GrepTool {
 
 impl GrepTool {
     const TEXT_EXTENSIONS: [&'static str; 12] = [
-        "txt", "md", "rs", "js", "ts", "jsx", "tsx", "py", "json", "yaml", "yml", "toml"
+        "txt", "md", "rs", "js", "ts", "jsx", "tsx", "py", "json", "yaml", "yml", "toml",
     ];
 
     fn search_directory(
@@ -119,7 +129,10 @@ impl GrepTool {
                 // Skip hidden directories and common exclusions
                 if let Some(name) = path.file_name() {
                     let name_str = name.to_string_lossy();
-                    if name_str.starts_with('.') || name_str == "node_modules" || name_str == "target" {
+                    if name_str.starts_with('.')
+                        || name_str == "node_modules"
+                        || name_str == "target"
+                    {
                         continue;
                     }
                 }
@@ -191,11 +204,13 @@ impl Tool for GlobTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let pattern = args.get("pattern")
+        let pattern = args
+            .get("pattern")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'pattern' parameter".to_string()))?;
 
-        let _include_hidden = args.get("include_hidden")
+        let _include_hidden = args
+            .get("include_hidden")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 

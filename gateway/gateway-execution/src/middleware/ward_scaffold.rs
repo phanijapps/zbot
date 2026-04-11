@@ -262,7 +262,10 @@ mod tests {
             content.contains("All scripts go in core/"),
             "convention missing"
         );
-        assert!(content.contains("`core/`"), "directory layout missing: core");
+        assert!(
+            content.contains("`core/`"),
+            "directory layout missing: core"
+        );
         assert!(
             content.contains("`output/`"),
             "directory layout missing: output"

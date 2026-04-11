@@ -3,10 +3,10 @@
 //! Handles scheduled/cron-triggered agent invocations.
 //! Since cron jobs don't have a response channel, responses are logged.
 
-use crate::{Hook, HookContext, HookType};
 use crate::registry::{Attachment, ResponseFormat};
-use gateway_events::{EventBus, GatewayEvent};
+use crate::{Hook, HookContext, HookType};
 use async_trait::async_trait;
+use gateway_events::{EventBus, GatewayEvent};
 use std::sync::Arc;
 
 /// Cron hook for scheduled agent invocations.

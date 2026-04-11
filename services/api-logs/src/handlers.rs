@@ -22,9 +22,7 @@ pub async fn list_sessions<D: DbProvider + 'static>(
     State(service): State<Arc<LogService<D>>>,
     Query(filter): Query<LogFilter>,
 ) -> Result<Json<Vec<LogSession>>, ApiError> {
-    let sessions = service
-        .list_sessions(&filter)
-        .map_err(ApiError::Database)?;
+    let sessions = service.list_sessions(&filter).map_err(ApiError::Database)?;
 
     Ok(Json(sessions))
 }

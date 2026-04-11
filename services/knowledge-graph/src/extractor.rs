@@ -19,7 +19,11 @@ impl EntityExtractor {
     }
 
     /// Extract entities and relationships from a message
-    pub fn extract_from_message(&self, _role: &str, content: &str) -> GraphResult<ExtractedKnowledge> {
+    pub fn extract_from_message(
+        &self,
+        _role: &str,
+        content: &str,
+    ) -> GraphResult<ExtractedKnowledge> {
         let mut entities = Vec::new();
         let relationships = Vec::new();
 
@@ -45,20 +49,15 @@ impl EntityExtractor {
 
         // Simple pattern: capitalized words that might be names
         // This is a basic implementation; real-world would use NLP
-        let re = Regex::new(r"\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b").map_err(|e| {
-            GraphError::Config(format!("Failed to compile regex: {}", e))
-        })?;
+        let re = Regex::new(r"\b([A-Z][a-z]+)\s+([A-Z][a-z]+)\b")
+            .map_err(|e| GraphError::Config(format!("Failed to compile regex: {}", e)))?;
 
         for caps in re.captures_iter(content) {
             if let Some(full_name) = caps.get(0) {
                 let name = full_name.as_str().to_string();
                 // Filter out common words
                 if !is_common_word(&name) {
-                    entities.push(Entity::new(
-                        self.agent_id.clone(),
-                        EntityType::Person,
-                        name,
-                    ));
+                    entities.push(Entity::new(self.agent_id.clone(), EntityType::Person, name));
                 }
             }
         }
@@ -72,10 +71,29 @@ impl EntityExtractor {
 
         // Common tech organizations
         let orgs = vec![
-            "Google", "Microsoft", "Amazon", "Apple", "Meta", "OpenAI",
-            "GitHub", "GitLab", "Stripe", "Shopify", "Twitter", "LinkedIn",
-            "Facebook", "Instagram", "WhatsApp", "Telegram", "Discord",
-            "React", "Vue", "Angular", "Svelte", "Next.js", "Vite",
+            "Google",
+            "Microsoft",
+            "Amazon",
+            "Apple",
+            "Meta",
+            "OpenAI",
+            "GitHub",
+            "GitLab",
+            "Stripe",
+            "Shopify",
+            "Twitter",
+            "LinkedIn",
+            "Facebook",
+            "Instagram",
+            "WhatsApp",
+            "Telegram",
+            "Discord",
+            "React",
+            "Vue",
+            "Angular",
+            "Svelte",
+            "Next.js",
+            "Vite",
         ];
 
         for org in orgs {
@@ -97,8 +115,16 @@ impl EntityExtractor {
 
         // Common locations
         let locations = vec![
-            "San Francisco", "New York", "London", "Paris", "Berlin",
-            "Tokyo", "Singapore", "Bangalore", "Seattle", "Boston",
+            "San Francisco",
+            "New York",
+            "London",
+            "Paris",
+            "Berlin",
+            "Tokyo",
+            "Singapore",
+            "Bangalore",
+            "Seattle",
+            "Boston",
         ];
 
         for location in locations {
@@ -120,11 +146,31 @@ impl EntityExtractor {
 
         // Programming languages and frameworks
         let tools = vec![
-            "Rust", "Python", "JavaScript", "TypeScript", "Go", "Java",
-            "React", "Vue", "Angular", "Svelte", "Node.js", "Deno",
-            "Docker", "Kubernetes", "AWS", "Azure", "GCP",
-            "PostgreSQL", "MongoDB", "Redis", "SQLite",
-            "Git", "GitHub", "GitLab", "VS Code",
+            "Rust",
+            "Python",
+            "JavaScript",
+            "TypeScript",
+            "Go",
+            "Java",
+            "React",
+            "Vue",
+            "Angular",
+            "Svelte",
+            "Node.js",
+            "Deno",
+            "Docker",
+            "Kubernetes",
+            "AWS",
+            "Azure",
+            "GCP",
+            "PostgreSQL",
+            "MongoDB",
+            "Redis",
+            "SQLite",
+            "Git",
+            "GitHub",
+            "GitLab",
+            "VS Code",
         ];
 
         for tool in tools {
@@ -145,9 +191,8 @@ impl EntityExtractor {
         let mut entities = Vec::new();
 
         // Pattern: "Project X" or similar
-        let re = Regex::new(r"[Pp]roject\s+([A-Z][a-zA-Z0-9]+)").map_err(|e| {
-            GraphError::Config(format!("Failed to compile regex: {}", e))
-        })?;
+        let re = Regex::new(r"[Pp]roject\s+([A-Z][a-zA-Z0-9]+)")
+            .map_err(|e| GraphError::Config(format!("Failed to compile regex: {}", e)))?;
 
         for caps in re.captures_iter(content) {
             if let Some(project_name) = caps.get(1) {
@@ -166,12 +211,11 @@ impl EntityExtractor {
 /// Check if a word is too common to be an entity
 fn is_common_word(word: &str) -> bool {
     let common = vec![
-        "The", "This", "That", "These", "Those", "Is", "Are", "Was",
-        "Were", "Be", "Been", "Being", "Have", "Has", "Had", "Do", "Does",
-        "Will", "Would", "Could", "Should", "May", "Might", "Can", "Just",
-        "Also", "Very", "More", "Some", "Such", "What", "Which", "Who",
-        "When", "Where", "Why", "How", "All", "Each", "Every", "Both",
-        "Few", "Many", "Much", "Own", "Same", "So", "Than", "Too", "Very",
+        "The", "This", "That", "These", "Those", "Is", "Are", "Was", "Were", "Be", "Been", "Being",
+        "Have", "Has", "Had", "Do", "Does", "Will", "Would", "Could", "Should", "May", "Might",
+        "Can", "Just", "Also", "Very", "More", "Some", "Such", "What", "Which", "Who", "When",
+        "Where", "Why", "How", "All", "Each", "Every", "Both", "Few", "Many", "Much", "Own",
+        "Same", "So", "Than", "Too", "Very",
     ];
     common.contains(&word)
 }
@@ -227,6 +271,9 @@ mod tests {
         assert_eq!(EntityType::from_str("person"), EntityType::Person);
         assert_eq!(EntityType::from_str("Person"), EntityType::Person);
         assert_eq!(EntityType::from_str("PERSON"), EntityType::Person);
-        assert_eq!(EntityType::from_str("custom_type"), EntityType::Custom("custom_type".to_string()));
+        assert_eq!(
+            EntityType::from_str("custom_type"),
+            EntityType::Custom("custom_type".to_string())
+        );
     }
 }

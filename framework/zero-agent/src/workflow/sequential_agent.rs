@@ -2,12 +2,14 @@
 //!
 //! Executes sub-agents in order (A → B → C).
 
-use async_trait::async_trait;
 use async_stream::stream;
+use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::Arc;
 
-use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, InvocationContext, Result};
+use zero_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 
 /// Sequential agent executes sub-agents once in order.
 ///
@@ -117,8 +119,8 @@ impl Agent for SequentialAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::{Event, Content};
     use std::sync::Arc;
+    use zero_core::{Content, Event};
 
     // Mock agent for testing
     struct MockAgent {
@@ -176,8 +178,8 @@ mod tests {
             description: "Test".to_string(),
         }) as Arc<dyn Agent>;
 
-        let sequential = SequentialAgent::new("seq", vec![agent])
-            .with_description("Sequential pipeline");
+        let sequential =
+            SequentialAgent::new("seq", vec![agent]).with_description("Sequential pipeline");
 
         assert_eq!(sequential.description(), "Sequential pipeline");
     }
