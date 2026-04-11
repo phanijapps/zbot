@@ -1,175 +1,122 @@
-# SonarQube Scan Report
+# SonarQube Scan Report — Duplication, Dead Code & Test Coverage
 
-**Project:** phanijapps_zbot (z-Bot)
-**Scanned:** main branch (as of 2026-04-11)
-**Lines of Code:** 104,215
+**Project:** phanijapps_zbot | **Date:** 2026-04-11 | **Branch:** feature/test-coverage
 
-## Dashboard Summary
+## Dashboard Metrics
 
-| Metric | Value | Rating |
-|--------|-------|--------|
-| Security | 0 vulnerabilities, 0 hotspots | A |
-| Reliability | 23 bugs | C |
-| Maintainability | 514 code smells | A |
-| Coverage | 0.0% | — |
-| Duplication | 4.0% | — |
-
-**Note:** Many issues shown below are already fixed on `feature/test-coverage` branch but not yet merged to main.
+| Metric | Value |
+|--------|-------|
+| Duplicated Lines | 4,939 (3.7%) |
+| Duplicated Blocks | 229 |
+| Duplicated Files | 66 |
+| Test Coverage (SonarCloud) | 0% (LCOV pipeline pending) |
+| Test Coverage (local cargo llvm-cov) | **55.45% lines, 48.71% branches** |
+| Maintainability Issues | 466 |
 
 ---
 
-## 1. Security
+## 1. Easy Duplication Wins (Files > 10% duplication)
 
-**Vulnerabilities: 0**
-**Security Hotspots: 0** (8 were fixed on feature/test-coverage: ReDoS regex, Math.random, HTTPS enforcement)
+### Tier 1 — Highest Impact, Easiest Fix
 
----
+| File | Dup% | Blocks | What's Duplicated | Fix |
+|------|------|--------|-------------------|-----|
+| `middleware/config.rs` | **53.7%** | 4 | `ContextEditingConfig` and `SummarizationConfig` have nearly identical field patterns (trigger thresholds, policies, defaults) | Extract shared `MiddlewareTriggerConfig` struct with common fields |
+| `ChatInput.tsx` | **32.7%** | 2 | `uploadFile()` function is duplicated between ChatInput and HeroInput | Already extracted — SonarQube may be scanning pre-merge main |
+| `api_tests.rs` | **22.2%** | 8 | Test setup/teardown repeated across 8 test functions | Extract `setup_test_app()` helper and reuse |
+| `ArtifactSlideOut.tsx` | **14.3%** | 2 | Shared with ArtifactsPanel | Already fixed on branch — `artifact-utils.tsx` |
+| `ArtifactsPanel.tsx` | **14.3%** | 3 | Same as above | Already fixed on branch |
+| `agent.rs` (agent-tools) | **10.7%** | 8 | `ListAgentsTool` and `CreateAgentTool` share JSON schema patterns | Extract `agent_schema_builder()` |
+| `agents.rs` (gateway-services) | **8.6%** | 2 | Agent CRUD operations have similar DB query patterns | Extract `query_agent()` helper |
 
-## 2. Reliability — 81 Open Issues
+### Tier 2 — Medium Impact
 
-### S6848 — Non-native interactive elements (MAJOR) — 16 issues
-
-Clickable `<div>` elements missing `role="button"`, `tabIndex`, `onKeyDown`.
-
-| File | Line | Status |
-|------|------|--------|
-| ChatInput.tsx | 117 | Fixed on branch |
-| HeroInput.tsx | 124 | Fixed on branch |
-| McpStep.tsx | 106-109 | Fixed on branch |
-| WebIntegrationsPanel.tsx | 668 | Fixed on branch |
-| WebIntegrationsPanel.tsx | 1216 | Fixed on branch |
-| AgentEditPanel.tsx | 303-306 | Fixed on branch |
-| AgentEditPanel.tsx | 322-325 | Fixed on branch |
-| AgentEditPanel.tsx | 371-375 | Fixed on branch |
-| WebAgentsPanel.tsx | 552-556 | Fixed on branch |
-| WebAgentsPanel.tsx | 657-661 | Fixed on branch |
-| ProviderSlideover.tsx | 291-294 | Fixed on branch |
-| MemoryFactCard.tsx | 76-88 | Fixed on branch |
-| WebOpsDashboard.tsx | 195-198 | Fixed on branch |
-| WebOpsDashboard.tsx | 229 | Fixed on branch |
-
-### S1082 — Missing keyboard listener (MINOR) — 14 issues
-
-Paired with S6848 — every `onClick` fix above includes `onKeyDown`.
-
-### S6853 — Form label not associated (MAJOR) — 35 issues
-
-`<label>` elements not linked to their controls via `htmlFor`/`id`.
-
-| File | Lines | Count | Status |
-|------|-------|-------|--------|
-| WebAgentsPanel.tsx | 798-1135 | 18 | Fixed on branch |
-| WebIntegrationsPanel.tsx | 877-1019 | 6 | Fixed on branch |
-| AgentEditPanel.tsx | 175-226 | 4 | Fixed on branch |
-| WebSettingsPanel.tsx | 419-676 | 5 | Fixed on branch |
-| ProvidersEmptyState.tsx | 144 | 1 | Fixed on branch |
-| WebMemoryPanel.tsx | 364 | 1 | Fixed on branch |
-
-### S6443 — Setter uses matching state variable (MAJOR) — 6 issues
-
-| File | Lines | Status |
-|------|-------|--------|
-| WebSettingsPanel.tsx | 206, 209, 227, 230, 254, 258 | Fixed on branch (functional updater) |
-
-### S6757 — `this` in functional component (MAJOR) — 2 issues
-
-| File | Lines | Status |
-|------|-------|--------|
-| GraphCanvas.tsx | 264, 285 | Fixed on branch (arrow functions with nodes param) |
-
-### S6439 — Leaked conditional value (MAJOR) — 1 issue
-
-| File | Line | Status |
-|------|------|--------|
-| ProviderSlideover.tsx | 493 | Fixed on branch |
-
-### S7758 — charCodeAt vs codePointAt (MINOR) — 3 issues
-
-| File | Lines | Status |
-|------|-------|--------|
-| WebIntegrationsPanel.tsx | 49, 57 | Open — intentional hash function |
-| WebAgentsPanel.tsx | 59 | Open — intentional hash function |
-
-### S6772 — Ambiguous JSX spacing (MAJOR) — 1 issue
-
-| File | Line | Status |
-|------|------|--------|
-| WebOpsDashboard.tsx | 696 | Open |
-
-### S7773 — Number.parseInt/parseFloat (MINOR) — 3 issues
-
-| File | Lines | Status |
-|------|-------|--------|
-| AgentEditPanel.tsx | 260, 277 | Fixed on branch |
-| GenerativeCanvas.tsx | 262 | Fixed on branch |
-
-### S3923 — Identical conditional blocks (MAJOR) — 1 issue
-
-| File | Lines | Status |
-|------|-------|--------|
-| App.tsx | 90-94 | Fixed on branch |
-
-### S4659 — Unknown CSS pseudo-class (MAJOR) — 1 issue
-
-| File | Line | Status |
-|------|------|--------|
-| index.css | 93 | Fixed on branch (Tailwind v4 comment) |
-
-### S6850 — Heading accessibility (MAJOR) — 1 issue
-
-| File | Lines | Status |
-|------|-------|--------|
-| shared/ui/card.tsx | 33-37 | Fixed on branch |
+Other files in the 440 duplicated list are mostly under 5% — not worth individual attention. The workspace-level clippy `#![allow]` dedup (already done) removed the biggest source.
 
 ---
 
-## 3. Maintainability — 514 Code Smells (Top Issues)
+## 2. Dead Code Analysis
 
-### Cognitive Complexity (CRITICAL) — Rust
+### Rust — No dead code warnings
 
-| File | Line | Complexity | Limit |
-|------|------|-----------|-------|
-| runtime/agent-runtime/src/executor.rs | 483 | **194** | 15 |
-| gateway/gateway-execution/src/runner.rs | 3064 | 41 | 15 |
-| runtime/agent-runtime/src/executor.rs | 1695 | 40 | 15 |
-| gateway/gateway-execution/src/session_state.rs | 423 | 38 | 15 |
-| gateway/gateway-templates/src/lib.rs | 257 | 28 | 15 |
+Clippy and `cargo check` report **zero dead code warnings** across the workspace. The workspace lints suppress `dead_code` — this is intentional to avoid noise from protocol structs with unused fields (WebSocket message types, CLI event types).
 
-### Cognitive Complexity (CRITICAL) — TypeScript
+**Known unused but intentionally kept:**
 
-| File | Line | Complexity | Status |
-|------|------|-----------|--------|
-| fast-chat-hooks.ts | 267 | 51 | Fixed on branch → ~5 |
-| SessionChatViewer.tsx | 480 | 45 | Open |
-| WebSettingsPanel.tsx | 33 | 43 | Open |
-| SetupWizard.tsx | 99 | 37 | Open |
-| http.ts | 1075 | 33 | Open |
-| ProviderCard.tsx | 17 | 30 | Open |
-| ProviderSlideover.tsx | 47 | 26 | Open |
-| mission-hooks.ts | 235 | 21 | Fixed on branch → ~3 |
-| WebIntegrationsPanel.tsx | 117, 307 | 21, 17 | Open |
-| WebAgentsPanel.tsx | 86, 153 | 21, 16 | Open |
-| GraphView.tsx | 217 | 20 | Open |
-| WebMemoryPanel.tsx | 31 | 20 | Open |
-| web_reader.py | 221 | 45 | Open |
-| ddg_search.py | 212 | 19 | Open |
-| web_reader.py | 378 | 19 | Open |
+| File | Item | Why Kept |
+|------|------|----------|
+| `apps/cli/src/client.rs` | Multiple struct fields (`session_id`, `tool_call_id`, `args`, `final_message`, `code`, `conversation_id`) | Protocol compatibility — fields are deserialized from JSON but not yet used in the CLI UI |
+| `apps/cli/src/events.rs` | `is_quit()`, `is_enter()`, etc. | Future keyboard handler API — CLI is WIP |
+| `apps/cli/src/ui.rs` | `COLOR_BG` constant | Planned for TUI background color |
+
+**Recommendation:** The entire `apps/cli/` crate is mostly dead code. Consider either investing in it or removing it to reduce the workspace.
+
+### TypeScript — No dead code detected
+
+ESLint `no-unused-vars` is enabled with `argsIgnorePattern: "^_"`. No unused imports or variables found.
+
+### Paths That Will Never Be Taken
+
+| File | Line | Code Path | Why Unreachable |
+|------|------|-----------|-----------------|
+| `runner.rs` invoke_with_callback | ~667 | `Err(_) if agent_id == "root"` fallback in `load_or_create_root` | Root agent always exists — the daemon creates it on startup |
+| `lifecycle.rs` get_or_create_session | ~54 | `Err(e)` → "Failed to get session" | SQLite query failure would require DB corruption |
+| `executor.rs` execute_tool | ~1297 | MCP tool not found fallback | MCP tools are validated at registration time |
+| `distillation.rs` resolve_distillation_target | ~645 | Third provider fallback loop | If orchestrator provider exists, first or second attempt always succeeds |
+| `chat.rs` init_chat_session | ~78 | Runner not available error | Runner is always initialized before HTTP server starts |
 
 ---
 
-## 4. Duplication — 4.0%
+## 3. Unit Test Coverage Gaps
 
-4.0% duplicated lines across the codebase. Within acceptable range (SonarQube threshold is typically 3-5%).
+### Well-Tested (>70% coverage)
+
+| Crate | Line Coverage | Key Tests |
+|-------|-------------|-----------|
+| `execution-state` | 82% | 86 tests — CRUD, session lifecycle, delegation tracking |
+| `knowledge-graph/types` | 99% | Type construction, serialization |
+| `knowledge-graph/traversal` | 94% | BFS expansion, neighbor queries |
+| `knowledge-graph/service` | 91% | CRUD, search, subgraph extraction |
+| `knowledge-graph/extractor` | 86% | Entity/relationship parsing |
+
+### Under-Tested (<30% coverage) — Easy to Improve
+
+| Crate/File | Coverage | What to Test | Effort |
+|------------|----------|--------------|--------|
+| `daily-sessions/repository.rs` | **0%** | DB CRUD for daily session tracking — similar patterns to execution-state tests | Small — copy test patterns |
+| `daily-sessions/cache.rs` | **0%** | In-memory LRU cache | Small — pure data structure |
+| `daily-sessions/manager.rs` | **0%** | Session lifecycle manager | Medium — needs mock deps |
+| `execution-state/handlers.rs` | **20%** | HTTP handler routes | Medium — needs test fixtures |
+| `api-logs/repository.rs` | **41%** | Log storage queries | Small — add edge case tests |
+| `api-logs/service.rs` | **46%** | Log aggregation, session detail building | Small |
+| `knowledge-graph/storage.rs` | **61%** | SQLite graph operations | Medium — add delete/update tests |
+
+### Not Testable Without Integration Setup (Skip)
+
+| Crate | Why |
+|-------|-----|
+| `gateway` (main) | HTTP server, WebSocket, full stack |
+| `agent-runtime/executor.rs` | Requires LLM mock, tool registry, full agent setup |
+| `gateway-execution/runner.rs` | Requires daemon, DB, event bus — integration-only |
 
 ---
 
-## Summary: What Merging `feature/test-coverage` Resolves
+## 4. Recommended Actions (Priority Order)
 
-| Category | Before Merge | After Merge (estimated) |
-|----------|-------------|------------------------|
-| Security Hotspots | 0 | 0 |
-| Reliability (bugs) | 81 | ~8 remaining |
-| Maintainability (code smells) | 514 | ~500 remaining |
-| Coverage | 0% | >0% (Rust LCOV from cargo-llvm-cov) |
+### Quick Wins (1-2 hours)
 
-**Action Required:** Merge `feature/test-coverage` PR to main, then re-scan.
+1. **Extract `MiddlewareTriggerConfig`** from `middleware/config.rs` — drops 194 duplicated lines (53.7% → ~10%)
+2. **Extract test helpers** in `api_tests.rs` — drops 187 duplicated lines (22.2% → ~5%)
+3. **Add tests for `daily-sessions`** — 0% → 50%+ with 3 test functions copying execution-state patterns
+
+### Medium Effort (half day)
+
+4. **Add edge case tests** for `api-logs` — 41% → 70%+
+5. **Extract agent schema builder** from `agent.rs` — drops 34 duplicated lines
+6. **Add storage tests** for knowledge-graph — 61% → 80%+
+
+### Defer
+
+7. Rust cognitive complexity (45 issues) — requires major refactors, risk of regression
+8. CLI dead code cleanup — depends on whether CLI will be invested in or removed
+9. Integration tests for gateway/runner — needs full test harness
