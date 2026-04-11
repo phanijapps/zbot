@@ -114,7 +114,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
   }, []);
 
   return (
-    <div style={{ width: "100%" }} onDrop={handleDrop} onDragOver={handleDragOver}>
+    <div style={{ width: "100%" }} onDrop={handleDrop} onDragOver={handleDragOver} role="region" aria-label="Drop files here">
       {/* Pending attachment chips */}
       {attachments.length > 0 && (
         <div className="chat-input__chips">
