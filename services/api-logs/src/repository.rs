@@ -396,3 +396,241 @@ impl<D: DbProvider> LogsRepository<D> {
         })
     }
 }
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::*;
+    use std::sync::Mutex;
+
+    /// In-memory test database provider.
+    struct TestDbProvider {
+        conn: Mutex<Connection>,
+    }
+
+    impl TestDbProvider {
+        fn new() -> Self {
+            let conn = Connection::open_in_memory().expect("Failed to create in-memory database");
+
+            conn.execute_batch(
+                r#"
+                CREATE TABLE IF NOT EXISTS execution_logs (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    conversation_id TEXT NOT NULL,
+                    agent_id TEXT NOT NULL,
+                    parent_session_id TEXT,
+                    timestamp TEXT NOT NULL,
+                    level TEXT NOT NULL,
+                    category TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    metadata TEXT,
+                    duration_ms INTEGER
+                );
+
+                CREATE TABLE IF NOT EXISTS sessions (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'completed',
+                    root_agent_id TEXT NOT NULL,
+                    title TEXT,
+                    created_at TEXT NOT NULL
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_executions (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    parent_execution_id TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS messages (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                );
+                "#,
+            )
+            .expect("Failed to create tables");
+
+            Self {
+                conn: Mutex::new(conn),
+            }
+        }
+    }
+
+    impl DbProvider for TestDbProvider {
+        fn with_connection<F, R>(&self, f: F) -> Result<R, String>
+        where
+            F: FnOnce(&Connection) -> Result<R, rusqlite::Error>,
+        {
+            let conn = self.conn.lock().map_err(|e| e.to_string())?;
+            f(&conn).map_err(|e| e.to_string())
+        }
+    }
+
+    fn setup_repo() -> LogsRepository<TestDbProvider> {
+        let db = Arc::new(TestDbProvider::new());
+        LogsRepository::new(db)
+    }
+
+    fn make_log(
+        session_id: &str,
+        conversation_id: &str,
+        agent_id: &str,
+        level: LogLevel,
+        category: LogCategory,
+        message: &str,
+    ) -> ExecutionLog {
+        ExecutionLog::new(session_id, conversation_id, agent_id, level, category, message)
+    }
+
+    #[test]
+    fn test_log_tool_call_and_result() {
+        let repo = setup_repo();
+
+        let tool_call = make_log(
+            "sess-1",
+            "conv-1",
+            "agent-1",
+            LogLevel::Info,
+            LogCategory::ToolCall,
+            "Calling tool: search",
+        )
+        .with_metadata(serde_json::json!({
+            "tool_name": "search",
+            "tool_id": "tc-1",
+            "args": {"query": "hello"}
+        }));
+
+        let tool_result = make_log(
+            "sess-1",
+            "conv-1",
+            "agent-1",
+            LogLevel::Info,
+            LogCategory::ToolResult,
+            "Tool search completed",
+        )
+        .with_metadata(serde_json::json!({
+            "tool_name": "search",
+            "tool_id": "tc-1",
+            "result": "found 3 items"
+        }))
+        .with_duration(150);
+
+        repo.insert_log(&tool_call).unwrap();
+        repo.insert_log(&tool_result).unwrap();
+
+        let logs = repo.get_session_logs("sess-1").unwrap();
+        assert_eq!(logs.len(), 2);
+
+        // Verify tool_call log
+        let tc = logs.iter().find(|l| l.category == LogCategory::ToolCall).unwrap();
+        assert_eq!(tc.session_id, "sess-1");
+        assert!(tc.metadata.is_some());
+        let meta = tc.metadata.as_ref().unwrap();
+        assert_eq!(meta["tool_name"], "search");
+
+        // Verify tool_result log
+        let tr = logs.iter().find(|l| l.category == LogCategory::ToolResult).unwrap();
+        assert_eq!(tr.duration_ms, Some(150));
+        assert!(tr.metadata.as_ref().unwrap()["result"].as_str().unwrap().contains("found"));
+    }
+
+    #[test]
+    fn test_list_sessions_with_filters() {
+        let repo = setup_repo();
+
+        // Insert logs for two different agents
+        let log_a1 = make_log("sess-a", "conv-a", "agent-alpha", LogLevel::Info, LogCategory::Session, "start");
+        let log_a2 = make_log("sess-a", "conv-a", "agent-alpha", LogLevel::Error, LogCategory::Error, "oops");
+        let log_b1 = make_log("sess-b", "conv-b", "agent-beta", LogLevel::Info, LogCategory::Session, "start");
+
+        repo.insert_log(&log_a1).unwrap();
+        repo.insert_log(&log_a2).unwrap();
+        repo.insert_log(&log_b1).unwrap();
+
+        // Filter by agent_id
+        let filter = LogFilter {
+            agent_id: Some("agent-alpha".to_string()),
+            ..Default::default()
+        };
+        let sessions = repo.list_sessions(&filter).unwrap();
+        assert_eq!(sessions.len(), 1);
+        assert_eq!(sessions[0].agent_id, "agent-alpha");
+        assert_eq!(sessions[0].error_count, 1);
+
+        // No filter — should return both sessions
+        let filter_all = LogFilter::default();
+        let sessions = repo.list_sessions(&filter_all).unwrap();
+        assert_eq!(sessions.len(), 2);
+    }
+
+    #[test]
+    fn test_get_session_detail_with_children() {
+        let repo = setup_repo();
+
+        // Parent session logs
+        let parent_log = make_log("sess-parent", "conv-1", "root-agent", LogLevel::Info, LogCategory::Session, "parent start");
+        repo.insert_log(&parent_log).unwrap();
+
+        // Child session logs with parent_session_id set
+        let child_log = make_log("sess-child", "conv-1", "child-agent", LogLevel::Info, LogCategory::Session, "child start")
+            .with_parent("sess-parent");
+        repo.insert_log(&child_log).unwrap();
+
+        // Verify parent session exists
+        let parent = repo.get_session("sess-parent").unwrap();
+        assert!(parent.is_some());
+        let parent = parent.unwrap();
+        assert_eq!(parent.session_id, "sess-parent");
+
+        // Verify child sessions can be retrieved
+        let children = repo.get_child_sessions("sess-parent").unwrap();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0], "sess-child");
+
+        // Verify child session logs
+        let child_logs = repo.get_session_logs("sess-child").unwrap();
+        assert_eq!(child_logs.len(), 1);
+        assert_eq!(child_logs[0].parent_session_id.as_deref(), Some("sess-parent"));
+    }
+
+    #[test]
+    fn test_delete_session_cascades() {
+        let repo = setup_repo();
+
+        // Insert multiple logs for a session
+        for i in 0..5 {
+            let log = make_log(
+                "sess-del",
+                "conv-del",
+                "agent-del",
+                LogLevel::Info,
+                LogCategory::Session,
+                &format!("message {}", i),
+            );
+            repo.insert_log(&log).unwrap();
+        }
+
+        // Verify logs exist
+        let logs = repo.get_session_logs("sess-del").unwrap();
+        assert_eq!(logs.len(), 5);
+
+        // Delete session
+        let deleted = repo.delete_session("sess-del").unwrap();
+        assert_eq!(deleted, 5);
+
+        // Verify logs are gone
+        let logs = repo.get_session_logs("sess-del").unwrap();
+        assert!(logs.is_empty());
+
+        // Verify session query returns None
+        let session = repo.get_session("sess-del").unwrap();
+        assert!(session.is_none());
+    }
+}

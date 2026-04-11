@@ -716,3 +716,159 @@ fn parse_datetime(s: &str) -> std::result::Result<DateTime<Utc>, DailySessionErr
         .map(|dt| dt.with_timezone(&Utc))
         .map_err(|e| DailySessionError::InvalidDateFormat(e.to_string()))
 }
+
+// ============================================================================
+// UNIT TESTS
+// ============================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Agent, SessionMessage};
+    use tempfile::tempdir;
+
+    /// Create a repository backed by a temporary SQLite database.
+    /// Must be called from a blocking context (spawn_blocking or outside runtime).
+    async fn setup_repo() -> SqlDailySessionRepository {
+        tokio::task::spawn_blocking(|| {
+            let dir = tempdir().unwrap();
+            let db_path = dir.keep().join("test_daily.db");
+            SqlDailySessionRepository::new(&db_path).unwrap()
+        })
+        .await
+        .unwrap()
+    }
+
+    /// Helper: insert an agent so foreign key constraints are satisfied.
+    async fn insert_agent(repo: &SqlDailySessionRepository, agent_id: &str) {
+        let agent = Agent {
+            id: agent_id.to_string(),
+            name: agent_id.to_string(),
+            display_name: agent_id.to_string(),
+            description: None,
+            config_path: "/tmp/config.yaml".to_string(),
+            system_prompt_version: 1,
+            current_system_prompt: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        repo.upsert_agent(agent).await.unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_create_daily_session() {
+        let repo = setup_repo().await;
+        insert_agent(&repo, "agent-1").await;
+
+        // Create a session for today
+        let session = repo.get_or_create_today_session("agent-1").await.unwrap();
+        assert_eq!(session.agent_id, "agent-1");
+        assert_eq!(session.message_count, 0);
+        assert_eq!(session.token_count, 0);
+
+        // Retrieve the same session (should return same one, not duplicate)
+        let session2 = repo.get_or_create_today_session("agent-1").await.unwrap();
+        assert_eq!(session.id, session2.id);
+
+        // Verify via get_session
+        let fetched = repo.get_session(&session.id).await.unwrap();
+        assert!(fetched.is_some());
+        let fetched = fetched.unwrap();
+        assert_eq!(fetched.id, session.id);
+        assert_eq!(fetched.agent_id, "agent-1");
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_list_daily_sessions() {
+        let repo = setup_repo().await;
+        insert_agent(&repo, "agent-list").await;
+
+        // Insert sessions for different past dates directly via SQL
+        let conn = repo.conn.lock().await;
+        let now = Utc::now().to_rfc3339();
+        for date in &["2025-01-01", "2025-01-02", "2025-01-03"] {
+            let id = DailySession::generate_id("agent-list", date);
+            conn.execute(
+                "INSERT INTO daily_sessions (id, agent_id, session_date, message_count, token_count, system_prompt_version, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 5, 100, 1, ?4, ?5)",
+                rusqlite::params![id, "agent-list", date, now, now],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        // list_previous_days only returns sessions before today — all 3 qualify
+        let days = repo.list_previous_days("agent-list", 10).await.unwrap();
+        assert_eq!(days.len(), 3);
+        // Verify ordering (most recent first)
+        assert_eq!(days[0].session_date, "2025-01-03");
+        assert_eq!(days[1].session_date, "2025-01-02");
+
+        // Test limit
+        let days = repo.list_previous_days("agent-list", 1).await.unwrap();
+        assert_eq!(days.len(), 1);
+
+        // Test different agent returns empty
+        let days = repo.list_previous_days("other-agent", 10).await.unwrap();
+        assert!(days.is_empty());
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_update_daily_session() {
+        let repo = setup_repo().await;
+        insert_agent(&repo, "agent-upd").await;
+
+        let session = repo.get_or_create_today_session("agent-upd").await.unwrap();
+
+        // Update summary
+        repo.update_session_summary(&session.id, "Today was productive".to_string())
+            .await
+            .unwrap();
+        let fetched = repo.get_session(&session.id).await.unwrap().unwrap();
+        assert_eq!(fetched.summary.as_deref(), Some("Today was productive"));
+
+        // Increment message count
+        repo.increment_message_count(&session.id).await.unwrap();
+        repo.increment_message_count(&session.id).await.unwrap();
+        let fetched = repo.get_session(&session.id).await.unwrap().unwrap();
+        assert_eq!(fetched.message_count, 2);
+
+        // Add token count
+        repo.add_token_count(&session.id, 50).await.unwrap();
+        repo.add_token_count(&session.id, 30).await.unwrap();
+        let fetched = repo.get_session(&session.id).await.unwrap().unwrap();
+        assert_eq!(fetched.token_count, 80);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn test_delete_old_sessions() {
+        let repo = setup_repo().await;
+        insert_agent(&repo, "agent-del").await;
+
+        // Insert old sessions via SQL
+        let conn = repo.conn.lock().await;
+        let now = Utc::now().to_rfc3339();
+        for date in &["2024-06-01", "2024-07-01", "2025-03-01"] {
+            let id = DailySession::generate_id("agent-del", date);
+            conn.execute(
+                "INSERT INTO daily_sessions (id, agent_id, session_date, message_count, token_count, system_prompt_version, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, 0, 0, 1, ?4, ?5)",
+                rusqlite::params![id, "agent-del", date, now, now],
+            )
+            .unwrap();
+        }
+        drop(conn);
+
+        // Delete sessions before 2025-01-01 — should remove 2 of 3
+        let deleted = repo
+            .delete_sessions_before("agent-del", "2025-01-01")
+            .await
+            .unwrap();
+        assert_eq!(deleted, 2);
+
+        // Verify only the March session remains
+        let days = repo.list_previous_days("agent-del", 10).await.unwrap();
+        assert_eq!(days.len(), 1);
+        assert_eq!(days[0].session_date, "2025-03-01");
+    }
+}
