@@ -87,7 +87,11 @@ impl Tool for WriteFileTool {
         // ~/Documents/zbot/wards/{ward}/specs/plan.md, the sanitizer strips ~/
         // but leaves Documents/zbot/wards/{ward}/specs/plan.md.
         // Detect and extract only the relative part after the ward directory.
-        path = fix_doubled_ward_path(path, &cwd, args.get("path").and_then(|v| v.as_str()).unwrap_or(""));
+        path = fix_doubled_ward_path(
+            path,
+            &cwd,
+            args.get("path").and_then(|v| v.as_str()).unwrap_or(""),
+        );
 
         let full_path = cwd.join(&path);
 
@@ -139,7 +143,9 @@ fn fix_doubled_ward_path(mut path: String, cwd: &std::path::Path, original: &str
             .trim_start_matches(home.to_string_lossy().as_ref())
             .trim_start_matches('/');
         if path.starts_with(home_relative) {
-            let fixed = path[home_relative.len()..].trim_start_matches('/').to_string();
+            let fixed = path[home_relative.len()..]
+                .trim_start_matches('/')
+                .to_string();
             tracing::debug!(original = %original, resolved = %fixed, "Fixed doubled ward path");
             path = fixed;
         }

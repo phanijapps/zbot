@@ -161,7 +161,14 @@ impl GraphService {
                     .storage
                     .get_neighbors(agent_id, entity_id, Direction::Both, 1000)
                     .await?;
-                collect_neighbors(neighbors, &mut visited_entities, &mut visited_relationships, &mut entities, &mut relationships, &mut next_hop);
+                collect_neighbors(
+                    neighbors,
+                    &mut visited_entities,
+                    &mut visited_relationships,
+                    &mut entities,
+                    &mut relationships,
+                    &mut next_hop,
+                );
             }
 
             current_hop = next_hop;

@@ -724,7 +724,7 @@ fn parse_datetime(s: &str) -> std::result::Result<DateTime<Utc>, DailySessionErr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Agent, SessionMessage};
+    use crate::types::Agent;
     use tempfile::tempdir;
 
     /// Create a repository backed by a temporary SQLite database.

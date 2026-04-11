@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 16;
+const SCHEMA_VERSION: i32 = 17;
 
 /// Run migrations for existing databases.
 ///
@@ -230,6 +230,11 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         );
     }
 
+    // v16 → v17: Add mode column to sessions for persistent execution mode
+    if version < 17 {
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN mode TEXT", []);
+    }
+
     Ok(())
 }
 
@@ -265,7 +270,8 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             thread_id TEXT,
             connector_id TEXT,
             respond_to TEXT,
-            archived INTEGER NOT NULL DEFAULT 0
+            archived INTEGER NOT NULL DEFAULT 0,
+            mode TEXT
         )",
         [],
     )?;
@@ -821,7 +827,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 16, "schema version should be 16");
+        assert_eq!(version, 17, "schema version should be 17");
     }
 
     #[test]

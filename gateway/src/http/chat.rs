@@ -89,6 +89,11 @@ pub async fn init_chat_session(
         tracing::warn!("Failed to create chat session in DB: {}", e);
     }
 
+    // Persist fast mode on the chat session so continuations/reconnects keep it
+    if let Err(e) = runner.state_service().set_session_mode(&session_id, "fast") {
+        tracing::warn!("Failed to set chat session mode: {}", e);
+    }
+
     // Persist the chat session IDs in settings
     let mut updated_settings = settings.clone();
     updated_settings.chat = gateway_services::ChatConfig {

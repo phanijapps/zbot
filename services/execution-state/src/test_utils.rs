@@ -37,6 +37,7 @@ pub fn mock_session(id: &str, agent_id: &str) -> Session {
         thread_id: None,
         connector_id: None,
         respond_to: None,
+        mode: None,
     }
 }
 
@@ -61,6 +62,7 @@ pub fn mock_session_with_source(id: &str, agent_id: &str, source: TriggerSource)
         thread_id: None,
         connector_id: None,
         respond_to: None,
+        mode: None,
     }
 }
 
@@ -85,6 +87,7 @@ pub fn mock_queued_session(id: &str, agent_id: &str, source: TriggerSource) -> S
         thread_id: None,
         connector_id: None,
         respond_to: None,
+        mode: None,
     }
 }
 
