@@ -439,7 +439,7 @@ export function WebSettingsPanel() {
                           <input
                             type="number"
                             value={toolSettings.offloadThresholdTokens}
-                            onChange={(e) => handleOffloadChange({ offloadThresholdTokens: parseInt(e.target.value, 10) || 1000 })}
+                            onChange={(e) => handleOffloadChange({ offloadThresholdTokens: Number.parseInt(e.target.value, 10) || 1000 })}
                             disabled={isSaving}
                             className="form-input"
                             min={1000}
@@ -530,7 +530,7 @@ export function WebSettingsPanel() {
                       <div>
                         <label className="settings-field-label">Keep Last N Files</label>
                         <input type="number" value={logSettings.maxFiles}
-                          onChange={(e) => handleLogChange({ maxFiles: parseInt(e.target.value, 10) || 0 })}
+                          onChange={(e) => handleLogChange({ maxFiles: Number.parseInt(e.target.value, 10) || 0 })}
                           disabled={isSavingLogs} className="form-input" min={0} />
                         <p className="settings-hint">0 = unlimited</p>
                       </div>
@@ -646,7 +646,7 @@ export function WebSettingsPanel() {
                         onChange={(e) => handleExecChange({
                           orchestrator: {
                             ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                            temperature: parseFloat(e.target.value) || 0.7,
+                            temperature: Number.parseFloat(e.target.value) || 0.7,
                           },
                         })}
                       />
@@ -661,7 +661,7 @@ export function WebSettingsPanel() {
                         onChange={(e) => handleExecChange({
                           orchestrator: {
                             ...execSettings.orchestrator || { temperature: 0.7, maxTokens: 16384, thinkingEnabled: true },
-                            maxTokens: parseInt(e.target.value) || 16384,
+                            maxTokens: Number.parseInt(e.target.value) || 16384,
                           },
                         })}
                       />
@@ -808,7 +808,7 @@ export function WebSettingsPanel() {
                         onChange={(e) => handleExecChange({
                           multimodal: {
                             ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                            temperature: parseFloat(e.target.value) || 0.3,
+                            temperature: Number.parseFloat(e.target.value) || 0.3,
                           },
                         })}
                       />
@@ -823,7 +823,7 @@ export function WebSettingsPanel() {
                         onChange={(e) => handleExecChange({
                           multimodal: {
                             ...execSettings.multimodal || { temperature: 0.3, maxTokens: 4096 },
-                            maxTokens: parseInt(e.target.value) || 4096,
+                            maxTokens: Number.parseInt(e.target.value) || 4096,
                           },
                         })}
                       />
@@ -849,7 +849,7 @@ export function WebSettingsPanel() {
                       className="form-input"
                       type="number"
                       value={execSettings.maxParallelAgents}
-                      onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, parseInt(e.target.value, 10) || 1) })}
+                      onChange={(e) => handleExecChange({ maxParallelAgents: Math.max(1, Number.parseInt(e.target.value, 10) || 1) })}
                       disabled={isSavingExec}
                       min={1}
                       max={10}

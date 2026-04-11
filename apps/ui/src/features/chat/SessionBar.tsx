@@ -105,6 +105,9 @@ export function SessionBar({
                   setHistoryOpen(false);
                   onNewSession();
                 }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { setHistoryOpen(false); onNewSession(); } }}
               >
                 <Plus style={{ width: 14, height: 14 }} />
                 New Session
@@ -129,6 +132,9 @@ export function SessionBar({
                       switchToSession(s.session_id, s.conversation_id);
                     }
                   }}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { setHistoryOpen(false); if (!isActive) switchToSession(s.session_id, s.conversation_id); } }}
                 >
                   <span className={`session-history__dot ${sessionStatusClass(s.status)}`} />
                   <span className="session-history__title">{displayTitle}</span>

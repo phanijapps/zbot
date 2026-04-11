@@ -127,6 +127,9 @@ export function ProvidersStep({ providers, defaultProviderId, onProvidersChanged
               key={preset.name}
               className={`provider-add-card ${isAdded ? "provider-add-card--added" : ""}`}
               onClick={() => !isAdded && handleAddProvider(preset)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { if (!isAdded) handleAddProvider(preset); } }}
             >
               <div className="provider-add-card__name">{preset.name}</div>
               <div className="provider-add-card__hint">

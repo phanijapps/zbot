@@ -40,8 +40,8 @@ import re
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
-USER_AGENT = USER_AGENT
-DELETED_MARKER = DELETED_MARKER
+USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+DELETED_MARKER = "[deleted]"
 
 # --- Lazy imports with availability tracking ---
 _trafilatura = None

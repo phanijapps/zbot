@@ -193,6 +193,9 @@ export function IntelligenceFeed({
                   key={art.id}
                   className="intel-artifacts__row"
                   onClick={() => onArtifactClick(art)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onArtifactClick(art); }}
                 >
                   <span className="intel-artifacts__icon">{getArtifactIcon(art.fileType)}</span>
                   <span className="intel-artifacts__name">{art.label || art.fileName}</span>

@@ -224,8 +224,8 @@ export function ProviderSlideover({
           models: form.models,
           defaultModel: form.defaultModel || undefined,
           rateLimits: {
-            requestsPerMinute: parseInt(form.rateLimitsRpm) || 30,
-            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 2,
+            requestsPerMinute: Number.parseInt(form.rateLimitsRpm) || 30,
+            concurrentRequests: Number.parseInt(form.rateLimitsConcurrent) || 2,
           },
         });
         if (!result.success) {
@@ -242,8 +242,8 @@ export function ProviderSlideover({
           models: form.models,
           defaultModel: form.defaultModel || undefined,
           rateLimits: {
-            requestsPerMinute: parseInt(form.rateLimitsRpm) || 30,
-            concurrentRequests: parseInt(form.rateLimitsConcurrent) || 2,
+            requestsPerMinute: Number.parseInt(form.rateLimitsRpm) || 30,
+            concurrentRequests: Number.parseInt(form.rateLimitsConcurrent) || 2,
           },
         });
         if (!result.success) {

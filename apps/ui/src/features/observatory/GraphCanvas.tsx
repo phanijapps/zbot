@@ -223,9 +223,9 @@ export function GraphCanvas({
         const transformStr = gRef.current?.getAttribute("transform") || "";
         const scaleMatch = transformStr.match(/scale\(([^)]+)\)/);
         const translateMatch = transformStr.match(/translate\(([^,]+),\s*([^)]+)\)/);
-        const scale = scaleMatch ? parseFloat(scaleMatch[1]) : 1;
-        const tx = translateMatch ? parseFloat(translateMatch[1]) : 0;
-        const ty = translateMatch ? parseFloat(translateMatch[2]) : 0;
+        const scale = scaleMatch ? Number.parseFloat(scaleMatch[1]) : 1;
+        const tx = translateMatch ? Number.parseFloat(translateMatch[1]) : 0;
+        const ty = translateMatch ? Number.parseFloat(translateMatch[2]) : 0;
         const rect = svg.getBoundingClientRect();
         d.fx = (e.clientX - rect.left - tx) / scale;
         d.fy = (e.clientY - rect.top - ty) / scale;

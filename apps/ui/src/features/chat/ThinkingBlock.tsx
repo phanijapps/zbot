@@ -10,7 +10,7 @@ export function ThinkingBlock({ content }: ThinkingBlockProps) {
 
   return (
     <div className="thinking-block">
-      <div className="thinking-block__header" onClick={() => setExpanded(!expanded)}>
+      <div className="thinking-block__header" onClick={() => setExpanded(!expanded)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setExpanded(!expanded); }}>
         <Brain size={12} />
         <span>Thinking</span>
         {expanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}

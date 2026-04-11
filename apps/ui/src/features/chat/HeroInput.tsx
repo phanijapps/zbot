@@ -139,6 +139,9 @@ export function HeroInput({ onSend, recentSessions = [] }: HeroInputProps) {
                 <span
                   className="chat-input__chip-remove"
                   onClick={() => removeAttachment(a.id)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") removeAttachment(a.id); }}
                 >
                   x
                 </span>

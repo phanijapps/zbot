@@ -189,7 +189,7 @@ export function AgentsStep({
               className="form-input"
               type="number"
               value={globalDefault.temperature}
-              onChange={(e) => onGlobalChange({ ...globalDefault, temperature: parseFloat(e.target.value) || 0 })}
+              onChange={(e) => onGlobalChange({ ...globalDefault, temperature: Number.parseFloat(e.target.value) || 0 })}
               min={0} max={2} step={0.1}
             />
           </div>
@@ -199,7 +199,7 @@ export function AgentsStep({
               className="form-input"
               type="number"
               value={globalDefault.maxTokens}
-              onChange={(e) => onGlobalChange({ ...globalDefault, maxTokens: parseInt(e.target.value) || 4096 })}
+              onChange={(e) => onGlobalChange({ ...globalDefault, maxTokens: Number.parseInt(e.target.value) || 4096 })}
               min={256} step={1024}
             />
           </div>
@@ -273,7 +273,7 @@ export function AgentsStep({
                       className="form-input"
                       type="number"
                       value={agentOverrides[agent.id]?.temperature ?? globalDefault.temperature}
-                      onChange={(e) => handleOverride(agent.id, "temperature", parseFloat(e.target.value) || 0)}
+                      onChange={(e) => handleOverride(agent.id, "temperature", Number.parseFloat(e.target.value) || 0)}
                       min={0} max={2} step={0.1}
                     />
                   </div>
@@ -283,7 +283,7 @@ export function AgentsStep({
                       className="form-input"
                       type="number"
                       value={agentOverrides[agent.id]?.maxTokens ?? globalDefault.maxTokens}
-                      onChange={(e) => handleOverride(agent.id, "maxTokens", parseInt(e.target.value) || 4096)}
+                      onChange={(e) => handleOverride(agent.id, "maxTokens", Number.parseInt(e.target.value) || 4096)}
                       min={256} step={1024}
                     />
                   </div>

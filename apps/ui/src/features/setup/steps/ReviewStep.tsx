@@ -254,7 +254,7 @@ function Section({ id, title, count, open, onToggle, children }: {
   const isOpen = open.has(id);
   return (
     <div className="review-section">
-      <div className="review-section__header" onClick={() => onToggle(id)}>
+      <div className="review-section__header" onClick={() => onToggle(id)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(id); }}>
         <span className="review-section__title">{title}</span>
         <div className="flex items-center gap-2">
           <span className="review-section__count">{count}</span>
