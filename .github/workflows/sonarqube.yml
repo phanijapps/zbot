@@ -16,6 +16,13 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Install cargo-llvm-cov if not present (self-hosted runner may not have it)
+      - name: Ensure cargo-llvm-cov is installed
+        run: cargo llvm-cov --version || cargo install cargo-llvm-cov --locked
+
+      - name: Generate Rust coverage (LCOV)
+        run: cargo llvm-cov --workspace --lcov --output-path rust-lcov.info || true
+
       - name: SonarQube Scan
         uses: SonarSource/sonarqube-scan-action@v6
         env:
