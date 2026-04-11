@@ -552,7 +552,10 @@ export function WebAgentsPanel() {
                   <div
                     key={agent.id}
                     className={`agent-card animate-fade-in-up animate-delay-${Math.min(i + 1, 4)}`}
+                    role="button"
+                    tabIndex={0}
                     onClick={() => setEditingAgent(agent)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setEditingAgent(agent); }}
                   >
                     <div className="agent-card__top">
                       <div className="agent-card__avatar">
@@ -657,7 +660,10 @@ export function WebAgentsPanel() {
                 <div
                   key={skill.id}
                   className={`skill-card animate-fade-in-up animate-delay-${Math.min(i + 1, 4)}`}
+                  role="button"
+                  tabIndex={0}
                   onClick={() => setSelectedSkill(skill)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setSelectedSkill(skill); }}
                 >
                   <div className="skill-card__header">
                     <span className="skill-card__name">{skill.displayName || skill.name}</span>
@@ -795,8 +801,9 @@ export function WebAgentsPanel() {
         }
       >
         <div className="form-group">
-          <label className="form-label">Name (ID)</label>
+          <label className="form-label" htmlFor="create-agent-name">Name (ID)</label>
           <input
+            id="create-agent-name"
             className="form-input"
             type="text"
             value={newAgent.name}
@@ -807,8 +814,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Display Name</label>
+          <label className="form-label" htmlFor="create-agent-display-name">Display Name</label>
           <input
+            id="create-agent-display-name"
             className="form-input"
             type="text"
             value={newAgent.displayName}
@@ -817,8 +825,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
+          <label className="form-label" htmlFor="create-agent-description">Description</label>
           <textarea
+            id="create-agent-description"
             className="form-textarea"
             value={newAgent.description}
             onChange={(e) => setNewAgent({ ...newAgent, description: e.target.value })}
@@ -828,8 +837,9 @@ export function WebAgentsPanel() {
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-4)" }}>
           <div className="form-group">
-            <label className="form-label">Provider</label>
+            <label className="form-label" htmlFor="create-agent-provider">Provider</label>
             <select
+              id="create-agent-provider"
               className="form-select"
               value={newAgent.providerId}
               onChange={(e) => {
@@ -851,8 +861,9 @@ export function WebAgentsPanel() {
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Model</label>
+            <label className="form-label" htmlFor="create-agent-model">Model</label>
             <select
+              id="create-agent-model"
               className="form-select"
               value={newAgent.model}
               onChange={(e) => setNewAgent({ ...newAgent, model: e.target.value })}
@@ -915,20 +926,21 @@ export function WebAgentsPanel() {
         {selectedSkill && (
           <>
             <div className="form-group">
-              <label className="form-label">Description</label>
-              <p style={{ fontSize: "var(--text-sm)", color: "var(--foreground)" }}>
+              <label className="form-label" id="skill-description-label">Description</label>
+              <p style={{ fontSize: "var(--text-sm)", color: "var(--foreground)" }} aria-labelledby="skill-description-label">
                 {selectedSkill.description || "No description"}
               </p>
             </div>
             <div className="form-group">
-              <label className="form-label">Category</label>
-              <div>
+              <label className="form-label" id="skill-category-label">Category</label>
+              <div aria-labelledby="skill-category-label">
                 <MetaChip variant="skills">{selectedSkill.category}</MetaChip>
               </div>
             </div>
             <div className="form-group">
-              <label className="form-label">Instructions</label>
+              <label className="form-label" id="skill-instructions-label">Instructions</label>
               <pre
+                aria-labelledby="skill-instructions-label"
                 style={{
                   background: "var(--background-elevated)",
                   borderRadius: "var(--radius-md)",
@@ -971,8 +983,9 @@ export function WebAgentsPanel() {
         }
       >
         <div className="form-group">
-          <label className="form-label">Name (ID)</label>
+          <label className="form-label" htmlFor="create-skill-name">Name (ID)</label>
           <input
+            id="create-skill-name"
             className="form-input"
             type="text"
             value={newSkill.name}
@@ -986,8 +999,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Display Name</label>
+          <label className="form-label" htmlFor="create-skill-display-name">Display Name</label>
           <input
+            id="create-skill-display-name"
             className="form-input"
             type="text"
             value={newSkill.displayName}
@@ -996,8 +1010,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
+          <label className="form-label" htmlFor="create-skill-description">Description</label>
           <input
+            id="create-skill-description"
             className="form-input"
             type="text"
             value={newSkill.description}
@@ -1006,8 +1021,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Category</label>
+          <label className="form-label" htmlFor="create-skill-category">Category</label>
           <input
+            id="create-skill-category"
             className="form-input"
             type="text"
             value={newSkill.category}
@@ -1016,8 +1032,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Instructions</label>
+          <label className="form-label" htmlFor="create-skill-instructions">Instructions</label>
           <textarea
+            id="create-skill-instructions"
             className="form-textarea"
             value={newSkill.instructions}
             onChange={(e) => setNewSkill({ ...newSkill, instructions: e.target.value })}
@@ -1050,8 +1067,9 @@ export function WebAgentsPanel() {
         }
       >
         <div className="form-group">
-          <label className="form-label">Name</label>
+          <label className="form-label" htmlFor="schedule-name">Name</label>
           <input
+            id="schedule-name"
             className="form-input"
             type="text"
             value={scheduleForm.name}
@@ -1060,8 +1078,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">ID</label>
+          <label className="form-label" htmlFor="schedule-id">ID</label>
           <input
+            id="schedule-id"
             className="form-input"
             type="text"
             value={scheduleForm.id}
@@ -1073,8 +1092,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Agent</label>
+          <label className="form-label" htmlFor="schedule-agent">Agent</label>
           <select
+            id="schedule-agent"
             className="form-select"
             value={scheduleForm.agent_id}
             onChange={(e) => setScheduleForm((prev) => ({ ...prev, agent_id: e.target.value }))}
@@ -1090,8 +1110,9 @@ export function WebAgentsPanel() {
           </select>
         </div>
         <div className="form-group">
-          <label className="form-label">Schedule (Cron Expression)</label>
+          <label className="form-label" htmlFor="schedule-cron-preset">Schedule (Cron Expression)</label>
           <select
+            id="schedule-cron-preset"
             className="form-select"
             value={
               CRON_PRESETS.find((p) => p.value === scheduleForm.schedule)
@@ -1122,8 +1143,9 @@ export function WebAgentsPanel() {
           </span>
         </div>
         <div className="form-group">
-          <label className="form-label">Message</label>
+          <label className="form-label" htmlFor="schedule-message">Message</label>
           <textarea
+            id="schedule-message"
             className="form-textarea"
             value={scheduleForm.message}
             onChange={(e) => setScheduleForm((prev) => ({ ...prev, message: e.target.value }))}
@@ -1132,8 +1154,9 @@ export function WebAgentsPanel() {
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Timezone (optional)</label>
+          <label className="form-label" htmlFor="schedule-timezone">Timezone (optional)</label>
           <input
+            id="schedule-timezone"
             className="form-input"
             type="text"
             value={scheduleForm.timezone}

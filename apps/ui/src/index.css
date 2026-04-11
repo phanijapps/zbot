@@ -90,6 +90,7 @@ body {
   color: hsl(var(--primary-foreground));
 }
 
+/* stylelint-disable-next-line selector-pseudo-class-no-unknown -- Tailwind v4 escaped utility class */
 .hover\\:bg-muted:hover {
   background-color: hsl(var(--muted));
 }

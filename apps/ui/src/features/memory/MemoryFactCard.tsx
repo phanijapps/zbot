@@ -82,7 +82,10 @@ export function MemoryFactCard({
           cursor: "pointer",
           transition: "background-color 0.15s ease",
         }}
+        role="button"
+        tabIndex={0}
         onClick={() => setIsExpanded(!isExpanded)}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setIsExpanded(!isExpanded); }}
         onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--muted)")}
         onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
       >

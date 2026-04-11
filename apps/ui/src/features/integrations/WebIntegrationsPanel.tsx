@@ -665,7 +665,7 @@ function ToolServerCard({ mcp, onClick }: { mcp: McpServerSummary; onClick: () =
   const iconClass = typeToIconClass(mcp.type);
 
   return (
-    <div className="ts-card" onClick={onClick}>
+    <div className="ts-card" role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}>
       <div className="ts-card__top">
         <div className={`ts-card__icon ${iconClass}`}>
           {getMcpEmoji(mcp.id)}
@@ -874,8 +874,9 @@ function ToolServerForm({
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--spacing-4)" }}>
       {/* Type selector */}
       <div className="form-group">
-        <label className="form-label">Type</label>
+        <label className="form-label" htmlFor="ts-type">Type</label>
         <select
+          id="ts-type"
           className="form-select"
           value={formData.type}
           onChange={(e) => setFormData({ ...formData, type: e.target.value as CreateMcpRequest["type"] })}
@@ -889,8 +890,9 @@ function ToolServerForm({
 
       {/* Name */}
       <div className="form-group">
-        <label className="form-label">Name</label>
+        <label className="form-label" htmlFor="ts-name">Name</label>
         <input
+          id="ts-name"
           className="form-input"
           type="text"
           value={formData.name || ""}
@@ -901,8 +903,9 @@ function ToolServerForm({
 
       {/* Description */}
       <div className="form-group">
-        <label className="form-label">Description</label>
+        <label className="form-label" htmlFor="ts-description">Description</label>
         <input
+          id="ts-description"
           className="form-input"
           type="text"
           value={formData.description || ""}
@@ -915,8 +918,9 @@ function ToolServerForm({
       {formData.type === "stdio" ? (
         <>
           <div className="form-group">
-            <label className="form-label">Command</label>
+            <label className="form-label" htmlFor="ts-command">Command</label>
             <input
+              id="ts-command"
               className="form-input"
               type="text"
               value={formData.command || ""}
@@ -926,8 +930,9 @@ function ToolServerForm({
           </div>
 
           <div className="form-group">
-            <label className="form-label">Arguments (comma-separated)</label>
+            <label className="form-label" htmlFor="ts-args">Arguments (comma-separated)</label>
             <input
+              id="ts-args"
               className="form-input"
               type="text"
               value={argsInput}
@@ -1016,8 +1021,9 @@ function ToolServerForm({
         </>
       ) : (
         <div className="form-group">
-          <label className="form-label">URL</label>
+          <label className="form-label" htmlFor="ts-url">URL</label>
           <input
+            id="ts-url"
             className="form-input"
             type="text"
             value={formData.url || ""}
@@ -1213,7 +1219,7 @@ function PluginWorkerCard({ worker, onClick }: { worker: BridgeWorker; onClick: 
   const connectedAt = new Date(worker.connected_at);
 
   return (
-    <div className="pw-card" onClick={onClick}>
+    <div className="pw-card" role="button" tabIndex={0} onClick={onClick} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}>
       <div className="pw-card__top">
         <div className="pw-card__icon pw-card__icon--worker">
           <Cpu style={{ width: 20, height: 20 }} />

@@ -290,7 +290,11 @@ export function ProviderSlideover({
       {/* Backdrop */}
       <div
         className={`provider-slideover__backdrop${isOpen ? " provider-slideover__backdrop--open" : ""}`}
+        role="button"
+        tabIndex={0}
+        aria-label="Close panel"
         onClick={handleBackdropClick}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleBackdropClick(); }}
       />
 
       {/* Panel */}

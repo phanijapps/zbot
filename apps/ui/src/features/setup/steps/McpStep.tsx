@@ -105,7 +105,11 @@ export function McpStep({ mcpConfigs, onChange }: McpStepProps) {
                 <div className="mcp-row__toggle">
                   <div
                     className={`toggle-switch ${server.enabled ? "toggle-switch--on" : "toggle-switch--off"}`}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Toggle ${server.name || server.id}`}
                     onClick={() => toggleServer(server.id!)}
+                    onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleServer(server.id!); }}
                   />
                 </div>
               </div>

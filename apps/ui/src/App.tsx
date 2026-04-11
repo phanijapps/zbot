@@ -79,7 +79,7 @@ function App() {
         // Check again before connecting WebSocket
         if (cancelled) return;
 
-        const connectResult = await transport.connect();
+        await transport.connect();
 
         if (cancelled) {
           // If cancelled during connect, disconnect immediately
@@ -87,11 +87,7 @@ function App() {
           return;
         }
 
-        if (connectResult.success) {
-          setConnectionStatus({ connected: true });
-        } else {
-          setConnectionStatus({ connected: true });
-        }
+        setConnectionStatus({ connected: true });
       } catch (err) {
         if (cancelled) return;
         const errorMessage = err instanceof Error ? err.message : String(err);

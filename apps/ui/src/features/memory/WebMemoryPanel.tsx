@@ -361,13 +361,14 @@ export function WebMemoryPanel() {
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "var(--spacing-2)" }}>
-            <label style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)" }}>
+            <label htmlFor="memory-agent-filter" style={{ fontSize: "var(--text-sm)", color: "var(--muted-foreground)" }}>
               Filter by Agent:
             </label>
             {agentsLoading ? (
               <Loader2 style={{ width: 16, height: 16, animation: "spin 1s linear infinite", color: "var(--muted-foreground)" }} />
             ) : (
               <select
+                id="memory-agent-filter"
                 value={selectedAgentId}
                 onChange={(e) => {
                   setSelectedAgentId(e.target.value);
