@@ -92,3 +92,6 @@ default = []
 [lib]
 name = "gateway"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

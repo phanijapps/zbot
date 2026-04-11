@@ -49,3 +49,6 @@ tikv-jemallocator = "0.6"
 [[bin]]
 name = "zerod"
 path = "src/main.rs"
+
+[lints]
+workspace = true

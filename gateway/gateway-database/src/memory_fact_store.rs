@@ -35,6 +35,35 @@ impl GatewayMemoryFactStore {
         }
     }
 
+    /// Mark similar facts as contradicted by the new fact with the given `key`.
+    fn mark_contradicted_facts(
+        &self,
+        similar_facts: Vec<crate::memory_repository::ScoredFact>,
+        key: &str,
+        category: &str,
+    ) {
+        for sf in similar_facts {
+            if sf.fact.key != key && sf.fact.category == category {
+                if let Err(e) = self.memory_repo.mark_contradicted(&sf.fact.id, key) {
+                    tracing::warn!(
+                        fact_id = %sf.fact.id,
+                        contradicted_by = %key,
+                        "Failed to mark fact as contradicted: {}",
+                        e
+                    );
+                } else {
+                    tracing::info!(
+                        fact_id = %sf.fact.id,
+                        fact_key = %sf.fact.key,
+                        contradicted_by = %key,
+                        similarity = %sf.score,
+                        "Marked fact as contradicted by newer fact"
+                    );
+                }
+            }
+        }
+    }
+
     /// Embed a text and optionally cache it. Returns None if no client is configured.
     async fn embed_text(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
@@ -108,26 +137,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                 emb, agent_id, 0.8, // high threshold to avoid false positives
                 5, None, // no ward filtering
             ) {
-                for sf in similar_facts {
-                    if sf.fact.key != key && sf.fact.category == category {
-                        if let Err(e) = self.memory_repo.mark_contradicted(&sf.fact.id, key) {
-                            tracing::warn!(
-                                fact_id = %sf.fact.id,
-                                contradicted_by = %key,
-                                "Failed to mark fact as contradicted: {}",
-                                e
-                            );
-                        } else {
-                            tracing::info!(
-                                fact_id = %sf.fact.id,
-                                fact_key = %sf.fact.key,
-                                contradicted_by = %key,
-                                similarity = %sf.score,
-                                "Marked fact as contradicted by newer fact"
-                            );
-                        }
-                    }
-                }
+                self.mark_contradicted_facts(similar_facts, key, category);
             }
         }
 

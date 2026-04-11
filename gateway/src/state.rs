@@ -865,38 +865,7 @@ impl AppState {
 
         // Seed python_env if not already present
         if !store.entries.contains_key("python_env") {
-            let venv_path = self.config_dir.join("venv");
-            let python_exe = if cfg!(windows) {
-                venv_path.join("Scripts").join("python.exe")
-            } else {
-                venv_path.join("bin").join("python")
-            };
-            let pip_exe = if cfg!(windows) {
-                venv_path.join("Scripts").join("pip.exe")
-            } else {
-                venv_path.join("bin").join("pip")
-            };
-
-            let value = serde_json::json!({
-                "exists": venv_ok,
-                "venv_path": venv_path.display().to_string(),
-                "executable": python_exe.display().to_string(),
-                "pip": pip_exe.display().to_string(),
-            });
-
-            store.entries.insert(
-                "python_env".to_string(),
-                MemoryEntry {
-                    value: value.to_string(),
-                    tags: vec![
-                        "system".to_string(),
-                        "python".to_string(),
-                        "env".to_string(),
-                    ],
-                    created_at: now.clone(),
-                    updated_at: now.clone(),
-                },
-            );
+            store.entries.insert("python_env".to_string(), self.build_python_env_entry(venv_ok, &now));
         }
 
         // Seed node_env if not already present
@@ -931,6 +900,32 @@ impl AppState {
                 }
             }
             Err(e) => tracing::warn!("Failed to serialize workspace.json: {}", e),
+        }
+    }
+
+    fn build_python_env_entry(&self, venv_ok: bool, now: &str) -> MemoryEntry {
+        let venv_path = self.config_dir.join("venv");
+        let python_exe = if cfg!(windows) {
+            venv_path.join("Scripts").join("python.exe")
+        } else {
+            venv_path.join("bin").join("python")
+        };
+        let pip_exe = if cfg!(windows) {
+            venv_path.join("Scripts").join("pip.exe")
+        } else {
+            venv_path.join("bin").join("pip")
+        };
+        let value = serde_json::json!({
+            "exists": venv_ok,
+            "venv_path": venv_path.display().to_string(),
+            "executable": python_exe.display().to_string(),
+            "pip": pip_exe.display().to_string(),
+        });
+        MemoryEntry {
+            value: value.to_string(),
+            tags: vec!["system".to_string(), "python".to_string(), "env".to_string()],
+            created_at: now.to_string(),
+            updated_at: now.to_string(),
         }
     }
 }

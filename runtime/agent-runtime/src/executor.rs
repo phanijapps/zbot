@@ -2197,6 +2197,19 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
 ///
 /// Keeps the first ~80% and last ~20% of the budget with a truncation notice.
 /// Returns the original string if within limits or if `max_chars` is 0 (disabled).
+fn truncate_single_line(result: &str, max_chars: usize) -> String {
+    let notice = format!("\n\n--- TRUNCATED ({} chars total) ---\n\n", result.len());
+    let budget = max_chars.saturating_sub(notice.len());
+    let head_size = (budget * 4) / 5;
+    let tail_size = budget - head_size;
+    format!(
+        "{}{}{}",
+        &result[..head_size],
+        notice,
+        &result[result.len() - tail_size..]
+    )
+}
+
 fn truncate_tool_result(result: String, max_chars: usize) -> String {
     if max_chars == 0 || result.len() <= max_chars {
         return result;
@@ -2207,16 +2220,7 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
 
     if total_lines <= 1 {
         // Single line — fall back to char-based truncation
-        let notice = format!("\n\n--- TRUNCATED ({} chars total) ---\n\n", result.len());
-        let budget = max_chars.saturating_sub(notice.len());
-        let head_size = (budget * 4) / 5;
-        let tail_size = budget - head_size;
-        return format!(
-            "{}{}{}",
-            &result[..head_size],
-            notice,
-            &result[result.len() - tail_size..]
-        );
+        return truncate_single_line(&result, max_chars);
     }
 
     // Line-aware: keep first N + last M lines within budget

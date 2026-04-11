@@ -33,3 +33,6 @@ futures = { workspace = true }
 
 # Logging
 tracing = { workspace = true }
+
+[lints]
+workspace = true

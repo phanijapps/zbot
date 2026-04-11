@@ -70,3 +70,6 @@ adk-eval = []
 [lib]
 name = "agent_runtime"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

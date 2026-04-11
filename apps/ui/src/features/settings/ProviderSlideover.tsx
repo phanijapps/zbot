@@ -494,7 +494,7 @@ export function ProviderSlideover({
                       {caps?.vision && <span className="cap-badge cap-badge--vision">vision</span>}
                       {caps?.thinking && <span className="cap-badge cap-badge--thinking">thinking</span>}
                       {caps?.embeddings && <span className="cap-badge cap-badge--embed">embeddings</span>}
-                      {maxIn && (
+                      {maxIn != null && maxIn > 0 && (
                         <span className="provider-slideover__model-context">
                           {Math.round(maxIn / 1000)}K in{maxOut ? ` / ${Math.round(maxOut / 1000)}K out` : ""}
                         </span>

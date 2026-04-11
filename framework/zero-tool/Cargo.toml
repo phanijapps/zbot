@@ -23,3 +23,6 @@ thiserror = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
+
+[lints]
+workspace = true

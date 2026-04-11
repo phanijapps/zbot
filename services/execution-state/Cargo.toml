@@ -34,3 +34,6 @@ assert_matches = "1.5"
 [lib]
 name = "execution_state"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

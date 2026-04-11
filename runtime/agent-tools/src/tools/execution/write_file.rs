@@ -87,29 +87,7 @@ impl Tool for WriteFileTool {
         // ~/Documents/zbot/wards/{ward}/specs/plan.md, the sanitizer strips ~/
         // but leaves Documents/zbot/wards/{ward}/specs/plan.md.
         // Detect and extract only the relative part after the ward directory.
-        let cwd_str = cwd.to_string_lossy();
-        if let Some(home) = dirs::home_dir() {
-            let home_relative = cwd_str
-                .trim_start_matches(home.to_string_lossy().as_ref())
-                .trim_start_matches('/');
-            if path.starts_with(home_relative) {
-                path = path[home_relative.len()..]
-                    .trim_start_matches('/')
-                    .to_string();
-                tracing::debug!(original = %args.get("path").and_then(|v| v.as_str()).unwrap_or(""), resolved = %path, "Fixed doubled ward path");
-            }
-        }
-        // Also strip if path contains "wards/{ward_id}/" pattern
-        if let Some(ward_pos) = path.find("wards/") {
-            let after_wards = &path[ward_pos + 6..]; // skip "wards/"
-            if let Some(slash) = after_wards.find('/') {
-                let ward_relative = &after_wards[slash + 1..];
-                if !ward_relative.is_empty() {
-                    tracing::debug!(original = %path, resolved = %ward_relative, "Stripped wards/ prefix from path");
-                    path = ward_relative.to_string();
-                }
-            }
-        }
+        path = fix_doubled_ward_path(path, &cwd, args.get("path").and_then(|v| v.as_str()).unwrap_or(""));
 
         let full_path = cwd.join(&path);
 
@@ -150,6 +128,33 @@ impl Tool for WriteFileTool {
         }
         Ok(result)
     }
+}
+
+/// Resolve path doubling where a home-relative or wards-relative prefix was not
+/// stripped by the sanitizer. Returns the corrected path.
+fn fix_doubled_ward_path(mut path: String, cwd: &std::path::Path, original: &str) -> String {
+    let cwd_str = cwd.to_string_lossy();
+    if let Some(home) = dirs::home_dir() {
+        let home_relative = cwd_str
+            .trim_start_matches(home.to_string_lossy().as_ref())
+            .trim_start_matches('/');
+        if path.starts_with(home_relative) {
+            let fixed = path[home_relative.len()..].trim_start_matches('/').to_string();
+            tracing::debug!(original = %original, resolved = %fixed, "Fixed doubled ward path");
+            path = fixed;
+        }
+    }
+    if let Some(ward_pos) = path.find("wards/") {
+        let after_wards = &path[ward_pos + 6..]; // skip "wards/"
+        if let Some(slash) = after_wards.find('/') {
+            let ward_relative = &after_wards[slash + 1..];
+            if !ward_relative.is_empty() {
+                tracing::debug!(original = %path, resolved = %ward_relative, "Stripped wards/ prefix from path");
+                return ward_relative.to_string();
+            }
+        }
+    }
+    path
 }
 
 #[cfg(test)]

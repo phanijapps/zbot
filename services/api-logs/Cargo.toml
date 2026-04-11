@@ -32,3 +32,6 @@ tokio-test = "0.4"
 [lib]
 name = "api_logs"
 path = "src/lib.rs"
+
+[lints]
+workspace = true

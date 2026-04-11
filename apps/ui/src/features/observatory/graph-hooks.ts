@@ -141,6 +141,17 @@ export function useGraphData(agentId?: string): GraphData {
 
   const refetch = useCallback(() => setTick((t) => t + 1), []);
 
+  const fetchPerAgentData = async (id: string): Promise<{ entities: GraphEntity[]; relationships: GraphRelationship[] }> => {
+    const transport = await getTransport();
+    const [entRes, relRes] = await Promise.all([
+      transport.getGraphEntities(id, { limit: 200 }),
+      transport.getGraphRelationships(id, { limit: 500 }),
+    ]);
+    if (!entRes.success || !entRes.data) throw new Error(entRes.error || "Failed to fetch entities");
+    if (!relRes.success || !relRes.data) throw new Error(relRes.error || "Failed to fetch relationships");
+    return { entities: entRes.data.entities, relationships: relRes.data.relationships };
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -149,24 +160,10 @@ export function useGraphData(agentId?: string): GraphData {
       setError(null);
       try {
         if (agentId) {
-          // Per-agent: use the existing transport methods
-          const transport = await getTransport();
-          const [entRes, relRes] = await Promise.all([
-            transport.getGraphEntities(agentId, { limit: 200 }),
-            transport.getGraphRelationships(agentId, { limit: 500 }),
-          ]);
-
+          const data = await fetchPerAgentData(agentId);
           if (cancelled) return;
-
-          if (!entRes.success || !entRes.data) {
-            throw new Error(entRes.error || "Failed to fetch entities");
-          }
-          if (!relRes.success || !relRes.data) {
-            throw new Error(relRes.error || "Failed to fetch relationships");
-          }
-
-          setEntities(entRes.data.entities);
-          setRelationships(relRes.data.relationships);
+          setEntities(data.entities);
+          setRelationships(data.relationships);
         } else {
           // Cross-agent: hit the /api/graph/all/* endpoints
           const [entData, relData] = await Promise.all([

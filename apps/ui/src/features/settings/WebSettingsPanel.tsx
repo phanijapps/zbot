@@ -417,7 +417,7 @@ export function WebSettingsPanel() {
                       </p>
 
                       <label className={`settings-toggle-option ${toolSettings.offloadLargeResults ? "settings-toggle-option--active" : ""}`}
-                        style={{ opacity: isSaving ? 0.7 : 1 }}>
+                        style={{ opacity: isSaving ? 0.7 : 1 }} aria-label="Offload Large Results">
                         <input
                           type="checkbox"
                           checked={toolSettings.offloadLargeResults}
@@ -488,7 +488,7 @@ export function WebSettingsPanel() {
 
                 {/* Enable toggle */}
                 <label className={`settings-toggle-option ${logSettings.enabled ? "settings-toggle-option--active" : ""}`}
-                  style={{ opacity: isSavingLogs ? 0.7 : 1 }}>
+                  style={{ opacity: isSavingLogs ? 0.7 : 1 }} aria-label="Enable File Logging">
                   <input type="checkbox" checked={logSettings.enabled}
                     onChange={() => handleLogChange({ enabled: !logSettings.enabled })}
                     disabled={isSavingLogs} className="settings-toggle-option__checkbox" />
@@ -537,7 +537,7 @@ export function WebSettingsPanel() {
                       </div>
                       <div>
                         <label className="settings-field-label" aria-hidden="true">&nbsp;</label>
-                        <label className="settings-toggle-option" style={{ opacity: isSavingLogs ? 0.7 : 1, marginTop: 0 }}>
+                        <label className="settings-toggle-option" style={{ opacity: isSavingLogs ? 0.7 : 1, marginTop: 0 }} aria-label="Quiet Mode">
                           <input type="checkbox" checked={logSettings.suppressStdout}
                             onChange={() => handleLogChange({ suppressStdout: !logSettings.suppressStdout })}
                             disabled={isSavingLogs} className="settings-toggle-option__checkbox" />
@@ -673,7 +673,7 @@ export function WebSettingsPanel() {
                     </div>
                   </div>
 
-                  <label className={`settings-toggle-option ${execSettings.orchestrator?.thinkingEnabled !== false ? "settings-toggle-option--active" : ""}`} style={{ marginTop: "var(--spacing-3)" }}>
+                  <label className={`settings-toggle-option ${execSettings.orchestrator?.thinkingEnabled !== false ? "settings-toggle-option--active" : ""}`} style={{ marginTop: "var(--spacing-3)" }} aria-label="Thinking Mode">
                     <input
                       type="checkbox"
                       checked={execSettings.orchestrator?.thinkingEnabled !== false}

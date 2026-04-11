@@ -150,6 +150,18 @@ export function WebAgentsPanel() {
     getTransport().then(setTransport);
   }, []);
 
+  const applyProvidersResult = (data: typeof providers) => {
+    setProviders(data);
+    if (!newAgent.providerId && data.length > 0) {
+      const def = data[0];
+      setNewAgent((prev) => ({
+        ...prev,
+        providerId: def.id || "",
+        model: getProviderDefaultModel(def),
+      }));
+    }
+  };
+
   const loadAllData = useCallback(async () => {
     if (!transport) return;
     setIsLoading(true);
@@ -162,17 +174,7 @@ export function WebAgentsPanel() {
         transport.listCronJobs(),
       ]);
       if (agentsRes.success && agentsRes.data) setAgents(agentsRes.data);
-      if (providersRes.success && providersRes.data) {
-        setProviders(providersRes.data);
-        if (!newAgent.providerId && providersRes.data.length > 0) {
-          const def = providersRes.data[0];
-          setNewAgent((prev) => ({
-            ...prev,
-            providerId: def.id || "",
-            model: getProviderDefaultModel(def),
-          }));
-        }
-      }
+      if (providersRes.success && providersRes.data) applyProvidersResult(providersRes.data);
       if (modelsRes.data) setModelRegistry(modelsRes.data);
       if (skillsRes.success && skillsRes.data) setSkills(skillsRes.data);
       if (schedulesRes.success && schedulesRes.data) setSchedules(schedulesRes.data);
@@ -926,21 +928,21 @@ export function WebAgentsPanel() {
         {selectedSkill && (
           <>
             <div className="form-group">
-              <label className="form-label" id="skill-description-label">Description</label>
-              <p style={{ fontSize: "var(--text-sm)", color: "var(--foreground)" }} aria-labelledby="skill-description-label">
+              <label className="form-label" htmlFor="skill-description-value">Description</label>
+              <p id="skill-description-value" style={{ fontSize: "var(--text-sm)", color: "var(--foreground)" }}>
                 {selectedSkill.description || "No description"}
               </p>
             </div>
             <div className="form-group">
-              <label className="form-label" id="skill-category-label">Category</label>
-              <div aria-labelledby="skill-category-label">
+              <label className="form-label" htmlFor="skill-category-value">Category</label>
+              <div id="skill-category-value">
                 <MetaChip variant="skills">{selectedSkill.category}</MetaChip>
               </div>
             </div>
             <div className="form-group">
-              <label className="form-label" id="skill-instructions-label">Instructions</label>
+              <label className="form-label" htmlFor="skill-instructions-value">Instructions</label>
               <pre
-                aria-labelledby="skill-instructions-label"
+                id="skill-instructions-value"
                 style={{
                   background: "var(--background-elevated)",
                   borderRadius: "var(--radius-md)",

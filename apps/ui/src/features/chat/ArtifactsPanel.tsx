@@ -1,37 +1,13 @@
 import { useState, useEffect } from "react";
-import {
-  FileText, FileCode, Table, Globe, Image, Film, Music,
-  File, Download, ChevronDown, ChevronRight, Paperclip, Presentation
-} from "lucide-react";
+import { Download, ChevronDown, ChevronRight, Paperclip } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { Artifact } from "@/services/transport/types";
+import { getArtifactIcon, formatFileSize, formatJson, CsvTable } from "./artifact-utils";
 
 interface ArtifactsPanelProps {
   sessionId: string;
 }
 
-function getArtifactIcon(fileType?: string) {
-  const size = 14;
-  switch (fileType) {
-    case "md": case "txt": case "docx": return <FileText size={size} />;
-    case "rs": case "py": case "js": case "ts": case "tsx": case "jsx": return <FileCode size={size} />;
-    case "csv": case "json": case "xlsx": return <Table size={size} />;
-    case "html": case "htm": return <Globe size={size} />;
-    case "png": case "jpg": case "jpeg": case "gif": case "svg": return <Image size={size} />;
-    case "mp4": case "webm": return <Film size={size} />;
-    case "mp3": case "wav": return <Music size={size} />;
-    case "pptx": return <Presentation size={size} />;
-    case "pdf": return <FileText size={size} />;
-    default: return <File size={size} />;
-  }
-}
-
-function formatFileSize(bytes?: number): string {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
 
 export function ArtifactsPanel({ sessionId }: ArtifactsPanelProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -170,26 +146,3 @@ function ArtifactViewer({ artifact }: { artifact: Artifact }) {
   );
 }
 
-function CsvTable({ content }: { content: string }) {
-  const rows = content.split("\n").filter(Boolean).map((row) => row.split(","));
-  if (rows.length === 0) return <pre>{content}</pre>;
-  const header = rows[0];
-  const body = rows.slice(1, 51);
-  return (
-    <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
-      <thead>
-        <tr>{header.map((h, i) => <th key={i} style={{ textAlign: "left", padding: "4px 8px", borderBottom: "1px solid var(--border)", color: "var(--foreground)" }}>{h.trim()}</th>)}</tr>
-      </thead>
-      <tbody>
-        {body.map((row, i) => (
-          <tr key={i}>{row.map((cell, j) => <td key={j} style={{ padding: "4px 8px", borderBottom: "1px solid var(--border)", color: "var(--muted-foreground)" }}>{cell.trim()}</td>)}</tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function formatJson(content: string): string {
-  try { return JSON.stringify(JSON.parse(content), null, 2); }
-  catch { return content; }
-}

@@ -57,6 +57,20 @@ fn extract_defects(response: &str) -> String {
     defects.join("\n")
 }
 
+/// Format the response body: pretty-print if JSON, otherwise return as-is.
+fn format_response_content(response: &str) -> String {
+    let trimmed = response.trim();
+    if trimmed.starts_with('{') || trimmed.starts_with('[') {
+        if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(response) {
+            return format!(
+                "```json\n{}\n```",
+                serde_json::to_string_pretty(&json_val).unwrap_or_else(|_| response.to_string())
+            );
+        }
+    }
+    response.to_string()
+}
+
 /// Format a successful callback message as markdown.
 pub fn format_callback_message(agent_id: &str, response: &str, conversation_id: &str) -> String {
     let agent_display_name = format_agent_display_name(agent_id);
@@ -64,20 +78,7 @@ pub fn format_callback_message(agent_id: &str, response: &str, conversation_id: 
     let response_content = if response.is_empty() {
         "_No response generated._".to_string()
     } else {
-        // Check if response looks like JSON and format it
-        if response.trim().starts_with('{') || response.trim().starts_with('[') {
-            if let Ok(json_val) = serde_json::from_str::<serde_json::Value>(response) {
-                format!(
-                    "```json\n{}\n```",
-                    serde_json::to_string_pretty(&json_val)
-                        .unwrap_or_else(|_| response.to_string())
-                )
-            } else {
-                response.to_string()
-            }
-        } else {
-            response.to_string()
-        }
+        format_response_content(response)
     };
 
     // Detect structured review result for fast root decision-making
