@@ -178,6 +178,101 @@ function buildTraceTree(
 }
 
 // ============================================================================
+// Per-category log processors
+// ============================================================================
+
+function processToolCallLog(
+  log: ExecutionLog,
+  logs: ExecutionLog[],
+): TraceNode | null {
+  const toolName = extractMetaField(log, "tool_name") || log.message;
+
+  // Skip internal tools
+  if (isInternalTool(toolName)) return null;
+
+  const resultLog = findMatchingResult(logs, log);
+  const args = extractMetaField(log, "args");
+  const result = resultLog ? extractMetaField(resultLog, "result") : undefined;
+  const durationMs = resultLog?.duration_ms ?? log.duration_ms;
+  const hasError = resultLog ? resultLog.level === "error" : false;
+
+  return {
+    id: log.id,
+    type: "tool_call",
+    agentId: log.agent_id,
+    label: toolName,
+    summary: extractToolSummary(toolName, args),
+    durationMs,
+    status: hasError ? "error" : resultLog ? "completed" : "running",
+    timestamp: log.timestamp,
+    args,
+    result,
+    children: [],
+  };
+}
+
+function processDelegationLog(
+  log: ExecutionLog,
+  session: LogSession,
+  childSessionsByAgent: Map<string, SessionDetail[]>,
+): TraceNode {
+  // Metadata key is "child_agent" (from stream.rs), not "child_agent_id" (from service.rs)
+  const childAgentId =
+    extractMetaField(log, "child_agent_id") ||
+    extractMetaField(log, "child_agent") ||
+    extractAgentFromMessage(log.message);
+  const task = extractMetaField(log, "task") || log.message;
+
+  // Find matching child session — consume in order for repeated agent delegations
+  let childSessionDetail: SessionDetail | undefined;
+  if (childAgentId) {
+    const queue = childSessionsByAgent.get(childAgentId);
+    if (queue && queue.length > 0) {
+      childSessionDetail = queue.shift();
+    }
+  }
+
+  const delegationNode: TraceNode = {
+    id: log.id,
+    type: "delegation",
+    agentId: childAgentId || session.agent_id,
+    label: childAgentId || "subagent",
+    summary: task,
+    durationMs: childSessionDetail?.session.duration_ms ?? log.duration_ms,
+    tokenCount: childSessionDetail?.session.token_count,
+    status: childSessionDetail ? mapStatus(childSessionDetail.session.status) : "running",
+    timestamp: log.timestamp,
+    children: [],
+  };
+
+  // Nest child session tool_call logs under delegation
+  if (childSessionDetail) {
+    delegationNode.children = buildChildNodes(
+      childSessionDetail.logs,
+      childSessionDetail.session,
+      // Pass empty map: we don't recurse further for grandchildren in this version
+      new Map(),
+    );
+  }
+
+  return delegationNode;
+}
+
+function processErrorLog(log: ExecutionLog): TraceNode {
+  return {
+    id: log.id,
+    type: "error",
+    agentId: log.agent_id,
+    label: "Error",
+    summary: log.message,
+    error: log.message,
+    status: "error",
+    timestamp: log.timestamp,
+    children: [],
+  };
+}
+
+// ============================================================================
 // Build child nodes from a session's logs
 // ============================================================================
 
@@ -211,88 +306,13 @@ function buildChildNodes(
 
   for (const log of orderedLogs) {
     if (log.category === "tool_call") {
-      const toolName = extractMetaField(log, "tool_name") || log.message;
-
-      // Skip internal tools
-      if (isInternalTool(toolName)) continue;
-
-      const resultLog = findMatchingResult(logs, log);
-      const args = extractMetaField(log, "args");
-      const result = resultLog ? extractMetaField(resultLog, "result") : undefined;
-      const durationMs = resultLog?.duration_ms ?? log.duration_ms;
-
-      const hasError = resultLog
-        ? resultLog.level === "error"
-        : false;
-
-      children.push({
-        id: log.id,
-        type: "tool_call",
-        agentId: log.agent_id,
-        label: toolName,
-        summary: extractToolSummary(toolName, args),
-        durationMs,
-        status: hasError ? "error" : (resultLog ? "completed" : "running"),
-        timestamp: log.timestamp,
-        args,
-        result,
-        children: [],
-      });
+      const node = processToolCallLog(log, logs);
+      if (node) children.push(node);
     } else if (log.category === "delegation") {
-      // Metadata key is "child_agent" (from stream.rs), not "child_agent_id" (from service.rs)
-      const childAgentId =
-        extractMetaField(log, "child_agent_id") ||
-        extractMetaField(log, "child_agent") ||
-        extractAgentFromMessage(log.message);
-      const task = extractMetaField(log, "task") || log.message;
-
-      // Find matching child session — consume in order for repeated agent delegations
-      let childSessionDetail: SessionDetail | undefined;
-      if (childAgentId) {
-        const queue = childSessionsByAgent.get(childAgentId);
-        if (queue && queue.length > 0) {
-          childSessionDetail = queue.shift();
-        }
-      }
-
-      const delegationNode: TraceNode = {
-        id: log.id,
-        type: "delegation",
-        agentId: childAgentId || session.agent_id,
-        label: childAgentId || "subagent",
-        summary: task,
-        durationMs: childSessionDetail?.session.duration_ms ?? log.duration_ms,
-        tokenCount: childSessionDetail?.session.token_count,
-        status: childSessionDetail
-          ? mapStatus(childSessionDetail.session.status)
-          : "running",
-        timestamp: log.timestamp,
-        children: [],
-      };
-
-      // Nest child session tool_call logs under delegation
-      if (childSessionDetail) {
-        delegationNode.children = buildChildNodes(
-          childSessionDetail.logs,
-          childSessionDetail.session,
-          // Pass empty map: we don't recurse further for grandchildren in this version
-          new Map(),
-        );
-      }
-
-      children.push(delegationNode);
+      const node = processDelegationLog(log, session, childSessionsByAgent);
+      children.push(node);
     } else if (log.category === "error") {
-      children.push({
-        id: log.id,
-        type: "error",
-        agentId: log.agent_id,
-        label: "Error",
-        summary: log.message,
-        error: log.message,
-        status: "error",
-        timestamp: log.timestamp,
-        children: [],
-      });
+      children.push(processErrorLog(log));
     }
   }
 
