@@ -363,7 +363,7 @@ mod tests {
 
         // Prompt should contain content from all three
         assert!(prompt.contains("Jaffa")); // from SOUL
-        assert!(prompt.contains("EXECUTION")); // from INSTRUCTIONS
+        assert!(prompt.contains("execution_mode")); // from INSTRUCTIONS
         assert!(prompt.contains("PLATFORM")); // from OS
         assert!(prompt.contains("SYSTEM SHARDS")); // separator
         assert!(prompt.contains("MEMORY & LEARNING")); // from shard
@@ -462,6 +462,6 @@ mod tests {
         // Should load all required shards from embedded
         assert!(shards.contains("TOOLING & SKILLS"));
         assert!(shards.contains("MEMORY & LEARNING"));
-        assert!(shards.contains("PLANNING & AUTONOMY"));
+        assert!(shards.contains("delegation_rules")); // from planning_autonomy shard
     }
 }
