@@ -25,6 +25,9 @@ export function NameStep({ agentName, namePreset, aboutMe, onChange, onAboutMeCh
             key={preset.id}
             className={`name-preset ${namePreset === preset.id ? "name-preset--selected" : ""}`}
             onClick={() => handlePresetClick(preset)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handlePresetClick(preset); }}
           >
             <span className="name-preset__emoji">{preset.emoji}</span>
             <span className="name-preset__name">{preset.name}</span>

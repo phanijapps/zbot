@@ -70,6 +70,9 @@ export function McpStep({ mcpConfigs, onChange }: McpStepProps) {
                 <div
                   className={`toggle-switch ${server.enabled ? "toggle-switch--on" : "toggle-switch--off"}`}
                   onClick={() => toggleServer(server.id!)}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e: React.KeyboardEvent) => { if (e.key === "Enter" || e.key === " ") toggleServer(server.id!); }}
                 />
               </div>
             </div>

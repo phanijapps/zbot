@@ -55,7 +55,7 @@ export function ArtifactsPanel({ sessionId }: ArtifactsPanelProps) {
 
   return (
     <div className="artifacts-panel">
-      <div className="artifacts-panel__header" onClick={() => setExpanded(!expanded)}>
+      <div className="artifacts-panel__header" onClick={() => setExpanded(!expanded)} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setExpanded(!expanded); }}>
         <Paperclip size={14} />
         <span>{artifacts.length} artifact{artifacts.length !== 1 ? "s" : ""}</span>
         {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -83,7 +83,7 @@ function ArtifactRow({ artifact, isViewing, onToggleView }: {
 }) {
   return (
     <div>
-      <div className="artifacts-panel__row" onClick={onToggleView}>
+      <div className="artifacts-panel__row" onClick={onToggleView} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggleView(); }}>
         <span className="artifacts-panel__icon">{getArtifactIcon(artifact.fileType)}</span>
         <span className="artifacts-panel__label">{artifact.label || artifact.fileName}</span>
         <span className="artifacts-panel__path">{artifact.fileName}</span>
@@ -138,7 +138,7 @@ function ArtifactViewer({ artifact }: { artifact: Artifact }) {
     return <div className="artifacts-panel__viewer"><pre>{content}</pre></div>;
   }
   if (ft === "html" || ft === "htm") {
-    return <div className="artifacts-panel__viewer"><iframe srcDoc={content || ""} style={{ width: "100%", height: 400, border: "none" }} sandbox="allow-scripts" /></div>;
+    return <div className="artifacts-panel__viewer"><iframe srcDoc={content || ""} style={{ width: "100%", height: 400, border: "none" }} sandbox="allow-scripts" title="Artifact preview" /></div>;
   }
   if (ft === "csv") {
     return <div className="artifacts-panel__viewer"><CsvTable content={content || ""} /></div>;

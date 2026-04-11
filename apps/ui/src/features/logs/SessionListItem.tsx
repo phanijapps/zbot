@@ -17,7 +17,7 @@ export function SessionListItem({ session, isSelected, onClick }: SessionListIte
   const agentCount = session.child_session_ids?.length || 0;
 
   return (
-    <div className={itemClass} onClick={onClick}>
+    <div className={itemClass} onClick={onClick} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClick(); }}>
       <div className="session-list-item__title">{title}</div>
       <div className="session-list-item__meta">
         <span>

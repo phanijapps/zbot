@@ -96,6 +96,9 @@ export function TraceNodeComponent({ node, depth }: TraceNodeComponentProps) {
         style={{ paddingLeft: `${depth * 20}px` }}
         onClick={handleClick}
         onDoubleClick={handleDoubleClick}
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleClick(); }}
       >
         <span className="trace-node__icon" style={{ color: iconColor }}>
           {node.type === "root" ? (

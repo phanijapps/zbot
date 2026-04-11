@@ -58,7 +58,7 @@ export function ArtifactSlideOut({ artifact, onClose }: ArtifactSlideOutProps) {
 
   return (
     <>
-      <div className="artifact-slideout__backdrop" onClick={onClose} />
+      <div className="artifact-slideout__backdrop" onClick={onClose} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onClose(); }} />
       <div className="artifact-slideout">
         <div className="artifact-slideout__header">
           <div className="artifact-slideout__title">
@@ -93,7 +93,7 @@ function renderContent(artifact: Artifact, content: string | null, contentUrl: s
   const ft = artifact.fileType || "";
 
   if (ft === "md" || ft === "txt") return <pre className="artifact-slideout__pre">{content}</pre>;
-  if (ft === "html" || ft === "htm") return <iframe srcDoc={content || ""} style={{ width: "100%", height: "100%", border: "none" }} sandbox="allow-scripts" />;
+  if (ft === "html" || ft === "htm") return <iframe srcDoc={content || ""} style={{ width: "100%", height: "100%", border: "none" }} sandbox="allow-scripts" title="Artifact preview" />;
   if (ft === "csv") return <CsvTable content={content || ""} />;
   if (ft === "json") return <pre className="artifact-slideout__pre">{formatJson(content || "")}</pre>;
   if (["rs", "py", "js", "ts", "tsx", "jsx", "toml", "yaml", "yml", "xml", "sql", "sh", "css", "go", "java", "c", "cpp", "h"].includes(ft)) {

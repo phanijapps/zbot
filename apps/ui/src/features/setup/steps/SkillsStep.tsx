@@ -79,6 +79,9 @@ export function SkillsStep({ enabledSkillIds, onChange }: SkillsStepProps) {
                 key={skill.id}
                 className={`skill-toggle ${enabledSkillIds.includes(skill.id) ? "skill-toggle--on" : ""}`}
                 onClick={() => toggleSkill(skill.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleSkill(skill.id); }}
               >
                 <div className="skill-toggle__info">
                   <div className="skill-toggle__name">{skill.displayName || skill.name}</div>

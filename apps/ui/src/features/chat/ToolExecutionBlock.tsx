@@ -45,7 +45,7 @@ export function ToolExecutionBlock({
   if (isShell) {
     return (
       <div className={`tool-block tool-block--shell${isError ? " tool-block--error" : ""}`}>
-        <div className="tool-block__shell-header" onClick={onToggle}>
+        <div className="tool-block__shell-header" onClick={onToggle} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(); }}>
           <span className="tool-block__shell-prompt">$</span>
           <span className="tool-block__shell-cmd">{input}</span>
           <span className="tool-block__shell-meta">
@@ -67,7 +67,7 @@ export function ToolExecutionBlock({
 
   return (
     <div className={`tool-block${isError ? " tool-block--error" : ""}`}>
-      <div className="tool-block__header" onClick={onToggle}>
+      <div className="tool-block__header" onClick={onToggle} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(); }}>
         <span className="tool-block__arrow">{arrow}</span>
         <span className="tool-block__name">{toolName}</span>
         <span className="tool-block__summary">{input}</span>

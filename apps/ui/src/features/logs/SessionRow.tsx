@@ -75,7 +75,7 @@ export function SessionRow({
   return (
     <div>
       {/* Collapsed row */}
-      <div className={rowClassName} onClick={handleClick}>
+      <div className={rowClassName} onClick={handleClick} role="button" tabIndex={0} onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") handleClick(); }}>
         {/* Expand arrow */}
         <span style={{ fontSize: '10px', width: '12px', flexShrink: 0, userSelect: 'none' }}>
           {isExpanded ? '\u25BC' : '\u25B6'}
