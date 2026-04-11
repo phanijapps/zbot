@@ -19,6 +19,17 @@ import type { TraceNode } from "./trace-types";
 import { formatDuration, formatTokens } from "./trace-types";
 import { TraceNodeDetail } from "./TraceNodeDetail";
 
+function getNodeClassName(isDelegation: boolean, isError: boolean): string {
+  return ["trace-node", isError ? "trace-node--error" : "", isDelegation ? "trace-node--delegation" : ""]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function getIconColor(isDelegation: boolean, isError: boolean): string | undefined {
+  if (isDelegation) return undefined;
+  return isError ? "var(--destructive)" : "var(--muted-foreground)";
+}
+
 /** Map tool names to specific icons */
 function getToolIcon(toolName: string, size: number) {
   switch (toolName) {
@@ -62,16 +73,9 @@ export function TraceNodeComponent({ node, depth }: TraceNodeComponentProps) {
   const isError = node.status === "error" || node.status === "crashed" || !!node.error;
   const hasChildren = node.children.length > 0;
 
-  const nodeClass = [
-    "trace-node",
-    isError ? "trace-node--error" : "",
-    isDelegation ? "trace-node--delegation" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-
+  const nodeClass = getNodeClassName(isDelegation, isError);
   const iconSize = 14;
-  const iconColor = isError ? "var(--destructive)" : "var(--muted-foreground)";
+  const iconColor = getIconColor(isDelegation, isError);
 
   function handleClick() {
     if (isDelegation && hasChildren) {
