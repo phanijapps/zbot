@@ -4,14 +4,11 @@
 // ============================================================================
 
 import { useState, useEffect } from "react";
-import {
-  FileText, FileCode, Table, Globe, Image, Film, Music,
-  File, Presentation
-} from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { Artifact } from "@/services/transport/types";
 import type { PlanStep } from "./PlanBlock";
 import type { IntentAnalysis } from "./mission-hooks";
+import { getArtifactIcon, formatFileSize } from "./artifact-utils";
 
 // ============================================================================
 // Types
@@ -327,28 +324,3 @@ export function IntelligenceFeed({
   );
 }
 
-// ============================================================================
-// Artifact Helpers
-// ============================================================================
-
-function getArtifactIcon(fileType?: string) {
-  const size = 14;
-  switch (fileType) {
-    case "md": case "txt": case "docx": return <FileText size={size} />;
-    case "rs": case "py": case "js": case "ts": case "tsx": case "jsx": return <FileCode size={size} />;
-    case "csv": case "json": case "xlsx": return <Table size={size} />;
-    case "html": case "htm": return <Globe size={size} />;
-    case "png": case "jpg": case "jpeg": case "gif": case "svg": return <Image size={size} />;
-    case "mp4": case "webm": return <Film size={size} />;
-    case "mp3": case "wav": return <Music size={size} />;
-    case "pptx": return <Presentation size={size} />;
-    default: return <File size={size} />;
-  }
-}
-
-function formatFileSize(bytes?: number): string {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}

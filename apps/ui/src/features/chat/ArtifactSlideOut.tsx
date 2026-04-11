@@ -4,12 +4,10 @@
 // ============================================================================
 
 import { useEffect, useState } from "react";
-import {
-  X, Download, FileText, FileCode, Table, Globe, Image, Film, Music,
-  File, Presentation
-} from "lucide-react";
+import { X, Download } from "lucide-react";
 import { getTransport } from "@/services/transport";
 import type { Artifact } from "@/services/transport/types";
+import { getArtifactIcon, formatFileSize, formatJson, CsvTable } from "./artifact-utils";
 
 interface ArtifactSlideOutProps {
   artifact: Artifact;
@@ -62,9 +60,9 @@ export function ArtifactSlideOut({ artifact, onClose }: ArtifactSlideOutProps) {
       <div className="artifact-slideout">
         <div className="artifact-slideout__header">
           <div className="artifact-slideout__title">
-            <span className="artifact-slideout__icon">{getIcon(artifact.fileType)}</span>
+            <span className="artifact-slideout__icon">{getArtifactIcon(artifact.fileType, 16)}</span>
             <span>{artifact.label || artifact.fileName}</span>
-            <span className="artifact-slideout__meta">{artifact.fileName} · {formatSize(artifact.fileSize)}</span>
+            <span className="artifact-slideout__meta">{artifact.fileName} · {formatFileSize(artifact.fileSize)}</span>
           </div>
           <div className="artifact-slideout__actions">
             <a href={contentUrl} download={artifact.fileName} className="btn btn--ghost btn--sm" title="Download">
@@ -115,46 +113,3 @@ function renderContent(artifact: Artifact, content: string | null, contentUrl: s
   );
 }
 
-function getIcon(fileType?: string) {
-  const size = 16;
-  switch (fileType) {
-    case "md": case "txt": case "docx": return <FileText size={size} />;
-    case "rs": case "py": case "js": case "ts": case "tsx": case "jsx": return <FileCode size={size} />;
-    case "csv": case "json": case "xlsx": return <Table size={size} />;
-    case "html": case "htm": return <Globe size={size} />;
-    case "png": case "jpg": case "jpeg": case "gif": case "svg": return <Image size={size} />;
-    case "mp4": case "webm": return <Film size={size} />;
-    case "mp3": case "wav": return <Music size={size} />;
-    case "pptx": return <Presentation size={size} />;
-    default: return <File size={size} />;
-  }
-}
-
-function formatSize(bytes?: number): string {
-  if (!bytes) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function CsvTable({ content }: { content: string }) {
-  const rows = content.split("\n").filter(Boolean).map(r => r.split(","));
-  if (rows.length === 0) return <pre>{content}</pre>;
-  return (
-    <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
-      <thead>
-        <tr>{rows[0].map((h, i) => <th key={i} style={{ textAlign: "left", padding: "6px 10px", borderBottom: "2px solid var(--border)", color: "var(--foreground)", position: "sticky", top: 0, background: "var(--card)" }}>{h.trim()}</th>)}</tr>
-      </thead>
-      <tbody>
-        {rows.slice(1, 100).map((row, i) => (
-          <tr key={i}>{row.map((cell, j) => <td key={j} style={{ padding: "4px 10px", borderBottom: "1px solid var(--border)", color: "var(--muted-foreground)" }}>{cell.trim()}</td>)}</tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
-function formatJson(content: string): string {
-  try { return JSON.stringify(JSON.parse(content), null, 2); }
-  catch { return content; }
-}
