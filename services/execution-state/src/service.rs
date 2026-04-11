@@ -108,6 +108,11 @@ impl<D: StateDbProvider> StateService<D> {
         Ok((updated_session, execution))
     }
 
+    /// Set the execution mode on a session record.
+    pub fn set_session_mode(&self, session_id: &str, mode: &str) -> Result<(), String> {
+        self.repo.set_session_mode(session_id, mode)
+    }
+
     /// Get a session by ID.
     pub fn get_session(&self, session_id: &str) -> Result<Option<Session>, String> {
         self.repo.get_session(session_id)
@@ -791,7 +796,8 @@ mod tests {
                     parent_session_id TEXT,
                     thread_id TEXT,
                     connector_id TEXT,
-                    respond_to TEXT
+                    respond_to TEXT,
+                    mode TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (

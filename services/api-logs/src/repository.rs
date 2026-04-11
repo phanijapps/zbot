@@ -404,7 +404,6 @@ impl<D: DbProvider> LogsRepository<D> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::*;
     use std::sync::Mutex;
 
     /// In-memory test database provider.
@@ -486,7 +485,14 @@ mod tests {
         category: LogCategory,
         message: &str,
     ) -> ExecutionLog {
-        ExecutionLog::new(session_id, conversation_id, agent_id, level, category, message)
+        ExecutionLog::new(
+            session_id,
+            conversation_id,
+            agent_id,
+            level,
+            category,
+            message,
+        )
     }
 
     #[test]
@@ -529,16 +535,25 @@ mod tests {
         assert_eq!(logs.len(), 2);
 
         // Verify tool_call log
-        let tc = logs.iter().find(|l| l.category == LogCategory::ToolCall).unwrap();
+        let tc = logs
+            .iter()
+            .find(|l| l.category == LogCategory::ToolCall)
+            .unwrap();
         assert_eq!(tc.session_id, "sess-1");
         assert!(tc.metadata.is_some());
         let meta = tc.metadata.as_ref().unwrap();
         assert_eq!(meta["tool_name"], "search");
 
         // Verify tool_result log
-        let tr = logs.iter().find(|l| l.category == LogCategory::ToolResult).unwrap();
+        let tr = logs
+            .iter()
+            .find(|l| l.category == LogCategory::ToolResult)
+            .unwrap();
         assert_eq!(tr.duration_ms, Some(150));
-        assert!(tr.metadata.as_ref().unwrap()["result"].as_str().unwrap().contains("found"));
+        assert!(tr.metadata.as_ref().unwrap()["result"]
+            .as_str()
+            .unwrap()
+            .contains("found"));
     }
 
     #[test]
@@ -546,9 +561,30 @@ mod tests {
         let repo = setup_repo();
 
         // Insert logs for two different agents
-        let log_a1 = make_log("sess-a", "conv-a", "agent-alpha", LogLevel::Info, LogCategory::Session, "start");
-        let log_a2 = make_log("sess-a", "conv-a", "agent-alpha", LogLevel::Error, LogCategory::Error, "oops");
-        let log_b1 = make_log("sess-b", "conv-b", "agent-beta", LogLevel::Info, LogCategory::Session, "start");
+        let log_a1 = make_log(
+            "sess-a",
+            "conv-a",
+            "agent-alpha",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        );
+        let log_a2 = make_log(
+            "sess-a",
+            "conv-a",
+            "agent-alpha",
+            LogLevel::Error,
+            LogCategory::Error,
+            "oops",
+        );
+        let log_b1 = make_log(
+            "sess-b",
+            "conv-b",
+            "agent-beta",
+            LogLevel::Info,
+            LogCategory::Session,
+            "start",
+        );
 
         repo.insert_log(&log_a1).unwrap();
         repo.insert_log(&log_a2).unwrap();
@@ -575,12 +611,26 @@ mod tests {
         let repo = setup_repo();
 
         // Parent session logs
-        let parent_log = make_log("sess-parent", "conv-1", "root-agent", LogLevel::Info, LogCategory::Session, "parent start");
+        let parent_log = make_log(
+            "sess-parent",
+            "conv-1",
+            "root-agent",
+            LogLevel::Info,
+            LogCategory::Session,
+            "parent start",
+        );
         repo.insert_log(&parent_log).unwrap();
 
         // Child session logs with parent_session_id set
-        let child_log = make_log("sess-child", "conv-1", "child-agent", LogLevel::Info, LogCategory::Session, "child start")
-            .with_parent("sess-parent");
+        let child_log = make_log(
+            "sess-child",
+            "conv-1",
+            "child-agent",
+            LogLevel::Info,
+            LogCategory::Session,
+            "child start",
+        )
+        .with_parent("sess-parent");
         repo.insert_log(&child_log).unwrap();
 
         // Verify parent session exists
@@ -597,7 +647,10 @@ mod tests {
         // Verify child session logs
         let child_logs = repo.get_session_logs("sess-child").unwrap();
         assert_eq!(child_logs.len(), 1);
-        assert_eq!(child_logs[0].parent_session_id.as_deref(), Some("sess-parent"));
+        assert_eq!(
+            child_logs[0].parent_session_id.as_deref(),
+            Some("sess-parent")
+        );
     }
 
     #[test]

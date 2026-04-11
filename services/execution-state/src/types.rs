@@ -311,6 +311,11 @@ pub struct Session {
     /// Connector IDs to route the final response to (stored as JSON in DB).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub respond_to: Option<Vec<String>>,
+
+    /// Execution mode persisted on the session (e.g. "fast").
+    /// When set, overrides per-invoke mode so continuations keep the same behavior.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
 }
 
 impl Session {
@@ -340,6 +345,7 @@ impl Session {
             thread_id: None,
             connector_id: None,
             respond_to: None,
+            mode: None,
         }
     }
 
@@ -364,6 +370,7 @@ impl Session {
             thread_id: None,
             connector_id: None,
             respond_to: None,
+            mode: None,
         }
     }
 
@@ -391,6 +398,7 @@ impl Session {
             thread_id: None,
             connector_id: None,
             respond_to: None,
+            mode: None,
         }
     }
 

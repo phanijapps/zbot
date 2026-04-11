@@ -865,7 +865,10 @@ impl AppState {
 
         // Seed python_env if not already present
         if !store.entries.contains_key("python_env") {
-            store.entries.insert("python_env".to_string(), self.build_python_env_entry(venv_ok, &now));
+            store.entries.insert(
+                "python_env".to_string(),
+                self.build_python_env_entry(venv_ok, &now),
+            );
         }
 
         // Seed node_env if not already present
@@ -923,7 +926,11 @@ impl AppState {
         });
         MemoryEntry {
             value: value.to_string(),
-            tags: vec!["system".to_string(), "python".to_string(), "env".to_string()],
+            tags: vec![
+                "system".to_string(),
+                "python".to_string(),
+                "env".to_string(),
+            ],
             created_at: now.to_string(),
             updated_at: now.to_string(),
         }

@@ -44,8 +44,8 @@ impl<D: StateDbProvider> StateRepository<D> {
                     created_at, started_at, completed_at,
                     total_tokens_in, total_tokens_out, metadata,
                     pending_delegations, continuation_needed, ward_id,
-                    parent_session_id, thread_id, connector_id, respond_to
-                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                    parent_session_id, thread_id, connector_id, respond_to, mode
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
                 params![
                     session.id,
                     session.status.as_str(),
@@ -65,6 +65,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                     session.thread_id,
                     session.connector_id,
                     session.respond_to.as_ref().and_then(|r| serde_json::to_string(r).ok()),
+                    session.mode,
                 ],
             )?;
             Ok(())
@@ -83,7 +84,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata,
                         pending_delegations, continuation_needed, ward_id,
-                        parent_session_id, thread_id, connector_id, respond_to
+                        parent_session_id, thread_id, connector_id, respond_to, mode
                  FROM sessions WHERE id = ?",
             )?;
 
@@ -103,7 +104,7 @@ impl<D: StateDbProvider> StateRepository<D> {
                         created_at, started_at, completed_at,
                         total_tokens_in, total_tokens_out, metadata,
                         pending_delegations, continuation_needed, ward_id,
-                        parent_session_id, thread_id, connector_id, respond_to
+                        parent_session_id, thread_id, connector_id, respond_to, mode
                  FROM sessions WHERE parent_session_id IS NULL",
             );
 
@@ -317,6 +318,17 @@ impl<D: StateDbProvider> StateRepository<D> {
                     respond_to.and_then(|r| serde_json::to_string(r).ok()),
                     id,
                 ],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Set the execution mode on a session record.
+    pub fn set_session_mode(&self, session_id: &str, mode: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE sessions SET mode = ?1 WHERE id = ?2",
+                params![mode, session_id],
             )?;
             Ok(())
         })
@@ -898,6 +910,7 @@ impl<D: StateDbProvider> StateRepository<D> {
             thread_id: row.get(15).ok().flatten(),
             connector_id: row.get(16).ok().flatten(),
             respond_to: respond_to_json.and_then(|s| serde_json::from_str(&s).ok()),
+            mode: row.get(18).ok().flatten(),
         })
     }
 
@@ -1077,7 +1090,8 @@ mod tests {
                     parent_session_id TEXT,
                     thread_id TEXT,
                     connector_id TEXT,
-                    respond_to TEXT
+                    respond_to TEXT,
+                    mode TEXT
                 );
 
                 CREATE TABLE IF NOT EXISTS agent_executions (
