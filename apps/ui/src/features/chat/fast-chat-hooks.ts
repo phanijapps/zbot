@@ -72,6 +72,228 @@ function extractToolName(toolCalls: unknown): string | undefined {
 }
 
 // ============================================================================
+// Event handler context
+// ============================================================================
+
+interface FastChatEventCtx {
+  setMessages: React.Dispatch<React.SetStateAction<FastMessage[]>>;
+  setStatus: React.Dispatch<React.SetStateAction<FastChatState["status"]>>;
+  setArtifacts: React.Dispatch<React.SetStateAction<Artifact[]>>;
+  sessionIdRef: React.MutableRefObject<string | null>;
+  toolCallMsgMapRef: React.MutableRefObject<Map<string, string>>;
+  streamingBufferRef: React.MutableRefObject<string>;
+  rafIdRef: React.MutableRefObject<number | null>;
+  thinkingBufferRef: React.MutableRefObject<string>;
+  thinkingRafIdRef: React.MutableRefObject<number | null>;
+  flushTokenBuffer: () => void;
+  flushThinkingBuffer: () => void;
+  setSessionId: (id: string) => void;
+}
+
+// ============================================================================
+// Extracted event handlers
+// ============================================================================
+
+function fastHandleInvokeAccepted(event: StreamEvent, ctx: FastChatEventCtx): void {
+  if (event.session_id && typeof event.session_id === "string") {
+    ctx.setSessionId(event.session_id);
+  }
+}
+
+function fastHandleAgentStarted(event: StreamEvent, ctx: FastChatEventCtx): void {
+  ctx.setStatus("running");
+  if (event.session_id && typeof event.session_id === "string") {
+    ctx.setSessionId(event.session_id);
+  }
+}
+
+function fastHandleTokenEvent(event: StreamEvent, ctx: FastChatEventCtx): void {
+  const delta = (event.delta ?? event.content ?? "") as string;
+  if (delta) {
+    ctx.streamingBufferRef.current += delta;
+    if (ctx.rafIdRef.current === null) {
+      ctx.rafIdRef.current = requestAnimationFrame(ctx.flushTokenBuffer);
+    }
+  }
+}
+
+function fastHandleThinkingEvent(event: StreamEvent, ctx: FastChatEventCtx): void {
+  const delta = (event.delta ?? event.content ?? "") as string;
+  if (delta) {
+    ctx.thinkingBufferRef.current += delta;
+    if (ctx.thinkingRafIdRef.current === null) {
+      ctx.thinkingRafIdRef.current = requestAnimationFrame(ctx.flushThinkingBuffer);
+    }
+  }
+}
+
+function fastHandleToolCallEvent(event: StreamEvent, ctx: FastChatEventCtx): void {
+  const toolName = (event.tool ?? event.tool_name ?? "") as string;
+  const toolCallId = (event.tool_call_id ?? event.id ?? "") as string;
+
+  if (toolName === "set_session_title" || toolName === "respond") return;
+
+  ctx.setMessages((prev) =>
+    prev.map((m) =>
+      m.role === "thinking" && m.isStreaming ? { ...m, isStreaming: false } : m
+    )
+  );
+
+  const msgId = crypto.randomUUID();
+  if (toolCallId) ctx.toolCallMsgMapRef.current.set(toolCallId, msgId);
+
+  ctx.setMessages((prev) => [
+    ...prev,
+    {
+      id: msgId,
+      role: "tool",
+      content: "",
+      timestamp: now(),
+      toolName,
+      toolOutput: "",
+    },
+  ]);
+}
+
+function fastHandleToolResultEvent(event: StreamEvent, ctx: FastChatEventCtx): void {
+  const toolCallId = (event.tool_call_id ?? "") as string;
+  const result = (event.result ?? event.output ?? "") as string;
+  const isError = event.is_error === true || event.error === true;
+  const msgId = toolCallId ? ctx.toolCallMsgMapRef.current.get(toolCallId) : undefined;
+
+  if (msgId) {
+    ctx.setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msgId);
+      if (idx < 0) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], toolOutput: result, isError };
+      return updated;
+    });
+    ctx.toolCallMsgMapRef.current.delete(toolCallId);
+  }
+}
+
+function fastFlushAllBuffers(ctx: FastChatEventCtx): void {
+  if (ctx.rafIdRef.current !== null) {
+    cancelAnimationFrame(ctx.rafIdRef.current);
+    ctx.rafIdRef.current = null;
+  }
+  ctx.flushTokenBuffer();
+
+  if (ctx.thinkingRafIdRef.current !== null) {
+    cancelAnimationFrame(ctx.thinkingRafIdRef.current);
+    ctx.thinkingRafIdRef.current = null;
+  }
+  ctx.flushThinkingBuffer();
+}
+
+function fastHandleTurnComplete(event: StreamEvent, ctx: FastChatEventCtx): void {
+  fastFlushAllBuffers(ctx);
+
+  const finalMessage = event.final_message as string | undefined;
+  if (finalMessage) {
+    ctx.setMessages((prev) => {
+      const lastIdx = prev.length - 1;
+      const last = prev[lastIdx];
+      if (last && last.role === "assistant" && last.isStreaming) {
+        return [
+          ...prev.slice(0, lastIdx),
+          { ...last, content: finalMessage, isStreaming: false },
+        ];
+      }
+      return [
+        ...prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
+        {
+          id: crypto.randomUUID(),
+          role: "assistant" as const,
+          content: finalMessage,
+          timestamp: now(),
+          isStreaming: false,
+        },
+      ];
+    });
+  }
+}
+
+function fastHandleAgentCompleted(event: StreamEvent, ctx: FastChatEventCtx): void {
+  fastFlushAllBuffers(ctx);
+
+  const result = event.result as string | undefined;
+  if (result) {
+    ctx.setMessages((prev) => {
+      const hasResponse = prev.some((m) => m.role === "assistant");
+      if (hasResponse) return prev;
+      return [
+        ...prev,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant" as const,
+          content: result,
+          timestamp: now(),
+          isStreaming: false,
+        },
+      ];
+    });
+  }
+
+  ctx.setStatus("completed");
+  ctx.setMessages((prev) => prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)));
+
+  if (ctx.sessionIdRef.current) {
+    getTransport().then((t) =>
+      t.listSessionArtifacts(ctx.sessionIdRef.current!).then((r) => {
+        if (r.success && r.data) ctx.setArtifacts(r.data);
+      })
+    );
+  }
+}
+
+function fastHandleErrorEvent(ctx: FastChatEventCtx): void {
+  fastFlushAllBuffers(ctx);
+  ctx.setStatus("error");
+  ctx.setMessages((prev) => prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)));
+}
+
+function fastHandleDelegationStarted(event: StreamEvent, ctx: FastChatEventCtx): void {
+  const childAgent = (event.child_agent_id ?? "") as string;
+  const task = (event.task ?? "") as string;
+  const childExecId = (event.child_execution_id ?? "") as string;
+
+  const msgId = crypto.randomUUID();
+  if (childExecId) ctx.toolCallMsgMapRef.current.set(`delegation:${childExecId}`, msgId);
+
+  ctx.setMessages((prev) => [
+    ...prev,
+    {
+      id: msgId,
+      role: "delegation",
+      content: "",
+      timestamp: now(),
+      delegationAgent: childAgent,
+      delegationTask: task,
+      delegationStatus: "running",
+    },
+  ]);
+}
+
+function fastHandleDelegationCompleted(event: StreamEvent, ctx: FastChatEventCtx): void {
+  const childExecId = (event.child_execution_id ?? "") as string;
+  const result = (event.result ?? "") as string;
+  const msgId = ctx.toolCallMsgMapRef.current.get(`delegation:${childExecId}`);
+
+  if (msgId) {
+    ctx.setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === msgId);
+      if (idx < 0) return prev;
+      const updated = [...prev];
+      updated[idx] = { ...updated[idx], delegationStatus: "completed", delegationResult: result };
+      return updated;
+    });
+    ctx.toolCallMsgMapRef.current.delete(`delegation:${childExecId}`);
+  }
+}
+
+// ============================================================================
 // Hook: useFastChat
 // ============================================================================
 
@@ -271,280 +493,60 @@ export function useFastChat(): UseFastChatResult {
         lastSeqRef.current = seq;
       }
 
+      const ctx: FastChatEventCtx = {
+        setMessages,
+        setStatus,
+        setArtifacts,
+        sessionIdRef,
+        toolCallMsgMapRef,
+        streamingBufferRef,
+        rafIdRef,
+        thinkingBufferRef,
+        thinkingRafIdRef,
+        flushTokenBuffer,
+        flushThinkingBuffer,
+        setSessionId: (id: string) => {
+          setSessionId(id);
+          sessionIdRef.current = id;
+        },
+      };
+
       switch (event.type) {
-        case "invoke_accepted": {
-          if (event.session_id && typeof event.session_id === "string") {
-            setSessionId(event.session_id);
-            sessionIdRef.current = event.session_id;
-          }
+        case "invoke_accepted":
+          fastHandleInvokeAccepted(event, ctx);
           lastSeqRef.current = 0;
           break;
-        }
-
-        case "agent_started": {
-          setStatus("running");
-          if (event.session_id && typeof event.session_id === "string") {
-            setSessionId(event.session_id);
-            sessionIdRef.current = event.session_id;
-          }
+        case "agent_started":
+          fastHandleAgentStarted(event, ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Token streaming
-        // ----------------------------------------------------------------
-        case "token": {
-          const delta = (event.delta ?? event.content ?? "") as string;
-          if (delta) {
-            streamingBufferRef.current += delta;
-            if (rafIdRef.current === null) {
-              rafIdRef.current = requestAnimationFrame(flushTokenBuffer);
-            }
-          }
+        case "token":
+          fastHandleTokenEvent(event, ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Thinking / reasoning streaming
-        // ----------------------------------------------------------------
         case "thinking":
-        case "reasoning": {
-          const delta = (event.delta ?? event.content ?? "") as string;
-          if (delta) {
-            thinkingBufferRef.current += delta;
-            if (thinkingRafIdRef.current === null) {
-              thinkingRafIdRef.current = requestAnimationFrame(flushThinkingBuffer);
-            }
-          }
+        case "reasoning":
+          fastHandleThinkingEvent(event, ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Tool calls
-        // ----------------------------------------------------------------
-        case "tool_call": {
-          const toolName = (event.tool ?? event.tool_name ?? "") as string;
-          const toolCallId = (event.tool_call_id ?? event.id ?? "") as string;
-
-          // Skip internal tools that don't need display
-          if (toolName === "set_session_title" || toolName === "respond") break;
-
-          // Finalize any streaming thinking message before tool call
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.role === "thinking" && m.isStreaming
-                ? { ...m, isStreaming: false }
-                : m
-            )
-          );
-
-          const msgId = crypto.randomUUID();
-          if (toolCallId) toolCallMsgMapRef.current.set(toolCallId, msgId);
-
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: msgId,
-              role: "tool",
-              content: "",
-              timestamp: now(),
-              toolName,
-              toolOutput: "",
-            },
-          ]);
+        case "tool_call":
+          fastHandleToolCallEvent(event, ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Tool results
-        // ----------------------------------------------------------------
-        case "tool_result": {
-          const toolCallId = (event.tool_call_id ?? "") as string;
-          const result = (event.result ?? event.output ?? "") as string;
-          const isError = event.is_error === true || event.error === true;
-          const msgId = toolCallId
-            ? toolCallMsgMapRef.current.get(toolCallId)
-            : undefined;
-
-          if (msgId) {
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === msgId);
-              if (idx < 0) return prev;
-              const updated = [...prev];
-              updated[idx] = {
-                ...updated[idx],
-                toolOutput: result,
-                isError,
-              };
-              return updated;
-            });
-            toolCallMsgMapRef.current.delete(toolCallId);
-          }
+        case "tool_result":
+          fastHandleToolResultEvent(event, ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Turn complete
-        // ----------------------------------------------------------------
-        case "turn_complete": {
-          if (rafIdRef.current !== null) {
-            cancelAnimationFrame(rafIdRef.current);
-            rafIdRef.current = null;
-          }
-          flushTokenBuffer();
-
-          if (thinkingRafIdRef.current !== null) {
-            cancelAnimationFrame(thinkingRafIdRef.current);
-            thinkingRafIdRef.current = null;
-          }
-          flushThinkingBuffer();
-
-          const finalMessage = event.final_message as string | undefined;
-          if (finalMessage) {
-            setMessages((prev) => {
-              const lastIdx = prev.length - 1;
-              const last = prev[lastIdx];
-              if (last && last.role === "assistant" && last.isStreaming) {
-                return [
-                  ...prev.slice(0, lastIdx),
-                  { ...last, content: finalMessage, isStreaming: false },
-                ];
-              }
-              return [
-                ...prev.map((m) =>
-                  m.isStreaming ? { ...m, isStreaming: false } : m
-                ),
-                {
-                  id: crypto.randomUUID(),
-                  role: "assistant" as const,
-                  content: finalMessage,
-                  timestamp: now(),
-                  isStreaming: false,
-                },
-              ];
-            });
-          }
+        case "turn_complete":
+          fastHandleTurnComplete(event, ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Agent completed / error
-        // ----------------------------------------------------------------
-        case "agent_completed": {
-          if (rafIdRef.current !== null) {
-            cancelAnimationFrame(rafIdRef.current);
-            rafIdRef.current = null;
-          }
-          flushTokenBuffer();
-
-          if (thinkingRafIdRef.current !== null) {
-            cancelAnimationFrame(thinkingRafIdRef.current);
-            thinkingRafIdRef.current = null;
-          }
-          flushThinkingBuffer();
-
-          const result = event.result as string | undefined;
-          if (result) {
-            setMessages((prev) => {
-              const hasResponse = prev.some((m) => m.role === "assistant");
-              if (hasResponse) return prev;
-              return [
-                ...prev,
-                {
-                  id: crypto.randomUUID(),
-                  role: "assistant" as const,
-                  content: result,
-                  timestamp: now(),
-                  isStreaming: false,
-                },
-              ];
-            });
-          }
-
-          setStatus("completed");
-          setMessages((prev) =>
-            prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
-          );
-
-          // Fetch artifacts after agent completes
-          if (sessionIdRef.current) {
-            getTransport().then((t) =>
-              t.listSessionArtifacts(sessionIdRef.current!).then((r) => {
-                if (r.success && r.data) setArtifacts(r.data);
-              })
-            );
-          }
+        case "agent_completed":
+          fastHandleAgentCompleted(event, ctx);
           break;
-        }
-
-        case "error": {
-          if (rafIdRef.current !== null) {
-            cancelAnimationFrame(rafIdRef.current);
-            rafIdRef.current = null;
-          }
-          flushTokenBuffer();
-
-          if (thinkingRafIdRef.current !== null) {
-            cancelAnimationFrame(thinkingRafIdRef.current);
-            thinkingRafIdRef.current = null;
-          }
-          flushThinkingBuffer();
-
-          setStatus("error");
-          setMessages((prev) =>
-            prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m))
-          );
+        case "error":
+          fastHandleErrorEvent(ctx);
           break;
-        }
-
-        // ----------------------------------------------------------------
-        // Delegation events
-        // ----------------------------------------------------------------
-        case "delegation_started": {
-          const childAgent = (event.child_agent_id ?? "") as string;
-          const task = (event.task ?? "") as string;
-          const childExecId = (event.child_execution_id ?? "") as string;
-
-          const msgId = crypto.randomUUID();
-          if (childExecId) toolCallMsgMapRef.current.set(`delegation:${childExecId}`, msgId);
-
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: msgId,
-              role: "delegation",
-              content: "",
-              timestamp: now(),
-              delegationAgent: childAgent,
-              delegationTask: task,
-              delegationStatus: "running",
-            },
-          ]);
+        case "delegation_started":
+          fastHandleDelegationStarted(event, ctx);
           break;
-        }
-
-        case "delegation_completed": {
-          const childExecId = (event.child_execution_id ?? "") as string;
-          const result = (event.result ?? "") as string;
-          const msgId = toolCallMsgMapRef.current.get(`delegation:${childExecId}`);
-
-          if (msgId) {
-            setMessages((prev) => {
-              const idx = prev.findIndex((m) => m.id === msgId);
-              if (idx < 0) return prev;
-              const updated = [...prev];
-              updated[idx] = {
-                ...updated[idx],
-                delegationStatus: "completed",
-                delegationResult: result,
-              };
-              return updated;
-            });
-            toolCallMsgMapRef.current.delete(`delegation:${childExecId}`);
-          }
+        case "delegation_completed":
+          fastHandleDelegationCompleted(event, ctx);
           break;
-        }
-
         default:
           break;
       }

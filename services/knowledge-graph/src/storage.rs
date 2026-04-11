@@ -298,7 +298,7 @@ impl GraphStorage {
             )
             .map_err(GraphError::Database)?;
 
-        Ok((rel_count + ent_count) as usize)
+        Ok(rel_count + ent_count)
     }
 
     // ===== NEW READ METHODS (Phase 1: Graph Repository Layer) =====

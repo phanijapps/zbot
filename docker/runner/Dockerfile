@@ -60,7 +60,7 @@ WORKDIR /home/runner
 
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- \
     --default-toolchain stable \
-    --component llvm-tools-preview \
+    --component llvm-tools-preview,clippy,rustfmt \
     --profile minimal \
     -y
 

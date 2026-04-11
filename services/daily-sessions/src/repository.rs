@@ -464,7 +464,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
             [agent_id, before_date],
         )?;
 
-        Ok(rows as usize)
+        Ok(rows)
     }
 
     async fn get_session_messages(
