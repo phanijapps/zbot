@@ -19,18 +19,18 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod registry;
 pub mod builtin;
 pub mod context;
 pub mod delegate;
 pub mod error;
+pub mod registry;
 pub mod respond;
 
-pub use registry::ToolRegistry;
 pub use builtin::{FileSystemContext, NoFileSystemContext};
 pub use context::ToolContext;
 pub use delegate::DelegateTool;
 pub use error::{ToolError as ToolExecError, ToolResult as ToolExecResult};
+pub use registry::ToolRegistry;
 pub use respond::RespondTool;
 
 // Re-export from types

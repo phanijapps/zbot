@@ -57,18 +57,16 @@ impl LangConfig {
         let compiled_patterns = self
             .signature_patterns
             .iter()
-            .filter_map(|(kind, pattern_str)| {
-                match Regex::new(pattern_str) {
-                    Ok(re) => Some((kind.clone(), re)),
-                    Err(e) => {
-                        tracing::warn!(
-                            "Invalid signature pattern for '{}' in language '{}': {}",
-                            kind,
-                            self.language,
-                            e
-                        );
-                        None
-                    }
+            .filter_map(|(kind, pattern_str)| match Regex::new(pattern_str) {
+                Ok(re) => Some((kind.clone(), re)),
+                Err(e) => {
+                    tracing::warn!(
+                        "Invalid signature pattern for '{}' in language '{}': {}",
+                        kind,
+                        self.language,
+                        e
+                    );
+                    None
                 }
             })
             .collect();
@@ -145,7 +143,11 @@ impl CompiledLangConfig {
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("Failed to read {:?} for signature extraction: {}", file_path, e);
+                tracing::warn!(
+                    "Failed to read {:?} for signature extraction: {}",
+                    file_path,
+                    e
+                );
                 return vec![];
             }
         };
@@ -177,7 +179,11 @@ impl CompiledLangConfig {
         let content = match std::fs::read_to_string(file_path) {
             Ok(c) => c,
             Err(e) => {
-                tracing::warn!("Failed to read {:?} for docstring extraction: {}", file_path, e);
+                tracing::warn!(
+                    "Failed to read {:?} for docstring extraction: {}",
+                    file_path,
+                    e
+                );
                 return None;
             }
         };
@@ -215,7 +221,10 @@ pub fn load_lang_config(path: &Path) -> Result<LangConfig, String> {
 /// - Only files with `.yaml` or `.yml` extensions are considered.
 pub fn load_all_lang_configs(dir: &Path) -> Result<Vec<LangConfig>, String> {
     if !dir.exists() {
-        tracing::debug!("Lang config directory does not exist, returning empty: {:?}", dir);
+        tracing::debug!(
+            "Lang config directory does not exist, returning empty: {:?}",
+            dir
+        );
         return Ok(vec![]);
     }
 
@@ -518,10 +527,26 @@ class Dog(Animal):
         let sigs = compiled.extract_signatures(&py_file);
 
         // Should find both functions and both classes
-        assert!(sigs.iter().any(|s| s.contains("calculate")), "missing calculate: {:?}", sigs);
-        assert!(sigs.iter().any(|s| s.contains("greet")), "missing greet: {:?}", sigs);
-        assert!(sigs.iter().any(|s| s.contains("Animal")), "missing Animal: {:?}", sigs);
-        assert!(sigs.iter().any(|s| s.contains("Dog")), "missing Dog: {:?}", sigs);
+        assert!(
+            sigs.iter().any(|s| s.contains("calculate")),
+            "missing calculate: {:?}",
+            sigs
+        );
+        assert!(
+            sigs.iter().any(|s| s.contains("greet")),
+            "missing greet: {:?}",
+            sigs
+        );
+        assert!(
+            sigs.iter().any(|s| s.contains("Animal")),
+            "missing Animal: {:?}",
+            sigs
+        );
+        assert!(
+            sigs.iter().any(|s| s.contains("Dog")),
+            "missing Dog: {:?}",
+            sigs
+        );
     }
 
     #[test]

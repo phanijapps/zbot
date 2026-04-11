@@ -20,11 +20,13 @@
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
-use gateway_database::{EpisodeRepository, MemoryRepository, RecallLogRepository, ScoredFact, SessionEpisode};
-use gateway_services::RecallConfig;
-use knowledge_graph::{GraphService, GraphTraversal, EntityWithConnections};
 #[cfg(test)]
 use gateway_database::MemoryFact;
+use gateway_database::{
+    EpisodeRepository, MemoryRepository, RecallLogRepository, ScoredFact, SessionEpisode,
+};
+use gateway_services::RecallConfig;
+use knowledge_graph::{EntityWithConnections, GraphService, GraphTraversal};
 
 /// Result of a memory recall operation, optionally including graph context.
 #[derive(Debug, Clone)]
@@ -144,27 +146,33 @@ impl MemoryRecall {
         )?;
 
         // 3. Also fetch high-confidence facts (always relevant)
-        let high_conf_facts = self.memory_repo
+        let high_conf_facts = self
+            .memory_repo
             .get_high_confidence_facts(agent_id, self.config.high_confidence_threshold, limit)
             .unwrap_or_default();
 
         // 3b. Include relevant corrections — corrections get a 1.5x category boost
         //     but must still have minimum relevance to the query. This prevents
         //     "WiZ lights" corrections appearing for currency questions.
-        let all_corrections = self.memory_repo
+        let all_corrections = self
+            .memory_repo
             .get_facts_by_category(agent_id, "correction", 10)
             .unwrap_or_default();
 
         // Filter corrections by minimum cosine similarity to query (if embedding available)
         let corrections: Vec<_> = if let Some(ref qe) = query_embedding {
-            all_corrections.into_iter().filter(|fact| {
-                if let Some(ref fact_emb) = fact.embedding {
-                    let sim = cosine_similarity(fact_emb, qe);
-                    sim >= 0.15 // Low threshold — broadly relevant corrections pass
-                } else {
-                    true // No embedding = include (benefit of the doubt)
-                }
-            }).take(5).collect()
+            all_corrections
+                .into_iter()
+                .filter(|fact| {
+                    if let Some(ref fact_emb) = fact.embedding {
+                        let sim = cosine_similarity(fact_emb, qe);
+                        sim >= 0.15 // Low threshold — broadly relevant corrections pass
+                    } else {
+                        true // No embedding = include (benefit of the doubt)
+                    }
+                })
+                .take(5)
+                .collect()
         } else {
             // No query embedding = include top 5 (fallback)
             all_corrections.into_iter().take(5).collect()
@@ -214,9 +222,7 @@ impl MemoryRecall {
             if !current_ward.is_empty() && current_ward != "scratch" {
                 let ward_prefix = format!("{}/", current_ward);
                 for sf in &mut results {
-                    if sf.fact.key.starts_with(&ward_prefix)
-                        || sf.fact.category == "ward"
-                    {
+                    if sf.fact.key.starts_with(&ward_prefix) || sf.fact.category == "ward" {
                         sf.score *= self.config.ward_affinity_boost;
                     }
                 }
@@ -230,7 +236,10 @@ impl MemoryRecall {
                 if sf.fact.category == "skill" || sf.fact.category == "agent" {
                     continue;
                 }
-                let half_life = self.config.temporal_decay.half_life_days
+                let half_life = self
+                    .config
+                    .temporal_decay
+                    .half_life_days
                     .get(&sf.fact.category)
                     .copied()
                     .unwrap_or(30.0);
@@ -251,7 +260,11 @@ impl MemoryRecall {
         }
 
         // Sort by score descending and take top-K
-        results.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        results.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         results.truncate(limit);
 
         Ok(results)
@@ -325,7 +338,8 @@ impl MemoryRecall {
         if self.config.graph_traversal.enabled {
             if let Some(ref traversal) = self.traversal {
                 // Extract entity names from top recalled facts
-                let entity_names: Vec<String> = facts.iter()
+                let entity_names: Vec<String> = facts
+                    .iter()
                     .take(5)
                     .flat_map(|sf| extract_potential_entity_names(&sf.fact.key, &sf.fact.content))
                     .collect();
@@ -333,17 +347,19 @@ impl MemoryRecall {
                 let name_refs: Vec<&str> = entity_names.iter().map(|s| s.as_str()).collect();
 
                 if !name_refs.is_empty() {
-                    match traversal.connected_entities(
-                        &name_refs,
-                        self.config.graph_traversal.max_hops,
-                        20,
-                    ).await {
+                    match traversal
+                        .connected_entities(&name_refs, self.config.graph_traversal.max_hops, 20)
+                        .await
+                    {
                         Ok(nodes) => {
                             // For each discovered entity, search for related facts
                             let mut seen_graph_keys = std::collections::HashSet::new();
                             for node in &nodes {
                                 if let Ok(related) = self.memory_repo.search_memory_facts_fts(
-                                    &node.entity_name, agent_id, 2, ward_id,
+                                    &node.entity_name,
+                                    agent_id,
+                                    2,
+                                    ward_id,
                                 ) {
                                     for sf in related {
                                         if seen_graph_keys.insert(sf.fact.key.clone())
@@ -365,7 +381,11 @@ impl MemoryRecall {
         }
 
         // Merge graph-discovered facts into results (capped)
-        graph_facts.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        graph_facts.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         graph_facts.truncate(self.config.graph_traversal.max_graph_facts);
         for sf in graph_facts {
             if seen_keys.insert(sf.fact.key.clone()) {
@@ -375,22 +395,30 @@ impl MemoryRecall {
 
         // 6. Predictive recall — boost facts that were recalled in similar past successful sessions
         if self.config.predictive_recall.enabled {
-            if let (Some(ref episode_repo), Some(ref recall_log)) = (&self.episode_repo, &self.recall_log) {
+            if let (Some(ref episode_repo), Some(ref recall_log)) =
+                (&self.episode_repo, &self.recall_log)
+            {
                 let query_embedding = self.embed_query(user_message).await;
                 if let Some(ref emb) = query_embedding {
                     match episode_repo.search_by_similarity(
-                        agent_id, emb, 0.5,
+                        agent_id,
+                        emb,
+                        0.5,
                         self.config.predictive_recall.max_episodes_to_check,
                     ) {
                         Ok(similar) => {
-                            let success_ids: Vec<&str> = similar.iter()
+                            let success_ids: Vec<&str> = similar
+                                .iter()
                                 .filter(|(ep, _)| ep.outcome == "success")
                                 .map(|(ep, _)| ep.session_id.as_str())
                                 .collect();
 
                             if !success_ids.is_empty() {
-                                if let Ok(key_counts) = recall_log.get_keys_for_sessions(&success_ids) {
-                                    let min_count = self.config.predictive_recall.min_similar_successes;
+                                if let Ok(key_counts) =
+                                    recall_log.get_keys_for_sessions(&success_ids)
+                                {
+                                    let min_count =
+                                        self.config.predictive_recall.min_similar_successes;
                                     let boost = self.config.predictive_recall.predictive_boost;
                                     let mut boosted = 0usize;
                                     for sf in &mut facts {
@@ -418,7 +446,11 @@ impl MemoryRecall {
         }
 
         // Re-sort after predictive boost and truncate to limit
-        facts.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+        facts.sort_by(|a, b| {
+            b.score
+                .partial_cmp(&a.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         facts.truncate(limit);
 
         // 7. Log recalled fact keys for this session (enables future predictive recall)
@@ -514,14 +546,28 @@ impl MemoryRecall {
         if let Some(ref graph_service) = self.graph_service {
             let entity_names = extract_entity_names_from_facts(&facts);
             if !entity_names.is_empty() {
-                match get_graph_context_for_entities(graph_service, GLOBAL_AGENT, &entity_names).await {
+                match get_graph_context_for_entities(graph_service, GLOBAL_AGENT, &entity_names)
+                    .await
+                {
                     Ok(Some(ctx)) if !ctx.entities.is_empty() => {
                         output.push_str("## Related Entities\n");
                         for ec in &ctx.entities {
-                            let mut line = format!("- {} ({})", ec.entity.name, ec.entity.entity_type.as_str());
+                            let mut line = format!(
+                                "- {} ({})",
+                                ec.entity.name,
+                                ec.entity.entity_type.as_str()
+                            );
                             if !ec.outgoing.is_empty() {
-                                let rels: Vec<String> = ec.outgoing.iter()
-                                    .map(|(rel, target)| format!("{} -> {}", rel.relationship_type.as_str(), target.name))
+                                let rels: Vec<String> = ec
+                                    .outgoing
+                                    .iter()
+                                    .map(|(rel, target)| {
+                                        format!(
+                                            "{} -> {}",
+                                            rel.relationship_type.as_str(),
+                                            target.name
+                                        )
+                                    })
                                     .collect();
                                 line.push_str(&format!(": {}", rels.join(", ")));
                             }
@@ -583,7 +629,10 @@ impl MemoryRecall {
         let facts = self.recall(agent_id, task, limit, ward_id).await?;
 
         // Also try global recall for cross-agent corrections
-        let global_facts = self.recall("__global__", task, 3, ward_id).await.unwrap_or_default();
+        let global_facts = self
+            .recall("__global__", task, 3, ward_id)
+            .await
+            .unwrap_or_default();
 
         if facts.is_empty() && global_facts.is_empty() {
             return Ok(String::new());
@@ -602,11 +651,15 @@ impl MemoryRecall {
             }
         }
         if !correction_lines.is_empty() {
-            sections.push(format!("## Corrections (MUST follow)\n{}", correction_lines.join("\n")));
+            sections.push(format!(
+                "## Corrections (MUST follow)\n{}",
+                correction_lines.join("\n")
+            ));
         }
 
         // Strategy/pattern knowledge
-        let strategies: Vec<String> = facts.iter()
+        let strategies: Vec<String> = facts
+            .iter()
             .filter(|f| f.fact.category == "strategy" || f.fact.category == "pattern")
             .map(|f| format!("- {}", f.fact.content))
             .collect();
@@ -615,8 +668,12 @@ impl MemoryRecall {
         }
 
         // Domain knowledge
-        let domain: Vec<String> = facts.iter()
-            .filter(|f| !["correction", "instruction", "strategy", "pattern"].contains(&f.fact.category.as_str()))
+        let domain: Vec<String> = facts
+            .iter()
+            .filter(|f| {
+                !["correction", "instruction", "strategy", "pattern"]
+                    .contains(&f.fact.category.as_str())
+            })
             .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
             .collect();
         if !domain.is_empty() {
@@ -627,7 +684,10 @@ impl MemoryRecall {
             return Ok(String::new());
         }
 
-        Ok(format!("<primed_context>\n{}\n</primed_context>", sections.join("\n\n")))
+        Ok(format!(
+            "<primed_context>\n{}\n</primed_context>",
+            sections.join("\n\n")
+        ))
     }
 
     /// Embed a query string for vector search.
@@ -665,7 +725,10 @@ pub fn format_recalled_facts(facts: &[ScoredFact]) -> String {
 }
 
 /// Format facts with optional graph context as a combined system message.
-pub fn format_combined_recall(facts: &[ScoredFact], graph_context: &Option<GraphContext>) -> String {
+pub fn format_combined_recall(
+    facts: &[ScoredFact],
+    graph_context: &Option<GraphContext>,
+) -> String {
     if facts.is_empty() && graph_context.is_none() {
         return String::new();
     }
@@ -701,7 +764,9 @@ pub fn format_combined_recall(facts: &[ScoredFact], graph_context: &Option<Graph
 
                 // Show outgoing relationships
                 if !entity_conn.outgoing.is_empty() {
-                    let rels: Vec<String> = entity_conn.outgoing.iter()
+                    let rels: Vec<String> = entity_conn
+                        .outgoing
+                        .iter()
                         .map(|(rel, target)| {
                             format!("{} → {}", rel.relationship_type.as_str(), target.name)
                         })
@@ -780,7 +845,8 @@ pub fn format_prioritized_recall(
     }
 
     // Section 3: Failed episode warnings (highest priority after rules)
-    let failed_episodes: Vec<&SessionEpisode> = episodes.iter()
+    let failed_episodes: Vec<&SessionEpisode> = episodes
+        .iter()
         .filter(|ep| ep.outcome == "failed" || ep.outcome == "crashed")
         .collect();
     if !failed_episodes.is_empty() && output.len() < max_chars {
@@ -790,16 +856,24 @@ pub fn format_prioritized_recall(
             let learnings = ep.key_learnings.as_deref().unwrap_or("");
             let line = format!(
                 "- FAILED: {} — strategy: {}. {}\n",
-                ep.task_summary, strategy,
-                if learnings.is_empty() { "Avoid this approach.".to_string() } else { learnings.to_string() }
+                ep.task_summary,
+                strategy,
+                if learnings.is_empty() {
+                    "Avoid this approach.".to_string()
+                } else {
+                    learnings.to_string()
+                }
             );
-            if output.len() + line.len() > max_chars { break; }
+            if output.len() + line.len() > max_chars {
+                break;
+            }
             output.push_str(&line);
         }
     }
 
     // Section 4: Successful past experiences
-    let successful_episodes: Vec<&SessionEpisode> = episodes.iter()
+    let successful_episodes: Vec<&SessionEpisode> = episodes
+        .iter()
         .filter(|ep| ep.outcome == "success" || ep.outcome == "partial")
         .collect();
     if !successful_episodes.is_empty() && output.len() < max_chars {
@@ -810,9 +884,15 @@ pub fn format_prioritized_recall(
             let date = ep.created_at.split('T').next().unwrap_or(&ep.created_at);
             let line = format!(
                 "- {} ({}): {} — {}, {} tokens\n",
-                ep.task_summary, date, ep.outcome.to_uppercase(), strategy, tokens
+                ep.task_summary,
+                date,
+                ep.outcome.to_uppercase(),
+                strategy,
+                tokens
             );
-            if output.len() + line.len() > max_chars { break; }
+            if output.len() + line.len() > max_chars {
+                break;
+            }
             output.push_str(&line);
         }
     }
@@ -890,7 +970,13 @@ fn extract_potential_entity_names(key: &str, content: &str) -> Vec<String> {
     // Extract capitalized words from content as potential entity names
     for word in content.split_whitespace() {
         let clean = word.trim_matches(|c: char| !c.is_alphanumeric());
-        if clean.len() > 2 && clean.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+        if clean.len() > 2
+            && clean
+                .chars()
+                .next()
+                .map(|c| c.is_uppercase())
+                .unwrap_or(false)
+        {
             names.push(clean.to_string());
         }
     }
@@ -950,12 +1036,13 @@ fn extract_entity_names_from_facts(facts: &[ScoredFact]) -> Vec<String> {
 
     // Filter out common words that are likely not entities
     let common_words = [
-        "The", "This", "That", "These", "Those", "What", "Which", "When",
-        "Where", "Why", "How", "If", "Then", "And", "But", "Or", "Not",
-        "User", "Project", "System", "Code", "File", "Data",
+        "The", "This", "That", "These", "Those", "What", "Which", "When", "Where", "Why", "How",
+        "If", "Then", "And", "But", "Or", "Not", "User", "Project", "System", "Code", "File",
+        "Data",
     ];
 
-    names.into_iter()
+    names
+        .into_iter()
         .filter(|name| !common_words.contains(&name.as_str()))
         .collect()
 }
@@ -969,7 +1056,10 @@ async fn get_graph_context_for_entities(
     let mut entities_with_connections = Vec::new();
 
     for name in entity_names {
-        match graph_service.get_entity_with_connections(agent_id, name).await {
+        match graph_service
+            .get_entity_with_connections(agent_id, name)
+            .await
+        {
             Ok(Some(connections)) => {
                 // Only include entities that have connections
                 if !connections.outgoing.is_empty() || !connections.incoming.is_empty() {
@@ -1006,10 +1096,16 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
     if a.len() != b.len() || a.is_empty() {
         return 0.0;
     }
-    let dot: f64 = a.iter().zip(b.iter()).map(|(x, y)| *x as f64 * *y as f64).sum();
+    let dot: f64 = a
+        .iter()
+        .zip(b.iter())
+        .map(|(x, y)| *x as f64 * *y as f64)
+        .sum();
     let norm_a: f64 = a.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
     let norm_b: f64 = b.iter().map(|x| (*x as f64).powi(2)).sum::<f64>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 { return 0.0; }
+    if norm_a == 0.0 || norm_b == 0.0 {
+        return 0.0;
+    }
     dot / (norm_a * norm_b)
 }
 
@@ -1149,30 +1245,28 @@ mod tests {
 
     #[test]
     fn test_extract_entity_names_quoted_strings() {
-        let facts = vec![
-            ScoredFact {
-                fact: MemoryFact {
-                    id: "fact-1".to_string(),
-                    session_id: None,
-                    agent_id: "agent-1".to_string(),
-                    scope: "agent".to_string(),
-                    category: "info".to_string(),
-                    key: "tool.name".to_string(),
-                    content: "The tool is called 'my_awesome_tool' and it helps".to_string(),
-                    confidence: 0.95,
-                    mention_count: 1,
-                    source_summary: None,
-                    embedding: None,
-                    ward_id: "__global__".to_string(),
-                    contradicted_by: None,
-                    created_at: String::new(),
-                    updated_at: String::new(),
-                    expires_at: None,
-                    pinned: false,
-                },
-                score: 0.85,
+        let facts = vec![ScoredFact {
+            fact: MemoryFact {
+                id: "fact-1".to_string(),
+                session_id: None,
+                agent_id: "agent-1".to_string(),
+                scope: "agent".to_string(),
+                category: "info".to_string(),
+                key: "tool.name".to_string(),
+                content: "The tool is called 'my_awesome_tool' and it helps".to_string(),
+                confidence: 0.95,
+                mention_count: 1,
+                source_summary: None,
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                expires_at: None,
+                pinned: false,
             },
-        ];
+            score: 0.85,
+        }];
 
         let names = extract_entity_names_from_facts(&facts);
 
@@ -1188,30 +1282,28 @@ mod tests {
 
     #[test]
     fn test_format_combined_recall_facts_only() {
-        let facts = vec![
-            ScoredFact {
-                fact: MemoryFact {
-                    id: "fact-1".to_string(),
-                    session_id: None,
-                    agent_id: "agent-1".to_string(),
-                    scope: "agent".to_string(),
-                    category: "preference".to_string(),
-                    key: "lang".to_string(),
-                    content: "Prefers Rust".to_string(),
-                    confidence: 0.95,
-                    mention_count: 1,
-                    source_summary: None,
-                    embedding: None,
-                    ward_id: "__global__".to_string(),
-                    contradicted_by: None,
-                    created_at: String::new(),
-                    updated_at: String::new(),
-                    expires_at: None,
-                    pinned: false,
-                },
-                score: 0.85,
+        let facts = vec![ScoredFact {
+            fact: MemoryFact {
+                id: "fact-1".to_string(),
+                session_id: None,
+                agent_id: "agent-1".to_string(),
+                scope: "agent".to_string(),
+                category: "preference".to_string(),
+                key: "lang".to_string(),
+                content: "Prefers Rust".to_string(),
+                confidence: 0.95,
+                mention_count: 1,
+                source_summary: None,
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                expires_at: None,
+                pinned: false,
             },
-        ];
+            score: 0.85,
+        }];
 
         let formatted = format_combined_recall(&facts, &None);
         assert!(formatted.contains("## Recalled Memory"));
@@ -1221,30 +1313,28 @@ mod tests {
 
     #[test]
     fn test_format_combined_recall_with_empty_graph() {
-        let facts = vec![
-            ScoredFact {
-                fact: MemoryFact {
-                    id: "fact-1".to_string(),
-                    session_id: None,
-                    agent_id: "agent-1".to_string(),
-                    scope: "agent".to_string(),
-                    category: "preference".to_string(),
-                    key: "lang".to_string(),
-                    content: "Prefers Rust".to_string(),
-                    confidence: 0.95,
-                    mention_count: 1,
-                    source_summary: None,
-                    embedding: None,
-                    ward_id: "__global__".to_string(),
-                    contradicted_by: None,
-                    created_at: String::new(),
-                    updated_at: String::new(),
-                    expires_at: None,
-                    pinned: false,
-                },
-                score: 0.85,
+        let facts = vec![ScoredFact {
+            fact: MemoryFact {
+                id: "fact-1".to_string(),
+                session_id: None,
+                agent_id: "agent-1".to_string(),
+                scope: "agent".to_string(),
+                category: "preference".to_string(),
+                key: "lang".to_string(),
+                content: "Prefers Rust".to_string(),
+                confidence: 0.95,
+                mention_count: 1,
+                source_summary: None,
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                expires_at: None,
+                pinned: false,
             },
-        ];
+            score: 0.85,
+        }];
 
         // Empty graph context
         let graph_ctx = Some(GraphContext { entities: vec![] });
@@ -1308,21 +1398,19 @@ mod tests {
             },
         ];
 
-        let episodes = vec![
-            SessionEpisode {
-                id: "ep-1".to_string(),
-                session_id: "sess-1".to_string(),
-                agent_id: "agent-1".to_string(),
-                ward_id: "__global__".to_string(),
-                task_summary: "Fixed database migration".to_string(),
-                outcome: "success".to_string(),
-                strategy_used: Some("direct".to_string()),
-                key_learnings: None,
-                token_cost: Some(1200),
-                embedding: None,
-                created_at: "2026-03-28T10:00:00Z".to_string(),
-            },
-        ];
+        let episodes = vec![SessionEpisode {
+            id: "ep-1".to_string(),
+            session_id: "sess-1".to_string(),
+            agent_id: "agent-1".to_string(),
+            ward_id: "__global__".to_string(),
+            task_summary: "Fixed database migration".to_string(),
+            outcome: "success".to_string(),
+            strategy_used: Some("direct".to_string()),
+            key_learnings: None,
+            token_cost: Some(1200),
+            embedding: None,
+            created_at: "2026-03-28T10:00:00Z".to_string(),
+        }];
 
         let formatted = format_prioritized_recall(&facts, &episodes, &None, 3000);
 
@@ -1346,30 +1434,28 @@ mod tests {
     #[test]
     fn test_format_prioritized_recall_token_budget() {
         // Create a fact with very long content
-        let facts = vec![
-            ScoredFact {
-                fact: MemoryFact {
-                    id: "f-1".to_string(),
-                    session_id: None,
-                    agent_id: "agent-1".to_string(),
-                    scope: "agent".to_string(),
-                    category: "correction".to_string(),
-                    key: "fix.something".to_string(),
-                    content: "x".repeat(500),
-                    confidence: 0.95,
-                    mention_count: 1,
-                    source_summary: None,
-                    embedding: None,
-                    ward_id: "__global__".to_string(),
-                    contradicted_by: None,
-                    created_at: String::new(),
-                    updated_at: String::new(),
-                    expires_at: None,
-                    pinned: false,
-                },
-                score: 1.0,
+        let facts = vec![ScoredFact {
+            fact: MemoryFact {
+                id: "f-1".to_string(),
+                session_id: None,
+                agent_id: "agent-1".to_string(),
+                scope: "agent".to_string(),
+                category: "correction".to_string(),
+                key: "fix.something".to_string(),
+                content: "x".repeat(500),
+                confidence: 0.95,
+                mention_count: 1,
+                source_summary: None,
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                expires_at: None,
+                pinned: false,
             },
-        ];
+            score: 1.0,
+        }];
 
         // Set a very tight token budget (50 tokens = 200 chars)
         let formatted = format_prioritized_recall(&facts, &[], &None, 50);

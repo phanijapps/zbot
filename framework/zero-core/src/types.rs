@@ -105,10 +105,7 @@ pub enum Part {
 
     /// Function response (tool result)
     #[serde(rename = "function_response")]
-    FunctionResponse {
-        id: String,
-        response: String,
-    },
+    FunctionResponse { id: String, response: String },
 
     /// Image content (screenshots, photos, diagrams)
     #[serde(rename = "image")]
@@ -234,7 +231,11 @@ mod tests {
             detail: Some(ImageDetail::Auto),
         };
         match &part {
-            Part::Image { source, mime_type, detail } => {
+            Part::Image {
+                source,
+                mime_type,
+                detail,
+            } => {
                 assert!(matches!(source, ContentSource::Base64(_)));
                 assert_eq!(mime_type, "image/png");
                 assert!(matches!(detail, Some(ImageDetail::Auto)));
@@ -278,7 +279,11 @@ mod tests {
             filename: Some("report.pdf".to_string()),
         };
         match &part {
-            Part::File { mime_type, filename, .. } => {
+            Part::File {
+                mime_type,
+                filename,
+                ..
+            } => {
                 assert_eq!(mime_type, "application/pdf");
                 assert_eq!(filename.as_deref(), Some("report.pdf"));
             }

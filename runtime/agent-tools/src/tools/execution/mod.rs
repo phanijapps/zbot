@@ -7,8 +7,8 @@ pub mod apply_patch;
 pub mod edit_file;
 pub mod graph;
 pub mod session_title;
-pub mod skills;
 pub mod shell;
+pub mod skills;
 pub mod todos;
 pub mod update_plan;
 pub mod write_file;
@@ -25,10 +25,10 @@ pub use write_file::WriteFileTool;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{Tool, ToolContext, Result};
 use zero_core::FileSystemContext;
+use zero_core::{Result, Tool, ToolContext};
 
 // ============================================================================
 // PYTHON TOOL
@@ -72,12 +72,14 @@ impl Tool for PythonTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let code = args.get("code")
+        let code = args
+            .get("code")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'code' parameter".to_string()))?;
 
-        let python = self.fs.python_executable()
-            .ok_or_else(|| zero_core::ZeroError::Tool("Python executable not configured".to_string()))?;
+        let python = self.fs.python_executable().ok_or_else(|| {
+            zero_core::ZeroError::Tool("Python executable not configured".to_string())
+        })?;
 
         tracing::debug!("Executing Python code ({} bytes)", code.len());
 
@@ -100,7 +102,10 @@ impl Tool for PythonTool {
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(zero_core::ZeroError::Tool(format!("Python error: {}", stderr)));
+            return Err(zero_core::ZeroError::Tool(format!(
+                "Python error: {}",
+                stderr
+            )));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);

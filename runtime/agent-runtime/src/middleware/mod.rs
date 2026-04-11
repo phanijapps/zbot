@@ -32,17 +32,22 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-pub mod pipeline;
-pub mod traits;
 pub mod config;
-pub mod summarization;
 pub mod context_editing;
+pub mod pipeline;
+pub mod summarization;
 pub mod token_counter;
+pub mod traits;
 
 // Re-exports for convenience
-pub use pipeline::MiddlewarePipeline;
-pub use traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext, MiddlewareEffect, ExecutionState, SkillInfo};
-pub use config::{MiddlewareConfig, TriggerCondition, KeepPolicy, SummarizationConfig, ContextEditingConfig};
-pub use summarization::SummarizationMiddleware;
+pub use config::{
+    ContextEditingConfig, KeepPolicy, MiddlewareConfig, SummarizationConfig, TriggerCondition,
+};
 pub use context_editing::ContextEditingMiddleware;
-pub(crate) use context_editing::{compress_old_assistant_messages, compress_assistant_message};
+pub(crate) use context_editing::{compress_assistant_message, compress_old_assistant_messages};
+pub use pipeline::MiddlewarePipeline;
+pub use summarization::SummarizationMiddleware;
+pub use traits::{
+    EventMiddleware, ExecutionState, MiddlewareContext, MiddlewareEffect, PreProcessMiddleware,
+    SkillInfo,
+};

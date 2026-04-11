@@ -176,13 +176,13 @@ impl SessionStateBuilder {
         Ok(Some(SessionState {
             session: SessionMeta {
                 id: session.session_id.clone(),
-                title: session.title.clone()
-                    .or_else(|| Self::extract_title(logs)),
+                title: session.title.clone().or_else(|| Self::extract_title(logs)),
                 status: session.status.as_str().to_string(),
                 started_at: session.started_at.clone(),
                 duration_ms: session.duration_ms,
                 // LogSession.token_count is often 0 — sum from messages table instead
-                token_count: self.sum_token_count(&session.session_id, &session.child_session_ids)
+                token_count: self
+                    .sum_token_count(&session.session_id, &session.child_session_ids)
                     .unwrap_or(session.token_count),
                 model,
             },
@@ -194,7 +194,12 @@ impl SessionStateBuilder {
             recalled_facts,
             // If session is completed, mark all plan steps as done
             plan: if matches!(phase, SessionPhase::Completed) {
-                plan.into_iter().map(|mut s| { s.status = Some("completed".to_string()); s }).collect()
+                plan.into_iter()
+                    .map(|mut s| {
+                        s.status = Some("completed".to_string());
+                        s
+                    })
+                    .collect()
             } else {
                 plan
             },
@@ -214,7 +219,8 @@ impl SessionStateBuilder {
                 if let Some(meta) = &log.metadata {
                     let tool = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                     if tool == "set_session_title" {
-                        return meta.get("args")
+                        return meta
+                            .get("args")
                             .and_then(|a| a.get("title").or_else(|| a.get("name")))
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string());
@@ -238,7 +244,11 @@ impl SessionStateBuilder {
                 total += messages.iter().map(|m| m.token_count).sum::<i32>();
             }
         }
-        if total > 0 { Some(total) } else { None }
+        if total > 0 {
+            Some(total)
+        } else {
+            None
+        }
     }
 
     /// Extract the first user message from the conversation messages table.
@@ -258,10 +268,7 @@ impl SessionStateBuilder {
     }
 
     /// Extract ward info from a ward tool call or from intent analysis metadata.
-    fn extract_ward(
-        logs: &[ExecutionLog],
-        intent: Option<&serde_json::Value>,
-    ) -> Option<WardInfo> {
+    fn extract_ward(logs: &[ExecutionLog], intent: Option<&serde_json::Value>) -> Option<WardInfo> {
         // First, try to find a ward from tool_call logs whose message mentions "ward"
         for log in logs {
             if log.category == LogCategory::ToolCall {
@@ -413,13 +420,19 @@ impl SessionStateBuilder {
     ///
     /// Prefers the `respond` tool call args, falls back to the last assistant
     /// message in the conversation.
-    fn extract_response(&self, logs: &[ExecutionLog], execution_id: &str, child_session_ids: &[String]) -> Option<String> {
+    fn extract_response(
+        &self,
+        logs: &[ExecutionLog],
+        execution_id: &str,
+        child_session_ids: &[String],
+    ) -> Option<String> {
         // Helper: find respond tool call in a set of logs
         let find_respond = |logs: &[ExecutionLog]| -> Option<String> {
             for log in logs.iter().rev() {
                 if log.category == LogCategory::ToolCall {
                     if let Some(meta) = &log.metadata {
-                        let tool_name = meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
+                        let tool_name =
+                            meta.get("tool_name").and_then(|v| v.as_str()).unwrap_or("");
                         if tool_name == "respond" {
                             if let Some(text) = meta
                                 .get("args")
@@ -519,7 +532,8 @@ impl SessionStateBuilder {
     ) -> Option<String> {
         // Try to find the parent session and its delegation logs
         // The child's logs contain parent_session_id references
-        if let Some(parent_sid) = child_logs.iter()
+        if let Some(parent_sid) = child_logs
+            .iter()
             .find_map(|l| l.parent_session_id.as_deref())
         {
             if let Ok(Some(parent_detail)) = self.log_service.get_session_detail(parent_sid) {
@@ -527,7 +541,8 @@ impl SessionStateBuilder {
                 for log in &parent_detail.logs {
                     if log.category == LogCategory::Delegation {
                         if let Some(meta) = &log.metadata {
-                            let agent = meta.get("child_agent")
+                            let agent = meta
+                                .get("child_agent")
                                 .or_else(|| meta.get("child_agent_id"))
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("");
@@ -547,7 +562,8 @@ impl SessionStateBuilder {
         }
 
         // Fallback: first non-"Session started" delegation or session log in child
-        child_logs.iter()
+        child_logs
+            .iter()
             .find(|l| {
                 (l.category == LogCategory::Delegation || l.category == LogCategory::Session)
                     && !l.message.is_empty()
@@ -642,9 +658,7 @@ impl SessionStateBuilder {
         }
 
         // Has delegation or non-internal tool calls → Executing
-        let has_delegation = logs
-            .iter()
-            .any(|l| l.category == LogCategory::Delegation);
+        let has_delegation = logs.iter().any(|l| l.category == LogCategory::Delegation);
 
         let has_external_tool = logs.iter().any(|l| {
             l.category == LogCategory::ToolCall

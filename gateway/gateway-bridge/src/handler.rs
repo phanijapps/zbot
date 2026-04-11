@@ -65,7 +65,9 @@ pub async fn handle_worker_connection(
                         }
                     }
                     Ok(axum::extract::ws::Message::Close(_)) => {
-                        return Err(BridgeError::Channel("Connection closed before Hello".to_string()));
+                        return Err(BridgeError::Channel(
+                            "Connection closed before Hello".to_string(),
+                        ));
                     }
                     Err(e) => {
                         return Err(BridgeError::Channel(e.to_string()));
@@ -73,7 +75,9 @@ pub async fn handle_worker_connection(
                     _ => continue, // Skip binary/ping/pong frames
                 }
             }
-            Err(BridgeError::Channel("Connection closed before Hello".to_string()))
+            Err(BridgeError::Channel(
+                "Connection closed before Hello".to_string(),
+            ))
         },
     )
     .await;
@@ -301,9 +305,8 @@ async fn handle_worker_message(
                 error = %error,
                 "FAIL received from worker"
             );
-            let retry_after = retry_after_seconds.map(|s| {
-                chrono::Utc::now() + chrono::Duration::seconds(s as i64)
-            });
+            let retry_after = retry_after_seconds
+                .map(|s| chrono::Utc::now() + chrono::Duration::seconds(s as i64));
             if let Err(e) = outbox_repo.mark_failed(&outbox_id, &error, retry_after) {
                 tracing::warn!("Failed to mark outbox failed: {}", e);
             }
@@ -341,8 +344,7 @@ async fn handle_worker_message(
                 .with_connector_id(adapter_id.to_string());
 
                 // Set source to "connector" via serde (avoids execution_state dep)
-                request.source = serde_json::from_str("\"connector\"")
-                    .unwrap_or_default();
+                request.source = serde_json::from_str("\"connector\"").unwrap_or_default();
 
                 if let Some(tid) = thread_id {
                     request = request.with_thread_id(tid);

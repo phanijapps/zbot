@@ -3,8 +3,8 @@
 // Core data structures for daily session management
 // ============================================================================
 
-use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 /// Daily session for an agent
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,7 +49,11 @@ impl DailySession {
         }
     }
 
-    pub fn with_version(agent_id: String, session_date: String, system_prompt_version: i64) -> Self {
+    pub fn with_version(
+        agent_id: String,
+        session_date: String,
+        system_prompt_version: i64,
+    ) -> Self {
         let id = Self::generate_id(&agent_id, &session_date);
         let now = Utc::now();
 
@@ -170,10 +174,7 @@ mod tests {
 
     #[test]
     fn test_daily_session_new() {
-        let session = DailySession::new(
-            "agent-123".to_string(),
-            "2025-01-20".to_string(),
-        );
+        let session = DailySession::new("agent-123".to_string(), "2025-01-20".to_string());
 
         assert_eq!(session.agent_id, "agent-123");
         assert_eq!(session.session_date, "2025-01-20");
@@ -187,11 +188,8 @@ mod tests {
 
     #[test]
     fn test_daily_session_with_version() {
-        let session = DailySession::with_version(
-            "agent-123".to_string(),
-            "2025-01-20".to_string(),
-            3,
-        );
+        let session =
+            DailySession::with_version("agent-123".to_string(), "2025-01-20".to_string(), 3);
 
         assert_eq!(session.agent_id, "agent-123");
         assert_eq!(session.system_prompt_version, 3);

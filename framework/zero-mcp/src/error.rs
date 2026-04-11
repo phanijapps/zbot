@@ -139,10 +139,7 @@ impl McpError {
     }
 
     /// Create a connection error.
-    pub fn connection(
-        server_id: impl Into<String>,
-        message: impl Into<String>,
-    ) -> Self {
+    pub fn connection(server_id: impl Into<String>, message: impl Into<String>) -> Self {
         Self::Connection {
             server_id: server_id.into(),
             message: message.into(),

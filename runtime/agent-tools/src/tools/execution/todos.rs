@@ -8,7 +8,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
@@ -164,15 +164,19 @@ impl TodoTool {
 
     /// Get agent identity from context
     fn get_agent_identity(ctx: &Arc<dyn ToolContext>) -> (String, String, bool) {
-        let agent_id = ctx.get_state("app:agent_id")
+        let agent_id = ctx
+            .get_state("app:agent_id")
             .and_then(|v| v.as_str().map(String::from))
             .unwrap_or_else(|| "unknown".to_string());
 
-        let root_agent_id = ctx.get_state("app:root_agent_id")
+        let root_agent_id = ctx
+            .get_state("app:root_agent_id")
             .and_then(|v| v.as_str().map(String::from));
 
         // Check if this is the orchestrator (no root_agent_id or same as agent_id)
-        let is_orchestrator = root_agent_id.as_ref().map_or(true, |root| root == &agent_id);
+        let is_orchestrator = root_agent_id
+            .as_ref()
+            .map_or(true, |root| root == &agent_id);
 
         // Extract agent name from agent_id (e.g., "parent.subagent" -> "subagent")
         let agent_name = if is_orchestrator {
@@ -282,12 +286,15 @@ impl Tool for TodoTool {
                     let mut created_titles: Vec<String> = Vec::new();
 
                     for item in items {
-                        let title = item
-                            .get("title")
-                            .and_then(|v| v.as_str())
-                            .ok_or_else(|| ZeroError::Tool("Each item must have a 'title'".to_string()))?;
+                        let title =
+                            item.get("title").and_then(|v| v.as_str()).ok_or_else(|| {
+                                ZeroError::Tool("Each item must have a 'title'".to_string())
+                            })?;
 
-                        let description = item.get("description").and_then(|v| v.as_str()).map(String::from);
+                        let description = item
+                            .get("description")
+                            .and_then(|v| v.as_str())
+                            .map(String::from);
                         let priority = item
                             .get("priority")
                             .and_then(|v| v.as_str())
@@ -322,12 +329,16 @@ impl Tool for TodoTool {
                     }))
                 } else {
                     // Single creation (backwards compatible)
-                    let title = args
-                        .get("title")
-                        .and_then(|v| v.as_str())
-                        .ok_or_else(|| ZeroError::Tool("Missing 'title' or 'items' parameter for add action".to_string()))?;
+                    let title = args.get("title").and_then(|v| v.as_str()).ok_or_else(|| {
+                        ZeroError::Tool(
+                            "Missing 'title' or 'items' parameter for add action".to_string(),
+                        )
+                    })?;
 
-                    let description = args.get("description").and_then(|v| v.as_str()).map(String::from);
+                    let description = args
+                        .get("description")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
                     let priority = args
                         .get("priority")
                         .and_then(|v| v.as_str())
@@ -361,15 +372,18 @@ impl Tool for TodoTool {
             }
 
             "update" => {
-                let id = args
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ZeroError::Tool("Missing 'id' parameter for update action".to_string()))?;
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ZeroError::Tool("Missing 'id' parameter for update action".to_string())
+                })?;
 
-                let completed = args
-                    .get("completed")
-                    .and_then(|v| v.as_bool())
-                    .ok_or_else(|| ZeroError::Tool("Missing 'completed' parameter for update action".to_string()))?;
+                let completed =
+                    args.get("completed")
+                        .and_then(|v| v.as_bool())
+                        .ok_or_else(|| {
+                            ZeroError::Tool(
+                                "Missing 'completed' parameter for update action".to_string(),
+                            )
+                        })?;
 
                 let mut todos = Self::load_todos(&ctx);
                 let found = todos.update_completion(id, completed);
@@ -392,10 +406,9 @@ impl Tool for TodoTool {
             }
 
             "delete" => {
-                let id = args
-                    .get("id")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| ZeroError::Tool("Missing 'id' parameter for delete action".to_string()))?;
+                let id = args.get("id").and_then(|v| v.as_str()).ok_or_else(|| {
+                    ZeroError::Tool("Missing 'id' parameter for delete action".to_string())
+                })?;
 
                 let mut todos = Self::load_todos(&ctx);
                 let found = todos.delete(id);
@@ -417,10 +430,7 @@ impl Tool for TodoTool {
             }
 
             "list" => {
-                let filter = args
-                    .get("filter")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("all");
+                let filter = args.get("filter").and_then(|v| v.as_str()).unwrap_or("all");
 
                 let todos = Self::load_todos(&ctx);
 

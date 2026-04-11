@@ -8,9 +8,9 @@
 //! task coalesces token updates (keeping only the latest per execution)
 //! and batch-inserts log entries.
 
-use gateway_database::{ConversationRepository, DatabaseManager};
 use api_logs::{ExecutionLog, LogService};
 use execution_state::StateService;
+use gateway_database::{ConversationRepository, DatabaseManager};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
@@ -113,7 +113,12 @@ pub fn spawn_batch_writer_with_repo(
 ) -> BatchWriterHandle {
     let (tx, rx) = mpsc::unbounded_channel();
 
-    tokio::spawn(batch_writer_loop(rx, state_service, log_service, conversation_repo));
+    tokio::spawn(batch_writer_loop(
+        rx,
+        state_service,
+        log_service,
+        conversation_repo,
+    ));
 
     BatchWriterHandle { tx }
 }
@@ -130,7 +135,14 @@ async fn batch_writer_loop(
     // Pending log entries
     let mut log_entries: Vec<ExecutionLog> = Vec::new();
     // Pending session messages (NOT coalesced — each is unique)
-    let mut session_messages: Vec<(String, String, String, String, Option<String>, Option<String>)> = Vec::new();
+    let mut session_messages: Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    )> = Vec::new();
 
     let mut interval = tokio::time::interval(Duration::from_millis(100));
     // Don't accumulate ticks while we're busy flushing
@@ -181,13 +193,24 @@ fn flush_all(
     conversation_repo: Option<&ConversationRepository>,
     token_updates: &mut HashMap<String, (u64, u64)>,
     log_entries: &mut Vec<ExecutionLog>,
-    session_messages: &mut Vec<(String, String, String, String, Option<String>, Option<String>)>,
+    session_messages: &mut Vec<(
+        String,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+    )>,
 ) {
     // Flush token updates (coalesced — one write per execution)
     for (execution_id, (tokens_in, tokens_out)) in token_updates.drain() {
         if let Err(e) = state_service.update_execution_tokens(&execution_id, tokens_in, tokens_out)
         {
-            tracing::warn!("BatchWriter: failed to update tokens for {}: {}", execution_id, e);
+            tracing::warn!(
+                "BatchWriter: failed to update tokens for {}: {}",
+                execution_id,
+                e
+            );
         }
     }
 
@@ -200,7 +223,9 @@ fn flush_all(
 
     // Flush session messages (order-preserving)
     if let Some(repo) = conversation_repo {
-        for (session_id, execution_id, role, content, tool_calls, tool_call_id) in session_messages.drain(..) {
+        for (session_id, execution_id, role, content, tool_calls, tool_call_id) in
+            session_messages.drain(..)
+        {
             if let Err(e) = repo.append_session_message(
                 &session_id,
                 &execution_id,
@@ -214,7 +239,10 @@ fn flush_all(
         }
     } else {
         if !session_messages.is_empty() {
-            tracing::warn!("BatchWriter: {} session messages dropped (no conversation repo)", session_messages.len());
+            tracing::warn!(
+                "BatchWriter: {} session messages dropped (no conversation repo)",
+                session_messages.len()
+            );
             session_messages.clear();
         }
     }

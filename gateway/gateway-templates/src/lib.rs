@@ -19,7 +19,12 @@ use std::sync::Arc;
 pub struct Templates;
 
 /// Required shards — loaded from config/shards/ if present, otherwise from embedded defaults.
-const REQUIRED_SHARDS: &[&str] = &["first_turn_protocol", "tooling_skills", "memory_learning", "planning_autonomy"];
+const REQUIRED_SHARDS: &[&str] = &[
+    "first_turn_protocol",
+    "tooling_skills",
+    "memory_learning",
+    "planning_autonomy",
+];
 
 // =========================================================================
 // Public API
@@ -74,7 +79,8 @@ fn assemble_chat_prompt(config_dir: &Path, vault_dir: &Path) -> String {
     }
 
     // 2. Chat-specific instructions (instead of full INSTRUCTIONS.md)
-    let chat_instructions = load_or_create_config(config_dir, "chat_instructions.md", "chat_instructions.md");
+    let chat_instructions =
+        load_or_create_config(config_dir, "chat_instructions.md", "chat_instructions.md");
     if !chat_instructions.is_empty() {
         parts.push(chat_instructions);
     }
@@ -133,7 +139,8 @@ fn assemble_prompt(config_dir: &Path, vault_dir: &Path) -> String {
     }
 
     // 2. INSTRUCTIONS.md — execution rules
-    let instructions = load_or_create_config(config_dir, "INSTRUCTIONS.md", "instructions_starter.md");
+    let instructions =
+        load_or_create_config(config_dir, "INSTRUCTIONS.md", "instructions_starter.md");
     if !instructions.is_empty() {
         parts.push(instructions);
     }
@@ -173,10 +180,7 @@ fn assemble_prompt(config_dir: &Path, vault_dir: &Path) -> String {
         return default_system_prompt();
     }
 
-    tracing::info!(
-        chars = result.len(),
-        "Assembled system prompt from config"
-    );
+    tracing::info!(chars = result.len(), "Assembled system prompt from config");
     result
 }
 
@@ -278,7 +282,8 @@ fn load_shards(config_dir: &Path) -> String {
             .filter_map(|e| e.ok())
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().to_string();
-                name.ends_with(".md") && !loaded_names.contains(&name.trim_end_matches(".md").to_string())
+                name.ends_with(".md")
+                    && !loaded_names.contains(&name.trim_end_matches(".md").to_string())
             })
             .collect();
         extras.sort_by_key(|e| e.file_name());
@@ -361,7 +366,8 @@ mod tests {
         std::fs::write(
             shards_dir.join("memory_learning.md"),
             "CUSTOM MEMORY RULES\nMy custom memory shard.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let prompt = assemble_prompt(&config_dir, dir.path());
 
@@ -381,7 +387,8 @@ mod tests {
         std::fs::write(
             shards_dir.join("my_rules.md"),
             "MY CUSTOM RULES\nAlways use TypeScript.",
-        ).unwrap();
+        )
+        .unwrap();
 
         let prompt = assemble_prompt(&config_dir, dir.path());
 

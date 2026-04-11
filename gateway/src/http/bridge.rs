@@ -15,10 +15,7 @@ use crate::state::AppState;
 /// Workers connect to `GET /bridge/ws` and are upgraded to a WebSocket
 /// connection. The handler delegates to `gateway_bridge::handle_worker_connection`
 /// for the full lifecycle (Hello handshake, message loop, cleanup).
-pub async fn ws_upgrade(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_upgrade(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     let registry = state.bridge_registry.clone();
     let outbox = state.bridge_outbox.clone();
     let bus = state.bridge_bus.clone();

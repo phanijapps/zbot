@@ -9,8 +9,8 @@ use crate::outbox::OutboxRepository;
 use crate::pending_requests::PendingRequests;
 use crate::plugin_config::{PluginConfig, PluginError, PluginState, PluginUserConfig};
 use crate::protocol::{BridgeServerMessage, WorkerCapability, WorkerMessage, WorkerResource};
-use crate::registry::BridgeRegistry;
 use crate::push;
+use crate::registry::BridgeRegistry;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -207,10 +207,7 @@ impl StdioPlugin {
                 Err(PluginError::NpmInstallFailed(error))
             }
             Err(_) => {
-                let error = format!(
-                    "npm install timed out after {}s",
-                    NPM_INSTALL_TIMEOUT_SECS
-                );
+                let error = format!("npm install timed out after {}s", NPM_INSTALL_TIMEOUT_SECS);
                 tracing::error!(
                     plugin_id = %self.config.id,
                     "npm install timed out"
@@ -353,14 +350,15 @@ impl StdioPlugin {
     }
 
     /// Wait for the plugin to send a Hello message.
-    async fn wait_for_hello(&mut self) -> Result<(Vec<WorkerCapability>, Vec<WorkerResource>), PluginError> {
+    async fn wait_for_hello(
+        &mut self,
+    ) -> Result<(Vec<WorkerCapability>, Vec<WorkerResource>), PluginError> {
         let msg_rx = self.msg_rx.as_mut().ok_or_else(|| {
             PluginError::CommunicationError("No message channel available".to_string())
         })?;
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_secs(HELLO_TIMEOUT_SECS),
-            async {
+        let result =
+            tokio::time::timeout(std::time::Duration::from_secs(HELLO_TIMEOUT_SECS), async {
                 while let Some(msg) = msg_rx.recv().await {
                     if let WorkerMessage::Hello {
                         adapter_id,
@@ -383,9 +381,8 @@ impl StdioPlugin {
                 Err(PluginError::HandshakeFailed(
                     "Connection closed before Hello".to_string(),
                 ))
-            },
-        )
-        .await;
+            })
+            .await;
 
         match result {
             Ok(Ok((capabilities, resources))) => {
@@ -412,7 +409,11 @@ impl StdioPlugin {
     }
 
     /// Run the main message loop after Hello handshake.
-    async fn run_loop(&mut self, capabilities: Vec<WorkerCapability>, resources: Vec<WorkerResource>) -> Result<(), PluginError> {
+    async fn run_loop(
+        &mut self,
+        capabilities: Vec<WorkerCapability>,
+        resources: Vec<WorkerResource>,
+    ) -> Result<(), PluginError> {
         let adapter_id = self.config.id.clone();
 
         // Step 1: Create channel for sending messages to this plugin
@@ -420,7 +421,8 @@ impl StdioPlugin {
         self.server_tx = Some(server_tx.clone());
 
         // Step 2: Register with BridgeRegistry
-        if let Err(e) = self.registry
+        if let Err(e) = self
+            .registry
             .register(
                 adapter_id.clone(),
                 capabilities,
@@ -462,7 +464,8 @@ impl StdioPlugin {
         let heartbeat_adapter_id = adapter_id.clone();
         let heartbeat_registry = self.registry.clone();
         let heartbeat_handle = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_SECONDS));
+            let mut interval =
+                tokio::time::interval(std::time::Duration::from_secs(HEARTBEAT_SECONDS));
             loop {
                 interval.tick().await;
                 if heartbeat_registry
@@ -487,9 +490,10 @@ impl StdioPlugin {
         })?;
 
         // Take ownership of stdin for sending
-        let mut stdin = self.stdin.take().ok_or_else(|| {
-            PluginError::CommunicationError("No stdin available".to_string())
-        })?;
+        let mut stdin = self
+            .stdin
+            .take()
+            .ok_or_else(|| PluginError::CommunicationError("No stdin available".to_string()))?;
 
         // Clone things we need in the loop
         let outbox = self.outbox.clone();
@@ -585,9 +589,8 @@ impl StdioPlugin {
                     error = %error,
                     "FAIL received from plugin"
                 );
-                let retry_after = retry_after_seconds.map(|s| {
-                    chrono::Utc::now() + chrono::Duration::seconds(s as i64)
-                });
+                let retry_after = retry_after_seconds
+                    .map(|s| chrono::Utc::now() + chrono::Duration::seconds(s as i64));
                 if let Err(e) = outbox.mark_failed(&outbox_id, &error, retry_after) {
                     tracing::warn!("Failed to mark outbox failed: {}", e);
                 }
@@ -625,8 +628,7 @@ impl StdioPlugin {
                     .with_connector_id(adapter_id.to_string());
 
                     // Set source to "connector"
-                    request.source = serde_json::from_str("\"connector\"")
-                        .unwrap_or_default();
+                    request.source = serde_json::from_str("\"connector\"").unwrap_or_default();
 
                     if let Some(tid) = thread_id {
                         request = request.with_thread_id(tid);
@@ -688,9 +690,10 @@ impl StdioPlugin {
 
     /// Send HelloAck to the plugin.
     async fn send_hello_ack(&mut self) -> Result<(), PluginError> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            PluginError::CommunicationError("No stdin available".to_string())
-        })?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| PluginError::CommunicationError("No stdin available".to_string()))?;
 
         let ack = BridgeServerMessage::HelloAck {
             server_time: chrono::Utc::now().to_rfc3339(),
@@ -762,9 +765,10 @@ impl StdioPlugin {
 
     /// Send a message to the plugin.
     pub async fn send(&mut self, msg: BridgeServerMessage) -> Result<(), PluginError> {
-        let stdin = self.stdin.as_mut().ok_or_else(|| {
-            PluginError::CommunicationError("Plugin not running".to_string())
-        })?;
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| PluginError::CommunicationError("Plugin not running".to_string()))?;
 
         let json = serde_json::to_string(&msg).map_err(|e| {
             PluginError::CommunicationError(format!("Failed to serialize message: {}", e))
@@ -812,9 +816,9 @@ mod tests {
 
         let registry = Arc::new(BridgeRegistry::new());
         let outbox = Arc::new(OutboxRepository::new(Arc::new(
-            gateway_database::DatabaseManager::new(Arc::new(
-                gateway_services::VaultPaths::new(dir.path().to_path_buf()),
-            ))
+            gateway_database::DatabaseManager::new(Arc::new(gateway_services::VaultPaths::new(
+                dir.path().to_path_buf(),
+            )))
             .unwrap(),
         )));
 

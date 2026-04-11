@@ -44,12 +44,7 @@ const fn default_max_tokens() -> u32 {
 impl LlmConfig {
     /// Create a new LLM config
     #[must_use]
-    pub fn new(
-        base_url: String,
-        api_key: String,
-        model: String,
-        provider_id: String,
-    ) -> Self {
+    pub fn new(base_url: String, api_key: String, model: String, provider_id: String) -> Self {
         Self {
             base_url,
             api_key,

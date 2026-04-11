@@ -5,7 +5,10 @@
 use async_trait::async_trait;
 use std::sync::Arc;
 
-use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, InvocationContext, Result, CallbackContext};
+use zero_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, EventStream,
+    InvocationContext, Result,
+};
 
 /// Rule-based conditional routing agent.
 ///
@@ -117,9 +120,9 @@ impl Agent for ConditionalAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::{Event, ReadonlyContext, CallbackContext, Content, context::Session};
-    use serde_json::Value;
     use futures::StreamExt;
+    use serde_json::Value;
+    use zero_core::{context::Session, CallbackContext, Content, Event, ReadonlyContext};
 
     struct MockAgent {
         name: String,
@@ -155,14 +158,29 @@ mod tests {
     }
 
     impl ReadonlyContext for TestContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test" }
-        fn user_id(&self) -> &str { "test" }
-        fn app_name(&self) -> &str { "test" }
-        fn session_id(&self) -> &str { "test" }
-        fn branch(&self) -> &str { "test" }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test"
+        }
+        fn user_id(&self) -> &str {
+            "test"
+        }
+        fn app_name(&self) -> &str {
+            "test"
+        }
+        fn session_id(&self) -> &str {
+            "test"
+        }
+        fn branch(&self) -> &str {
+            "test"
+        }
         fn user_content(&self) -> &Content {
-            static CONTENT: Content = Content { role: String::new(), parts: Vec::new() };
+            static CONTENT: Content = Content {
+                role: String::new(),
+                parts: Vec::new(),
+            };
             &CONTENT
         }
     }
@@ -185,28 +203,56 @@ mod tests {
     }
 
     impl ReadonlyContext for MockInvocationContext {
-        fn invocation_id(&self) -> &str { self.test_ctx.invocation_id() }
-        fn agent_name(&self) -> &str { self.test_ctx.agent_name() }
-        fn user_id(&self) -> &str { self.test_ctx.user_id() }
-        fn app_name(&self) -> &str { self.test_ctx.app_name() }
-        fn session_id(&self) -> &str { self.test_ctx.session_id() }
-        fn branch(&self) -> &str { self.test_ctx.branch() }
-        fn user_content(&self) -> &Content { self.test_ctx.user_content() }
+        fn invocation_id(&self) -> &str {
+            self.test_ctx.invocation_id()
+        }
+        fn agent_name(&self) -> &str {
+            self.test_ctx.agent_name()
+        }
+        fn user_id(&self) -> &str {
+            self.test_ctx.user_id()
+        }
+        fn app_name(&self) -> &str {
+            self.test_ctx.app_name()
+        }
+        fn session_id(&self) -> &str {
+            self.test_ctx.session_id()
+        }
+        fn branch(&self) -> &str {
+            self.test_ctx.branch()
+        }
+        fn user_content(&self) -> &Content {
+            self.test_ctx.user_content()
+        }
     }
 
     impl CallbackContext for MockInvocationContext {
-        fn get_state(&self, key: &str) -> Option<Value> { self.test_ctx.get_state(key) }
-        fn set_state(&self, key: String, value: Value) { self.test_ctx.set_state(key, value) }
+        fn get_state(&self, key: &str) -> Option<Value> {
+            self.test_ctx.get_state(key)
+        }
+        fn set_state(&self, key: String, value: Value) {
+            self.test_ctx.set_state(key, value)
+        }
     }
 
     impl zero_core::InvocationContext for MockInvocationContext {
-        fn agent(&self) -> Arc<dyn Agent> { self.agent.clone() }
-        fn session(&self) -> Arc<dyn Session> { unimplemented!() }
-        fn run_config(&self) -> &zero_core::RunConfig { unimplemented!() }
-        fn actions(&self) -> zero_core::EventActions { zero_core::EventActions::default() }
+        fn agent(&self) -> Arc<dyn Agent> {
+            self.agent.clone()
+        }
+        fn session(&self) -> Arc<dyn Session> {
+            unimplemented!()
+        }
+        fn run_config(&self) -> &zero_core::RunConfig {
+            unimplemented!()
+        }
+        fn actions(&self) -> zero_core::EventActions {
+            zero_core::EventActions::default()
+        }
         fn set_actions(&self, _actions: zero_core::EventActions) {}
         fn end_invocation(&self) {}
-        fn ended(&self) -> bool { false }
+        fn ended(&self) -> bool {
+            false
+        }
         fn add_content(&self, _content: zero_core::Content) {
             // Mock implementation - does nothing
         }
@@ -223,12 +269,18 @@ mod tests {
             description: "Basic agent".to_string(),
         }) as Arc<dyn Agent>;
 
-        let router = Arc::new(ConditionalAgent::new(
-            "router",
-            |ctx| ctx.get_state("is_premium").and_then(|v| v.as_bool()).unwrap_or(false),
-            premium.clone(),
-        )
-        .with_else(basic.clone()));
+        let router = Arc::new(
+            ConditionalAgent::new(
+                "router",
+                |ctx| {
+                    ctx.get_state("is_premium")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                },
+                premium.clone(),
+            )
+            .with_else(basic.clone()),
+        );
 
         let test_ctx = TestContext { is_premium: true };
         let inv_ctx = Arc::new(MockInvocationContext {
@@ -252,12 +304,18 @@ mod tests {
             description: "Basic agent".to_string(),
         }) as Arc<dyn Agent>;
 
-        let router = Arc::new(ConditionalAgent::new(
-            "router",
-            |ctx| ctx.get_state("is_premium").and_then(|v| v.as_bool()).unwrap_or(false),
-            premium.clone(),
-        )
-        .with_else(basic.clone()));
+        let router = Arc::new(
+            ConditionalAgent::new(
+                "router",
+                |ctx| {
+                    ctx.get_state("is_premium")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false)
+                },
+                premium.clone(),
+            )
+            .with_else(basic.clone()),
+        );
 
         let test_ctx = TestContext { is_premium: false };
         let inv_ctx = Arc::new(MockInvocationContext {

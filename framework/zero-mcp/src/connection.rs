@@ -140,10 +140,7 @@ impl McpConnectionPool {
     /// Get connections in a specific state.
     pub async fn get_by_state(&self, _state: ConnectionState) -> Vec<Arc<McpConnection>> {
         let connections = self.connections.read().await;
-        connections
-            .values()
-            .cloned()
-            .collect()
+        connections.values().cloned().collect()
     }
 
     /// Count connections by state.
@@ -153,7 +150,12 @@ impl McpConnectionPool {
 
         for conn in connections.values() {
             // Skip connections where we can't acquire the read lock
-            if conn.state.try_read().map(|s| *s == target_state).unwrap_or(false) {
+            if conn
+                .state
+                .try_read()
+                .map(|s| *s == target_state)
+                .unwrap_or(false)
+            {
                 count += 1;
             }
         }
@@ -164,7 +166,10 @@ impl McpConnectionPool {
     /// Clear all connections.
     pub async fn clear(&self) {
         let mut connections = self.connections.write().await;
-        info!("Clearing MCP connection pool ({} servers)", connections.len());
+        info!(
+            "Clearing MCP connection pool ({} servers)",
+            connections.len()
+        );
         connections.clear();
     }
 

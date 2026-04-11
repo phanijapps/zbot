@@ -6,7 +6,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
 
@@ -73,7 +73,11 @@ impl Tool for SetSessionTitleTool {
         };
 
         let session_id = ctx.session_id().to_string();
-        tracing::debug!("Setting session title: session={}, title={}", session_id, title);
+        tracing::debug!(
+            "Setting session title: session={}, title={}",
+            session_id,
+            title
+        );
 
         // Store title in session state so the stream handler can persist it
         ctx.set_state(

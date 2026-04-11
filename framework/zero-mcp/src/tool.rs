@@ -2,13 +2,13 @@
 //!
 //! Wraps MCP tools to implement the Zero Tool trait.
 
-use std::sync::Arc;
 use async_trait::async_trait;
 use serde_json::Value;
+use std::sync::Arc;
 
-use zero_core::{Tool, ToolContext, Result as ZeroResult};
 use super::client::McpClient;
 use super::error::{McpError, Result};
+use zero_core::{Result as ZeroResult, Tool, ToolContext};
 
 /// Tool that wraps an MCP server tool.
 #[derive(Clone)]
@@ -101,13 +101,13 @@ impl McpToolBuilder {
 
     /// Build the tool.
     pub fn build(self) -> Result<McpTool> {
-        let definition = self.definition.ok_or_else(|| {
-            McpError::config("", "Tool definition is required")
-        })?;
+        let definition = self
+            .definition
+            .ok_or_else(|| McpError::config("", "Tool definition is required"))?;
 
-        let client = self.client.ok_or_else(|| {
-            McpError::config("", "MCP client is required")
-        })?;
+        let client = self
+            .client
+            .ok_or_else(|| McpError::config("", "MCP client is required"))?;
 
         Ok(McpTool::new(self.server_id, definition, client))
     }
@@ -115,23 +115,35 @@ impl McpToolBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::super::client::MockMcpClient;
     use super::super::config::McpServerConfig;
+    use super::*;
 
     fn create_mock_context() -> Arc<dyn ToolContext> {
-        use zero_core::{ReadonlyContext, CallbackContext, ToolContext};
         use zero_core::EventActions;
+        use zero_core::{CallbackContext, ReadonlyContext, ToolContext};
 
         struct MockCtx;
 
         impl ReadonlyContext for MockCtx {
-            fn invocation_id(&self) -> &str { "test" }
-            fn agent_name(&self) -> &str { "test" }
-            fn user_id(&self) -> &str { "test" }
-            fn app_name(&self) -> &str { "test" }
-            fn session_id(&self) -> &str { "test" }
-            fn branch(&self) -> &str { "test" }
+            fn invocation_id(&self) -> &str {
+                "test"
+            }
+            fn agent_name(&self) -> &str {
+                "test"
+            }
+            fn user_id(&self) -> &str {
+                "test"
+            }
+            fn app_name(&self) -> &str {
+                "test"
+            }
+            fn session_id(&self) -> &str {
+                "test"
+            }
+            fn branch(&self) -> &str {
+                "test"
+            }
             fn user_content(&self) -> &zero_core::types::Content {
                 static CONTENT: zero_core::types::Content = zero_core::types::Content {
                     role: String::new(),
@@ -142,13 +154,19 @@ mod tests {
         }
 
         impl CallbackContext for MockCtx {
-            fn get_state(&self, _key: &str) -> Option<Value> { None }
+            fn get_state(&self, _key: &str) -> Option<Value> {
+                None
+            }
             fn set_state(&self, _key: String, _value: Value) {}
         }
 
         impl ToolContext for MockCtx {
-            fn function_call_id(&self) -> String { "test".to_string() }
-            fn actions(&self) -> EventActions { EventActions::default() }
+            fn function_call_id(&self) -> String {
+                "test".to_string()
+            }
+            fn actions(&self) -> EventActions {
+                EventActions::default()
+            }
             fn set_actions(&self, _actions: EventActions) {}
         }
 

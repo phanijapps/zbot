@@ -65,11 +65,7 @@ pub struct McpCommand {
 
 impl McpServerConfig {
     /// Create a new MCP server config.
-    pub fn new(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        transport: McpTransport,
-    ) -> Self {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, transport: McpTransport) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
@@ -153,7 +149,10 @@ impl McpServerConfig {
             }
             McpTransport::Http | McpTransport::Sse => {
                 if self.url.is_none() {
-                    return Err(format!("{} transport requires url", self.transport_as_str()));
+                    return Err(format!(
+                        "{} transport requires url",
+                        self.transport_as_str()
+                    ));
                 }
             }
         }

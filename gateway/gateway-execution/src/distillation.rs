@@ -24,9 +24,12 @@ use agent_runtime::llm::config::LlmConfig;
 use agent_runtime::llm::embedding::EmbeddingClient;
 use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
-use gateway_database::{ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact, MemoryRepository, SessionEpisode};
+use gateway_database::{
+    ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
+    MemoryRepository, SessionEpisode,
+};
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
-use knowledge_graph::{GraphStorage, Entity, EntityType, Relationship, RelationshipType};
+use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, RelationshipType};
 use serde::Deserialize;
 
 /// Distills completed sessions into structured memory facts.
@@ -106,10 +109,13 @@ fn verify_fact_confidence(
     tool_outputs: &[String],
 ) -> f64 {
     // Extract key terms from the fact (words > 3 chars, skip stopwords)
-    let stopwords = ["that", "this", "with", "from", "have", "been", "were", "will",
-                     "should", "would", "could", "their", "there", "about", "which",
-                     "when", "into", "also", "than", "then", "them", "very", "just"];
-    let key_terms: Vec<&str> = fact_content.split_whitespace()
+    let stopwords = [
+        "that", "this", "with", "from", "have", "been", "were", "will", "should", "would", "could",
+        "their", "there", "about", "which", "when", "into", "also", "than", "then", "them", "very",
+        "just",
+    ];
+    let key_terms: Vec<&str> = fact_content
+        .split_whitespace()
         .map(|w| w.trim_matches(|c: char| !c.is_alphanumeric()))
         .filter(|w| w.len() > 3)
         .filter(|w| !stopwords.contains(&w.to_lowercase().as_str()))
@@ -189,7 +195,9 @@ impl SessionDistiller {
     /// 2. orchestrator.provider_id / orchestrator.model (if set)
     /// 3. None (falls through to default provider in extract_all)
     fn resolve_distillation_target(&self) -> (Option<String>, Option<String>) {
-        let settings = self.settings_service.as_ref()
+        let settings = self
+            .settings_service
+            .as_ref()
             .and_then(|s| s.get_execution_settings().ok());
 
         let settings = match settings {
@@ -197,10 +205,16 @@ impl SessionDistiller {
             None => return (None, None),
         };
 
-        let provider_id = settings.distillation.provider_id.clone()
+        let provider_id = settings
+            .distillation
+            .provider_id
+            .clone()
             .or_else(|| settings.orchestrator.provider_id.clone());
 
-        let model = settings.distillation.model.clone()
+        let model = settings
+            .distillation
+            .model
+            .clone()
             .or_else(|| settings.orchestrator.model.clone());
 
         if provider_id.is_some() || model.is_some() {
@@ -251,11 +265,7 @@ impl SessionDistiller {
     /// entry when the repository is available — optimistic-failure pattern:
     /// insert with `status = 'failed'` up front, then update to `'success'`
     /// or `'skipped'` when the outcome is known.
-    pub async fn distill(
-        &self,
-        session_id: &str,
-        agent_id: &str,
-    ) -> Result<usize, String> {
+    pub async fn distill(&self, session_id: &str, agent_id: &str) -> Result<usize, String> {
         let started = std::time::Instant::now();
 
         // 1. Load session messages
@@ -279,7 +289,8 @@ impl SessionDistiller {
         self.record_pending(session_id);
 
         // Collect tool outputs from transcript for fact verification
-        let tool_outputs: Vec<String> = messages.iter()
+        let tool_outputs: Vec<String> = messages
+            .iter()
             .filter(|m| m.role == "tool")
             .map(|m| m.content.clone())
             .collect();
@@ -321,10 +332,12 @@ impl SessionDistiller {
         let mut upserted = 0;
 
         // Load existing facts for content-similarity dedup
-        let existing_facts = self.memory_repo
+        let existing_facts = self
+            .memory_repo
             .get_memory_facts(agent_id, None, 500)
             .unwrap_or_default();
-        let existing_contents: Vec<(String, String)> = existing_facts.iter()
+        let existing_contents: Vec<(String, String)> = existing_facts
+            .iter()
             .map(|f: &gateway_database::MemoryFact| (f.key.clone(), f.content.clone()))
             .collect();
 
@@ -338,7 +351,8 @@ impl SessionDistiller {
                 continue;
             }
 
-            let verified_confidence = verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
+            let verified_confidence =
+                verify_fact_confidence(&ef.content, ef.confidence, &tool_outputs);
 
             // Skip facts with very low grounding
             if verified_confidence < 0.2 {
@@ -348,15 +362,23 @@ impl SessionDistiller {
 
             // Content-similarity dedup: skip if an existing fact has 60%+ word overlap
             // (even with a different key). Prevents "user holds PTON" appearing 5 times.
-            let new_words: std::collections::HashSet<&str> = ef.content.split_whitespace().collect();
-            let is_duplicate = existing_contents.iter().any(|(existing_key, existing_content)| {
-                if existing_key == &ef.key { return false; } // Same key = upsert, not dedup
-                let existing_words: std::collections::HashSet<&str> = existing_content.split_whitespace().collect();
-                if new_words.is_empty() || existing_words.is_empty() { return false; }
-                let overlap = new_words.intersection(&existing_words).count();
-                let smaller = new_words.len().min(existing_words.len());
-                overlap as f64 / smaller as f64 > 0.6
-            });
+            let new_words: std::collections::HashSet<&str> =
+                ef.content.split_whitespace().collect();
+            let is_duplicate = existing_contents
+                .iter()
+                .any(|(existing_key, existing_content)| {
+                    if existing_key == &ef.key {
+                        return false;
+                    } // Same key = upsert, not dedup
+                    let existing_words: std::collections::HashSet<&str> =
+                        existing_content.split_whitespace().collect();
+                    if new_words.is_empty() || existing_words.is_empty() {
+                        return false;
+                    }
+                    let overlap = new_words.intersection(&existing_words).count();
+                    let smaller = new_words.len().min(existing_words.len());
+                    overlap as f64 / smaller as f64 > 0.6
+                });
             if is_duplicate {
                 tracing::debug!(key = %ef.key, "Skipping duplicate fact (60%+ content overlap with existing)");
                 continue;
@@ -401,7 +423,8 @@ impl SessionDistiller {
         // 5. Store entities and relationships in knowledge graph
         if let Some(graph) = &self.graph_storage {
             // Build entity map for relationship resolution
-            let mut entity_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut entity_map: std::collections::HashMap<String, String> =
+                std::collections::HashMap::new();
 
             for ee in &response.entities {
                 // Check if entity already exists (dedup by name, case-insensitive)
@@ -436,10 +459,12 @@ impl SessionDistiller {
 
             for er in &response.relationships {
                 // Resolve entity names to IDs (or use names as IDs if not found)
-                let source_id = entity_map.get(&er.source)
+                let source_id = entity_map
+                    .get(&er.source)
                     .cloned()
                     .unwrap_or_else(|| er.source.clone());
-                let target_id = entity_map.get(&er.target)
+                let target_id = entity_map
+                    .get(&er.target)
                     .cloned()
                     .unwrap_or_else(|| er.target.clone());
 
@@ -466,7 +491,10 @@ impl SessionDistiller {
         // 6. Store episode if extracted
         let mut episode_created = false;
         if let Some(ref extracted_episode) = response.episode {
-            match self.store_episode(session_id, agent_id, extracted_episode, &now).await {
+            match self
+                .store_episode(session_id, agent_id, extracted_episode, &now)
+                .await
+            {
                 Ok(true) => {
                     episode_created = true;
                     tracing::info!(
@@ -583,7 +611,14 @@ impl SessionDistiller {
         duration_ms: i64,
     ) {
         if let Some(repo) = &self.distillation_repo {
-            if let Err(e) = repo.update_success(session_id, facts, entities, rels, episode_created, duration_ms) {
+            if let Err(e) = repo.update_success(
+                session_id,
+                facts,
+                entities,
+                rels,
+                episode_created,
+                duration_ms,
+            ) {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation success");
             }
         }
@@ -603,7 +638,9 @@ impl SessionDistiller {
     /// Implements a provider fallback chain: tries the default provider first,
     /// then iterates through remaining providers if the LLM call fails.
     async fn extract_all(&self, transcript: &str) -> Result<DistillationResponse, String> {
-        let providers = self.provider_service.list()
+        let providers = self
+            .provider_service
+            .list()
             .map_err(|e| format!("Failed to list providers: {}", e))?;
 
         if providers.is_empty() {
@@ -624,7 +661,9 @@ impl SessionDistiller {
         // Order providers: target first (if specified), then default, then rest
         let default_idx = providers.iter().position(|p| p.is_default);
         let target_idx = target_provider_id.as_ref().and_then(|tid| {
-            providers.iter().position(|p| p.id.as_deref() == Some(tid.as_str()))
+            providers
+                .iter()
+                .position(|p| p.id.as_deref() == Some(tid.as_str()))
         });
 
         let ordered_indices: Vec<usize> = {
@@ -651,7 +690,9 @@ impl SessionDistiller {
             let provider = &providers[idx];
             // Use target model for first attempt (if configured), else provider default
             let model = if attempt == 0 {
-                target_model.clone().unwrap_or_else(|| provider.default_model().to_string())
+                target_model
+                    .clone()
+                    .unwrap_or_else(|| provider.default_model().to_string())
             } else {
                 provider.default_model().to_string()
             };
@@ -669,7 +710,10 @@ impl SessionDistiller {
             let client = match OpenAiClient::new(config) {
                 Ok(c) => Arc::new(c) as Arc<dyn LlmClient>,
                 Err(e) => {
-                    last_error = format!("Provider '{}': client creation failed: {}", provider.name, e);
+                    last_error = format!(
+                        "Provider '{}': client creation failed: {}",
+                        provider.name, e
+                    );
                     tracing::warn!(
                         provider = %provider.name,
                         error = %e,
@@ -707,20 +751,30 @@ impl SessionDistiller {
                         }
                         Err(parse_err) => {
                             // Log the raw response so we can debug what the LLM returned
-                            let preview = if content.len() > 800 { &content[..800] } else { content.as_str() };
+                            let preview = if content.len() > 800 {
+                                &content[..800]
+                            } else {
+                                content.as_str()
+                            };
                             tracing::warn!(
                                 provider = %provider.name,
                                 error = %parse_err,
                                 response_preview = %preview,
                                 "Distillation response could not be parsed — trying next provider"
                             );
-                            last_error = format!("Provider '{}': parse failed: {}", provider.name, parse_err);
+                            last_error = format!(
+                                "Provider '{}': parse failed: {}",
+                                provider.name, parse_err
+                            );
                             continue; // Try next provider — a different model might produce parseable JSON
                         }
                     }
                 }
                 Err(e) => {
-                    last_error = format!("Provider '{}' ({}): LLM call failed: {}", provider.name, provider_id, e);
+                    last_error = format!(
+                        "Provider '{}' ({}): LLM call failed: {}",
+                        provider.name, provider_id, e
+                    );
                     tracing::warn!(
                         provider = %provider.name,
                         provider_id = %provider_id,
@@ -731,7 +785,10 @@ impl SessionDistiller {
             }
         }
 
-        Err(format!("All providers failed for distillation. Last error: {}", last_error))
+        Err(format!(
+            "All providers failed for distillation. Last error: {}",
+            last_error
+        ))
     }
 
     // =========================================================================
@@ -975,7 +1032,10 @@ impl SessionDistiller {
             scope: "agent".to_string(),
             category: "correction".to_string(),
             key: fact_key,
-            content: format!("Recurring failure ({} episodes): {}", cluster_size, latest_key_learning),
+            content: format!(
+                "Recurring failure ({} episodes): {}",
+                cluster_size, latest_key_learning
+            ),
             confidence: (0.85 + 0.02 * cluster_size as f64).min(0.98),
             mention_count: cluster_size as i32,
             source_summary: Some("Clustered from repeated failures".to_string()),
@@ -1060,7 +1120,11 @@ fn build_transcript(messages: &[gateway_database::Message]) -> String {
         let content = if msg.role == "tool" {
             summarize_tool_result(&msg.content)
         } else if msg.content.len() > 1000 {
-            format!("{}... [truncated, {} chars total]", zero_core::truncate_str(&msg.content, 1000), msg.content.len())
+            format!(
+                "{}... [truncated, {} chars total]",
+                zero_core::truncate_str(&msg.content, 1000),
+                msg.content.len()
+            )
         } else {
             msg.content.clone()
         };
@@ -1069,8 +1133,14 @@ fn build_transcript(messages: &[gateway_database::Message]) -> String {
         let tool_info = if let Some(tc) = &msg.tool_calls {
             match serde_json::from_str::<Vec<serde_json::Value>>(tc) {
                 Ok(calls) => {
-                    let names: Vec<String> = calls.iter()
-                        .filter_map(|c| c.get("tool_name").or(c.get("name")).and_then(|n| n.as_str()).map(String::from))
+                    let names: Vec<String> = calls
+                        .iter()
+                        .filter_map(|c| {
+                            c.get("tool_name")
+                                .or(c.get("name"))
+                                .and_then(|n| n.as_str())
+                                .map(String::from)
+                        })
                         .collect();
                     if names.is_empty() {
                         String::new()
@@ -1110,22 +1180,40 @@ fn summarize_tool_result(content: &str) -> String {
                 let stderr = obj.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
                 let mut result = format!("[exit_code: {}]", exit_code);
                 if !stdout.trim().is_empty() {
-                    let truncated = if stdout.len() > 500 { &stdout[..500] } else { stdout };
+                    let truncated = if stdout.len() > 500 {
+                        &stdout[..500]
+                    } else {
+                        stdout
+                    };
                     result.push_str(&format!(" {}", truncated.trim()));
                 }
                 if !stderr.trim().is_empty() && exit_code != 0 {
-                    let truncated = if stderr.len() > 300 { &stderr[..300] } else { stderr };
+                    let truncated = if stderr.len() > 300 {
+                        &stderr[..300]
+                    } else {
+                        stderr
+                    };
                     result.push_str(&format!(" STDERR: {}", truncated.trim()));
                 }
                 return result;
             }
             // Delegation result
             if let Some(message) = obj.get("message").and_then(|v| v.as_str()) {
-                return format!("[delegation result] {}", if message.len() > 500 { &message[..500] } else { message });
+                return format!(
+                    "[delegation result] {}",
+                    if message.len() > 500 {
+                        &message[..500]
+                    } else {
+                        message
+                    }
+                );
             }
             // Ward change
             if obj.get("__ward_changed__").is_some() {
-                let action = obj.get("action").and_then(|v| v.as_str()).unwrap_or("changed");
+                let action = obj
+                    .get("action")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("changed");
                 return format!("[ward {}]", action);
             }
         }
@@ -1201,8 +1289,15 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
     }
 
     // All parsing failed — this is a real error, not "nothing to extract"
-    let preview = if trimmed.len() > 500 { &trimmed[..500] } else { trimmed };
-    Err(format!("Failed to parse distillation response. Preview: {}", preview))
+    let preview = if trimmed.len() > 500 {
+        &trimmed[..500]
+    } else {
+        trimmed
+    };
+    Err(format!(
+        "Failed to parse distillation response. Preview: {}",
+        preview
+    ))
 }
 
 /// Try to extract a DistillationResponse from an arbitrary JSON Value.
@@ -1210,19 +1305,23 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
 fn parse_distillation_from_value(val: &serde_json::Value) -> Result<DistillationResponse, String> {
     let obj = val.as_object().ok_or("Response is not a JSON object")?;
 
-    let facts: Vec<ExtractedFact> = obj.get("facts")
+    let facts: Vec<ExtractedFact> = obj
+        .get("facts")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let entities: Vec<ExtractedEntity> = obj.get("entities")
+    let entities: Vec<ExtractedEntity> = obj
+        .get("entities")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let relationships: Vec<ExtractedRelationship> = obj.get("relationships")
+    let relationships: Vec<ExtractedRelationship> = obj
+        .get("relationships")
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
 
-    let episode: Option<ExtractedEpisode> = obj.get("episode")
+    let episode: Option<ExtractedEpisode> = obj
+        .get("episode")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
     if facts.is_empty() && entities.is_empty() && episode.is_none() {
@@ -1235,7 +1334,12 @@ fn parse_distillation_from_value(val: &serde_json::Value) -> Result<Distillation
         );
     }
 
-    Ok(DistillationResponse { facts, entities, relationships, episode })
+    Ok(DistillationResponse {
+        facts,
+        entities,
+        relationships,
+        episode,
+    })
 }
 
 /// Extract JSON content from text that may contain markdown code blocks.
@@ -1468,8 +1572,14 @@ mod tests {
         let ep = resp.episode.unwrap();
         assert_eq!(ep.outcome, "success");
         assert_eq!(ep.task_summary, "User asked to analyze portfolio data");
-        assert_eq!(ep.strategy_used.as_deref(), Some("delegated to data-analyst for technicals"));
-        assert_eq!(ep.key_learnings.as_deref(), Some("CSV parsing worked well with pandas"));
+        assert_eq!(
+            ep.strategy_used.as_deref(),
+            Some("delegated to data-analyst for technicals")
+        );
+        assert_eq!(
+            ep.key_learnings.as_deref(),
+            Some("CSV parsing worked well with pandas")
+        );
     }
 
     #[test]
@@ -1499,7 +1609,10 @@ mod tests {
 
     #[test]
     fn test_sanitize_task_type_basic() {
-        assert_eq!(sanitize_task_type("Analyze portfolio data"), "analyze_portfolio_data");
+        assert_eq!(
+            sanitize_task_type("Analyze portfolio data"),
+            "analyze_portfolio_data"
+        );
     }
 
     #[test]
@@ -1512,12 +1625,18 @@ mod tests {
 
     #[test]
     fn test_sanitize_task_type_with_dots() {
-        assert_eq!(sanitize_task_type("Fix config.toml parsing"), "fix_config_toml_parsing");
+        assert_eq!(
+            sanitize_task_type("Fix config.toml parsing"),
+            "fix_config_toml_parsing"
+        );
     }
 
     #[test]
     fn test_sanitize_task_type_special_chars() {
-        assert_eq!(sanitize_task_type("Build & deploy (v2)"), "build__deploy_v2");
+        assert_eq!(
+            sanitize_task_type("Build & deploy (v2)"),
+            "build__deploy_v2"
+        );
     }
 
     #[test]

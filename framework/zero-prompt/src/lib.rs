@@ -12,8 +12,8 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-mod template;
 mod error;
+mod template;
 
 pub use error::{PromptError, Result};
-pub use template::{Template, TemplateRenderer, inject_session_state};
+pub use template::{inject_session_state, Template, TemplateRenderer};

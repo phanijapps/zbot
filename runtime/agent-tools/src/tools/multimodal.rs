@@ -7,21 +7,25 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
-use zero_core::types::ContentSource;
 use zero_core::multimodal::rehydrate_source;
+use zero_core::types::ContentSource;
+use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
 pub struct MultimodalAnalyzeTool;
 
 impl MultimodalAnalyzeTool {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait]
 impl Tool for MultimodalAnalyzeTool {
-    fn name(&self) -> &str { "multimodal_analyze" }
+    fn name(&self) -> &str {
+        "multimodal_analyze"
+    }
 
     fn description(&self) -> &str {
         "Analyze images, PDFs, or documents using a vision-capable model. \
@@ -53,14 +57,18 @@ impl Tool for MultimodalAnalyzeTool {
         }))
     }
 
-    fn permissions(&self) -> ToolPermissions { ToolPermissions::safe() }
+    fn permissions(&self) -> ToolPermissions {
+        ToolPermissions::safe()
+    }
 
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let content_items = args.get("content")
+        let content_items = args
+            .get("content")
             .and_then(|v| v.as_array())
             .ok_or_else(|| ZeroError::Tool("'content' must be an array".to_string()))?;
 
-        let prompt = args.get("prompt")
+        let prompt = args
+            .get("prompt")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("'prompt' is required".to_string()))?;
 
@@ -72,13 +80,25 @@ impl Tool for MultimodalAnalyzeTool {
                 "No multimodal model configured. Add a vision-capable model to Settings > Advanced > Multimodal.".to_string()
             ))?;
 
-        let base_url = config.get("baseUrl").and_then(|v| v.as_str())
-            .ok_or_else(|| ZeroError::Tool("multimodal provider baseUrl not resolved".to_string()))?;
+        let base_url = config
+            .get("baseUrl")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                ZeroError::Tool("multimodal provider baseUrl not resolved".to_string())
+            })?;
         let api_key = config.get("apiKey").and_then(|v| v.as_str()).unwrap_or("");
-        let model = config.get("model").and_then(|v| v.as_str())
+        let model = config
+            .get("model")
+            .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("multimodal.model not configured".to_string()))?;
-        let temperature = config.get("temperature").and_then(|v| v.as_f64()).unwrap_or(0.3);
-        let max_tokens = config.get("maxTokens").and_then(|v| v.as_u64()).unwrap_or(4096);
+        let temperature = config
+            .get("temperature")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.3);
+        let max_tokens = config
+            .get("maxTokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(4096);
 
         // Build OpenAI content array from inputs
         let mut content_blocks: Vec<Value> = Vec::new();
@@ -88,19 +108,25 @@ impl Tool for MultimodalAnalyzeTool {
 
         for item in content_items {
             let content_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("image");
-            let source_str = item.get("source").and_then(|v| v.as_str())
-                .ok_or_else(|| ZeroError::Tool("Each content item must have a 'source'".to_string()))?;
+            let source_str = item.get("source").and_then(|v| v.as_str()).ok_or_else(|| {
+                ZeroError::Tool("Each content item must have a 'source'".to_string())
+            })?;
 
             let source = resolve_source(source_str)?;
 
             match content_type {
                 "image" => {
-                    let detail = item.get("detail").and_then(|v| v.as_str()).unwrap_or("auto");
+                    let detail = item
+                        .get("detail")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("auto");
                     let mime_type = infer_image_mime(source_str);
                     let resolved = rehydrate_source(&source)
                         .map_err(|e| ZeroError::Tool(format!("Failed to resolve image: {}", e)))?;
                     let url = match &resolved {
-                        ContentSource::Base64(data) => format!("data:{};base64,{}", mime_type, data),
+                        ContentSource::Base64(data) => {
+                            format!("data:{};base64,{}", mime_type, data)
+                        }
                         ContentSource::Url(url) => url.clone(),
                         ContentSource::FileRef(_) => unreachable!(),
                     };
@@ -114,7 +140,9 @@ impl Tool for MultimodalAnalyzeTool {
                     let resolved = rehydrate_source(&source)
                         .map_err(|e| ZeroError::Tool(format!("Failed to resolve file: {}", e)))?;
                     let url = match &resolved {
-                        ContentSource::Base64(data) => format!("data:{};base64,{}", mime_type, data),
+                        ContentSource::Base64(data) => {
+                            format!("data:{};base64,{}", mime_type, data)
+                        }
                         ContentSource::Url(url) => url.clone(),
                         ContentSource::FileRef(_) => unreachable!(),
                     };
@@ -151,7 +179,8 @@ impl Tool for MultimodalAnalyzeTool {
         tracing::info!("multimodal_analyze: calling {} with model {}", url, model);
 
         let client = reqwest::Client::new();
-        let mut request = client.post(&url)
+        let mut request = client
+            .post(&url)
             .header("Content-Type", "application/json")
             .json(&body);
 
@@ -159,18 +188,23 @@ impl Tool for MultimodalAnalyzeTool {
             request = request.header("Authorization", format!("Bearer {}", api_key));
         }
 
-        let response = request.send().await
+        let response = request
+            .send()
+            .await
             .map_err(|e| ZeroError::Tool(format!("Multimodal API call failed: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(ZeroError::Tool(format!(
-                "Multimodal API error ({}): {}", status, error_text
+                "Multimodal API error ({}): {}",
+                status, error_text
             )));
         }
 
-        let response_json: Value = response.json().await
+        let response_json: Value = response
+            .json()
+            .await
             .map_err(|e| ZeroError::Tool(format!("Failed to parse API response: {}", e)))?;
 
         // Extract the assistant's response content
@@ -216,19 +250,32 @@ fn resolve_source(source: &str) -> Result<ContentSource> {
 
 fn infer_image_mime(source: &str) -> String {
     let lower = source.to_lowercase();
-    if lower.ends_with(".png") { "image/png".to_string() }
-    else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") { "image/jpeg".to_string() }
-    else if lower.ends_with(".webp") { "image/webp".to_string() }
-    else if lower.ends_with(".gif") { "image/gif".to_string() }
-    else { "image/png".to_string() }
+    if lower.ends_with(".png") {
+        "image/png".to_string()
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg".to_string()
+    } else if lower.ends_with(".webp") {
+        "image/webp".to_string()
+    } else if lower.ends_with(".gif") {
+        "image/gif".to_string()
+    } else {
+        "image/png".to_string()
+    }
 }
 
 fn infer_file_mime(source: &str) -> String {
     let lower = source.to_lowercase();
-    if lower.ends_with(".pdf") { "application/pdf".to_string() }
-    else if lower.ends_with(".csv") { "text/csv".to_string() }
-    else if lower.ends_with(".txt") { "text/plain".to_string() }
-    else if lower.ends_with(".html") || lower.ends_with(".htm") { "text/html".to_string() }
-    else if lower.ends_with(".json") { "application/json".to_string() }
-    else { "application/octet-stream".to_string() }
+    if lower.ends_with(".pdf") {
+        "application/pdf".to_string()
+    } else if lower.ends_with(".csv") {
+        "text/csv".to_string()
+    } else if lower.ends_with(".txt") {
+        "text/plain".to_string()
+    } else if lower.ends_with(".html") || lower.ends_with(".htm") {
+        "text/html".to_string()
+    } else if lower.ends_with(".json") {
+        "application/json".to_string()
+    } else {
+        "application/octet-stream".to_string()
+    }
 }

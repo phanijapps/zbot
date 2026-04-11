@@ -6,18 +6,20 @@
 //! and performance pragmas applied to every connection.
 
 mod connection;
-pub mod repository;
-pub mod memory_repository;
-pub mod memory_fact_store;
 pub mod distillation_repository;
 pub mod episode_repository;
+pub mod memory_fact_store;
+pub mod memory_repository;
 pub mod recall_log_repository;
+pub mod repository;
 mod schema;
 
 pub use connection::DatabaseManager;
-pub use repository::{ConversationRepository, Message};
-pub use memory_repository::{MemoryRepository, MemoryFact, ScoredFact};
-pub use memory_fact_store::GatewayMemoryFactStore;
-pub use distillation_repository::{DistillationRepository, DistillationRun, DistillationStats, UndistilledSession};
+pub use distillation_repository::{
+    DistillationRepository, DistillationRun, DistillationStats, UndistilledSession,
+};
 pub use episode_repository::{EpisodeRepository, SessionEpisode};
+pub use memory_fact_store::GatewayMemoryFactStore;
+pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact};
 pub use recall_log_repository::RecallLogRepository;
+pub use repository::{ConversationRepository, Message};

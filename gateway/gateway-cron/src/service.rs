@@ -2,7 +2,7 @@
 //!
 //! CRUD operations and persistence for cron jobs.
 
-use crate::config::{CronJobConfig, CronJobsStore, CreateCronJobRequest, UpdateCronJobRequest};
+use crate::config::{CreateCronJobRequest, CronJobConfig, CronJobsStore, UpdateCronJobRequest};
 use gateway_services::SharedVaultPaths;
 use std::path::PathBuf;
 use thiserror::Error;
@@ -165,7 +165,11 @@ impl CronService {
     }
 
     /// Update an existing cron job.
-    pub async fn update(&self, id: &str, request: UpdateCronJobRequest) -> CronResult<CronJobConfig> {
+    pub async fn update(
+        &self,
+        id: &str,
+        request: UpdateCronJobRequest,
+    ) -> CronResult<CronJobConfig> {
         // Validate schedule if provided
         if let Some(ref schedule) = request.schedule {
             Self::validate_schedule(schedule)?;

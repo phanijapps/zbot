@@ -6,18 +6,18 @@
 //!
 //! Manager for MCP server connections and tool execution.
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-use serde_json::Value;
 use tokio::sync::RwLock;
 
 use super::client::McpClient;
 use super::config::McpServerConfig;
 use super::error::McpError;
-use super::tool::McpTool;
 use super::http::HttpMcpClient;
-use super::stdio::StdioMcpClient;
 use super::sse::SseMcpClient;
+use super::stdio::StdioMcpClient;
+use super::tool::McpTool;
 
 /// Manager for MCP server connections
 pub struct McpManager {
@@ -46,7 +46,14 @@ impl McpManager {
     /// Start an MCP server connection
     pub async fn start_server(&self, config: McpServerConfig) -> Result<(), McpError> {
         match config {
-            McpServerConfig::Stdio { id, name, command, args, env, .. } => {
+            McpServerConfig::Stdio {
+                id,
+                name,
+                command,
+                args,
+                env,
+                ..
+            } => {
                 let id = id.unwrap_or_else(|| name.clone());
                 let client = Arc::new(StdioMcpClient::new(
                     id.clone(),
@@ -58,22 +65,55 @@ impl McpManager {
                 self.servers.write().await.insert(id, client);
                 Ok(())
             }
-            McpServerConfig::Http { id, name, url, headers, .. } => {
+            McpServerConfig::Http {
+                id,
+                name,
+                url,
+                headers,
+                ..
+            } => {
                 let id = id.unwrap_or_else(|| name.clone());
-                let client = Arc::new(HttpMcpClient::new(id.clone(), name, url, headers.unwrap_or_default()));
+                let client = Arc::new(HttpMcpClient::new(
+                    id.clone(),
+                    name,
+                    url,
+                    headers.unwrap_or_default(),
+                ));
                 self.servers.write().await.insert(id, client);
                 Ok(())
             }
-            McpServerConfig::Sse { id, name, url, headers, .. } => {
+            McpServerConfig::Sse {
+                id,
+                name,
+                url,
+                headers,
+                ..
+            } => {
                 let id = id.unwrap_or_else(|| name.clone());
-                let client = Arc::new(SseMcpClient::new(id.clone(), name, url, headers.unwrap_or_default()));
+                let client = Arc::new(SseMcpClient::new(
+                    id.clone(),
+                    name,
+                    url,
+                    headers.unwrap_or_default(),
+                ));
                 self.servers.write().await.insert(id, client);
                 Ok(())
             }
-            McpServerConfig::StreamableHttp { id, name, url, headers, .. } => {
+            McpServerConfig::StreamableHttp {
+                id,
+                name,
+                url,
+                headers,
+                ..
+            } => {
                 let id = id.unwrap_or_else(|| name.clone());
                 // Streamable-http uses the same client as HTTP for now
-                let client = Arc::new(HttpMcpClient::new(id.clone(), name, url, headers.unwrap_or_default()));
+                let client = Arc::new(HttpMcpClient::new(
+                    id.clone(),
+                    name,
+                    url,
+                    headers.unwrap_or_default(),
+                ));
                 self.servers.write().await.insert(id, client);
                 Ok(())
             }
@@ -92,7 +132,9 @@ impl McpManager {
         tool_name: &str,
         arguments: Value,
     ) -> Result<Value, McpError> {
-        let client = self.get_client(server_id).await
+        let client = self
+            .get_client(server_id)
+            .await
             .ok_or_else(|| McpError::ServerNotFound(server_id.to_string()))?;
 
         client.call_tool(tool_name, arguments).await

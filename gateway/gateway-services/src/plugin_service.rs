@@ -128,9 +128,7 @@ impl PluginService {
     /// Get the config file path for a plugin.
     /// Returns: plugins/{plugin_id}/.config.json
     fn config_path(&self, plugin_id: &str) -> PathBuf {
-        self.plugins_dir
-            .join(plugin_id)
-            .join(CONFIG_FILE_NAME)
+        self.plugins_dir.join(plugin_id).join(CONFIG_FILE_NAME)
     }
 
     /// Get the plugin directory path.
@@ -247,12 +245,7 @@ impl PluginService {
     }
 
     /// Set a secret value in a plugin's config.
-    pub fn set_secret(
-        &self,
-        plugin_id: &str,
-        key: String,
-        value: String,
-    ) -> Result<(), String> {
+    pub fn set_secret(&self, plugin_id: &str, key: String, value: String) -> Result<(), String> {
         let mut config = self.load_config(plugin_id);
         config.set_secret(key, value);
         self.save_config(plugin_id, &config)
@@ -352,7 +345,9 @@ mod tests {
 
         let service = PluginService::new(plugins_dir);
 
-        service.set_secret("slack", "bot_token".to_string(), "xoxb-123".to_string()).unwrap();
+        service
+            .set_secret("slack", "bot_token".to_string(), "xoxb-123".to_string())
+            .unwrap();
 
         let secret = service.get_secret("slack", "bot_token").unwrap();
         assert_eq!(secret, "xoxb-123");
@@ -371,7 +366,9 @@ mod tests {
 
         let service = PluginService::new(plugins_dir);
 
-        service.set_secret("slack", "token".to_string(), "secret".to_string()).unwrap();
+        service
+            .set_secret("slack", "token".to_string(), "secret".to_string())
+            .unwrap();
         assert!(service.delete_secret("slack", "token").unwrap());
         assert!(!service.delete_secret("slack", "token").unwrap());
     }

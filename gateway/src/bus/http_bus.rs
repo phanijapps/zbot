@@ -4,10 +4,10 @@
 //! interface for HTTP-based session management.
 
 use super::{BusError, GatewayBus, SessionHandle, SessionRequest};
+use crate::database::DatabaseManager;
 use crate::execution::{ExecutionConfig, ExecutionRunner};
 use async_trait::async_trait;
 use execution_state::{SessionStatus, StateService};
-use crate::database::DatabaseManager;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -120,7 +120,8 @@ impl GatewayBus for HttpGatewayBus {
         // If thread_id provided but no session_id, try to find existing session
         if request.thread_id.is_some() && request.session_id.is_none() {
             if let Some(thread_id) = &request.thread_id {
-                if let Ok(Some(existing)) = self.state_service.find_session_by_thread_id(thread_id) {
+                if let Ok(Some(existing)) = self.state_service.find_session_by_thread_id(thread_id)
+                {
                     tracing::info!(
                         thread_id = %thread_id,
                         session_id = %existing.id,
@@ -232,8 +233,8 @@ mod tests {
         assert!(new_session.session_id.is_none());
 
         // Continue session: has session_id
-        let continue_session = SessionRequest::new("root", "Continue conversation")
-            .with_session_id("sess-existing");
+        let continue_session =
+            SessionRequest::new("root", "Continue conversation").with_session_id("sess-existing");
         assert!(continue_session.session_id.is_some());
     }
 
@@ -249,11 +250,7 @@ mod tests {
 
         for (source, name) in sources {
             let request = SessionRequest::new("root", "test").with_source(source.clone());
-            assert_eq!(
-                request.source, source,
-                "Source mismatch for {}",
-                name
-            );
+            assert_eq!(request.source, source, "Source mismatch for {}", name);
         }
     }
 
@@ -397,7 +394,8 @@ mod tests {
 
     #[test]
     fn bus_error_provider_not_configured() {
-        let err = BusError::ProviderError("No API key configured for provider 'anthropic'".to_string());
+        let err =
+            BusError::ProviderError("No API key configured for provider 'anthropic'".to_string());
 
         match &err {
             BusError::ProviderError(msg) => assert!(msg.contains("anthropic")),

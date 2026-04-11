@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::time::timeout;
 
@@ -204,12 +204,8 @@ impl ShellTool {
     /// These are safe commands that frequently trigger false positives due to
     /// substring matching on their content (e.g., python scripts containing "rm",
     /// cat heredocs with backticks).
-    const ALLOWED_PREFIXES: &'static [&'static str] = &[
-        "python ",
-        "python3 ",
-        "python.exe ",
-        "python3.exe ",
-    ];
+    const ALLOWED_PREFIXES: &'static [&'static str] =
+        &["python ", "python3 ", "python.exe ", "python3.exe "];
 
     /// Validate a command against security rules
     fn validate_command(command: &str) -> Result<()> {
@@ -222,7 +218,8 @@ impl ShellTool {
         // apply_patch heredocs are excluded inside is_file_writing_command().
         if is_file_writing_command(&command_normalized) {
             return Err(ZeroError::Tool(
-                "Use the apply_patch tool for file creation/editing, not shell commands.".to_string()
+                "Use the apply_patch tool for file creation/editing, not shell commands."
+                    .to_string(),
             ));
         }
 
@@ -263,7 +260,9 @@ impl ShellTool {
         }
 
         // Block backtick command substitution with dangerous commands
-        if command.contains('`') && (command.contains("rm ") || command.contains("dd if=") || command.contains("dd of=")) {
+        if command.contains('`')
+            && (command.contains("rm ") || command.contains("dd if=") || command.contains("dd of="))
+        {
             return Err(ZeroError::Tool(
                 "Command blocked: potential command injection".to_string(),
             ));
@@ -303,7 +302,10 @@ impl ShellTool {
         if output.len() > max_size {
             let truncated = output.chars().take(max_size).collect::<String>();
             (
-                format!("{}\n\n[Output truncated - exceeded {} bytes]", truncated, max_size),
+                format!(
+                    "{}\n\n[Output truncated - exceeded {} bytes]",
+                    truncated, max_size
+                ),
                 true,
             )
         } else {
@@ -363,7 +365,10 @@ impl Tool for ShellTool {
         // Check for error markers from truncated/malformed tool calls.
         // Return a result (not error) with recovery guidance so the agent can retry.
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
-            let original_len = args.get("__original_length__").and_then(|v| v.as_u64()).unwrap_or(0);
+            let original_len = args
+                .get("__original_length__")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(0);
             let guidance = if error_type == "TRUNCATED_ARGUMENTS" {
                 format!(
                     "Your shell command was too large ({} bytes) and was truncated. \
@@ -375,7 +380,10 @@ impl Tool for ShellTool {
                     original_len
                 )
             } else {
-                let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+                let message = args
+                    .get("__message__")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Unknown error");
                 format!("Shell command could not be parsed: {}", message)
             };
             return Ok(json!({
@@ -432,7 +440,10 @@ impl Tool for ShellTool {
 
         #[cfg(windows)]
         let (shell, shell_args) = if use_wsl {
-            ("wsl".to_string(), vec!["bash".to_string(), "-c".to_string()])
+            (
+                "wsl".to_string(),
+                vec!["bash".to_string(), "-c".to_string()],
+            )
         } else {
             Self::get_shell()
         };
@@ -520,17 +531,17 @@ impl Tool for ShellTool {
                 }
             }
             if ward_dir.exists() {
-                tracing::debug!("Shell: cwd set to {} (ward: {})", ward_dir.display(), ward_id);
+                tracing::debug!(
+                    "Shell: cwd set to {} (ward: {})",
+                    ward_dir.display(),
+                    ward_id
+                );
                 cmd.current_dir(&ward_dir);
             }
         }
 
         // Execute with timeout
-        let result = timeout(
-            Duration::from_secs(timeout_seconds),
-            cmd.output(),
-        )
-        .await;
+        let result = timeout(Duration::from_secs(timeout_seconds), cmd.output()).await;
 
         match result {
             Ok(Ok(output)) => {
@@ -559,15 +570,11 @@ impl Tool for ShellTool {
                     "shell": shell,
                 }))
             }
-            Ok(Err(e)) => {
-                Err(ZeroError::Tool(format!("Failed to execute command: {}", e)))
-            }
-            Err(_) => {
-                Err(ZeroError::Tool(format!(
-                    "Command timed out after {} seconds",
-                    timeout_seconds
-                )))
-            }
+            Ok(Err(e)) => Err(ZeroError::Tool(format!("Failed to execute command: {}", e))),
+            Err(_) => Err(ZeroError::Tool(format!(
+                "Command timed out after {} seconds",
+                timeout_seconds
+            ))),
         }
     }
 }
@@ -626,7 +633,7 @@ fn is_windows_admin() -> bool {
 
     use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
     use windows_sys::Win32::Security::{
-        GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY,
+        GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
     };
     use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 

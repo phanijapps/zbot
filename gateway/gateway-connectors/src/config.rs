@@ -348,6 +348,9 @@ mod tests {
         assert_eq!(parsed.capabilities.len(), 1);
         assert_eq!(parsed.resources.len(), 1);
         assert_eq!(parsed.response_schemas.len(), 1);
-        assert_eq!(parsed.context.as_deref(), Some("This connector bridges Gmail."));
+        assert_eq!(
+            parsed.context.as_deref(),
+            Some("This connector bridges Gmail.")
+        );
     }
 }

@@ -73,10 +73,7 @@ pub async fn upload_file(
     };
 
     // Capture metadata before consuming the field body.
-    let original_filename = field
-        .file_name()
-        .unwrap_or("unnamed")
-        .to_string();
+    let original_filename = field.file_name().unwrap_or("unnamed").to_string();
     let content_type = field
         .content_type()
         .unwrap_or("application/octet-stream")

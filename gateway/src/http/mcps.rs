@@ -189,10 +189,7 @@ pub async fn create_mcp(
         Ok(()) => Ok(Json(config)),
         Err(e) => {
             tracing::error!("Failed to create MCP server: {}", e);
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse { error: e }),
-            ))
+            Err((StatusCode::BAD_REQUEST, Json(ErrorResponse { error: e })))
         }
     }
 }
@@ -236,10 +233,7 @@ pub async fn delete_mcp(
         Ok(()) => Ok(StatusCode::NO_CONTENT),
         Err(e) => {
             tracing::warn!("Failed to delete MCP server: {} - {}", id, e);
-            Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse { error: e }),
-            ))
+            Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: e })))
         }
     }
 }
@@ -261,10 +255,7 @@ pub async fn test_mcp(
     let config = match state.mcp_service.get(&id) {
         Ok(c) => c,
         Err(e) => {
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(ErrorResponse { error: e }),
-            ));
+            return Err((StatusCode::NOT_FOUND, Json(ErrorResponse { error: e })));
         }
     };
 
@@ -286,21 +277,17 @@ pub async fn test_mcp(
                         tools: Some(tool_names),
                     }))
                 }
-                Err(e) => {
-                    Ok(Json(McpTestResult {
-                        success: false,
-                        message: format!("Connected but failed to list tools: {}", e),
-                        tools: None,
-                    }))
-                }
+                Err(e) => Ok(Json(McpTestResult {
+                    success: false,
+                    message: format!("Connected but failed to list tools: {}", e),
+                    tools: None,
+                })),
             }
         }
-        Err(e) => {
-            Ok(Json(McpTestResult {
-                success: false,
-                message: format!("Failed to connect: {}", e),
-                tools: None,
-            }))
-        }
+        Err(e) => Ok(Json(McpTestResult {
+            success: false,
+            message: format!("Failed to connect: {}", e),
+            tools: None,
+        })),
     }
 }

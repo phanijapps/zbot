@@ -328,13 +328,7 @@ mod tests {
             updated_at: None,
         };
 
-        let result = dispatch(
-            &connector,
-            "test",
-            serde_json::json!({}),
-            &test_context(),
-        )
-        .await;
+        let result = dispatch(&connector, "test", serde_json::json!({}), &test_context()).await;
 
         assert!(matches!(result, Err(DispatchError::Disabled(_))));
     }
@@ -358,13 +352,7 @@ mod tests {
             updated_at: None,
         };
 
-        let result = dispatch(
-            &connector,
-            "test",
-            serde_json::json!({}),
-            &test_context(),
-        )
-        .await;
+        let result = dispatch(&connector, "test", serde_json::json!({}), &test_context()).await;
 
         assert!(matches!(result, Err(DispatchError::OutboundDisabled(_))));
     }

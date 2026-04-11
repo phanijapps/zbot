@@ -13,9 +13,11 @@ use fs2::FileExt;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError};
+use zero_core::{
+    FileSystemContext, MemoryFactStore, Result, Tool, ToolContext, ToolPermissions, ZeroError,
+};
 
 // ============================================================================
 // CONFIGURATION
@@ -71,7 +73,10 @@ pub struct MemoryTool {
 impl MemoryTool {
     /// Create a new MemoryTool with file system context and optional fact store.
     #[must_use]
-    pub fn new(fs: Arc<dyn FileSystemContext>, fact_store: Option<Arc<dyn MemoryFactStore>>) -> Self {
+    pub fn new(
+        fs: Arc<dyn FileSystemContext>,
+        fact_store: Option<Arc<dyn MemoryFactStore>>,
+    ) -> Self {
         Self { fs, fact_store }
     }
 
@@ -113,9 +118,7 @@ impl MemoryTool {
                 .fs
                 .agent_data_dir(agent_id)
                 .map(|dir| dir.join(MEMORY_FILE))
-                .ok_or_else(|| {
-                    ZeroError::Tool("No agent data directory configured".to_string())
-                }),
+                .ok_or_else(|| ZeroError::Tool("No agent data directory configured".to_string())),
         }
     }
 
@@ -160,7 +163,9 @@ impl MemoryTool {
             .create(true)
             .truncate(true)
             .open(path)
-            .map_err(|e| ZeroError::Tool(format!("Failed to open memory file for writing: {}", e)))?;
+            .map_err(|e| {
+                ZeroError::Tool(format!("Failed to open memory file for writing: {}", e))
+            })?;
 
         // Acquire exclusive lock (blocks all other access)
         file.lock_exclusive()
@@ -264,7 +269,10 @@ impl Tool for MemoryTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         // Check for error markers from truncated/malformed tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
-            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            let message = args
+                .get("__message__")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
             return Err(ZeroError::Tool(format!("{}: {}", error_type, message)));
         }
 
@@ -510,12 +518,10 @@ impl MemoryTool {
 
         // Use DB-backed fact store if available
         match &self.fact_store {
-            Some(store) => {
-                store
-                    .save_fact(agent_id, category, key, content, confidence, None)
-                    .await
-                    .map_err(|e| ZeroError::Tool(e))
-            }
+            Some(store) => store
+                .save_fact(agent_id, category, key, content, confidence, None)
+                .await
+                .map_err(|e| ZeroError::Tool(e)),
             None => {
                 // Fallback: store in legacy KV file
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
@@ -561,19 +567,14 @@ impl MemoryTool {
             .and_then(|v| v.as_str())
             .ok_or_else(|| ZeroError::Tool("Missing 'query' for recall".to_string()))?;
 
-        let limit = args
-            .get("limit")
-            .and_then(|v| v.as_u64())
-            .unwrap_or(5) as usize;
+        let limit = args.get("limit").and_then(|v| v.as_u64()).unwrap_or(5) as usize;
 
         // Use DB-backed fact store if available — prioritized recall
         match &self.fact_store {
-            Some(store) => {
-                store
-                    .recall_facts_prioritized(agent_id, query, limit)
-                    .await
-                    .map_err(|e| ZeroError::Tool(e))
-            }
+            Some(store) => store
+                .recall_facts_prioritized(agent_id, query, limit)
+                .await
+                .map_err(|e| ZeroError::Tool(e)),
             None => {
                 // Fallback: search KV store with category-aware ordering
                 let kv_path = self.resolve_memory_path(agent_id, "agent", None)?;
@@ -603,7 +604,10 @@ impl MemoryTool {
                     .filter(|(k, entry)| {
                         k.to_lowercase().contains(&query_lower)
                             || entry.value.to_lowercase().contains(&query_lower)
-                            || entry.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                            || entry
+                                .tags
+                                .iter()
+                                .any(|t| t.to_lowercase().contains(&query_lower))
                     })
                     .map(|(key, entry)| {
                         let weight = category_weight(&entry.tags);
@@ -656,7 +660,10 @@ impl MemoryTool {
             .filter(|(key, entry)| {
                 key.to_lowercase().contains(&query_lower)
                     || entry.value.to_lowercase().contains(&query_lower)
-                    || entry.tags.iter().any(|t| t.to_lowercase().contains(&query_lower))
+                    || entry
+                        .tags
+                        .iter()
+                        .any(|t| t.to_lowercase().contains(&query_lower))
             })
             .map(|(key, entry)| {
                 json!({
@@ -748,7 +755,9 @@ mod tests {
         let fs = Arc::new(TestFileSystem::new(dir.path().to_path_buf()));
         let tool = MemoryTool::new(fs, None);
 
-        let path = tool.resolve_memory_path("test-agent", "agent", None).unwrap();
+        let path = tool
+            .resolve_memory_path("test-agent", "agent", None)
+            .unwrap();
         assert!(path.ends_with("agents_data/test-agent/memory.json"));
     }
 
@@ -772,10 +781,12 @@ mod tests {
 
         let result = tool.resolve_memory_path("test-agent", "shared", None);
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("'file' parameter required"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("'file' parameter required")
+        );
     }
 
     #[test]
@@ -786,7 +797,12 @@ mod tests {
 
         let result = tool.resolve_memory_path("test-agent", "shared", Some("invalid_file"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid shared file"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Invalid shared file")
+        );
     }
 
     #[test]

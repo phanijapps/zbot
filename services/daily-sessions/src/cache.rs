@@ -20,8 +20,8 @@ pub struct CacheConfig {
 impl Default for CacheConfig {
     fn default() -> Self {
         Self {
-            max_capacity: 1000,              // Max 1000 sessions
-            ttl: Duration::from_secs(3600),  // 1 hour TTL
+            max_capacity: 1000,                      // Max 1000 sessions
+            ttl: Duration::from_secs(3600),          // 1 hour TTL
             time_to_idle: Duration::from_secs(1800), // 30 min idle
         }
     }
@@ -76,7 +76,9 @@ impl ConversationCache {
 
     /// Insert or update session in cache
     pub async fn insert(&self, session: CachedSession) {
-        self.sessions.insert(session.session_id.clone(), session).await;
+        self.sessions
+            .insert(session.session_id.clone(), session)
+            .await;
     }
 
     /// Invalidate specific session

@@ -2,12 +2,14 @@
 //!
 //! Executes sub-agents repeatedly with exit conditions.
 
-use async_trait::async_trait;
 use async_stream::stream;
+use async_trait::async_trait;
 use futures::StreamExt;
 use std::sync::Arc;
 
-use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, InvocationContext, Result};
+use zero_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+};
 
 /// Loop agent executes sub-agents repeatedly for N iterations or until escalation.
 ///
@@ -184,8 +186,7 @@ mod tests {
             escalate_on: None,
         }) as Arc<dyn Agent>;
 
-        let loop_agent = LoopAgent::new("iterator", vec![agent])
-            .with_max_iterations(5);
+        let loop_agent = LoopAgent::new("iterator", vec![agent]).with_max_iterations(5);
 
         assert_eq!(loop_agent.name(), "iterator");
         assert_eq!(loop_agent.sub_agents().len(), 1);
@@ -199,8 +200,7 @@ mod tests {
             escalate_on: None,
         }) as Arc<dyn Agent>;
 
-        let loop_agent = LoopAgent::new("iterator", vec![agent])
-            .with_max_iterations(3);
+        let loop_agent = LoopAgent::new("iterator", vec![agent]).with_max_iterations(3);
 
         // In a real test, we'd verify the loop stops after 3 iterations
         assert_eq!(loop_agent.max_iterations, Some(3));

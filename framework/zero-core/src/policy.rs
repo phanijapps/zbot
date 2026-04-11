@@ -206,7 +206,7 @@ impl ResourceLimits {
         Self {
             max_memory_mb: Some(512),
             max_cpu_percent: Some(80),
-            max_execution_time_secs: Some(600), // 10 minutes
+            max_execution_time_secs: Some(600),       // 10 minutes
             max_output_bytes: Some(50 * 1024 * 1024), // 50 MB
             max_network_requests: Some(100),
             max_tool_calls: Some(200),
@@ -218,7 +218,7 @@ impl ResourceLimits {
         Self {
             max_memory_mb: Some(2048),
             max_cpu_percent: Some(100),
-            max_execution_time_secs: Some(3600), // 1 hour
+            max_execution_time_secs: Some(3600),       // 1 hour
             max_output_bytes: Some(500 * 1024 * 1024), // 500 MB
             max_network_requests: Some(1000),
             max_tool_calls: Some(1000),
@@ -230,7 +230,7 @@ impl ResourceLimits {
         Self {
             max_memory_mb: Some(256),
             max_cpu_percent: Some(50),
-            max_execution_time_secs: Some(60), // 1 minute
+            max_execution_time_secs: Some(60),        // 1 minute
             max_output_bytes: Some(10 * 1024 * 1024), // 10 MB
             max_network_requests: Some(10),
             max_tool_calls: Some(20),

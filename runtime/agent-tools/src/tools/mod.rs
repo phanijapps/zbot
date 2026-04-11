@@ -2,46 +2,46 @@
 // TOOL MODULES
 // ============================================================================
 
-mod file;
-mod search;
-mod execution;
-mod ui;
 mod agent;
-mod web;
-mod memory;
-mod introspection;
-mod ward;
 mod connectors;
-mod multimodal;
+mod execution;
+mod file;
 pub(crate) mod guards;
+mod introspection;
+mod memory;
+mod multimodal;
+mod search;
+mod ui;
+mod ward;
+mod web;
 
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use zero_core::Tool;
 use zero_core::FileSystemContext;
 use zero_core::MemoryFactStore;
+use zero_core::Tool;
 
-pub use file::{ReadTool, WriteTool, EditTool};
-pub use search::{GrepTool, GlobTool};
+pub use agent::{CreateAgentTool, ListAgentsTool};
+pub use connectors::QueryResourceTool;
 pub use execution::ApplyPatchTool;
 pub use execution::EditFileTool;
 pub use execution::ExecutionGraphTool;
 pub use execution::PythonTool;
 pub use execution::SetSessionTitleTool;
 pub use execution::ShellTool;
-pub use execution::skills::LoadSkillTool;
 pub use execution::TodoTool;
 pub use execution::UpdatePlanTool;
 pub use execution::WriteFileTool;
-pub use ui::{RequestInputTool, ShowContentTool};
-pub use agent::{CreateAgentTool, ListAgentsTool};
-pub use web::WebFetchTool;
-pub use memory::{MemoryTool, MemoryStore, MemoryEntry};
-pub use introspection::{ListSkillsTool, ListToolsTool, ListMcpsTool};
-pub use ward::WardTool;
-pub use connectors::QueryResourceTool;
+pub use execution::skills::LoadSkillTool;
+pub use file::{EditTool, ReadTool, WriteTool};
+pub use introspection::{ListMcpsTool, ListSkillsTool, ListToolsTool};
+pub use memory::{MemoryEntry, MemoryStore, MemoryTool};
 pub use multimodal::MultimodalAnalyzeTool;
+pub use search::{GlobTool, GrepTool};
+pub use ui::{RequestInputTool, ShowContentTool};
+pub use ward::WardTool;
+pub use web::WebFetchTool;
 
 // ============================================================================
 // TOOL SETTINGS
@@ -167,7 +167,10 @@ pub fn core_tools(
 ///
 /// Includes file tools (read/write/edit/glob), todos, python, web_fetch, etc.
 #[must_use]
-pub fn optional_tools(fs: Arc<dyn FileSystemContext>, settings: &ToolSettings) -> Vec<Arc<dyn Tool>> {
+pub fn optional_tools(
+    fs: Arc<dyn FileSystemContext>,
+    settings: &ToolSettings,
+) -> Vec<Arc<dyn Tool>> {
     let mut tools: Vec<Arc<dyn Tool>> = Vec::new();
 
     // File tools — separate read/write/edit/glob (opt-in)

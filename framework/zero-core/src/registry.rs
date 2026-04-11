@@ -201,7 +201,11 @@ impl CapabilityRegistry {
     /// Get available agents (not at capacity).
     pub fn available_agents(&self) -> Vec<AgentCapabilities> {
         let agents = self.agents.read().unwrap();
-        agents.values().filter(|a| a.is_available()).cloned().collect()
+        agents
+            .values()
+            .filter(|a| a.is_available())
+            .cloned()
+            .collect()
     }
 
     /// Update agent availability.
@@ -355,7 +359,7 @@ impl CapabilityRouter {
 // UNIFIED CAPABILITY REGISTRY
 // ============================================================================
 
-use crate::capability::{CapabilityKind, CapabilityDescriptor};
+use crate::capability::{CapabilityDescriptor, CapabilityKind};
 
 /// Unified registry for all capability types (Tools, Skills, MCPs, SubAgents).
 ///
@@ -453,10 +457,7 @@ impl UnifiedCapabilityRegistry {
     /// Find all descriptors for a capability ID.
     pub fn find_by_id(&self, capability_id: &str) -> Vec<CapabilityDescriptor> {
         let descriptors = self.descriptors.read().unwrap();
-        descriptors
-            .get(capability_id)
-            .cloned()
-            .unwrap_or_default()
+        descriptors.get(capability_id).cloned().unwrap_or_default()
     }
 
     /// Find all descriptors of a specific kind.
@@ -505,13 +506,11 @@ impl UnifiedCapabilityRegistry {
 
     /// Find the best descriptor for a query based on routing score.
     pub fn find_best(&self, query: &CapabilityQuery) -> Option<CapabilityDescriptor> {
-        self.find_matching(query)
-            .into_iter()
-            .max_by(|a, b| {
-                a.routing_score(query)
-                    .partial_cmp(&b.routing_score(query))
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        self.find_matching(query).into_iter().max_by(|a, b| {
+            a.routing_score(query)
+                .partial_cmp(&b.routing_score(query))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 
     /// Find the best descriptor of a specific kind.
@@ -724,7 +723,9 @@ mod tests {
 
         let result = result.unwrap();
         assert_eq!(result.agent_id, "code-agent");
-        assert!(result.matched_capabilities.contains(&"code_review".to_string()));
+        assert!(result
+            .matched_capabilities
+            .contains(&"code_review".to_string()));
     }
 
     #[test]
@@ -767,9 +768,19 @@ mod tests {
     fn test_unified_registry_find_by_kind() {
         let registry = UnifiedCapabilityRegistry::new();
 
-        registry.register(CapabilityDescriptor::tool(common::file_operations(), "read_file"));
-        registry.register(CapabilityDescriptor::tool(common::shell_execution(), "shell"));
-        registry.register(CapabilityDescriptor::mcp(common::web_search(), "brave", "search"));
+        registry.register(CapabilityDescriptor::tool(
+            common::file_operations(),
+            "read_file",
+        ));
+        registry.register(CapabilityDescriptor::tool(
+            common::shell_execution(),
+            "shell",
+        ));
+        registry.register(CapabilityDescriptor::mcp(
+            common::web_search(),
+            "brave",
+            "search",
+        ));
 
         let tools = registry.find_by_kind(CapabilityKind::Tool);
         assert_eq!(tools.len(), 2);
@@ -783,8 +794,8 @@ mod tests {
         let registry = UnifiedCapabilityRegistry::new();
 
         // Same capability provided by different resources
-        let tool_desc = CapabilityDescriptor::tool(common::code_generation(), "generate_code")
-            .with_latency(50);
+        let tool_desc =
+            CapabilityDescriptor::tool(common::code_generation(), "generate_code").with_latency(50);
         let agent_desc = CapabilityDescriptor::sub_agent(common::code_generation(), "code-agent")
             .with_latency(200);
 
@@ -803,9 +814,19 @@ mod tests {
     fn test_unified_registry_unregister_resource() {
         let registry = UnifiedCapabilityRegistry::new();
 
-        registry.register(CapabilityDescriptor::tool(common::file_operations(), "file_tool"));
-        registry.register(CapabilityDescriptor::tool(common::shell_execution(), "file_tool"));
-        registry.register(CapabilityDescriptor::mcp(common::web_search(), "search-mcp", "search"));
+        registry.register(CapabilityDescriptor::tool(
+            common::file_operations(),
+            "file_tool",
+        ));
+        registry.register(CapabilityDescriptor::tool(
+            common::shell_execution(),
+            "file_tool",
+        ));
+        registry.register(CapabilityDescriptor::mcp(
+            common::web_search(),
+            "search-mcp",
+            "search",
+        ));
 
         assert_eq!(registry.total_descriptors(), 3);
 
@@ -819,8 +840,15 @@ mod tests {
     fn test_unified_registry_availability() {
         let registry = UnifiedCapabilityRegistry::new();
 
-        registry.register(CapabilityDescriptor::tool(common::file_operations(), "file_tool"));
-        registry.register(CapabilityDescriptor::mcp(common::web_search(), "mcp", "search"));
+        registry.register(CapabilityDescriptor::tool(
+            common::file_operations(),
+            "file_tool",
+        ));
+        registry.register(CapabilityDescriptor::mcp(
+            common::web_search(),
+            "mcp",
+            "search",
+        ));
 
         // Initially all available
         assert_eq!(registry.all_available().len(), 2);

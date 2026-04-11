@@ -56,7 +56,11 @@ pub fn process_artifact_declarations(
             .extension()
             .map(|e| e.to_string_lossy().to_lowercase());
 
-        let mut artifact = Artifact::new(session_id, abs_path.to_string_lossy().to_string(), &file_name);
+        let mut artifact = Artifact::new(
+            session_id,
+            abs_path.to_string_lossy().to_string(),
+            &file_name,
+        );
         artifact.ward_id = ward_id.map(|s| s.to_string());
         artifact.execution_id = Some(execution_id.to_string());
         artifact.agent_id = Some(agent_id.to_string());

@@ -93,15 +93,9 @@ pub async fn serve_artifact_content(
         Some("csv") => "text/csv",
         Some("json") => "application/json",
         Some("pdf") => "application/pdf",
-        Some("docx") => {
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        }
-        Some("pptx") => {
-            "application/vnd.openxmlformats-officedocument.presentationml.presentation"
-        }
-        Some("xlsx") => {
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        }
+        Some("docx") => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        Some("pptx") => "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        Some("xlsx") => "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         Some("png") => "image/png",
         Some("jpg") | Some("jpeg") => "image/jpeg",
         Some("gif") => "image/gif",

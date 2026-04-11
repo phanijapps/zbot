@@ -156,20 +156,26 @@ impl ModelRegistry {
         let local_path = config_dir.join("config").join("models.json");
         if local_path.exists() {
             match std::fs::read_to_string(&local_path) {
-                Ok(content) => match serde_json::from_str::<HashMap<String, ModelProfile>>(&content) {
-                    Ok(overrides) => {
-                        let count = overrides.len();
-                        models.extend(overrides);
-                        tracing::info!("Loaded {} model override(s) from {}", count, local_path.display());
+                Ok(content) => {
+                    match serde_json::from_str::<HashMap<String, ModelProfile>>(&content) {
+                        Ok(overrides) => {
+                            let count = overrides.len();
+                            models.extend(overrides);
+                            tracing::info!(
+                                "Loaded {} model override(s) from {}",
+                                count,
+                                local_path.display()
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Malformed models.json at {} — skipping local overrides: {}",
+                                local_path.display(),
+                                e
+                            );
+                        }
                     }
-                    Err(e) => {
-                        tracing::warn!(
-                            "Malformed models.json at {} — skipping local overrides: {}",
-                            local_path.display(),
-                            e
-                        );
-                    }
-                },
+                }
                 Err(e) => {
                     tracing::warn!("Cannot read {}: {}", local_path.display(), e);
                 }

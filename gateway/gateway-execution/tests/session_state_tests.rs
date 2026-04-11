@@ -18,7 +18,12 @@ use tempfile::tempdir;
 // ============================================================================
 
 /// Spin up a temp DB with full schema and return the builder + DB handle.
-fn setup() -> (SessionStateBuilder, Arc<DatabaseManager>, Arc<LogService<DatabaseManager>>, Arc<ConversationRepository>) {
+fn setup() -> (
+    SessionStateBuilder,
+    Arc<DatabaseManager>,
+    Arc<LogService<DatabaseManager>>,
+    Arc<ConversationRepository>,
+) {
     let dir = tempdir().unwrap();
     #[allow(deprecated)]
     let dir_path = dir.into_path();
@@ -49,7 +54,12 @@ fn insert_session_row(db: &DatabaseManager, session_id: &str, status: &str, root
 }
 
 /// Insert an agent_executions row so messages can reference it (FK constraint).
-fn insert_execution_row(db: &DatabaseManager, execution_id: &str, session_id: &str, agent_id: &str) {
+fn insert_execution_row(
+    db: &DatabaseManager,
+    execution_id: &str,
+    session_id: &str,
+    agent_id: &str,
+) {
     db.with_connection(|conn| {
         conn.execute(
             "INSERT OR IGNORE INTO agent_executions (id, session_id, agent_id, status, started_at)
@@ -102,19 +112,27 @@ fn test_completed_session_with_response() {
 
     // Intent log
     log_service
-        .log(api_logs::ExecutionLog::new(
-            &sid, &conv_id, agent,
-            api_logs::LogLevel::Info,
-            api_logs::LogCategory::Intent,
-            "Intent analyzed",
-        ).with_metadata(serde_json::json!({ "intent": "report" })))
+        .log(
+            api_logs::ExecutionLog::new(
+                &sid,
+                &conv_id,
+                agent,
+                api_logs::LogLevel::Info,
+                api_logs::LogCategory::Intent,
+                "Intent analyzed",
+            )
+            .with_metadata(serde_json::json!({ "intent": "report" })),
+        )
         .unwrap();
 
     // update_plan tool call
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "update_plan", "tc-1",
+            &sid,
+            &conv_id,
+            agent,
+            "update_plan",
+            "tc-1",
             &serde_json::json!({
                 "steps": [
                     {"text": "Gather data", "status": "completed"},
@@ -127,8 +145,11 @@ fn test_completed_session_with_response() {
     // delegate tool call (external tool)
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "delegate", "tc-2",
+            &sid,
+            &conv_id,
+            agent,
+            "delegate",
+            "tc-2",
             &serde_json::json!({"agent": "code-agent"}),
         )
         .unwrap();
@@ -136,8 +157,11 @@ fn test_completed_session_with_response() {
     // respond tool call
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "respond", "tc-3",
+            &sid,
+            &conv_id,
+            agent,
+            "respond",
+            "tc-3",
             &serde_json::json!({"message": "Here is your report"}),
         )
         .unwrap();
@@ -176,8 +200,11 @@ fn test_crashed_session() {
 
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "some_tool", "tc-1",
+            &sid,
+            &conv_id,
+            agent,
+            "some_tool",
+            "tc-1",
             &serde_json::json!({"arg": "value"}),
         )
         .unwrap();
@@ -212,15 +239,24 @@ fn test_title_from_tool_call() {
 
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "set_session_title", "tc-1",
+            &sid,
+            &conv_id,
+            agent,
+            "set_session_title",
+            "tc-1",
             &serde_json::json!({"title": "My Test Session"}),
         )
         .unwrap();
 
     // End session so it has an ended_at
     log_service
-        .log_session_end(&sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     let state = builder.build(&sid).unwrap().expect("session should exist");
@@ -241,7 +277,13 @@ fn test_response_skips_tool_calls_message() {
         .log_session_start(&sid, &conv_id, agent, None)
         .unwrap();
     log_service
-        .log_session_end(&sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     // Create agent_execution so messages FK is satisfied
@@ -282,7 +324,13 @@ fn test_response_from_child_session() {
         .log_session_start(&root_sid, &conv_id, agent, None)
         .unwrap();
     log_service
-        .log_session_end(&root_sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &root_sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     // Child session logs (parent = root_sid)
@@ -291,16 +339,28 @@ fn test_response_from_child_session() {
         .unwrap();
     log_service
         .log_tool_call(
-            &child_sid, &child_sid, child_agent,
-            "respond", "tc-child-1",
+            &child_sid,
+            &child_sid,
+            child_agent,
+            "respond",
+            "tc-child-1",
             &serde_json::json!({"message": "Child response"}),
         )
         .unwrap();
     log_service
-        .log_session_end(&child_sid, &child_sid, child_agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &child_sid,
+            &child_sid,
+            child_agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
-    let state = builder.build(&root_sid).unwrap().expect("session should exist");
+    let state = builder
+        .build(&root_sid)
+        .unwrap()
+        .expect("session should exist");
 
     assert_eq!(state.response.as_deref(), Some("Child response"));
 }
@@ -321,7 +381,13 @@ fn test_token_count_cumulative() {
         .log_session_start(&root_sid, &conv_id, agent, None)
         .unwrap();
     log_service
-        .log_session_end(&root_sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &root_sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     // Child session logs
@@ -329,7 +395,13 @@ fn test_token_count_cumulative() {
         .log_session_start(&child_sid, &child_sid, child_agent, Some(&root_sid))
         .unwrap();
     log_service
-        .log_session_end(&child_sid, &child_sid, child_agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &child_sid,
+            &child_sid,
+            child_agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     // Create agent_executions so messages FK is satisfied
@@ -340,7 +412,10 @@ fn test_token_count_cumulative() {
     insert_message_raw(&db, &root_sid, "user", "hello", 1000);
     insert_message_raw(&db, &child_sid, "assistant", "world", 5000);
 
-    let state = builder.build(&root_sid).unwrap().expect("session should exist");
+    let state = builder
+        .build(&root_sid)
+        .unwrap()
+        .expect("session should exist");
 
     assert_eq!(state.session.token_count, 6000);
 }
@@ -361,8 +436,11 @@ fn test_plan_completed_on_finished_session() {
     // Plan with in_progress / pending steps
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "update_plan", "tc-1",
+            &sid,
+            &conv_id,
+            agent,
+            "update_plan",
+            "tc-1",
             &serde_json::json!({
                 "steps": [
                     {"text": "Step 1", "status": "in_progress"},
@@ -373,7 +451,13 @@ fn test_plan_completed_on_finished_session() {
         .unwrap();
 
     log_service
-        .log_session_end(&sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     let state = builder.build(&sid).unwrap().expect("session should exist");
@@ -404,14 +488,23 @@ fn test_subagent_task_from_parent_delegation() {
     // Parent delegation log
     log_service
         .log_delegation_start(
-            &root_sid, &conv_id, agent,
-            child_agent, &child_sid,
+            &root_sid,
+            &conv_id,
+            agent,
+            child_agent,
+            &child_sid,
             "Build dashboard",
         )
         .unwrap();
 
     log_service
-        .log_session_end(&root_sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &root_sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     // Child session logs
@@ -420,18 +513,27 @@ fn test_subagent_task_from_parent_delegation() {
         .unwrap();
     log_service
         .log_session_end(
-            &child_sid, &child_sid, child_agent,
-            api_logs::SessionStatus::Completed, None,
+            &child_sid,
+            &child_sid,
+            child_agent,
+            api_logs::SessionStatus::Completed,
+            None,
         )
         .unwrap();
 
-    let state = builder.build(&root_sid).unwrap().expect("session should exist");
+    let state = builder
+        .build(&root_sid)
+        .unwrap()
+        .expect("session should exist");
 
     assert!(!state.subagents.is_empty());
     let sub = &state.subagents[0];
     assert_eq!(sub.agent_id, "code-agent");
     assert!(
-        sub.task.as_deref().unwrap_or("").contains("Build dashboard"),
+        sub.task
+            .as_deref()
+            .unwrap_or("")
+            .contains("Build dashboard"),
         "Expected task to contain 'Build dashboard', got: {:?}",
         sub.task
     );
@@ -453,14 +555,23 @@ fn test_ward_from_tool_call() {
     // Ward tool call — tool name contains "ward"
     log_service
         .log_tool_call(
-            &sid, &conv_id, agent,
-            "load_ward", "tc-1",
+            &sid,
+            &conv_id,
+            agent,
+            "load_ward",
+            "tc-1",
             &serde_json::json!({"action": "use", "name": "my-ward"}),
         )
         .unwrap();
 
     log_service
-        .log_session_end(&sid, &conv_id, agent, api_logs::SessionStatus::Completed, None)
+        .log_session_end(
+            &sid,
+            &conv_id,
+            agent,
+            api_logs::SessionStatus::Completed,
+            None,
+        )
         .unwrap();
 
     let state = builder.build(&sid).unwrap().expect("session should exist");

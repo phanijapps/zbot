@@ -215,7 +215,6 @@ pub struct ContextEditingConfig {
     // =========================================================================
     // SKILL-AWARE EDITING OPTIONS
     // =========================================================================
-
     /// Whether to use skill-specific placeholder messages when unloading skills.
     /// When true, unloaded skills show a message like:
     /// "[Skill 'skill-name' was loaded and unloaded. Reload with load_skill(skill=\"skill-name\") if needed.]"

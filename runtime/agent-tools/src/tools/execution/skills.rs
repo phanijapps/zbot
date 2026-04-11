@@ -7,10 +7,10 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{Tool, ToolContext, Result};
 use zero_core::FileSystemContext;
+use zero_core::{Result, Tool, ToolContext};
 
 use crate::tools::guards::has_placeholder_specs;
 
@@ -48,21 +48,26 @@ pub type SkillGraph = HashMap<String, SkillEntry>;
 /// Track a skill being loaded in the context state
 fn track_skill_load(ctx: &Arc<dyn ToolContext>, skill_name: &str, tool_call_id: &str) {
     // Get or create the skill graph
-    let mut graph: SkillGraph = ctx.get_state("skill:graph")
+    let mut graph: SkillGraph = ctx
+        .get_state("skill:graph")
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
 
     // Add/update this skill entry
-    graph.insert(skill_name.to_string(), SkillEntry {
-        tool_call_id: tool_call_id.to_string(),
-        loaded_at: chrono::Utc::now().timestamp_millis(),
-        resources: vec![],
-    });
+    graph.insert(
+        skill_name.to_string(),
+        SkillEntry {
+            tool_call_id: tool_call_id.to_string(),
+            loaded_at: chrono::Utc::now().timestamp_millis(),
+            resources: vec![],
+        },
+    );
 
     ctx.set_state("skill:graph".to_string(), json!(graph));
 
     // Update the loaded_skills list
-    let mut loaded: Vec<String> = ctx.get_state("skill:loaded_skills")
+    let mut loaded: Vec<String> = ctx
+        .get_state("skill:loaded_skills")
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
 
@@ -73,8 +78,14 @@ fn track_skill_load(ctx: &Arc<dyn ToolContext>, skill_name: &str, tool_call_id: 
 }
 
 /// Track a resource file being loaded within a skill
-fn track_resource_load(ctx: &Arc<dyn ToolContext>, skill_name: &str, resource_path: &str, tool_call_id: &str) {
-    let mut graph: SkillGraph = ctx.get_state("skill:graph")
+fn track_resource_load(
+    ctx: &Arc<dyn ToolContext>,
+    skill_name: &str,
+    resource_path: &str,
+    tool_call_id: &str,
+) {
+    let mut graph: SkillGraph = ctx
+        .get_state("skill:graph")
         .and_then(|v| serde_json::from_value(v).ok())
         .unwrap_or_default();
 
@@ -88,18 +99,22 @@ fn track_resource_load(ctx: &Arc<dyn ToolContext>, skill_name: &str, resource_pa
     } else {
         // Skill not in graph yet (unusual case - resource loaded before main skill)
         // Create a placeholder entry with just this resource
-        graph.insert(skill_name.to_string(), SkillEntry {
-            tool_call_id: String::new(), // Unknown - skill wasn't loaded via load_skill
-            loaded_at: chrono::Utc::now().timestamp_millis(),
-            resources: vec![ResourceEntry {
-                path: resource_path.to_string(),
-                tool_call_id: tool_call_id.to_string(),
-            }],
-        });
+        graph.insert(
+            skill_name.to_string(),
+            SkillEntry {
+                tool_call_id: String::new(), // Unknown - skill wasn't loaded via load_skill
+                loaded_at: chrono::Utc::now().timestamp_millis(),
+                resources: vec![ResourceEntry {
+                    path: resource_path.to_string(),
+                    tool_call_id: tool_call_id.to_string(),
+                }],
+            },
+        );
         ctx.set_state("skill:graph".to_string(), json!(graph));
 
         // Also add to loaded_skills list
-        let mut loaded: Vec<String> = ctx.get_state("skill:loaded_skills")
+        let mut loaded: Vec<String> = ctx
+            .get_state("skill:loaded_skills")
             .and_then(|v| serde_json::from_value(v).ok())
             .unwrap_or_default();
 
@@ -136,9 +151,8 @@ impl LoadSkillTool {
     /// - "path/to/file" -> ("", "path/to/file", false) (uses current skill)
     fn parse_skill_path(&self, file_path: &str) -> (String, String, bool) {
         const FILE_EXTENSIONS: &[&str] = &[
-            ".md", ".txt", ".json", ".yaml", ".yml", ".toml",
-            ".html", ".css", ".js", ".ts", ".py", ".rs",
-            ".pdf", ".png", ".jpg", ".jpeg", ".gif"
+            ".md", ".txt", ".json", ".yaml", ".yml", ".toml", ".html", ".css", ".js", ".ts", ".py",
+            ".rs", ".pdf", ".png", ".jpg", ".jpeg", ".gif",
         ];
 
         if file_path.starts_with("@skill:") {
@@ -209,7 +223,7 @@ impl Tool for LoadSkillTool {
             self.load_skill_file(ctx, args).await
         } else {
             Err(zero_core::ZeroError::Tool(
-                "Either 'skill' or 'file' parameter must be provided".to_string()
+                "Either 'skill' or 'file' parameter must be provided".to_string(),
             ))
         }
     }
@@ -218,18 +232,23 @@ impl Tool for LoadSkillTool {
 impl LoadSkillTool {
     /// Load the main SKILL.md file for a skill
     async fn load_main_skill(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let skill_name = args.get("skill")
+        let skill_name = args
+            .get("skill")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'skill' parameter".to_string()))?;
 
-        let skills_dir = self.fs.skills_dir()
-            .ok_or_else(|| zero_core::ZeroError::Tool("Skills directory not configured".to_string()))?;
+        let skills_dir = self.fs.skills_dir().ok_or_else(|| {
+            zero_core::ZeroError::Tool("Skills directory not configured".to_string())
+        })?;
 
         let skill_dir = skills_dir.join(skill_name);
         let skill_file = skill_dir.join("SKILL.md");
 
         if !skill_file.exists() {
-            return Err(zero_core::ZeroError::Tool(format!("Skill file not found: {}", skill_file.to_string_lossy())));
+            return Err(zero_core::ZeroError::Tool(format!(
+                "Skill file not found: {}",
+                skill_file.to_string_lossy()
+            )));
         }
 
         let content = std::fs::read_to_string(&skill_file)
@@ -258,12 +277,14 @@ impl LoadSkillTool {
 
     /// Load a specific file from a skill's directory
     async fn load_skill_file(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let file_path = args.get("file")
+        let file_path = args
+            .get("file")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'file' parameter".to_string()))?;
 
-        let skills_dir = self.fs.skills_dir()
-            .ok_or_else(|| zero_core::ZeroError::Tool("Skills directory not configured".to_string()))?;
+        let skills_dir = self.fs.skills_dir().ok_or_else(|| {
+            zero_core::ZeroError::Tool("Skills directory not configured".to_string())
+        })?;
 
         // Parse path and get skill name
         let (skill_name_from_path, relative_path, is_explicit) = self.parse_skill_path(file_path);
@@ -287,7 +308,7 @@ impl LoadSkillTool {
         // Security: Ensure path doesn't escape skill directory
         if !full_path.starts_with(&skill_dir) {
             return Err(zero_core::ZeroError::Tool(
-                "Invalid path: cannot access files outside skill directory".to_string()
+                "Invalid path: cannot access files outside skill directory".to_string(),
             ));
         }
 
@@ -342,8 +363,9 @@ impl LoadSkillTool {
             let yaml_content = parts[1].trim();
             let instructions = parts[2].trim().to_string();
 
-            let metadata: Value = serde_yaml::from_str(yaml_content)
-                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to parse skill YAML: {}", e)))?;
+            let metadata: Value = serde_yaml::from_str(yaml_content).map_err(|e| {
+                zero_core::ZeroError::Tool(format!("Failed to parse skill YAML: {}", e))
+            })?;
 
             Ok((metadata, instructions))
         } else {
@@ -385,7 +407,9 @@ fn list_skill_resources(skill_dir: &std::path::Path, skill_name: &str) -> Vec<Va
                         let sub_path = sub_entry.path();
                         if sub_path.is_file() {
                             if let Some(dir_name) = path.file_name().and_then(|n| n.to_str()) {
-                                if let Some(file_name) = sub_path.file_name().and_then(|n| n.to_str()) {
+                                if let Some(file_name) =
+                                    sub_path.file_name().and_then(|n| n.to_str())
+                                {
                                     let rel_path = format!("{}/{}", dir_name, file_name);
                                     resources.push(json!({
                                         "file": rel_path.clone(),
@@ -405,12 +429,9 @@ fn list_skill_resources(skill_dir: &std::path::Path, skill_name: &str) -> Vec<Va
 /// Check if a file is binary based on its extension
 fn is_binary_file(filename: &str) -> bool {
     const BINARY_EXTENSIONS: &[&str] = &[
-        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx",
-        "zip", "tar", "gz", "rar", "7z",
-        "exe", "dll", "so", "dylib",
-        "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp",
-        "mp3", "mp4", "wav", "avi", "mov", "mkv",
-        "ttf", "otf", "woff", "woff2",
+        "pdf", "doc", "docx", "xls", "xlsx", "ppt", "pptx", "zip", "tar", "gz", "rar", "7z", "exe",
+        "dll", "so", "dylib", "png", "jpg", "jpeg", "gif", "bmp", "ico", "webp", "mp3", "mp4",
+        "wav", "avi", "mov", "mkv", "ttf", "otf", "woff", "woff2",
     ];
 
     if let Some(ext) = filename.rsplit('.').next() {

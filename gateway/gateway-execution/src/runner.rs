@@ -8,12 +8,12 @@
 //! - Agent delegation handling
 //! - Session and execution lifecycle management
 
+use agent_runtime::{AgentExecutor, ChatMessage};
 use api_logs::LogService;
 use execution_state::StateService;
 use gateway_database::{ConversationRepository, DatabaseManager};
 use gateway_events::{EventBus, GatewayEvent};
 use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths};
-use agent_runtime::{AgentExecutor, ChatMessage};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::future::Future;
@@ -23,25 +23,25 @@ use tokio::sync::{broadcast, mpsc, RwLock, Semaphore};
 
 /// Callback invoked after session creation but before any events are emitted.
 /// Receives the session_id so the caller can set up subscriptions before events fire.
-pub type OnSessionReady = Box<dyn FnOnce(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
+pub type OnSessionReady =
+    Box<dyn FnOnce(String) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
-use crate::middleware::intent_analysis::{analyze_intent, format_intent_injection, index_resources};
+use crate::middleware::intent_analysis::{
+    analyze_intent, format_intent_injection, index_resources,
+};
 
 // Import types from sibling modules
 pub use super::config::ExecutionConfig;
-use super::delegation::{
-    spawn_delegated_agent, DelegationRegistry, DelegationRequest,
-};
+use super::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use super::handle::ExecutionHandle;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
-    spawn_batch_writer_with_repo, AgentLoader,
-    ExecutorBuilder, ResponseAccumulator, StreamContext, ToolCallAccumulator, WorkspaceCache,
+    spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
+    ToolCallAccumulator, WorkspaceCache,
 };
 use super::lifecycle::{
-    complete_execution, crash_execution, emit_agent_started,
-    get_or_create_session, start_execution,
-    stop_execution,
+    complete_execution, crash_execution, emit_agent_started, get_or_create_session,
+    start_execution, stop_execution,
 };
 
 // ============================================================================
@@ -101,7 +101,11 @@ pub struct ExecutionRunner {
     /// Model capabilities registry for context window and capability lookups
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     /// Per-provider rate limiters — shared across all executors using the same provider.
-    rate_limiters: std::sync::Arc<std::sync::RwLock<std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>>>,
+    rate_limiters: std::sync::Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>,
+        >,
+    >,
 }
 
 impl ExecutionRunner {
@@ -189,7 +193,9 @@ impl ExecutionRunner {
             delegation_semaphore: Arc::new(Semaphore::new(max_parallel_agents as usize)),
             embedding_client,
             model_registry: None,
-            rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(std::collections::HashMap::new())),
+            rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
         };
 
         // Spawn delegation handler task
@@ -210,7 +216,10 @@ impl ExecutionRunner {
     ///
     /// Rate limiters are created once per provider and shared across all executors
     /// (root and subagents) so they share the same concurrent-request and RPM buckets.
-    fn get_rate_limiter(&self, provider: &gateway_services::providers::Provider) -> std::sync::Arc<agent_runtime::ProviderRateLimiter> {
+    fn get_rate_limiter(
+        &self,
+        provider: &gateway_services::providers::Provider,
+    ) -> std::sync::Arc<agent_runtime::ProviderRateLimiter> {
         let provider_id = provider.id.clone().unwrap_or_else(|| provider.name.clone());
         let rate_limits = provider.effective_rate_limits();
 
@@ -270,8 +279,7 @@ impl ExecutionRunner {
             > = std::collections::HashMap::new();
 
             // Completion notification channel
-            let (done_tx, mut done_rx) =
-                tokio::sync::mpsc::unbounded_channel::<String>();
+            let (done_tx, mut done_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
             /// Spawn a delegation task with a completion notification.
             ///
@@ -296,11 +304,13 @@ impl ExecutionRunner {
                 workspace_cache: &WorkspaceCache,
                 delegation_semaphore: &Arc<Semaphore>,
                 memory_repo: &Option<Arc<gateway_database::MemoryRepository>>,
-                embedding_client: &Option<
-                    Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>,
-                >,
+                embedding_client: &Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
                 memory_recall: &Option<Arc<super::recall::MemoryRecall>>,
-                rate_limiters: &Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>>>,
+                rate_limiters: &Arc<
+                    std::sync::RwLock<
+                        std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
+                    >,
+                >,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -598,7 +608,10 @@ impl ExecutionRunner {
         let execution_id = setup.execution_id;
 
         // Persist routing fields on the session (thread_id, connector_id, respond_to)
-        if config.thread_id.is_some() || config.connector_id.is_some() || config.respond_to.is_some() {
+        if config.thread_id.is_some()
+            || config.connector_id.is_some()
+            || config.respond_to.is_some()
+        {
             if let Err(e) = self.state_service.update_session_routing(
                 &session_id,
                 config.thread_id.as_deref(),
@@ -642,13 +655,18 @@ impl ExecutionRunner {
 
         // Load agent configuration (or create default for "root" agent)
         let settings_for_loader = gateway_services::SettingsService::new(self.paths.clone());
-        let agent_loader = AgentLoader::new(&self.agent_service, &self.provider_service, self.paths.clone())
-            .with_settings(&settings_for_loader)
-            .with_fast_mode(config.is_fast_mode());
+        let agent_loader = AgentLoader::new(
+            &self.agent_service,
+            &self.provider_service,
+            self.paths.clone(),
+        )
+        .with_settings(&settings_for_loader)
+        .with_fast_mode(config.is_fast_mode());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
-                self.emit_error(&config.conversation_id, &config.agent_id, &e).await;
+                self.emit_error(&config.conversation_id, &config.agent_id, &e)
+                    .await;
                 return Err(e);
             }
         };
@@ -657,51 +675,73 @@ impl ExecutionRunner {
         let mut history: Vec<ChatMessage> = self
             .conversation_repo
             .get_session_conversation(&session_id, 200)
-            .map(|messages| self.conversation_repo.session_messages_to_chat_format(&messages))
+            .map(|messages| {
+                self.conversation_repo
+                    .session_messages_to_chat_format(&messages)
+            })
             .unwrap_or_default();
 
         // Graph-powered recall for first message — inject remembered facts, episodes, and
         // entity context before the agent sees the user's message.
         // Skipped in fast mode for speed — chat_protocol instructs the agent to skip recall.
         if !config.is_fast_mode() {
-        if let Some(recall) = &self.memory_recall {
-            match recall.recall_with_graph(
-                &config.agent_id,
-                &message,
-                5,
-                setup.ward_id.as_deref(),
-                Some(&session_id),
-            ).await {
-                Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
-                    history.insert(0, ChatMessage::system(result.formatted));
-                    tracing::info!(
-                        facts = result.facts.len(),
-                        episodes = result.episodes.len(),
-                        "Recalled memory context for first message"
-                    );
-                }
-                Ok(_) => {
-                    tracing::debug!("First-message recall returned empty — no relevant facts/episodes");
-                }
-                Err(e) => {
-                    tracing::warn!("First-message graph recall failed: {}, falling back to basic recall", e);
-                    // Fallback: try basic recall without graph
-                    match recall.recall(&config.agent_id, &message, 5, setup.ward_id.as_deref()).await {
-                        Ok(facts) if !facts.is_empty() => {
-                            let formatted: Vec<String> = facts.iter()
-                                .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                .collect();
-                            history.insert(0, ChatMessage::system(
-                                format!("## Recalled Context\n{}", formatted.join("\n"))
-                            ));
-                            tracing::info!(facts = facts.len(), "Fallback recall injected facts");
+            if let Some(recall) = &self.memory_recall {
+                match recall
+                    .recall_with_graph(
+                        &config.agent_id,
+                        &message,
+                        5,
+                        setup.ward_id.as_deref(),
+                        Some(&session_id),
+                    )
+                    .await
+                {
+                    Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
+                        history.insert(0, ChatMessage::system(result.formatted));
+                        tracing::info!(
+                            facts = result.facts.len(),
+                            episodes = result.episodes.len(),
+                            "Recalled memory context for first message"
+                        );
+                    }
+                    Ok(_) => {
+                        tracing::debug!(
+                            "First-message recall returned empty — no relevant facts/episodes"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            "First-message graph recall failed: {}, falling back to basic recall",
+                            e
+                        );
+                        // Fallback: try basic recall without graph
+                        match recall
+                            .recall(&config.agent_id, &message, 5, setup.ward_id.as_deref())
+                            .await
+                        {
+                            Ok(facts) if !facts.is_empty() => {
+                                let formatted: Vec<String> = facts
+                                    .iter()
+                                    .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                                    .collect();
+                                history.insert(
+                                    0,
+                                    ChatMessage::system(format!(
+                                        "## Recalled Context\n{}",
+                                        formatted.join("\n")
+                                    )),
+                                );
+                                tracing::info!(
+                                    facts = facts.len(),
+                                    "Fallback recall injected facts"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e2) => tracing::warn!("Fallback recall also failed: {}", e2),
                         }
-                        Ok(_) => {}
-                        Err(e2) => tracing::warn!("Fallback recall also failed: {}", e2),
                     }
                 }
             }
-        }
         } // end !is_fast_mode recall gate
 
         // Nudge the agent to use memory.recall tool at session start (visible, agent-driven)
@@ -709,12 +749,25 @@ impl ExecutionRunner {
         if !config.is_fast_mode() && history.is_empty() {
             history.push(ChatMessage::system(
                 "Before starting this task, use the memory tool to recall relevant knowledge \
-                 — corrections, past strategies, and domain context.".to_string()
+                 — corrections, past strategies, and domain context."
+                    .to_string(),
             ));
         }
 
         // Create executor (restore ward_id from existing session if available)
-        let (executor, recommended_skills) = match self.create_executor(&agent, &provider, &config, &session_id, setup.ward_id.as_deref(), true, Some(&message), &execution_id).await {
+        let (executor, recommended_skills) = match self
+            .create_executor(
+                &agent,
+                &provider,
+                &config,
+                &session_id,
+                setup.ward_id.as_deref(),
+                true,
+                Some(&message),
+                &execution_id,
+            )
+            .await
+        {
             Ok(result) => result,
             Err(e) => {
                 self.emit_error(&config.conversation_id, &config.agent_id, &e)
@@ -725,18 +778,26 @@ impl ExecutionRunner {
 
         // Inject mandatory first action for graph tasks with placeholder specs
         if let Some(ref ward_id) = setup.ward_id {
-            let specs_dir = self.paths.vault_dir().join("wards").join(ward_id).join("specs");
+            let specs_dir = self
+                .paths
+                .vault_dir()
+                .join("wards")
+                .join(ward_id)
+                .join("specs");
             if specs_dir.exists() {
-                let has_placeholders = std::fs::read_dir(&specs_dir).ok()
+                let has_placeholders = std::fs::read_dir(&specs_dir)
+                    .ok()
                     .map(|entries| {
                         entries
                             .filter_map(|e| e.ok())
                             .filter(|e| e.path().is_dir())
                             .any(|topic_dir| {
-                                std::fs::read_dir(topic_dir.path()).ok()
+                                std::fs::read_dir(topic_dir.path())
+                                    .ok()
                                     .map(|files| {
                                         files.filter_map(|f| f.ok()).any(|f| {
-                                            std::fs::read_to_string(f.path()).ok()
+                                            std::fs::read_to_string(f.path())
+                                                .ok()
                                                 .map(|c| c.contains("Status: placeholder"))
                                                 .unwrap_or(false)
                                         })
@@ -830,14 +891,7 @@ impl ExecutionRunner {
             let mut tool_acc = ToolCallAccumulator::new();
 
             // Append user message to session stream BEFORE execution
-            batch_writer.session_message(
-                &session_id,
-                &execution_id,
-                "user",
-                &message,
-                None,
-                None,
-            );
+            batch_writer.session_message(&session_id, &execution_id, "user", &message, None, None);
 
             // Track per-turn tool calls for assistant message emission
             let session_id_inner = session_id.clone();
@@ -860,7 +914,12 @@ impl ExecutionRunner {
 
                     // Stream messages to session as they happen
                     match &event {
-                        agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                        agent_runtime::StreamEvent::ToolCallStart {
+                            tool_id,
+                            tool_name,
+                            args,
+                            ..
+                        } => {
                             tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
                             // Accumulate tool call for the current assistant message
                             turn_tool_calls.push(serde_json::json!({
@@ -869,12 +928,18 @@ impl ExecutionRunner {
                                 "args": args,
                             }));
                         }
-                        agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                        agent_runtime::StreamEvent::ToolResult {
+                            tool_id,
+                            result,
+                            error,
+                            ..
+                        } => {
                             tool_acc.complete_call(tool_id, result.clone(), error.clone());
 
                             // Emit the assistant message for this turn (with accumulated tool_calls)
                             if !turn_tool_calls.is_empty() {
-                                let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                                let tc_json =
+                                    serde_json::to_string(&turn_tool_calls).unwrap_or_default();
                                 let content = if turn_text.is_empty() {
                                     "[tool calls]".to_string()
                                 } else {
@@ -1084,7 +1149,10 @@ impl ExecutionRunner {
             handle.stop();
             Ok(())
         } else {
-            Err(format!("No active execution for conversation: {}", conversation_id))
+            Err(format!(
+                "No active execution for conversation: {}",
+                conversation_id
+            ))
         }
     }
 
@@ -1099,7 +1167,10 @@ impl ExecutionRunner {
             handle.add_iterations(additional_iterations);
             Ok(())
         } else {
-            Err(format!("No active execution for conversation: {}", conversation_id))
+            Err(format!(
+                "No active execution for conversation: {}",
+                conversation_id
+            ))
         }
     }
 
@@ -1135,7 +1206,9 @@ impl ExecutionRunner {
                     child_session = ?crashed_exec.child_session_id,
                     "Smart resume: re-spawning crashed subagent instead of root"
                 );
-                return self.resume_crashed_subagent(session_id, &crashed_exec).await;
+                return self
+                    .resume_crashed_subagent(session_id, &crashed_exec)
+                    .await;
             }
         }
 
@@ -1156,7 +1229,9 @@ impl ExecutionRunner {
         session_id: &str,
         crashed_exec: &execution_state::AgentExecution,
     ) -> Result<(), String> {
-        let child_session_id = crashed_exec.child_session_id.as_ref()
+        let child_session_id = crashed_exec
+            .child_session_id
+            .as_ref()
             .ok_or("No child_session_id on crashed execution")?;
 
         // 1. Reactivate root session and execution
@@ -1178,14 +1253,20 @@ impl ExecutionRunner {
         self.state_service.request_continuation(session_id)?;
 
         // 6. Build DelegationRequest from crashed execution's data
-        let parent_execution_id = crashed_exec.parent_execution_id.as_ref()
+        let parent_execution_id = crashed_exec
+            .parent_execution_id
+            .as_ref()
             .ok_or("No parent_execution_id on crashed execution")?;
 
-        let task = crashed_exec.task.as_ref()
+        let task = crashed_exec
+            .task
+            .as_ref()
             .ok_or("No task on crashed execution")?;
 
         // Get root agent ID for parent_agent_id
-        let root_agent_id = self.state_service.get_root_execution(session_id)?
+        let root_agent_id = self
+            .state_service
+            .get_root_execution(session_id)?
             .map(|e| e.agent_id)
             .unwrap_or_else(|| "root".to_string());
 
@@ -1198,7 +1279,8 @@ impl ExecutionRunner {
             task,
         );
         self.state_service.create_execution(&new_exec)?;
-        self.state_service.set_child_session_id(&new_exec.id, child_session_id)?;
+        self.state_service
+            .set_child_session_id(&new_exec.id, child_session_id)?;
 
         let request = DelegationRequest {
             parent_agent_id: root_agent_id,
@@ -1236,7 +1318,8 @@ impl ExecutionRunner {
             self.embedding_client.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
-        ).await?;
+        )
+        .await?;
 
         Ok(())
     }
@@ -1309,7 +1392,11 @@ impl ExecutionRunner {
         let child_conversation_id = format!(
             "{}-sub-{}",
             parent_conversation_id,
-            uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+            uuid::Uuid::new_v4()
+                .to_string()
+                .split('-')
+                .next()
+                .unwrap_or("0")
         );
 
         // Register the delegation (legacy function, using conversation_id as session for backward compat)
@@ -1324,7 +1411,8 @@ impl ExecutionRunner {
         } else {
             delegation_context
         };
-        self.delegation_registry.register(&child_conversation_id, delegation_context);
+        self.delegation_registry
+            .register(&child_conversation_id, delegation_context);
 
         // Create config for the child agent
         let config = ExecutionConfig::new(
@@ -1397,30 +1485,41 @@ impl ExecutionRunner {
             .and_then(|ctx| serde_json::to_value(ctx).ok());
 
         // Build fact store from memory repo + embedding client (if available)
-        let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = self.memory_repo.as_ref().map(|repo| {
-            Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), self.embedding_client.clone()))
-                as Arc<dyn zero_core::MemoryFactStore>
-        });
+        let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
+            self.memory_repo.as_ref().map(|repo| {
+                Arc::new(gateway_database::GatewayMemoryFactStore::new(
+                    repo.clone(),
+                    self.embedding_client.clone(),
+                )) as Arc<dyn zero_core::MemoryFactStore>
+            });
         // Clone for resource indexing (before fact_store is moved into builder)
         let fact_store_for_indexing = fact_store.clone();
 
         // Build connector resource provider (HTTP + bridge composite)
         let http_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
             self.connector_registry.as_ref().map(|registry| {
-                Arc::new(super::resource_provider::GatewayResourceProvider::new(registry.clone()))
-                    as Arc<dyn zero_core::ConnectorResourceProvider>
+                Arc::new(super::resource_provider::GatewayResourceProvider::new(
+                    registry.clone(),
+                )) as Arc<dyn zero_core::ConnectorResourceProvider>
             });
-        let bridge_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
-            self.bridge_registry.as_ref().zip(self.bridge_outbox.as_ref()).map(|(reg, outbox)| {
-                Arc::new(gateway_bridge::BridgeResourceProvider::new(reg.clone(), outbox.clone()))
-                    as Arc<dyn zero_core::ConnectorResourceProvider>
+        let bridge_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> = self
+            .bridge_registry
+            .as_ref()
+            .zip(self.bridge_outbox.as_ref())
+            .map(|(reg, outbox)| {
+                Arc::new(gateway_bridge::BridgeResourceProvider::new(
+                    reg.clone(),
+                    outbox.clone(),
+                )) as Arc<dyn zero_core::ConnectorResourceProvider>
             });
         let connector_provider: Option<Arc<dyn zero_core::ConnectorResourceProvider>> =
             if http_provider.is_some() || bridge_provider.is_some() {
-                Some(Arc::new(super::composite_provider::CompositeResourceProvider::new(
-                    http_provider,
-                    bridge_provider,
-                )) as Arc<dyn zero_core::ConnectorResourceProvider>)
+                Some(
+                    Arc::new(super::composite_provider::CompositeResourceProvider::new(
+                        http_provider,
+                        bridge_provider,
+                    )) as Arc<dyn zero_core::ConnectorResourceProvider>,
+                )
             } else {
                 None
             };
@@ -1516,8 +1615,14 @@ impl ExecutionRunner {
                                             hidden_intents: analysis.hidden_intents.clone(),
                                             recommended_skills: analysis.recommended_skills.clone(),
                                             recommended_agents: analysis.recommended_agents.clone(),
-                                            ward_recommendation: serde_json::to_value(&analysis.ward_recommendation).unwrap_or_default(),
-                                            execution_strategy: serde_json::to_value(&analysis.execution_strategy).unwrap_or_default(),
+                                            ward_recommendation: serde_json::to_value(
+                                                &analysis.ward_recommendation,
+                                            )
+                                            .unwrap_or_default(),
+                                            execution_strategy: serde_json::to_value(
+                                                &analysis.execution_strategy,
+                                            )
+                                            .unwrap_or_default(),
                                         })
                                         .await;
 
@@ -1542,19 +1647,29 @@ impl ExecutionRunner {
                                     let spec_guidance = {
                                         let mut guidances = Vec::new();
                                         for skill_name in &analysis.recommended_skills {
-                                            if let Ok(Some(ws)) = self.skill_service.get_ward_setup(skill_name).await {
+                                            if let Ok(Some(ws)) =
+                                                self.skill_service.get_ward_setup(skill_name).await
+                                            {
                                                 if let Some(ref g) = ws.spec_guidance {
                                                     guidances.push(g.clone());
                                                 }
                                             }
                                         }
-                                        if guidances.is_empty() { None } else { Some(guidances.join("\n\n")) }
+                                        if guidances.is_empty() {
+                                            None
+                                        } else {
+                                            Some(guidances.join("\n\n"))
+                                        }
                                     };
 
                                     // Inject intent analysis into agent instructions
                                     // so the agent can follow ward/skill/strategy recommendations
                                     agent_for_build.instructions.push_str(
-                                        &format_intent_injection(&analysis, spec_guidance.as_deref(), user_message),
+                                        &format_intent_injection(
+                                            &analysis,
+                                            spec_guidance.as_deref(),
+                                            user_message,
+                                        ),
                                     );
                                 }
                                 Err(e) => {
@@ -1585,7 +1700,10 @@ impl ExecutionRunner {
                             }
                         }
                         Err(e) => {
-                            tracing::warn!("Failed to create LLM client for intent analysis: {}", e);
+                            tracing::warn!(
+                                "Failed to create LLM client for intent analysis: {}",
+                                e
+                            );
                             // Fallback: emit minimal analysis event
                             self.event_bus
                                 .publish(GatewayEvent::IntentAnalysisComplete {
@@ -1618,7 +1736,8 @@ impl ExecutionRunner {
             if let Some(wid) = ward_id {
                 let specs_dir = self.paths.vault_dir().join("wards").join(wid).join("specs");
                 if specs_dir.exists() {
-                    let has_placeholders = std::fs::read_dir(&specs_dir).ok()
+                    let has_placeholders = std::fs::read_dir(&specs_dir)
+                        .ok()
                         .map(|entries| entries.filter_map(|e| e.ok()).any(|e| e.path().is_dir()))
                         .unwrap_or(false);
                     if has_placeholders {
@@ -1656,38 +1775,44 @@ impl ExecutionRunner {
                 let every_n = mid_cfg.every_n_turns as u32;
 
                 executor.set_recall_hook(
-                    Box::new(move |query: &str, already_injected: &std::collections::HashSet<String>| {
-                        let recall = Arc::clone(&recall);
-                        let agent_id = agent_id.clone();
-                        let ward = ward.clone();
-                        let query = query.to_string();
-                        let already_injected = already_injected.clone();
-                        Box::pin(async move {
-                            let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
-                            // Filter out already-injected facts and low-novelty results
-                            let novel: Vec<_> = facts.into_iter()
-                                .filter(|f| !already_injected.contains(&f.fact.key))
-                                .filter(|f| f.score >= min_novelty)
-                                .collect();
-                            if novel.is_empty() {
-                                return Ok(agent_runtime::RecallHookResult {
-                                    system_message: String::new(),
-                                    fact_keys: Vec::new(),
-                                });
-                            }
-                            let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
-                            let lines: Vec<String> = novel.iter().map(|f| {
-                                format!("- [{}] {}", f.fact.category, f.fact.content)
-                            }).collect();
-                            Ok(agent_runtime::RecallHookResult {
-                                system_message: format!(
-                                    "[Memory Refresh] Relevant facts for current context:\n{}",
-                                    lines.join("\n")
-                                ),
-                                fact_keys: keys,
+                    Box::new(
+                        move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                            let recall = Arc::clone(&recall);
+                            let agent_id = agent_id.clone();
+                            let ward = ward.clone();
+                            let query = query.to_string();
+                            let already_injected = already_injected.clone();
+                            Box::pin(async move {
+                                let facts =
+                                    recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                                // Filter out already-injected facts and low-novelty results
+                                let novel: Vec<_> = facts
+                                    .into_iter()
+                                    .filter(|f| !already_injected.contains(&f.fact.key))
+                                    .filter(|f| f.score >= min_novelty)
+                                    .collect();
+                                if novel.is_empty() {
+                                    return Ok(agent_runtime::RecallHookResult {
+                                        system_message: String::new(),
+                                        fact_keys: Vec::new(),
+                                    });
+                                }
+                                let keys: Vec<String> =
+                                    novel.iter().map(|f| f.fact.key.clone()).collect();
+                                let lines: Vec<String> = novel
+                                    .iter()
+                                    .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                                    .collect();
+                                Ok(agent_runtime::RecallHookResult {
+                                    system_message: format!(
+                                        "[Memory Refresh] Relevant facts for current context:\n{}",
+                                        lines.join("\n")
+                                    ),
+                                    fact_keys: keys,
+                                })
                             })
-                        })
-                    }),
+                        },
+                    ),
                     every_n,
                     std::collections::HashSet::new(),
                 );
@@ -1755,7 +1880,11 @@ async fn invoke_continuation(
     let conversation_id = format!(
         "{}-cont-{}",
         session_id,
-        uuid::Uuid::new_v4().to_string().split('-').next().unwrap_or("0")
+        uuid::Uuid::new_v4()
+            .to_string()
+            .split('-')
+            .next()
+            .unwrap_or("0")
     );
 
     // Reuse the root execution for continuation (one continuous conversation)
@@ -1772,12 +1901,7 @@ async fn invoke_continuation(
     // Reactivate session and execution if they were in a terminal state
     state_service.reactivate_session(session_id)?;
     state_service.reactivate_execution(&execution_id)?;
-    let _ = log_service.log_session_start(
-        &execution_id,
-        &conversation_id,
-        root_agent_id,
-        None,
-    );
+    let _ = log_service.log_session_start(&execution_id, &conversation_id, root_agent_id, None);
 
     // Create execution handle
     let handle = ExecutionHandle::new(50); // Default max iterations for continuation
@@ -1787,7 +1911,14 @@ async fn invoke_continuation(
     }
 
     // Emit agent started event
-    emit_agent_started(&event_bus, root_agent_id, &conversation_id, session_id, &execution_id).await;
+    emit_agent_started(
+        &event_bus,
+        root_agent_id,
+        &conversation_id,
+        session_id,
+        &execution_id,
+    )
+    .await;
 
     // Load agent and provider (with orchestrator config from settings)
     let settings_for_loader = gateway_services::SettingsService::new(paths.clone());
@@ -1819,7 +1950,16 @@ async fn invoke_continuation(
         .unwrap_or_else(|| "continuation recall".to_string());
 
     if let Some(recall) = &memory_recall {
-        match recall.recall_with_graph(root_agent_id, &continuation_recall_query, 5, session_ward_id.as_deref(), Some(session_id)).await {
+        match recall
+            .recall_with_graph(
+                root_agent_id,
+                &continuation_recall_query,
+                5,
+                session_ward_id.as_deref(),
+                Some(session_id),
+            )
+            .await
+        {
             Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
                 history.insert(0, ChatMessage::system(result.formatted));
                 tracing::info!(
@@ -1862,10 +2002,13 @@ async fn invoke_continuation(
     }
 
     // Build fact store for continuation (so save_fact uses DB, not file fallback)
-    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {
-        Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), embedding_client.clone()))
-            as Arc<dyn zero_core::MemoryFactStore>
-    });
+    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
+        memory_repo.as_ref().map(|repo| {
+            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+                repo.clone(),
+                embedding_client.clone(),
+            )) as Arc<dyn zero_core::MemoryFactStore>
+        });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
@@ -1895,41 +2038,50 @@ async fn invoke_continuation(
             let every_n = mid_cfg.every_n_turns as u32;
 
             executor.set_recall_hook(
-                Box::new(move |query: &str, already_injected: &std::collections::HashSet<String>| {
-                    let recall = Arc::clone(&recall);
-                    let agent_id = agent_id.clone();
-                    let ward = ward.clone();
-                    let query = query.to_string();
-                    let already_injected = already_injected.clone();
-                    Box::pin(async move {
-                        let facts = recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
-                        let novel: Vec<_> = facts.into_iter()
-                            .filter(|f| !already_injected.contains(&f.fact.key))
-                            .filter(|f| f.score >= min_novelty)
-                            .collect();
-                        if novel.is_empty() {
-                            return Ok(agent_runtime::RecallHookResult {
-                                system_message: String::new(),
-                                fact_keys: Vec::new(),
-                            });
-                        }
-                        let keys: Vec<String> = novel.iter().map(|f| f.fact.key.clone()).collect();
-                        let lines: Vec<String> = novel.iter().map(|f| {
-                            format!("- [{}] {}", f.fact.category, f.fact.content)
-                        }).collect();
-                        Ok(agent_runtime::RecallHookResult {
-                            system_message: format!(
-                                "[Memory Refresh] Relevant facts for current context:\n{}",
-                                lines.join("\n")
-                            ),
-                            fact_keys: keys,
+                Box::new(
+                    move |query: &str, already_injected: &std::collections::HashSet<String>| {
+                        let recall = Arc::clone(&recall);
+                        let agent_id = agent_id.clone();
+                        let ward = ward.clone();
+                        let query = query.to_string();
+                        let already_injected = already_injected.clone();
+                        Box::pin(async move {
+                            let facts =
+                                recall.recall(&agent_id, &query, 5, ward.as_deref()).await?;
+                            let novel: Vec<_> = facts
+                                .into_iter()
+                                .filter(|f| !already_injected.contains(&f.fact.key))
+                                .filter(|f| f.score >= min_novelty)
+                                .collect();
+                            if novel.is_empty() {
+                                return Ok(agent_runtime::RecallHookResult {
+                                    system_message: String::new(),
+                                    fact_keys: Vec::new(),
+                                });
+                            }
+                            let keys: Vec<String> =
+                                novel.iter().map(|f| f.fact.key.clone()).collect();
+                            let lines: Vec<String> = novel
+                                .iter()
+                                .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
+                                .collect();
+                            Ok(agent_runtime::RecallHookResult {
+                                system_message: format!(
+                                    "[Memory Refresh] Relevant facts for current context:\n{}",
+                                    lines.join("\n")
+                                ),
+                                fact_keys: keys,
+                            })
                         })
-                    })
-                }),
+                    },
+                ),
                 every_n,
                 std::collections::HashSet::new(),
             );
-            tracing::debug!(every_n_turns = every_n, "Mid-session recall hook wired (continuation)");
+            tracing::debug!(
+                every_n_turns = every_n,
+                "Mid-session recall hook wired (continuation)"
+            );
         }
     }
 
@@ -1946,11 +2098,13 @@ async fn invoke_continuation(
                 "[DELEGATION COMPLETED. YOUR PLAN IS BELOW.\n\
                  DO NOT read files. DO NOT analyze. DO NOT use shell.\n\
                  Just find the next step that hasn't been done and delegate it NOW.\n\
-                 One action only: delegate_to_agent.]\n\n{}", plan
+                 One action only: delegate_to_agent.]\n\n{}",
+                plan
             )
         } else {
             "[Delegation completed. Delegate the next step in your plan immediately. \
-             Do NOT read files or analyze — just delegate.]".to_string()
+             Do NOT read files or analyze — just delegate.]"
+                .to_string()
         }
     };
 
@@ -2008,7 +2162,12 @@ async fn invoke_continuation(
 
                 // Stream messages to session as they happen
                 match &event {
-                    agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                    agent_runtime::StreamEvent::ToolCallStart {
+                        tool_id,
+                        tool_name,
+                        args,
+                        ..
+                    } => {
                         tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
                         turn_tool_calls.push(serde_json::json!({
                             "tool_id": tool_id,
@@ -2016,12 +2175,18 @@ async fn invoke_continuation(
                             "args": args,
                         }));
                     }
-                    agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                    agent_runtime::StreamEvent::ToolResult {
+                        tool_id,
+                        result,
+                        error,
+                        ..
+                    } => {
                         tool_acc.complete_call(tool_id, result.clone(), error.clone());
 
                         // Emit assistant message for this turn
                         if !turn_tool_calls.is_empty() {
-                            let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                            let tc_json =
+                                serde_json::to_string(&turn_tool_calls).unwrap_or_default();
                             let content = if turn_text.is_empty() {
                                 "[tool calls]".to_string()
                             } else {
@@ -2182,7 +2347,9 @@ async fn invoke_continuation(
 async fn cancel_session_delegations(
     session_id: &str,
     delegation_registry: &crate::delegation::DelegationRegistry,
-    handles: &tokio::sync::RwLock<std::collections::HashMap<String, crate::handle::ExecutionHandle>>,
+    handles: &tokio::sync::RwLock<
+        std::collections::HashMap<String, crate::handle::ExecutionHandle>,
+    >,
     state_service: &execution_state::StateService<gateway_database::DatabaseManager>,
 ) {
     let active = delegation_registry.get_by_session_id(session_id);
@@ -2244,7 +2411,7 @@ fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
                     }
                 }
             } else if path.is_dir() {
-            // specs/{subdir}/plan.md
+                // specs/{subdir}/plan.md
                 let plan_path = path.join("plan.md");
                 if plan_path.exists() {
                     if let Ok(meta) = plan_path.metadata() {
@@ -2261,7 +2428,9 @@ fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
 
     if let Some((_, path)) = newest {
         let content = std::fs::read_to_string(&path).ok()?;
-        if content.trim().is_empty() { return None; }
+        if content.trim().is_empty() {
+            return None;
+        }
         tracing::info!(path = %path.display(), "Injecting plan into continuation message");
         Some(content)
     } else {
@@ -2411,7 +2580,11 @@ fn extract_conventions_section(agents_md_path: &std::path::Path) -> Option<Vec<S
             }
         }
     }
-    if conventions.is_empty() { None } else { Some(conventions) }
+    if conventions.is_empty() {
+        None
+    } else {
+        Some(conventions)
+    }
 }
 
 /// Format a byte count as a human-readable size string (e.g. "125 KB", "8 KB", "1.2 MB").
@@ -2427,10 +2600,7 @@ fn format_file_size(bytes: u64) -> String {
 
 /// Collect data files (.csv, .json, .txt, .html, .parquet) recursively under a directory.
 /// Returns `(relative_path, size_in_bytes)` pairs, relative to `base_dir`.
-fn collect_data_files(
-    dir: &std::path::Path,
-    base_dir: &std::path::Path,
-) -> Vec<(String, u64)> {
+fn collect_data_files(dir: &std::path::Path, base_dir: &std::path::Path) -> Vec<(String, u64)> {
     let data_extensions = ["csv", "json", "txt", "html", "parquet", "xlsx", "pkl"];
     let mut result = Vec::new();
     collect_data_files_recursive(dir, base_dir, &data_extensions, &mut result);
@@ -2468,9 +2638,7 @@ fn collect_data_files_recursive(
                     .unwrap_or(&path)
                     .to_string_lossy()
                     .replace('\\', "/");
-                let size = std::fs::metadata(&path)
-                    .map(|m| m.len())
-                    .unwrap_or(0);
+                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
                 result.push((rel, size));
             }
         }
@@ -2515,7 +2683,9 @@ pub fn auto_update_agents_md_with_lang_configs(
     let memory_bank_exists = ward_dir.join("memory-bank").exists();
     if memory_bank_exists {
         sections.push("## Read These First\n".to_string());
-        sections.push("Before writing any code, read these files to understand the ward:\n".to_string());
+        sections.push(
+            "Before writing any code, read these files to understand the ward:\n".to_string(),
+        );
 
         sections.push("- [memory-bank/ward.md](memory-bank/ward.md) — Domain knowledge, patterns, and session learnings\n".to_string());
 
@@ -2533,8 +2703,11 @@ pub fn auto_update_agents_md_with_lang_configs(
                 .filter_map(|e| e.ok())
                 .filter(|e| {
                     let name = e.file_name().to_string_lossy().to_string();
-                    e.path().is_file() && name.ends_with(".md")
-                        && name != "ward.md" && name != "structure.md" && name != "core_docs.md"
+                    e.path().is_file()
+                        && name.ends_with(".md")
+                        && name != "ward.md"
+                        && name != "structure.md"
+                        && name != "core_docs.md"
                 })
                 .collect();
             docs.sort_by_key(|e| e.file_name());
@@ -2563,7 +2736,11 @@ pub fn auto_update_agents_md_with_lang_configs(
                     }
                     let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
                     // Accept if any lang config matches, or if it's .py (hardcoded fallback)
-                    gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext).is_some()
+                    gateway_services::lang_config::CompiledLangConfig::find_for_extension(
+                        &lang_configs,
+                        ext,
+                    )
+                    .is_some()
                         || ext == "py"
                 })
                 .collect();
@@ -2578,7 +2755,12 @@ pub fn auto_update_agents_md_with_lang_configs(
 
                     sections.push(format!("### core/{}\n", name));
 
-                    if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
+                    if let Some(config) =
+                        gateway_services::lang_config::CompiledLangConfig::find_for_extension(
+                            &lang_configs,
+                            ext,
+                        )
+                    {
                         // Language config path: use config's extraction methods
                         let desc = config.extract_first_docstring(&path).unwrap_or_default();
                         if !desc.is_empty() {
@@ -2725,7 +2907,12 @@ pub fn auto_update_agents_md_with_lang_configs(
                 for topic in &spec_topics {
                     let spec_count = std::fs::read_dir(ward_dir.join("specs").join(topic))
                         .ok()
-                        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
+                        .map(|entries| {
+                            entries
+                                .filter_map(|e| e.ok())
+                                .filter(|e| e.path().is_file())
+                                .count()
+                        })
                         .unwrap_or(0);
                     if spec_count > 0 {
                         sections.push(format!("- `specs/{}/` — {} spec(s)\n", topic, spec_count));
@@ -2744,7 +2931,12 @@ pub fn auto_update_agents_md_with_lang_configs(
                 for topic in &plan_topics {
                     let plan_count = std::fs::read_dir(ward_dir.join("plans").join(topic))
                         .ok()
-                        .map(|entries| entries.filter_map(|e| e.ok()).filter(|e| e.path().is_file()).count())
+                        .map(|entries| {
+                            entries
+                                .filter_map(|e| e.ok())
+                                .filter(|e| e.path().is_file())
+                                .count()
+                        })
                         .unwrap_or(0);
                     if plan_count > 0 {
                         sections.push(format!("- `plans/{}/` — {} plan(s)\n", topic, plan_count));
@@ -2757,28 +2949,26 @@ pub fn auto_update_agents_md_with_lang_configs(
 
     // ── How to Code ──
     // Determine an example module name for the import example
-    let example_import = std::fs::read_dir(&core_dir)
-        .ok()
-        .and_then(|mut entries| {
-            entries.find_map(|e| {
-                let e = e.ok()?;
-                let name = e.file_name().to_string_lossy().to_string();
-                if name.ends_with(".py") && name != "__init__.py" {
-                    let module = name.trim_end_matches(".py").to_string();
-                    let first_fn = extract_function_signatures(&e.path())
-                        .first()
-                        .and_then(|sig| {
-                            // Extract just the function name from `def func_name(...)`
-                            sig.strip_prefix("def ")
-                                .and_then(|rest| rest.split('(').next())
-                                .map(|s| s.to_string())
-                        });
-                    Some((module, first_fn))
-                } else {
-                    None
-                }
-            })
-        });
+    let example_import = std::fs::read_dir(&core_dir).ok().and_then(|mut entries| {
+        entries.find_map(|e| {
+            let e = e.ok()?;
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.ends_with(".py") && name != "__init__.py" {
+                let module = name.trim_end_matches(".py").to_string();
+                let first_fn = extract_function_signatures(&e.path())
+                    .first()
+                    .and_then(|sig| {
+                        // Extract just the function name from `def func_name(...)`
+                        sig.strip_prefix("def ")
+                            .and_then(|rest| rest.split('(').next())
+                            .map(|s| s.to_string())
+                    });
+                Some((module, first_fn))
+            } else {
+                None
+            }
+        })
+    });
 
     let import_example = match example_import {
         Some((module, Some(func))) => format!("`from core.{} import {}`", module, func),
@@ -2805,18 +2995,27 @@ pub fn auto_update_agents_md_with_lang_configs(
         sections.push("## Task Runner (ralph.py)\n".to_string());
         sections.push("Use `ralph.py` to process `tasks.json` files in specs/:\n".to_string());
         sections.push("```\n".to_string());
-        sections.push("python3 ralph.py next <tasks.json>       # Get next pending task\n".to_string());
-        sections.push("python3 ralph.py complete <tasks.json> N  # Mark task N complete\n".to_string());
-        sections.push("python3 ralph.py fail <tasks.json> N msg  # Mark task N failed\n".to_string());
-        sections.push("python3 ralph.py status <tasks.json>      # Show progress summary\n".to_string());
+        sections
+            .push("python3 ralph.py next <tasks.json>       # Get next pending task\n".to_string());
+        sections
+            .push("python3 ralph.py complete <tasks.json> N  # Mark task N complete\n".to_string());
+        sections
+            .push("python3 ralph.py fail <tasks.json> N msg  # Mark task N failed\n".to_string());
+        sections.push(
+            "python3 ralph.py status <tasks.json>      # Show progress summary\n".to_string(),
+        );
         sections.push("```\n\n".to_string());
     }
 
     // ── How to Code ──
     sections.push("## How to Code\n".to_string());
-    sections.push("1. Reusable functions → core/. Task scripts → task subdirectories.\n".to_string());
+    sections
+        .push("1. Reusable functions → core/. Task scripts → task subdirectories.\n".to_string());
     sections.push("2. Import from core/ — never duplicate existing modules.\n".to_string());
-    sections.push("3. Use write_file to create files, edit_file for changes. Keep files under 3KB.\n".to_string());
+    sections.push(
+        "3. Use write_file to create files, edit_file for changes. Keep files under 3KB.\n"
+            .to_string(),
+    );
     sections.push("4. Update memory-bank/core_docs.md with full function signatures after creating core modules.\n".to_string());
 
     // ── Timestamp ──
@@ -2851,7 +3050,11 @@ pub fn auto_update_memory_bank(vault_dir: &std::path::Path, ward_id: &str) {
     generate_structure_md(&ward_dir, &memory_bank_dir.join("structure.md"));
 
     let lang_configs_dir = vault_dir.join("config").join("wards");
-    generate_core_docs_md(&ward_dir, &memory_bank_dir.join("core_docs.md"), &lang_configs_dir);
+    generate_core_docs_md(
+        &ward_dir,
+        &memory_bank_dir.join("core_docs.md"),
+        &lang_configs_dir,
+    );
 }
 
 fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Path) {
@@ -2861,9 +3064,15 @@ fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Pa
 
     // Tech stack detection
     let mut tech = Vec::new();
-    if ward_dir.join("requirements.txt").exists() { tech.push("Python (requirements.txt)"); }
-    if ward_dir.join("package.json").exists() { tech.push("Node.js (package.json)"); }
-    if ward_dir.join("Cargo.toml").exists() { tech.push("Rust (Cargo.toml)"); }
+    if ward_dir.join("requirements.txt").exists() {
+        tech.push("Python (requirements.txt)");
+    }
+    if ward_dir.join("package.json").exists() {
+        tech.push("Node.js (package.json)");
+    }
+    if ward_dir.join("Cargo.toml").exists() {
+        tech.push("Rust (Cargo.toml)");
+    }
 
     let core_dir = ward_dir.join("core");
     if core_dir.exists() {
@@ -2871,7 +3080,8 @@ fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Pa
             for entry in entries.filter_map(|e| e.ok()) {
                 if entry.path().extension().and_then(|e| e.to_str()) == Some("py") {
                     if let Ok(src) = std::fs::read_to_string(entry.path()) {
-                        if src.contains("import yfinance") && !tech.iter().any(|t| *t == "yfinance") {
+                        if src.contains("import yfinance") && !tech.iter().any(|t| *t == "yfinance")
+                        {
                             tech.push("yfinance");
                         }
                         if src.contains("import pandas") && !tech.iter().any(|t| *t == "pandas") {
@@ -2901,7 +3111,9 @@ fn generate_tree(
     max_depth: usize,
     output: &mut String,
 ) {
-    if depth > max_depth { return; }
+    if depth > max_depth {
+        return;
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return,
@@ -2911,8 +3123,11 @@ fn generate_tree(
 
     for entry in &items {
         let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || name == "__pycache__" || name == "node_modules"
-            || name == ".venv" || name == "data"
+        if name.starts_with('.')
+            || name == "__pycache__"
+            || name == "node_modules"
+            || name == ".venv"
+            || name == "data"
         {
             continue;
         }
@@ -2921,8 +3136,11 @@ fn generate_tree(
         if path.is_dir() {
             output.push_str(&format!("{}{}/ \n", indent, name));
             generate_tree(&path, base, depth + 1, max_depth, output);
-        } else if depth < 2 || name.ends_with(".py") || name.ends_with(".md")
-            || name.ends_with(".json") || name.ends_with(".yaml")
+        } else if depth < 2
+            || name.ends_with(".py")
+            || name.ends_with(".md")
+            || name.ends_with(".json")
+            || name.ends_with(".yaml")
         {
             output.push_str(&format!("{}{}\n", indent, name));
         }
@@ -2942,10 +3160,22 @@ fn generate_core_docs_md(
 
     // Scan ALL code files in the ward (not just core/) — recursively
     let code_extensions = ["py", "js", "ts", "rs", "go", "rb", "sh"];
-    let skip_dirs = ["node_modules", ".venv", "__pycache__", ".git", "memory-bank", "specs"];
+    let skip_dirs = [
+        "node_modules",
+        ".venv",
+        "__pycache__",
+        ".git",
+        "memory-bank",
+        "specs",
+    ];
 
     let mut all_files: Vec<std::path::PathBuf> = Vec::new();
-    fn walk_dir(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>, exts: &[&str], skip: &[&str]) {
+    fn walk_dir(
+        dir: &std::path::Path,
+        files: &mut Vec<std::path::PathBuf>,
+        exts: &[&str],
+        skip: &[&str],
+    ) {
         let entries = match std::fs::read_dir(dir) {
             Ok(e) => e,
             Err(_) => return,
@@ -2953,7 +3183,9 @@ fn generate_core_docs_md(
         for entry in entries.flatten() {
             let path = entry.path();
             let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') { continue; }
+            if name.starts_with('.') {
+                continue;
+            }
             if path.is_dir() {
                 if !skip.contains(&name.as_str()) {
                     walk_dir(&path, files, exts, skip);
@@ -2970,9 +3202,13 @@ fn generate_core_docs_md(
     walk_dir(ward_dir, &mut all_files, &code_extensions, &skip_dirs);
     all_files.sort();
 
-    if all_files.is_empty() { return; }
+    if all_files.is_empty() {
+        return;
+    }
 
-    let mut content = String::from("# Code Inventory\n\n*Auto-generated. Lists all code files with function signatures.*\n\n");
+    let mut content = String::from(
+        "# Code Inventory\n\n*Auto-generated. Lists all code files with function signatures.*\n\n",
+    );
 
     for path in &all_files {
         let relative = path.strip_prefix(ward_dir).unwrap_or(path);
@@ -2981,23 +3217,36 @@ fn generate_core_docs_md(
 
         // File size
         let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let size_str = if size > 1024 { format!("{:.1}KB", size as f64 / 1024.0) } else { format!("{}B", size) };
+        let size_str = if size > 1024 {
+            format!("{:.1}KB", size as f64 / 1024.0)
+        } else {
+            format!("{}B", size)
+        };
 
         content.push_str(&format!("## {} ({})\n\n", rel_str, size_str));
 
         // Extract signatures
-        if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(&lang_configs, ext) {
+        if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(
+            &lang_configs,
+            ext,
+        ) {
             let desc = config.extract_first_docstring(path).unwrap_or_default();
-            if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
+            if !desc.is_empty() {
+                content.push_str(&format!("{}\n\n", desc));
+            }
             let sigs = config.extract_signatures(path);
             if !sigs.is_empty() {
                 content.push_str("**Functions:**\n");
-                for sig in &sigs { content.push_str(&format!("- `{}`\n", sig)); }
+                for sig in &sigs {
+                    content.push_str(&format!("- `{}`\n", sig));
+                }
                 content.push('\n');
             }
         } else {
             let desc = extract_first_docstring(path);
-            if !desc.is_empty() { content.push_str(&format!("{}\n\n", desc)); }
+            if !desc.is_empty() {
+                content.push_str(&format!("{}\n\n", desc));
+            }
             let sigs = extract_function_signatures(path);
             if !sigs.is_empty() {
                 content.push_str("**Functions:**\n");
@@ -3014,4 +3263,3 @@ fn generate_core_docs_md(
         tracing::warn!("Failed to write core_docs.md: {}", e);
     }
 }
-

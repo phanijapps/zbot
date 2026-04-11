@@ -20,7 +20,11 @@ pub fn mock_session_request_with_source(
 }
 
 /// Create a test session handle.
-pub fn mock_session_handle(session_id: &str, execution_id: &str, conversation_id: &str) -> SessionHandle {
+pub fn mock_session_handle(
+    session_id: &str,
+    execution_id: &str,
+    conversation_id: &str,
+) -> SessionHandle {
     SessionHandle {
         session_id: session_id.to_string(),
         execution_id: execution_id.to_string(),
@@ -35,7 +39,7 @@ mod tests {
     #[test]
     fn test_mock_session_request() {
         let req = mock_session_request("root", "Hello!");
-        
+
         assert_eq!(req.agent_id, "root");
         assert_eq!(req.message, "Hello!");
         assert_eq!(req.source, TriggerSource::Web); // default
@@ -44,14 +48,14 @@ mod tests {
     #[test]
     fn test_mock_session_request_with_source() {
         let req = mock_session_request_with_source("agent", "Test", TriggerSource::Connector);
-        
+
         assert_eq!(req.source, TriggerSource::Connector);
     }
 
     #[test]
     fn test_mock_session_handle() {
         let handle = mock_session_handle("sess-1", "exec-1", "conv-1");
-        
+
         assert_eq!(handle.session_id, "sess-1");
         assert_eq!(handle.execution_id, "exec-1");
         assert_eq!(handle.conversation_id, "conv-1");

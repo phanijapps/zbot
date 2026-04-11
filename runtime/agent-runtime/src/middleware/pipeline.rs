@@ -7,8 +7,8 @@
 //!
 //! Pipeline that orchestrates middleware execution.
 
+use super::traits::{EventMiddleware, MiddlewareContext, PreProcessMiddleware};
 use crate::types::{ChatMessage, StreamEvent};
-use super::traits::{PreProcessMiddleware, EventMiddleware, MiddlewareContext};
 
 /// Middleware pipeline that orchestrates preprocessing and event handling
 pub struct MiddlewarePipeline {
@@ -85,7 +85,10 @@ impl MiddlewarePipeline {
             // the original messages are preserved. If it returns Modified/EmitAndModify,
             // we use the new messages (clone is discarded).
             let backup = current_messages.clone();
-            match middleware.process(std::mem::take(&mut current_messages), context).await? {
+            match middleware
+                .process(std::mem::take(&mut current_messages), context)
+                .await?
+            {
                 super::traits::MiddlewareEffect::ModifiedMessages(msgs) => {
                     current_messages = msgs;
                 }
@@ -97,7 +100,10 @@ impl MiddlewarePipeline {
                     on_event(event);
                     current_messages = backup;
                 }
-                super::traits::MiddlewareEffect::EmitAndModify { event, messages: msgs } => {
+                super::traits::MiddlewareEffect::EmitAndModify {
+                    event,
+                    messages: msgs,
+                } => {
                     on_event(event);
                     current_messages = msgs;
                 }
@@ -124,7 +130,11 @@ impl MiddlewarePipeline {
 
             // Continue processing even if one handler fails
             if let Err(e) = handler.on_event(event, context).await {
-                tracing::warn!("Middleware {} failed to handle event: {}", handler.name(), e);
+                tracing::warn!(
+                    "Middleware {} failed to handle event: {}",
+                    handler.name(),
+                    e
+                );
             }
         }
 
@@ -192,7 +202,9 @@ mod tests {
             messages: Vec<ChatMessage>,
             _context: &MiddlewareContext,
         ) -> Result<super::super::traits::MiddlewareEffect, String> {
-            Ok(super::super::traits::MiddlewareEffect::ModifiedMessages(messages))
+            Ok(super::super::traits::MiddlewareEffect::ModifiedMessages(
+                messages,
+            ))
         }
     }
 

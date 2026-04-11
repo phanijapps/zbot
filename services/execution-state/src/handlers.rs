@@ -22,9 +22,7 @@ pub async fn list_sessions<D: StateDbProvider + 'static>(
     State(service): State<Arc<StateService<D>>>,
     Query(filter): Query<SessionFilter>,
 ) -> Result<Json<Vec<Session>>, ApiError> {
-    let sessions = service
-        .list_sessions(&filter)
-        .map_err(ApiError::Database)?;
+    let sessions = service.list_sessions(&filter).map_err(ApiError::Database)?;
 
     Ok(Json(sessions))
 }
@@ -221,9 +219,7 @@ pub async fn cancel_session<D: StateDbProvider + 'static>(
 pub async fn get_dashboard_stats<D: StateDbProvider + 'static>(
     State(service): State<Arc<StateService<D>>>,
 ) -> Result<Json<DashboardStats>, ApiError> {
-    let stats = service
-        .get_dashboard_stats()
-        .map_err(ApiError::Database)?;
+    let stats = service.get_dashboard_stats().map_err(ApiError::Database)?;
 
     Ok(Json(stats))
 }
@@ -234,9 +230,7 @@ pub async fn get_dashboard_stats<D: StateDbProvider + 'static>(
 pub async fn get_stats_counts<D: StateDbProvider + 'static>(
     State(service): State<Arc<StateService<D>>>,
 ) -> Result<Json<std::collections::HashMap<String, u64>>, ApiError> {
-    let stats = service
-        .get_dashboard_stats()
-        .map_err(ApiError::Database)?;
+    let stats = service.get_dashboard_stats().map_err(ApiError::Database)?;
 
     let mut counts = std::collections::HashMap::new();
 
@@ -249,9 +243,15 @@ pub async fn get_stats_counts<D: StateDbProvider + 'static>(
     // Execution counts
     counts.insert("executions_queued".to_string(), stats.executions_queued);
     counts.insert("executions_running".to_string(), stats.executions_running);
-    counts.insert("executions_completed".to_string(), stats.executions_completed);
+    counts.insert(
+        "executions_completed".to_string(),
+        stats.executions_completed,
+    );
     counts.insert("executions_crashed".to_string(), stats.executions_crashed);
-    counts.insert("executions_cancelled".to_string(), stats.executions_cancelled);
+    counts.insert(
+        "executions_cancelled".to_string(),
+        stats.executions_cancelled,
+    );
 
     // Daily stats
     counts.insert("today_sessions".to_string(), stats.today_sessions);

@@ -88,7 +88,7 @@ pub trait Toolset: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::{ReadonlyContext, CallbackContext, ToolContext};
+    use crate::context::{CallbackContext, ReadonlyContext, ToolContext};
     use crate::event::EventActions;
     use crate::types::Content;
     use std::sync::Mutex;
@@ -123,19 +123,33 @@ mod tests {
         assert_eq!(tool.name(), "test");
         assert_eq!(tool.description(), "Test tool");
 
-        let result = tool.execute(Arc::new(MockContext), serde_json::json!({})).await;
+        let result = tool
+            .execute(Arc::new(MockContext), serde_json::json!({}))
+            .await;
         assert!(result.is_ok());
     }
 
     struct MockContext;
 
     impl ReadonlyContext for MockContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test" }
-        fn user_id(&self) -> &str { "test" }
-        fn app_name(&self) -> &str { "test" }
-        fn session_id(&self) -> &str { "test" }
-        fn branch(&self) -> &str { "test" }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test"
+        }
+        fn user_id(&self) -> &str {
+            "test"
+        }
+        fn app_name(&self) -> &str {
+            "test"
+        }
+        fn session_id(&self) -> &str {
+            "test"
+        }
+        fn branch(&self) -> &str {
+            "test"
+        }
         fn user_content(&self) -> &Content {
             use std::sync::LazyLock;
             static CONTENT: LazyLock<Content> = LazyLock::new(|| Content {
@@ -147,13 +161,19 @@ mod tests {
     }
 
     impl CallbackContext for MockContext {
-        fn get_state(&self, _key: &str) -> Option<Value> { None }
+        fn get_state(&self, _key: &str) -> Option<Value> {
+            None
+        }
         fn set_state(&self, _key: String, _value: Value) {}
     }
 
     impl ToolContext for MockContext {
-        fn function_call_id(&self) -> String { "test".to_string() }
-        fn actions(&self) -> EventActions { EventActions::default() }
+        fn function_call_id(&self) -> String {
+            "test".to_string()
+        }
+        fn actions(&self) -> EventActions {
+            EventActions::default()
+        }
         fn set_actions(&self, _actions: EventActions) {}
     }
 

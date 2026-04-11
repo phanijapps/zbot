@@ -87,10 +87,18 @@ pub struct OrchestratorConfig {
     pub thinking_enabled: bool,
 }
 
-fn default_max_parallel_agents() -> u32 { 2 }
-fn default_true() -> bool { true }
-fn default_temperature() -> f64 { 0.7 }
-fn default_orchestrator_max_tokens() -> u32 { 16384 }
+fn default_max_parallel_agents() -> u32 {
+    2
+}
+fn default_true() -> bool {
+    true
+}
+fn default_temperature() -> f64 {
+    0.7
+}
+fn default_orchestrator_max_tokens() -> u32 {
+    16384
+}
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
@@ -140,8 +148,12 @@ pub struct MultimodalConfig {
     pub max_tokens: u32,
 }
 
-fn default_multimodal_temperature() -> f64 { 0.3 }
-fn default_multimodal_max_tokens() -> u32 { 4096 }
+fn default_multimodal_temperature() -> f64 {
+    0.3
+}
+fn default_multimodal_max_tokens() -> u32 {
+    4096
+}
 
 impl Default for MultimodalConfig {
     fn default() -> Self {
@@ -226,8 +238,7 @@ impl SettingsService {
         let content = fs::read_to_string(&self.config_path())
             .map_err(|e| format!("Failed to read settings.json: {}", e))?;
 
-        serde_json::from_str(&content)
-            .map_err(|e| format!("Failed to parse settings.json: {}", e))
+        serde_json::from_str(&content).map_err(|e| format!("Failed to parse settings.json: {}", e))
     }
 
     /// Load settings (cached).
@@ -312,7 +323,10 @@ impl SettingsService {
     /// Update execution settings.
     ///
     /// Note: Changes to max_parallel_agents require a daemon restart to take effect.
-    pub fn update_execution_settings(&self, execution_settings: ExecutionSettings) -> Result<(), String> {
+    pub fn update_execution_settings(
+        &self,
+        execution_settings: ExecutionSettings,
+    ) -> Result<(), String> {
         if execution_settings.max_parallel_agents == 0 {
             return Err("max_parallel_agents must be at least 1".to_string());
         }
@@ -370,7 +384,9 @@ mod tests {
         new_log_settings.max_files = 14;
         new_log_settings.level = "debug".to_string();
 
-        service.update_log_settings(new_log_settings.clone()).unwrap();
+        service
+            .update_log_settings(new_log_settings.clone())
+            .unwrap();
 
         // Verify
         let loaded = service.get_log_settings().unwrap();

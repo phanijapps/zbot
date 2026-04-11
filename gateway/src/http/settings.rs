@@ -4,11 +4,7 @@
 
 use crate::state::AppState;
 use agent_tools::ToolSettings;
-use axum::{
-    extract::State,
-    http::StatusCode,
-    Json,
-};
+use axum::{extract::State, http::StatusCode, Json};
 use gateway_services::{ExecutionSettings, LogSettings};
 use serde::{Deserialize, Serialize};
 
@@ -254,7 +250,10 @@ pub struct ExecutionSettingsResponse {
 /// GET /api/settings/execution - Get execution settings.
 pub async fn get_execution_settings(
     State(state): State<AppState>,
-) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
+) -> Result<
+    Json<SettingsResponse<ExecutionSettingsResponse>>,
+    (StatusCode, Json<SettingsResponse<()>>),
+> {
     match state.settings.get_execution_settings() {
         Ok(settings) => Ok(Json(SettingsResponse {
             success: true,
@@ -302,8 +301,12 @@ pub struct UpdateExecutionSettingsRequest {
     pub multimodal: Option<gateway_services::MultimodalConfig>,
 }
 
-fn default_max_parallel() -> u32 { 2 }
-fn default_non_streaming() -> bool { true }
+fn default_max_parallel() -> u32 {
+    2
+}
+fn default_non_streaming() -> bool {
+    true
+}
 
 impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
     fn from(req: UpdateExecutionSettingsRequest) -> Self {
@@ -327,7 +330,10 @@ impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
 pub async fn update_execution_settings(
     State(state): State<AppState>,
     Json(request): Json<UpdateExecutionSettingsRequest>,
-) -> Result<Json<SettingsResponse<ExecutionSettingsResponse>>, (StatusCode, Json<SettingsResponse<()>>)> {
+) -> Result<
+    Json<SettingsResponse<ExecutionSettingsResponse>>,
+    (StatusCode, Json<SettingsResponse<()>>),
+> {
     let settings: ExecutionSettings = request.into();
 
     // Update SOUL.md if agent_name is provided

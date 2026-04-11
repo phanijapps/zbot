@@ -232,7 +232,8 @@ impl Relationship {
         relationship_type: RelationshipType,
     ) -> Self {
         let now = Utc::now();
-        let id = format!("rel_{}_{}_{}_{}",
+        let id = format!(
+            "rel_{}_{}_{}_{}",
             agent_id,
             source_entity_id,
             target_entity_id,
@@ -354,7 +355,10 @@ mod tests {
         assert_eq!(EntityType::from_str("person"), EntityType::Person);
         assert_eq!(EntityType::from_str("PERSON"), EntityType::Person);
         assert_eq!(EntityType::from_str("Person"), EntityType::Person);
-        assert_eq!(EntityType::from_str("organization"), EntityType::Organization);
+        assert_eq!(
+            EntityType::from_str("organization"),
+            EntityType::Organization
+        );
         assert_eq!(EntityType::from_str("org"), EntityType::Organization);
         assert_eq!(EntityType::from_str("location"), EntityType::Location);
         assert_eq!(EntityType::from_str("concept"), EntityType::Concept);
@@ -362,7 +366,10 @@ mod tests {
         assert_eq!(EntityType::from_str("project"), EntityType::Project);
         assert_eq!(EntityType::from_str("file"), EntityType::File);
         assert_eq!(EntityType::from_str("File"), EntityType::File);
-        assert_eq!(EntityType::from_str("custom_type"), EntityType::Custom("custom_type".to_string()));
+        assert_eq!(
+            EntityType::from_str("custom_type"),
+            EntityType::Custom("custom_type".to_string())
+        );
     }
 
     #[test]
@@ -379,15 +386,39 @@ mod tests {
 
     #[test]
     fn test_relationship_type_from_str() {
-        assert_eq!(RelationshipType::from_str("works_for"), RelationshipType::WorksFor);
-        assert_eq!(RelationshipType::from_str("worksfor"), RelationshipType::WorksFor);
-        assert_eq!(RelationshipType::from_str("located_in"), RelationshipType::LocatedIn);
-        assert_eq!(RelationshipType::from_str("related_to"), RelationshipType::RelatedTo);
-        assert_eq!(RelationshipType::from_str("created"), RelationshipType::Created);
+        assert_eq!(
+            RelationshipType::from_str("works_for"),
+            RelationshipType::WorksFor
+        );
+        assert_eq!(
+            RelationshipType::from_str("worksfor"),
+            RelationshipType::WorksFor
+        );
+        assert_eq!(
+            RelationshipType::from_str("located_in"),
+            RelationshipType::LocatedIn
+        );
+        assert_eq!(
+            RelationshipType::from_str("related_to"),
+            RelationshipType::RelatedTo
+        );
+        assert_eq!(
+            RelationshipType::from_str("created"),
+            RelationshipType::Created
+        );
         assert_eq!(RelationshipType::from_str("uses"), RelationshipType::Uses);
-        assert_eq!(RelationshipType::from_str("part_of"), RelationshipType::PartOf);
-        assert_eq!(RelationshipType::from_str("mentions"), RelationshipType::Mentions);
-        assert_eq!(RelationshipType::from_str("custom_rel"), RelationshipType::Custom("customrel".to_string()));
+        assert_eq!(
+            RelationshipType::from_str("part_of"),
+            RelationshipType::PartOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("mentions"),
+            RelationshipType::Mentions
+        );
+        assert_eq!(
+            RelationshipType::from_str("custom_rel"),
+            RelationshipType::Custom("customrel".to_string())
+        );
     }
 
     #[test]
@@ -399,7 +430,10 @@ mod tests {
         assert_eq!(RelationshipType::Uses.as_str(), "uses");
         assert_eq!(RelationshipType::PartOf.as_str(), "part_of");
         assert_eq!(RelationshipType::Mentions.as_str(), "mentions");
-        assert_eq!(RelationshipType::Custom("custom".to_string()).as_str(), "custom");
+        assert_eq!(
+            RelationshipType::Custom("custom".to_string()).as_str(),
+            "custom"
+        );
     }
 
     #[test]
@@ -444,7 +478,10 @@ mod tests {
         .with_property("role".to_string(), json!("Engineer"));
 
         assert_eq!(entity.properties.len(), 2);
-        assert_eq!(entity.properties.get("email"), Some(&json!("john@example.com")));
+        assert_eq!(
+            entity.properties.get("email"),
+            Some(&json!("john@example.com"))
+        );
         assert_eq!(entity.properties.get("role"), Some(&json!("Engineer")));
     }
 
@@ -476,7 +513,10 @@ mod tests {
         assert_eq!(relationship.agent_id, "agent-123");
         assert_eq!(relationship.source_entity_id, "entity-1");
         assert_eq!(relationship.target_entity_id, "entity-2");
-        assert!(matches!(relationship.relationship_type, RelationshipType::WorksFor));
+        assert!(matches!(
+            relationship.relationship_type,
+            RelationshipType::WorksFor
+        ));
         assert_eq!(relationship.mention_count, 1);
         assert!(relationship.properties.is_empty());
     }

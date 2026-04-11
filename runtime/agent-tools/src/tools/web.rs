@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use reqwest::{Client, Method};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use url::Url;
 
 use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
@@ -105,8 +105,8 @@ impl WebFetchTool {
 
     /// Validate the URL
     fn validate_url(url_str: &str) -> Result<Url> {
-        let url = Url::parse(url_str)
-            .map_err(|e| ZeroError::Tool(format!("Invalid URL: {}", e)))?;
+        let url =
+            Url::parse(url_str).map_err(|e| ZeroError::Tool(format!("Invalid URL: {}", e)))?;
 
         // Only allow http and https
         match url.scheme() {
@@ -194,10 +194,7 @@ impl Tool for WebFetchTool {
         tracing::debug!("WebFetchTool: Fetching {}", url);
 
         // Extract method
-        let method_str = args
-            .get("method")
-            .and_then(|v| v.as_str())
-            .unwrap_or("GET");
+        let method_str = args.get("method").and_then(|v| v.as_str()).unwrap_or("GET");
 
         let method = match method_str.to_uppercase().as_str() {
             "GET" => Method::GET,
@@ -206,7 +203,12 @@ impl Tool for WebFetchTool {
             "DELETE" => Method::DELETE,
             "PATCH" => Method::PATCH,
             "HEAD" => Method::HEAD,
-            _ => return Err(ZeroError::Tool(format!("Unsupported method: {}", method_str))),
+            _ => {
+                return Err(ZeroError::Tool(format!(
+                    "Unsupported method: {}",
+                    method_str
+                )));
+            }
         };
 
         // Extract timeout
@@ -239,9 +241,10 @@ impl Tool for WebFetchTool {
         }
 
         // Send request
-        let response = request.send().await.map_err(|e| {
-            ZeroError::Tool(format!("Request failed: {}", e))
-        })?;
+        let response = request
+            .send()
+            .await
+            .map_err(|e| ZeroError::Tool(format!("Request failed: {}", e)))?;
 
         // Get response info
         let status = response.status().as_u16();
@@ -266,9 +269,10 @@ impl Tool for WebFetchTool {
         }
 
         // Get response body with size limit
-        let bytes = response.bytes().await.map_err(|e| {
-            ZeroError::Tool(format!("Failed to read response: {}", e))
-        })?;
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ZeroError::Tool(format!("Failed to read response: {}", e)))?;
 
         if bytes.len() > MAX_RESPONSE_SIZE {
             return Err(ZeroError::Tool(format!(
@@ -316,16 +320,32 @@ mod tests {
     #[test]
     fn test_blocked_urls() {
         // Blocked URLs
-        assert!(WebFetchTool::is_blocked_url(&Url::parse("http://localhost/api").unwrap()));
-        assert!(WebFetchTool::is_blocked_url(&Url::parse("http://127.0.0.1/api").unwrap()));
-        assert!(WebFetchTool::is_blocked_url(&Url::parse("http://192.168.1.1/api").unwrap()));
-        assert!(WebFetchTool::is_blocked_url(&Url::parse("http://10.0.0.1/api").unwrap()));
-        assert!(WebFetchTool::is_blocked_url(&Url::parse("http://169.254.169.254/latest/").unwrap()));
-        assert!(WebFetchTool::is_blocked_url(&Url::parse("http://metadata.google.internal/api").unwrap()));
+        assert!(WebFetchTool::is_blocked_url(
+            &Url::parse("http://localhost/api").unwrap()
+        ));
+        assert!(WebFetchTool::is_blocked_url(
+            &Url::parse("http://127.0.0.1/api").unwrap()
+        ));
+        assert!(WebFetchTool::is_blocked_url(
+            &Url::parse("http://192.168.1.1/api").unwrap()
+        ));
+        assert!(WebFetchTool::is_blocked_url(
+            &Url::parse("http://10.0.0.1/api").unwrap()
+        ));
+        assert!(WebFetchTool::is_blocked_url(
+            &Url::parse("http://169.254.169.254/latest/").unwrap()
+        ));
+        assert!(WebFetchTool::is_blocked_url(
+            &Url::parse("http://metadata.google.internal/api").unwrap()
+        ));
 
         // Allowed URLs
-        assert!(!WebFetchTool::is_blocked_url(&Url::parse("https://api.example.com/v1").unwrap()));
-        assert!(!WebFetchTool::is_blocked_url(&Url::parse("https://github.com/").unwrap()));
+        assert!(!WebFetchTool::is_blocked_url(
+            &Url::parse("https://api.example.com/v1").unwrap()
+        ));
+        assert!(!WebFetchTool::is_blocked_url(
+            &Url::parse("https://github.com/").unwrap()
+        ));
     }
 
     #[test]

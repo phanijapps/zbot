@@ -35,7 +35,8 @@ pub trait FileSystemContext: Send + Sync {
     /// Returns the directory for agent-specific npm packages (e.g., agents_data/{agent-id}/node_modules/)
     fn agent_node_modules_dir(&self, agent_id: &str) -> Option<PathBuf> {
         // Default implementation: node_modules inside agent_data_dir
-        self.agent_data_dir(agent_id).map(|p| p.join("node_modules"))
+        self.agent_data_dir(agent_id)
+            .map(|p| p.join("node_modules"))
     }
 
     /// Get the vault/config root path

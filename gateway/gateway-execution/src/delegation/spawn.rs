@@ -5,12 +5,12 @@
 use super::callback::{handle_delegation_failure, handle_delegation_success};
 use super::context::{DelegationContext, DelegationRequest};
 use super::registry::DelegationRegistry;
-use gateway_database::{ConversationRepository, DatabaseManager};
-use gateway_events::{EventBus, GatewayEvent};
-use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use agent_runtime::AgentExecutor;
 use api_logs::LogService;
 use execution_state::StateService;
+use gateway_database::{ConversationRepository, DatabaseManager};
+use gateway_events::{EventBus, GatewayEvent};
+use gateway_services::{AgentService, McpService, ProviderService, SharedVaultPaths, SkillService};
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;
@@ -24,11 +24,11 @@ use crate::invoke::{
     process_stream_event, spawn_batch_writer_with_repo, subagent_rules, AgentLoader,
     ExecutorBuilder, ResponseAccumulator, StreamContext, SubagentRole, WorkspaceCache,
 };
-use crate::recall::MemoryRecall;
 use crate::lifecycle::{
     complete_execution, crash_execution, emit_delegation_completed, emit_delegation_started,
     start_execution,
 };
+use crate::recall::MemoryRecall;
 
 /// Spawn a delegated agent.
 ///
@@ -61,13 +61,15 @@ pub async fn spawn_delegated_agent(
     memory_repo: Option<Arc<gateway_database::MemoryRepository>>,
     embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
     memory_recall: Option<Arc<MemoryRecall>>,
-    rate_limiters: Arc<std::sync::RwLock<std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>>>,
+    rate_limiters: Arc<
+        std::sync::RwLock<
+            std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
+        >,
+    >,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
-    let child_session = execution_state::Session::new_child(
-        &request.child_agent_id,
-        &request.session_id,
-    );
+    let child_session =
+        execution_state::Session::new_child(&request.child_agent_id, &request.session_id);
     let child_session_id = child_session.id.clone();
 
     if let Err(e) = state_service.create_session_from(&child_session) {
@@ -114,7 +116,8 @@ pub async fn spawn_delegated_agent(
         &request.parent_agent_id,
         &child_conversation_id, // legacy conversation_id
     );
-    let delegation_context = delegation_context.with_child_conversation_id(child_conversation_id.clone());
+    let delegation_context =
+        delegation_context.with_child_conversation_id(child_conversation_id.clone());
     let delegation_context = if let Some(ctx) = request.context.clone() {
         delegation_context.with_context(ctx)
     } else {
@@ -144,7 +147,10 @@ pub async fn spawn_delegated_agent(
 
     // Load agent and provider using AgentLoader
     let agent_loader = AgentLoader::new(&agent_service, &provider_service, paths.clone());
-    let (mut agent, provider) = match agent_loader.load_or_create_specialist(&request.child_agent_id).await {
+    let (mut agent, provider) = match agent_loader
+        .load_or_create_specialist(&request.child_agent_id)
+        .await
+    {
         Ok(result) => result,
         Err(e) => {
             // Mark the pre-created execution as crashed so session can complete
@@ -155,10 +161,7 @@ pub async fn spawn_delegated_agent(
     };
 
     // Detect subagent role
-    let role = detect_subagent_role(
-        &request.child_agent_id,
-        &request.task,
-    );
+    let role = detect_subagent_role(&request.child_agent_id, &request.task);
     tracing::info!(
         child_agent = %request.child_agent_id,
         role = ?role,
@@ -211,10 +214,9 @@ pub async fn spawn_delegated_agent(
         let agents_md_path = ward_dir.join("AGENTS.md");
 
         if let Ok(agents_md) = std::fs::read_to_string(&agents_md_path) {
-            agent.instructions.push_str(&format!(
-                "\n# Ward Context ({})\n{}\n",
-                ward_id, agents_md
-            ));
+            agent
+                .instructions
+                .push_str(&format!("\n# Ward Context ({})\n{}\n", ward_id, agents_md));
         }
 
         // Inject core module docs so subagent knows available functions
@@ -222,10 +224,9 @@ pub async fn spawn_delegated_agent(
         if let Ok(core_docs) = std::fs::read_to_string(&core_docs_path) {
             // Only inject if reasonably sized (< 4KB to avoid context bloat)
             if core_docs.len() < 4096 {
-                agent.instructions.push_str(&format!(
-                    "\n# Available Core Modules\n{}\n",
-                    core_docs
-                ));
+                agent
+                    .instructions
+                    .push_str(&format!("\n# Available Core Modules\n{}\n", core_docs));
             } else {
                 agent.instructions.push_str(
                     "\n# Core Modules\nSee memory-bank/core_docs.md for available functions. Read it before writing new code.\n"
@@ -281,10 +282,13 @@ pub async fn spawn_delegated_agent(
     }
 
     // Build fact store for subagent (so save_fact uses DB, not file fallback)
-    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> = memory_repo.as_ref().map(|repo| {
-        Arc::new(gateway_database::GatewayMemoryFactStore::new(repo.clone(), embedding_client.clone()))
-            as Arc<dyn zero_core::MemoryFactStore>
-    });
+    let fact_store: Option<Arc<dyn zero_core::MemoryFactStore>> =
+        memory_repo.as_ref().map(|repo| {
+            Arc::new(gateway_database::GatewayMemoryFactStore::new(
+                repo.clone(),
+                embedding_client.clone(),
+            )) as Arc<dyn zero_core::MemoryFactStore>
+        });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
@@ -315,12 +319,10 @@ pub async fn spawn_delegated_agent(
     // Delegation recall: inject relevant knowledge for the child agent
     let initial_history = if let Some(recall) = &memory_recall {
         let ward_id = session_ward_id.as_deref();
-        match recall.recall_for_delegation(
-            &request.child_agent_id,
-            &request.task,
-            ward_id,
-            8,
-        ).await {
+        match recall
+            .recall_for_delegation(&request.child_agent_id, &request.task, ward_id, 8)
+            .await
+        {
             Ok(context) if !context.is_empty() => {
                 tracing::info!(
                     agent = %request.child_agent_id,
@@ -470,16 +472,27 @@ fn spawn_execution_task(
 
                 // Stream messages to child session
                 match &event {
-                    agent_runtime::StreamEvent::ToolCallStart { tool_id, tool_name, args, .. } => {
+                    agent_runtime::StreamEvent::ToolCallStart {
+                        tool_id,
+                        tool_name,
+                        args,
+                        ..
+                    } => {
                         turn_tool_calls.push(serde_json::json!({
                             "tool_id": tool_id,
                             "tool_name": tool_name,
                             "args": args,
                         }));
                     }
-                    agent_runtime::StreamEvent::ToolResult { tool_id, result, error, .. } => {
+                    agent_runtime::StreamEvent::ToolResult {
+                        tool_id,
+                        result,
+                        error,
+                        ..
+                    } => {
                         if !turn_tool_calls.is_empty() {
-                            let tc_json = serde_json::to_string(&turn_tool_calls).unwrap_or_default();
+                            let tc_json =
+                                serde_json::to_string(&turn_tool_calls).unwrap_or_default();
                             let content = if turn_text.is_empty() {
                                 "[tool calls]".to_string()
                             } else {
@@ -801,10 +814,7 @@ fn build_crash_report(
     parent_session_id: &str,
     paths: &SharedVaultPaths,
 ) -> String {
-    let mut report = format!(
-        "DELEGATION FAILED: {}\n\nERROR: {}\n",
-        agent_id, error
-    );
+    let mut report = format!("DELEGATION FAILED: {}\n\nERROR: {}\n", agent_id, error);
 
     // Try to extract plan status from child session messages.
     // Plan updates appear as tool results containing JSON with `__plan_update: true`.
@@ -822,16 +832,12 @@ fn build_crash_report(
                 if let Some(steps) = plan_data.get("plan").and_then(|p| p.as_array()) {
                     let completed: Vec<_> = steps
                         .iter()
-                        .filter(|s| {
-                            s.get("status").and_then(|v| v.as_str()) == Some("completed")
-                        })
+                        .filter(|s| s.get("status").and_then(|v| v.as_str()) == Some("completed"))
                         .filter_map(|s| s.get("step").and_then(|v| v.as_str()))
                         .collect();
                     let pending: Vec<_> = steps
                         .iter()
-                        .filter(|s| {
-                            s.get("status").and_then(|v| v.as_str()) != Some("completed")
-                        })
+                        .filter(|s| s.get("status").and_then(|v| v.as_str()) != Some("completed"))
                         .filter_map(|s| s.get("step").and_then(|v| v.as_str()))
                         .collect();
 
@@ -880,7 +886,8 @@ fn build_crash_report(
                                 {
                                     let status = String::from_utf8_lossy(&output.stdout);
                                     if !status.trim().is_empty() {
-                                        let rel_path = tasks_json.strip_prefix(&ward_dir)
+                                        let rel_path = tasks_json
+                                            .strip_prefix(&ward_dir)
                                             .map(|p| p.display().to_string())
                                             .unwrap_or_else(|_| tasks_json.display().to_string());
                                         report.push_str(&format!(

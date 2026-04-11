@@ -10,13 +10,12 @@ use serde_json::{json, Value};
 use tokio_stream::StreamExt;
 
 use crate::llm::client::{
-    LlmClient, LlmError, ChatResponse, StreamChunk, StreamCallback, TokenUsage,
-    ToolCallChunk,
+    ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk, TokenUsage, ToolCallChunk,
 };
 use crate::llm::config::LlmConfig;
 use crate::types::{ChatMessage, ToolCall};
-use zero_core::types::{Part, ContentSource};
 use zero_core::multimodal::rehydrate_source;
+use zero_core::types::{ContentSource, Part};
 
 /// OpenAI-compatible LLM client
 ///
@@ -107,11 +106,18 @@ impl OpenAiClient {
 
     /// Rehydrate any FileRef sources in messages to Base64 before sending to the API.
     fn rehydrate_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
-        messages.into_iter().map(|mut msg| {
-            msg.content = msg.content.into_iter().map(|part| {
-                match &part {
-                    Part::Image { source: source @ ContentSource::FileRef(path), mime_type, detail } => {
-                        match rehydrate_source(source) {
+        messages
+            .into_iter()
+            .map(|mut msg| {
+                msg.content = msg
+                    .content
+                    .into_iter()
+                    .map(|part| match &part {
+                        Part::Image {
+                            source: source @ ContentSource::FileRef(path),
+                            mime_type,
+                            detail,
+                        } => match rehydrate_source(source) {
                             Ok(new_source) => Part::Image {
                                 source: new_source,
                                 mime_type: mime_type.clone(),
@@ -121,10 +127,12 @@ impl OpenAiClient {
                                 tracing::warn!("Failed to rehydrate FileRef {}: {}", path, e);
                                 part
                             }
-                        }
-                    }
-                    Part::File { source: source @ ContentSource::FileRef(path), mime_type, filename } => {
-                        match rehydrate_source(source) {
+                        },
+                        Part::File {
+                            source: source @ ContentSource::FileRef(path),
+                            mime_type,
+                            filename,
+                        } => match rehydrate_source(source) {
                             Ok(new_source) => Part::File {
                                 source: new_source,
                                 mime_type: mime_type.clone(),
@@ -134,21 +142,17 @@ impl OpenAiClient {
                                 tracing::warn!("Failed to rehydrate FileRef {}: {}", path, e);
                                 part
                             }
-                        }
-                    }
-                    _ => part,
-                }
-            }).collect();
-            msg
-        }).collect()
+                        },
+                        _ => part,
+                    })
+                    .collect();
+                msg
+            })
+            .collect()
     }
 
     /// Build the request body for the API
-    fn build_request_body(
-        &self,
-        messages: Vec<ChatMessage>,
-        tools: Option<Value>,
-    ) -> Value {
+    fn build_request_body(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Value {
         let messages = Self::rehydrate_messages(messages);
         let mut body_obj = json!({
             "model": self.config.model,
@@ -168,10 +172,7 @@ impl OpenAiClient {
         // Add thinking parameter if enabled (for DeepSeek, GLM, etc.)
         if self.config.thinking_enabled {
             if let Some(body_map) = body_obj.as_object_mut() {
-                body_map.insert(
-                    "thinking".to_string(),
-                    json!({"type": "enabled"})
-                );
+                body_map.insert("thinking".to_string(), json!({"type": "enabled"}));
             }
         }
 
@@ -223,7 +224,8 @@ impl OpenAiClient {
 
         tracing::debug!("Making POST request to: {}", url);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
@@ -272,7 +274,11 @@ impl OpenAiClient {
 
         ChatResponse {
             content,
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
             reasoning,
             usage,
         }
@@ -287,13 +293,18 @@ impl OpenAiClient {
                     .filter_map(|call| {
                         let id = call.get("id")?.as_str()?.to_string();
                         let name = call.get("function")?.get("name")?.as_str()?.to_string();
-                        let arguments_str = call.get("function")?.get("arguments")?.as_str()?.to_string();
+                        let arguments_str = call
+                            .get("function")?
+                            .get("arguments")?
+                            .as_str()?
+                            .to_string();
 
                         // Parse arguments from string to Value for internal use
                         let arguments = serde_json::from_str(&arguments_str)
                             .or_else(|_| {
-                                recover_first_json(&arguments_str)
-                                    .ok_or_else(|| serde_json::from_str::<Value>("null").unwrap_err())
+                                recover_first_json(&arguments_str).ok_or_else(|| {
+                                    serde_json::from_str::<Value>("null").unwrap_err()
+                                })
                             })
                             .ok()?;
 
@@ -316,7 +327,11 @@ impl LlmClient for OpenAiClient {
         &self.config.provider_id
     }
 
-    async fn chat(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Result<ChatResponse, LlmError> {
+    async fn chat(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+    ) -> Result<ChatResponse, LlmError> {
         tracing::info!("Starting chat with {} messages", messages.len());
 
         let body = self.build_request_body(messages, tools);
@@ -345,12 +360,16 @@ impl LlmClient for OpenAiClient {
         // Enable streaming with usage reporting
         if let Some(obj) = body_obj.as_object_mut() {
             obj.insert("stream".to_string(), json!(true));
-            obj.insert("stream_options".to_string(), json!({ "include_usage": true }));
+            obj.insert(
+                "stream_options".to_string(),
+                json!({ "include_usage": true }),
+            );
         }
 
         tracing::debug!("Making streaming POST request to: {}", url);
 
-        let response = self.http_client
+        let response = self
+            .http_client
             .post(&url)
             .header("Authorization", format!("Bearer {}", self.config.api_key))
             .header("Content-Type", "application/json")
@@ -457,10 +476,15 @@ impl LlmClient for OpenAiClient {
                 };
 
                 // Capture finish_reason from the final chunk
-                if let Some(reason) = json_data.pointer("/choices/0/finish_reason").and_then(|v| v.as_str()) {
+                if let Some(reason) = json_data
+                    .pointer("/choices/0/finish_reason")
+                    .and_then(|v| v.as_str())
+                {
                     _finish_reason = Some(reason.to_string());
                     if reason == "length" {
-                        tracing::warn!("Stream finished with reason 'length' — response may be truncated");
+                        tracing::warn!(
+                            "Stream finished with reason 'length' — response may be truncated"
+                        );
                     }
                 }
 
@@ -522,17 +546,16 @@ impl LlmClient for OpenAiClient {
                 // Tool calls — accumulate deltas by index
                 if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                     for call in calls {
-                        let index = call.get("index")
-                            .and_then(|i| i.as_u64())
-                            .unwrap_or(0);
+                        let index = call.get("index").and_then(|i| i.as_u64()).unwrap_or(0);
 
-                        let acc = tool_accumulators.entry(index).or_insert_with(|| {
-                            ToolCallAccumulator {
-                                id: String::new(),
-                                name: String::new(),
-                                arguments: String::new(),
-                            }
-                        });
+                        let acc =
+                            tool_accumulators
+                                .entry(index)
+                                .or_insert_with(|| ToolCallAccumulator {
+                                    id: String::new(),
+                                    name: String::new(),
+                                    arguments: String::new(),
+                                });
 
                         // First delta for this index carries the id and name
                         if let Some(id) = call.get("id").and_then(|i| i.as_str()) {
@@ -540,7 +563,8 @@ impl LlmClient for OpenAiClient {
                                 acc.id = id.to_string();
                             }
                         }
-                        if let Some(name) = call.get("function")
+                        if let Some(name) = call
+                            .get("function")
                             .and_then(|f| f.get("name"))
                             .and_then(|n| n.as_str())
                         {
@@ -550,7 +574,8 @@ impl LlmClient for OpenAiClient {
                         }
 
                         // Every delta may carry an argument fragment — append it
-                        if let Some(args_fragment) = call.get("function")
+                        if let Some(args_fragment) = call
+                            .get("function")
                             .and_then(|f| f.get("arguments"))
                             .and_then(|a| a.as_str())
                         {
@@ -559,8 +584,16 @@ impl LlmClient for OpenAiClient {
 
                         // Emit StreamChunk::ToolCall for UI feedback
                         callback(StreamChunk::ToolCall(ToolCallChunk {
-                            id: if acc.id.is_empty() { None } else { Some(acc.id.clone()) },
-                            name: if acc.name.is_empty() { None } else { Some(acc.name.clone()) },
+                            id: if acc.id.is_empty() {
+                                None
+                            } else {
+                                Some(acc.id.clone())
+                            },
+                            name: if acc.name.is_empty() {
+                                None
+                            } else {
+                                Some(acc.name.clone())
+                            },
                             arguments: acc.arguments.clone(),
                         }));
                     }
@@ -604,7 +637,9 @@ impl LlmClient for OpenAiClient {
                             } else {
                                 tracing::warn!(
                                     "Failed to parse tool call arguments for '{}': {} — raw: {}",
-                                    acc.name, e, &acc.arguments[..acc.arguments.len().min(200)]
+                                    acc.name,
+                                    e,
+                                    &acc.arguments[..acc.arguments.len().min(200)]
                                 );
                                 json!({
                                     "__error__": "PARSE_ERROR",
@@ -639,8 +674,16 @@ impl LlmClient for OpenAiClient {
 
         Ok(ChatResponse {
             content: full_content,
-            tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
-            reasoning: if reasoning_content.is_empty() { None } else { Some(reasoning_content) },
+            tool_calls: if tool_calls.is_empty() {
+                None
+            } else {
+                Some(tool_calls)
+            },
+            reasoning: if reasoning_content.is_empty() {
+                None
+            } else {
+                Some(reasoning_content)
+            },
             usage: Some(usage),
         })
     }

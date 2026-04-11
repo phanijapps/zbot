@@ -209,7 +209,10 @@ mod tests {
             .register("worker-1".to_string(), vec![], vec![], tx2, pending2)
             .await;
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), BridgeError::AlreadyConnected(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            BridgeError::AlreadyConnected(_)
+        ));
     }
 
     #[tokio::test]
@@ -252,9 +255,7 @@ mod tests {
     #[tokio::test]
     async fn test_send_to_disconnected() {
         let registry = BridgeRegistry::new();
-        let result = registry
-            .send("worker-1", BridgeServerMessage::Ping)
-            .await;
+        let result = registry.send("worker-1", BridgeServerMessage::Ping).await;
         assert!(result.is_err());
         assert!(matches!(result.unwrap_err(), BridgeError::NotConnected(_)));
     }

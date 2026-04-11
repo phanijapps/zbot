@@ -1,11 +1,11 @@
 //! Per-provider rate limiter with concurrency control + sliding window.
 
+use async_trait::async_trait;
+use serde_json::Value;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore, SemaphorePermit};
-use async_trait::async_trait;
-use serde_json::Value;
 
 use super::client::{ChatResponse, LlmClient, LlmError, StreamCallback};
 use crate::types::ChatMessage;
@@ -43,7 +43,11 @@ impl ProviderRateLimiter {
                 let one_minute_ago = now - Duration::from_secs(60);
 
                 // Remove old timestamps
-                while window.timestamps.front().map_or(false, |t| *t < one_minute_ago) {
+                while window
+                    .timestamps
+                    .front()
+                    .map_or(false, |t| *t < one_minute_ago)
+                {
                     window.timestamps.pop_front();
                 }
 
@@ -68,7 +72,10 @@ impl ProviderRateLimiter {
             }
         }
 
-        self.concurrency.acquire().await.expect("Rate limiter semaphore closed")
+        self.concurrency
+            .acquire()
+            .await
+            .expect("Rate limiter semaphore closed")
     }
 
     /// Auto-reduce RPM after 429.
@@ -99,21 +106,44 @@ impl RateLimitedLlmClient {
 
 #[async_trait]
 impl LlmClient for RateLimitedLlmClient {
-    fn model(&self) -> &str { self.inner.model() }
-    fn provider(&self) -> &str { self.inner.provider() }
+    fn model(&self) -> &str {
+        self.inner.model()
+    }
+    fn provider(&self) -> &str {
+        self.inner.provider()
+    }
 
-    fn supports_tools(&self) -> bool { self.inner.supports_tools() }
-    fn supports_reasoning(&self) -> bool { self.inner.supports_reasoning() }
+    fn supports_tools(&self) -> bool {
+        self.inner.supports_tools()
+    }
+    fn supports_reasoning(&self) -> bool {
+        self.inner.supports_reasoning()
+    }
 
-    async fn chat(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Result<ChatResponse, LlmError> {
+    async fn chat(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+    ) -> Result<ChatResponse, LlmError> {
         let _permit = self.limiter.acquire().await;
-        tracing::debug!(provider = self.inner.provider(), "Rate limit permit acquired for chat()");
+        tracing::debug!(
+            provider = self.inner.provider(),
+            "Rate limit permit acquired for chat()"
+        );
         self.inner.chat(messages, tools).await
     }
 
-    async fn chat_stream(&self, messages: Vec<ChatMessage>, tools: Option<Value>, callback: StreamCallback) -> Result<ChatResponse, LlmError> {
+    async fn chat_stream(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+        callback: StreamCallback,
+    ) -> Result<ChatResponse, LlmError> {
         let _permit = self.limiter.acquire().await;
-        tracing::debug!(provider = self.inner.provider(), "Rate limit permit acquired for chat_stream()");
+        tracing::debug!(
+            provider = self.inner.provider(),
+            "Rate limit permit acquired for chat_stream()"
+        );
         self.inner.chat_stream(messages, tools, callback).await
     }
 }
@@ -135,9 +165,15 @@ mod tests {
         // by checking try_acquire behavior directly on the semaphore
         let sem = Arc::new(Semaphore::new(1));
         let _permit1 = sem.try_acquire().expect("first acquire should succeed");
-        assert!(sem.try_acquire().is_err(), "Second acquire should fail when concurrency=1 and permit is held");
+        assert!(
+            sem.try_acquire().is_err(),
+            "Second acquire should fail when concurrency=1 and permit is held"
+        );
         drop(_permit1);
-        assert!(sem.try_acquire().is_ok(), "Acquire should succeed after permit is dropped");
+        assert!(
+            sem.try_acquire().is_ok(),
+            "Acquire should succeed after permit is dropped"
+        );
         drop(limiter); // ensure limiter is used
     }
 

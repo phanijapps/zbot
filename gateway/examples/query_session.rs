@@ -6,7 +6,10 @@ use std::env;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
-    let session_id = args.get(1).map(|s| s.as_str()).unwrap_or("sess-9fa1604d-a82b-48e1-a47e-176d594a3b7b");
+    let session_id = args
+        .get(1)
+        .map(|s| s.as_str())
+        .unwrap_or("sess-9fa1604d-a82b-48e1-a47e-176d594a3b7b");
 
     let db_path = r"C:\Users\rampi\Documents\zbot\conversations.db";
     let conn = Connection::open(db_path)?;
@@ -24,14 +27,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             row.get::<_, i64>(4)?,
         ))
     }) {
-        println!("Session: {} | Status: {} | Agent: {} | Pending: {} | Continuation: {}", id, status, agent, pending, cont);
+        println!(
+            "Session: {} | Status: {} | Agent: {} | Pending: {} | Continuation: {}",
+            id, status, agent, pending, cont
+        );
     }
 
     println!("\n=== EXECUTIONS ===\n");
 
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, delegation_type, status, parent_execution_id
-         FROM agent_executions WHERE session_id = ?1 ORDER BY started_at"
+         FROM agent_executions WHERE session_id = ?1 ORDER BY started_at",
     )?;
     let mut rows = stmt.query(params![session_id])?;
 
@@ -41,9 +47,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let dtype: String = row.get(2)?;
         let status: String = row.get(3)?;
         let parent: Option<String> = row.get(4)?;
-        println!("{} | {:20} | {:10} | {:10} | parent: {:?}",
-            &id[..id.floor_char_boundary(24)], agent, dtype, status,
-            parent.as_ref().map(|p| &p[..p.floor_char_boundary(24)]));
+        println!(
+            "{} | {:20} | {:10} | {:10} | parent: {:?}",
+            &id[..id.floor_char_boundary(24)],
+            agent,
+            dtype,
+            status,
+            parent.as_ref().map(|p| &p[..p.floor_char_boundary(24)])
+        );
     }
 
     println!("\n=== MESSAGES (by execution) ===\n");
@@ -53,7 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
          FROM messages m
          JOIN agent_executions e ON m.execution_id = e.id
          WHERE e.session_id = ?1
-         ORDER BY m.created_at"
+         ORDER BY m.created_at",
     )?;
     let mut rows = stmt.query(params![session_id])?;
 
@@ -63,9 +74,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let content: String = row.get(2)?;
         let dtype: String = row.get(3)?;
         let agent: String = row.get(4)?;
-        println!("[{} | {}] {} ({}): {}",
-            &exec[..exec.floor_char_boundary(16)], agent, role, dtype,
-            content.replace('\n', " ").chars().take(80).collect::<String>());
+        println!(
+            "[{} | {}] {} ({}): {}",
+            &exec[..exec.floor_char_boundary(16)],
+            agent,
+            role,
+            dtype,
+            content
+                .replace('\n', " ")
+                .chars()
+                .take(80)
+                .collect::<String>()
+        );
     }
 
     Ok(())

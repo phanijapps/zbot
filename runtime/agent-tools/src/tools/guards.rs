@@ -22,7 +22,10 @@ pub(crate) fn has_placeholder_specs(ctx: &dyn ToolContext) -> bool {
     }
 
     // Check ward_id
-    let ward_id = match ctx.get_state("ward_id").and_then(|v| v.as_str().map(String::from)) {
+    let ward_id = match ctx
+        .get_state("ward_id")
+        .and_then(|v| v.as_str().map(String::from))
+    {
         Some(id) if id != "scratch" => id,
         _ => return false,
     };

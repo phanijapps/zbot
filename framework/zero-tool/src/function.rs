@@ -206,13 +206,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_function_tool_basic() {
-        let tool = FunctionTool::new(
-            "echo",
-            "Echo back the input",
-            |_ctx, args| {
-                Box::pin(async move { Ok(args) })
-            },
-        );
+        let tool = FunctionTool::new("echo", "Echo back the input", |_ctx, args| {
+            Box::pin(async move { Ok(args) })
+        });
 
         assert_eq!(tool.name(), "echo");
         assert_eq!(tool.description(), "Echo back the input");
@@ -226,17 +222,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_function_tool_with_parameters() {
-        let tool = FunctionTool::new(
-            "calculate",
-            "Perform a calculation",
-            |_ctx, args| {
-                Box::pin(async move {
-                    let a = args["a"].as_i64().unwrap_or(0);
-                    let b = args["b"].as_i64().unwrap_or(0);
-                    Ok(serde_json::json!(a + b))
-                })
-            },
-        )
+        let tool = FunctionTool::new("calculate", "Perform a calculation", |_ctx, args| {
+            Box::pin(async move {
+                let a = args["a"].as_i64().unwrap_or(0);
+                let b = args["b"].as_i64().unwrap_or(0);
+                Ok(serde_json::json!(a + b))
+            })
+        })
         .with_parameters(serde_json::json!({
             "type": "object",
             "properties": {

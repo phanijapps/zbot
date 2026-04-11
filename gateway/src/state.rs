@@ -2,22 +2,30 @@
 //!
 //! Shared state for the gateway application.
 
-use api_logs::LogService;
-use execution_state::StateService;
-use knowledge_graph::{GraphStorage, GraphService, SqliteGraphTraversal};
 use crate::connectors::{ConnectorRegistry, ConnectorService};
 use crate::cron::CronScheduler;
 use crate::database::{ConversationRepository, DatabaseManager};
 use crate::events::EventBus;
-use crate::execution::{new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller, WorkspaceCache};
+use crate::execution::{
+    new_workspace_cache, DelegationRegistry, MemoryRecall, SessionArchiver, SessionDistiller,
+    WorkspaceCache,
+};
 use crate::hooks::HookRegistry;
-use crate::services::{AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService, SkillService, SharedVaultPaths, VaultPaths};
-use agent_runtime::llm::LocalEmbeddingClient;
+use crate::services::{
+    AgentService, McpService, ModelRegistry, ProviderService, RuntimeService, SettingsService,
+    SharedVaultPaths, SkillService, VaultPaths,
+};
 use agent_runtime::llm::EmbeddingClient;
+use agent_runtime::llm::LocalEmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
+use api_logs::LogService;
 use chrono::Utc;
-use gateway_database::{DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository};
+use execution_state::StateService;
+use gateway_database::{
+    DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository,
+};
+use knowledge_graph::{GraphService, GraphStorage, SqliteGraphTraversal};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -118,7 +126,7 @@ impl AppState {
     pub fn new(config_dir: PathBuf) -> Self {
         // Create centralized vault paths
         let paths = Arc::new(VaultPaths::new(config_dir.clone()));
-        
+
         // Ensure required directories exist
         if let Err(e) = paths.ensure_dirs_exist() {
             tracing::warn!("Failed to create vault directories: {}", e);
@@ -192,32 +200,29 @@ impl AppState {
         };
 
         // Load recall configuration (compiled defaults merged with optional user overrides)
-        let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(paths.vault_dir()));
+        let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(
+            paths.vault_dir(),
+        ));
 
         // Create session archiver for offloading old transcripts to compressed files
-        let archive_path = paths.data_dir().join(&recall_config.session_offload.archive_path);
-        let session_archiver = Arc::new(SessionArchiver::new(
-            db_manager.clone(),
-            archive_path,
-        ));
+        let archive_path = paths
+            .data_dir()
+            .join(&recall_config.session_offload.archive_path);
+        let session_archiver = Arc::new(SessionArchiver::new(db_manager.clone(), archive_path));
 
         // Create memory recall with optional graph enrichment and episodic recall
         let mut memory_recall_inner = match &graph_service {
-            Some(gs) => {
-                MemoryRecall::with_graph(
-                    embedding_client.clone(),
-                    memory_repo.clone(),
-                    gs.clone(),
-                    recall_config.clone(),
-                )
-            }
-            None => {
-                MemoryRecall::new(
-                    embedding_client.clone(),
-                    memory_repo.clone(),
-                    recall_config.clone(),
-                )
-            }
+            Some(gs) => MemoryRecall::with_graph(
+                embedding_client.clone(),
+                memory_repo.clone(),
+                gs.clone(),
+                recall_config.clone(),
+            ),
+            None => MemoryRecall::new(
+                embedding_client.clone(),
+                memory_repo.clone(),
+                recall_config.clone(),
+            ),
         };
         memory_recall_inner.set_episode_repo(episode_repo.clone());
 
@@ -317,7 +322,7 @@ impl AppState {
             connector_registry,
             bridge_registry,
             bridge_outbox,
-            bridge_bus: None, // Set by server.start() before router creation
+            bridge_bus: None,     // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             session_archiver: Some(session_archiver),
             plugin_manager,
@@ -350,8 +355,7 @@ impl AppState {
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
         let memory_repo = Arc::new(MemoryRepository::new(Arc::new(
-            DatabaseManager::new(paths.clone())
-                .expect("Failed to initialize database for memory"),
+            DatabaseManager::new(paths.clone()).expect("Failed to initialize database for memory"),
         )));
 
         // Create connector registry
@@ -416,10 +420,8 @@ impl AppState {
         paths: SharedVaultPaths,
     ) -> Self {
         let config_dir = paths.vault_dir().clone();
-        let db = Arc::new(
-            DatabaseManager::new(paths.clone())
-                .expect("Failed to initialize database"),
-        );
+        let db =
+            Arc::new(DatabaseManager::new(paths.clone()).expect("Failed to initialize database"));
         let memory_repo = Arc::new(MemoryRepository::new(db));
 
         // Create bridge registry and outbox
@@ -503,7 +505,8 @@ impl AppState {
             .list()
             .ok()
             .and_then(|providers| {
-                providers.iter()
+                providers
+                    .iter()
                     .find(|p| p.is_default)
                     .or_else(|| providers.first())
                     .and_then(|p| p.default_model().to_string().into())
@@ -511,18 +514,22 @@ impl AppState {
             .unwrap_or_else(|| "gpt-4o".to_string());
 
         // Seed default agents from bundled templates (configs + AGENTS.md instructions)
-        let agent_template = gateway_templates::Templates::get("default_agents.json")
-            .map(|f| f.data.to_vec());
-        if let Err(e) = self.agents.seed_default_agents(
-            &default_provider_id,
-            &default_model,
-            agent_template.as_deref(),
-            |name| {
-                let path = format!("agents/{}.md", name);
-                gateway_templates::Templates::get(&path)
-                    .map(|f| String::from_utf8_lossy(&f.data).to_string())
-            },
-        ).await {
+        let agent_template =
+            gateway_templates::Templates::get("default_agents.json").map(|f| f.data.to_vec());
+        if let Err(e) = self
+            .agents
+            .seed_default_agents(
+                &default_provider_id,
+                &default_model,
+                agent_template.as_deref(),
+                |name| {
+                    let path = format!("agents/{}.md", name);
+                    gateway_templates::Templates::get(&path)
+                        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+                },
+            )
+            .await
+        {
             tracing::warn!("Failed to seed default agents: {}", e);
         }
 
@@ -553,7 +560,11 @@ impl AppState {
                 if discovered.is_empty() {
                     tracing::info!("No plugins discovered");
                 } else {
-                    tracing::info!("Discovered {} plugin(s): {:?}", discovered.len(), discovered);
+                    tracing::info!(
+                        "Discovered {} plugin(s): {:?}",
+                        discovered.len(),
+                        discovered
+                    );
 
                     // Start all enabled plugins
                     self.plugin_manager.start_all().await;
@@ -570,9 +581,10 @@ impl AppState {
         let skills_dir = self.paths.vault_dir().join("skills");
 
         // Only seed if skills dir is empty or doesn't exist
-        let has_skills = skills_dir.exists() && std::fs::read_dir(&skills_dir)
-            .map(|mut entries| entries.next().is_some())
-            .unwrap_or(false);
+        let has_skills = skills_dir.exists()
+            && std::fs::read_dir(&skills_dir)
+                .map(|mut entries| entries.next().is_some())
+                .unwrap_or(false);
 
         if has_skills {
             tracing::debug!("Skills directory not empty, skipping seed");
@@ -585,7 +597,9 @@ impl AppState {
         // Iterate all embedded files under skills/
         for path in gateway_templates::Templates::iter() {
             let path_str = path.as_ref();
-            if !path_str.starts_with("skills/") { continue; }
+            if !path_str.starts_with("skills/") {
+                continue;
+            }
 
             // path_str is like "skills/coding/SKILL.md" or "skills/yf-data/scripts/run.py"
             let dest = self.paths.vault_dir().join(path_str);
@@ -614,7 +628,8 @@ impl AppState {
         };
 
         // Check if any correction facts already exist
-        let existing = memory_repo.get_facts_by_category("root", "correction", 1)
+        let existing = memory_repo
+            .get_facts_by_category("root", "correction", 1)
             .unwrap_or_default();
         if !existing.is_empty() {
             tracing::debug!("Policies already exist, skipping seed");
@@ -644,7 +659,9 @@ impl AppState {
             let confidence = policy["confidence"].as_f64().unwrap_or(1.0);
             let pinned = policy["pinned"].as_bool().unwrap_or(true);
 
-            if key.is_empty() || content.is_empty() { continue; }
+            if key.is_empty() || content.is_empty() {
+                continue;
+            }
 
             let fact = gateway_database::MemoryFact {
                 id: format!("policy-{}", uuid::Uuid::new_v4()),
@@ -696,7 +713,10 @@ impl AppState {
             if let Err(e) = std::fs::create_dir_all(&scratch_dir) {
                 tracing::warn!("Failed to create wards/scratch directory: {}", e);
             } else {
-                tracing::info!("Created wards directory with scratch ward at {}", wards_dir.display());
+                tracing::info!(
+                    "Created wards directory with scratch ward at {}",
+                    wards_dir.display()
+                );
             }
         }
     }
@@ -707,10 +727,7 @@ impl AppState {
     /// with ExecutionRunner, so all executors see the cached data without
     /// reading from disk on every invocation.
     async fn populate_workspace_cache(&self) {
-        let workspace_path = self
-            .paths
-            .ward_dir("shared")
-            .join("workspace.json");
+        let workspace_path = self.paths.ward_dir("shared").join("workspace.json");
 
         let workspace = match std::fs::read_to_string(&workspace_path) {
             Ok(content) => match serde_json::from_str::<MemoryStore>(&content) {
@@ -720,7 +737,11 @@ impl AppState {
                         .iter()
                         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.value.clone())))
                         .collect();
-                    if map.is_empty() { None } else { Some(map) }
+                    if map.is_empty() {
+                        None
+                    } else {
+                        Some(map)
+                    }
                 }
                 Err(_) => None,
             },
@@ -779,7 +800,10 @@ impl AppState {
                 false
             }
             Err(e) => {
-                tracing::warn!("Failed to run python -m venv: {} (python may not be installed)", e);
+                tracing::warn!(
+                    "Failed to run python -m venv: {} (python may not be installed)",
+                    e
+                );
                 false
             }
         }
@@ -819,10 +843,7 @@ impl AppState {
     /// Only writes entries that don't already exist (preserves user state).
     /// Uses the same MemoryStore type as the memory tool to avoid format mismatch.
     fn seed_workspace_env_status(&self, venv_ok: bool, node_ok: bool) {
-        let workspace_path = self
-            .paths
-            .ward_dir("shared")
-            .join("workspace.json");
+        let workspace_path = self.paths.ward_dir("shared").join("workspace.json");
 
         // Ensure parent directory exists
         if let Some(parent) = workspace_path.parent() {
@@ -833,8 +854,7 @@ impl AppState {
         }
 
         // Load existing store using the same type as the memory tool
-        let mut store: MemoryStore = if let Ok(content) = std::fs::read_to_string(&workspace_path)
-        {
+        let mut store: MemoryStore = if let Ok(content) = std::fs::read_to_string(&workspace_path) {
             serde_json::from_str(&content).unwrap_or_default()
         } else {
             MemoryStore::default()
@@ -893,11 +913,7 @@ impl AppState {
                 "node_env".to_string(),
                 MemoryEntry {
                     value: value.to_string(),
-                    tags: vec![
-                        "system".to_string(),
-                        "node".to_string(),
-                        "env".to_string(),
-                    ],
+                    tags: vec!["system".to_string(), "node".to_string(), "env".to_string()],
                     created_at: now.clone(),
                     updated_at: now,
                 },

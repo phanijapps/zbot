@@ -262,22 +262,27 @@ impl ConversationRepository {
     ///
     /// Handles role='tool' messages with tool_call_id, and assistant messages
     /// with tool_calls arrays. This produces the exact format the LLM expects.
-    pub fn session_messages_to_chat_format(&self, messages: &[Message]) -> Vec<agent_runtime::ChatMessage> {
+    pub fn session_messages_to_chat_format(
+        &self,
+        messages: &[Message],
+    ) -> Vec<agent_runtime::ChatMessage> {
         messages
             .iter()
             .map(|m| {
                 // Parse tool_calls if present on assistant messages
                 let tool_calls = if m.role == "assistant" {
-                    m.tool_calls.as_ref().and_then(|tc_json| {
-                        self.parse_tool_calls_json(tc_json)
-                    })
+                    m.tool_calls
+                        .as_ref()
+                        .and_then(|tc_json| self.parse_tool_calls_json(tc_json))
                 } else {
                     None
                 };
 
                 agent_runtime::ChatMessage {
                     role: m.role.clone(),
-                    content: vec![zero_core::types::Part::Text { text: m.content.clone() }],
+                    content: vec![zero_core::types::Part::Text {
+                        text: m.content.clone(),
+                    }],
                     tool_calls,
                     tool_call_id: m.tool_call_id.clone(),
                 }
@@ -323,7 +328,9 @@ impl ConversationRepository {
                 let tool_name = v.get("tool_name")?.as_str()?.to_string();
                 let args = v.get("args")?.clone();
 
-                Some(agent_runtime::types::ToolCall::new(tool_id, tool_name, args))
+                Some(agent_runtime::types::ToolCall::new(
+                    tool_id, tool_name, args,
+                ))
             })
             .collect();
 
@@ -341,8 +348,8 @@ mod tests {
 
     /// Create a test database using tempfile
     fn create_test_db() -> Arc<DatabaseManager> {
-        use tempfile::TempDir;
         use gateway_services::VaultPaths;
+        use tempfile::TempDir;
 
         let temp_dir = TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
@@ -439,7 +446,8 @@ mod tests {
         repo.append_session_message("session-1", "exec-1", "user", "build a docx", None, None)
             .unwrap();
 
-        let tc_json = r#"[{"tool_id":"call_1","tool_name":"shell","args":{"cmd":"pip install docx"}}]"#;
+        let tc_json =
+            r#"[{"tool_id":"call_1","tool_name":"shell","args":{"cmd":"pip install docx"}}]"#;
         repo.append_session_message(
             "session-1",
             "exec-1",

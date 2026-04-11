@@ -58,11 +58,7 @@ impl ConnectorRegistry {
     }
 
     /// Get inbound log entries for a connector, most recent first.
-    pub async fn get_inbound_log(
-        &self,
-        connector_id: &str,
-        limit: usize,
-    ) -> Vec<InboundLogEntry> {
+    pub async fn get_inbound_log(&self, connector_id: &str, limit: usize) -> Vec<InboundLogEntry> {
         let log = self.inbound_log.read().await;
         log.iter()
             .rev()
@@ -219,7 +215,7 @@ mod tests {
 
     async fn test_registry() -> (ConnectorRegistry, TempDir) {
         use gateway_services::VaultPaths;
-        
+
         let temp_dir = TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let service = ConnectorService::new(paths);

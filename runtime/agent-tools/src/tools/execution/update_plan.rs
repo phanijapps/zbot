@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use zero_core::{Result, Tool, ToolContext, ZeroError};
 
@@ -86,7 +86,10 @@ impl Tool for UpdatePlanTool {
 
         // Check for error markers from truncated/malformed tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
-            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
+            let message = args
+                .get("__message__")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
             return Err(ZeroError::Tool(format!("{}: {}", error_type, message)));
         }
 
@@ -109,15 +112,17 @@ impl Tool for UpdatePlanTool {
                 });
                 if has_progress {
                     if let Some(new_steps) = args.get("plan").and_then(|p| p.as_array()) {
-                        let all_pending = new_steps.iter().all(|s| {
-                            s.get("status").and_then(|v| v.as_str()) == Some("pending")
-                        });
+                        let all_pending = new_steps
+                            .iter()
+                            .all(|s| s.get("status").and_then(|v| v.as_str()) == Some("pending"));
                         if all_pending {
                             replacement_warning = Some(
                                 "Warning: You are replacing a plan that had completed/failed steps. \
-                                 Update step statuses instead of creating a new plan."
+                                 Update step statuses instead of creating a new plan.",
                             );
-                            tracing::warn!("Plan replacement detected — existing plan had progress");
+                            tracing::warn!(
+                                "Plan replacement detected — existing plan had progress"
+                            );
                         }
                     }
                 }
@@ -126,7 +131,8 @@ impl Tool for UpdatePlanTool {
 
         // Part C: Subagent plan cap — delegated executors limited to 5 steps
         let mut truncation_warning = None;
-        let is_delegated = ctx.get_state("app:is_delegated")
+        let is_delegated = ctx
+            .get_state("app:is_delegated")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
 
@@ -148,7 +154,10 @@ impl Tool for UpdatePlanTool {
         // Store the (possibly truncated) plan in session state for UI rendering
         ctx.set_state("app:plan".to_string(), plan_args.clone());
 
-        let final_plan = plan_args.get("plan").and_then(|v| v.as_array()).unwrap_or(plan);
+        let final_plan = plan_args
+            .get("plan")
+            .and_then(|v| v.as_array())
+            .unwrap_or(plan);
         tracing::debug!("Plan updated: {} steps", final_plan.len());
 
         // Build response with optional warnings

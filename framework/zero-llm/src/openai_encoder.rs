@@ -177,10 +177,7 @@ mod tests {
         assert_eq!(arr[0]["type"], "text");
         assert_eq!(arr[0]["text"], "What is in this image?");
         assert_eq!(arr[1]["type"], "image_url");
-        assert_eq!(
-            arr[1]["image_url"]["url"],
-            "data:image/png;base64,aGVsbG8="
-        );
+        assert_eq!(arr[1]["image_url"]["url"], "data:image/png;base64,aGVsbG8=");
         assert_eq!(arr[1]["image_url"]["detail"], "high");
     }
 
@@ -194,10 +191,7 @@ mod tests {
         }];
         let result = encoder.encode_content(&parts).unwrap();
         let arr = result.as_array().unwrap();
-        assert_eq!(
-            arr[0]["image_url"]["url"],
-            "https://example.com/img.png"
-        );
+        assert_eq!(arr[0]["image_url"]["url"], "https://example.com/img.png");
         assert!(arr[0]["image_url"].get("detail").is_none());
     }
 

@@ -18,27 +18,29 @@
 
 pub mod client;
 pub mod config;
-pub mod openai;
-pub mod retry;
 pub mod embedding;
-pub mod openai_embedding;
 pub mod local_embedding;
-pub mod throttle;
-pub mod rate_limiter;
 pub mod non_streaming;
+pub mod openai;
+pub mod openai_embedding;
+pub mod rate_limiter;
+pub mod retry;
+pub mod throttle;
 
 pub use client::{
-    LlmClient, LlmError, ChatResponse, StreamChunk, StreamCallback, ToolCallChunk, TokenUsage
+    ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk, TokenUsage, ToolCallChunk,
 };
 pub use config::LlmConfig;
-pub use openai::OpenAiClient;
-pub use retry::{RetryingLlmClient, RetryPolicy};
-pub use throttle::ThrottledLlmClient;
-pub use embedding::{EmbeddingClient, EmbeddingConfig, EmbeddingProviderType, EmbeddingError, content_hash};
-pub use openai_embedding::OpenAiEmbeddingClient;
+pub use embedding::{
+    content_hash, EmbeddingClient, EmbeddingConfig, EmbeddingError, EmbeddingProviderType,
+};
 pub use local_embedding::LocalEmbeddingClient;
-pub use rate_limiter::{ProviderRateLimiter, RateLimitedLlmClient};
 pub use non_streaming::NonStreamingLlmClient;
+pub use openai::OpenAiClient;
+pub use openai_embedding::OpenAiEmbeddingClient;
+pub use rate_limiter::{ProviderRateLimiter, RateLimitedLlmClient};
+pub use retry::{RetryPolicy, RetryingLlmClient};
+pub use throttle::ThrottledLlmClient;
 
 // Re-export from types
 pub use crate::types::{ChatMessage, ToolCall};

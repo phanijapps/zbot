@@ -424,9 +424,7 @@ impl CapabilityQuery {
     /// Check if a capability matches this query.
     pub fn matches(&self, capability: &Capability) -> bool {
         // Check capability IDs
-        if !self.capability_ids.is_empty()
-            && !self.capability_ids.contains(&capability.id)
-        {
+        if !self.capability_ids.is_empty() && !self.capability_ids.contains(&capability.id) {
             return false;
         }
 

@@ -16,175 +16,88 @@
 
 // Re-export core types from zero-core
 pub use zero_core::{
-    Agent,
-    Content,
-    Part,
-    Event,
-    EventStream,
-    EventActions,
-    Result,
-    ZeroError,
-    ReadonlyContext,
-    CallbackContext,
-    InvocationContext,
-    RunConfig,
-    BeforeAgentCallback,
-    AfterAgentCallback,
-    Tool,
-    Toolset,
-    ToolContext,
-    FileSystemContext,
-    NoFileSystemContext,
-    context::Session,
+    AfterAgentCallback, Agent, BeforeAgentCallback, CallbackContext, Content, Event, EventActions,
+    EventStream, FileSystemContext, InvocationContext, NoFileSystemContext, Part, ReadonlyContext,
+    Result, RunConfig, Tool, ToolContext, Toolset, ZeroError, context::Session,
 };
 
 // Re-export LLM types
 pub use zero_llm::{
-    Llm,
-    LlmRequest,
-    LlmResponse,
-    LlmResponseChunk,
-    LlmResponseStream,
-    ToolCall,
-    TokenUsage,
-    ToolDefinition,
-    LlmConfig,
-    OpenAiLlm,
+    Llm, LlmConfig, LlmRequest, LlmResponse, LlmResponseChunk, LlmResponseStream, OpenAiLlm,
+    TokenUsage, ToolCall, ToolDefinition,
 };
 
 // Re-export tool types
-pub use zero_tool::{
-    ToolRegistry,
-    FunctionTool,
-};
+pub use zero_tool::{FunctionTool, ToolRegistry};
 
 // Re-export session types
 pub use zero_session::{
-    InMemorySession,
-    MutexSession,
-    SessionService,
-    InMemoryState,
-    State,
-    Session as SessionTrait,
+    InMemorySession, InMemoryState, MutexSession, Session as SessionTrait, SessionService, State,
 };
 
 // Re-export agent types
-pub use zero_agent::{
-    LlmAgent,
-    LlmAgentBuilder,
-};
+pub use zero_agent::{LlmAgent, LlmAgentBuilder};
 
 // Re-export workflow agents
 pub use zero_agent::workflow::{
-    SequentialAgent,
-    ParallelAgent,
-    LoopAgent,
-    ConditionalAgent,
-    LlmConditionalAgent,
-    LlmConditionalAgentBuilder,
-    CustomAgent,
-    CustomAgentBuilder,
+    ConditionalAgent, CustomAgent, CustomAgentBuilder, LlmConditionalAgent,
+    LlmConditionalAgentBuilder, LoopAgent, ParallelAgent, SequentialAgent,
 };
 
 // Re-export MCP types
 pub use zero_mcp::{
-    McpClient,
-    McpToolset,
-    McpServerConfig,
-    McpTransport,
-    McpCommand,
-    filter::ToolFilter,
-    connection::McpConnectionPool,
+    McpClient, McpCommand, McpServerConfig, McpToolset, McpTransport,
+    connection::McpConnectionPool, filter::ToolFilter,
 };
 
 // Re-export prompt types
-pub use zero_prompt::{
-    Template,
-    TemplateRenderer,
-    inject_session_state,
-    PromptError,
-};
+pub use zero_prompt::{PromptError, Template, TemplateRenderer, inject_session_state};
 
 // Re-export middleware types
 pub use zero_middleware::{
-    MiddlewarePipeline,
-    PreProcessMiddleware,
-    EventMiddleware,
-    MiddlewareContext,
-    MiddlewareEffect,
-    MiddlewareConfig,
-    SummarizationMiddleware,
-    ContextEditingMiddleware,
+    ContextEditingMiddleware, EventMiddleware, KeepPolicy, MiddlewareConfig, MiddlewareContext,
+    MiddlewareEffect, MiddlewarePipeline, PreProcessMiddleware, SummarizationMiddleware,
     TriggerCondition,
-    KeepPolicy,
 };
 
 /// Prelude module for convenient imports
 pub mod prelude {
     // Core
     pub use zero_core::{
-        Agent,
-        Content,
-        Part,
-        Event,
-        EventStream,
-        EventActions,
-        Result,
-        ZeroError,
-        ReadonlyContext,
-        CallbackContext,
-        InvocationContext,
-        RunConfig,
-        Tool,
-        Toolset,
-        ToolContext,
-        FileSystemContext,
-        NoFileSystemContext,
-        context::Session,
+        Agent, CallbackContext, Content, Event, EventActions, EventStream, FileSystemContext,
+        InvocationContext, NoFileSystemContext, Part, ReadonlyContext, Result, RunConfig, Tool,
+        ToolContext, Toolset, ZeroError, context::Session,
     };
 
     // LLM
-    pub use zero_llm::{Llm, OpenAiLlm, LlmConfig};
+    pub use zero_llm::{Llm, LlmConfig, OpenAiLlm};
 
     // Agents
     pub use zero_agent::{LlmAgent, LlmAgentBuilder};
 
     // Workflow
     pub use zero_agent::workflow::{
+        ConditionalAgent, CustomAgent, LlmConditionalAgent, LoopAgent, ParallelAgent,
         SequentialAgent,
-        ParallelAgent,
-        LoopAgent,
-        ConditionalAgent,
-        LlmConditionalAgent,
-        CustomAgent,
     };
 
     // Tools
-    pub use zero_tool::{ToolRegistry, FunctionTool, ToolContextImpl};
+    pub use zero_tool::{FunctionTool, ToolContextImpl, ToolRegistry};
 
     // Session
-    pub use zero_session::{InMemorySession, SessionService, InMemoryState};
+    pub use zero_session::{InMemorySession, InMemoryState, SessionService};
 
     // MCP
-    pub use zero_mcp::{McpToolset, McpServerConfig, McpTransport, McpCommand};
+    pub use zero_mcp::{McpCommand, McpServerConfig, McpToolset, McpTransport};
 
     // Prompt
     pub use zero_prompt::{Template, TemplateRenderer};
 
     // Middleware
     pub use zero_middleware::{
-        MiddlewarePipeline,
-        MiddlewareConfig,
-        PreProcessMiddleware,
-        EventMiddleware,
-        MiddlewareContext,
-        MiddlewareEffect,
-        SummarizationMiddleware,
-        ContextEditingMiddleware,
-        SummarizationConfig,
-        ContextEditingConfig,
-        TriggerCondition,
-        KeepPolicy,
+        ContextEditingConfig, ContextEditingMiddleware, EventMiddleware, KeepPolicy,
+        MiddlewareConfig, MiddlewareContext, MiddlewareEffect, MiddlewarePipeline,
+        PreProcessMiddleware, SummarizationConfig, SummarizationMiddleware, TriggerCondition,
     };
 }
 
@@ -271,7 +184,12 @@ impl ZeroApp {
     }
 
     /// Create a new session with this app's configuration
-    pub fn create_session(&self, session_id: String, app_name: String, user_id: String) -> InMemorySession {
+    pub fn create_session(
+        &self,
+        session_id: String,
+        app_name: String,
+        user_id: String,
+    ) -> InMemorySession {
         InMemorySession::new(session_id, app_name, user_id)
     }
 
@@ -317,7 +235,11 @@ mod tests {
     #[test]
     fn test_create_session() {
         let app = ZeroAppBuilder::new().build().unwrap();
-        let session = app.create_session("test-session".to_string(), "test-app".to_string(), "test-user".to_string());
+        let session = app.create_session(
+            "test-session".to_string(),
+            "test-app".to_string(),
+            "test-user".to_string(),
+        );
 
         assert_eq!(session.id(), "test-session");
     }

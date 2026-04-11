@@ -2,14 +2,16 @@
 //!
 //! OpenAI-compatible LLM client implementation.
 
-use super::{Llm, LlmRequest, LlmResponse, LlmResponseChunk, LlmResponseStream, ToolCall, TokenUsage};
 use super::config::LlmConfig;
-use zero_core::types::Part;
-use zero_core::error::{Result, ZeroError};
+use super::{
+    Llm, LlmRequest, LlmResponse, LlmResponseChunk, LlmResponseStream, TokenUsage, ToolCall,
+};
 use async_trait::async_trait;
 use reqwest::header;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use zero_core::error::{Result, ZeroError};
+use zero_core::types::Part;
 
 /// OpenAI-compatible LLM client.
 pub struct OpenAiLlm {
@@ -39,19 +41,22 @@ impl OpenAiLlm {
             temperature: request.temperature.or(self.config.temperature),
             max_tokens: request.max_tokens.or(self.config.max_tokens),
             tools: request.tools.as_ref().map(|tools| {
-                tools.iter().map(|t| OpenAiTool {
-                    r#type: "function".to_string(),
-                    function: OpenAiFunction {
-                        name: t.name.clone(),
-                        description: t.description.clone(),
-                        parameters: t.parameters.clone().unwrap_or_else(|| {
-                            serde_json::json!({
-                                "type": "object",
-                                "properties": {}
-                            })
-                        }),
-                    },
-                }).collect()
+                tools
+                    .iter()
+                    .map(|t| OpenAiTool {
+                        r#type: "function".to_string(),
+                        function: OpenAiFunction {
+                            name: t.name.clone(),
+                            description: t.description.clone(),
+                            parameters: t.parameters.clone().unwrap_or_else(|| {
+                                serde_json::json!({
+                                    "type": "object",
+                                    "properties": {}
+                                })
+                            }),
+                        },
+                    })
+                    .collect()
             }),
             stream: false,
         }
@@ -101,8 +106,16 @@ impl OpenAiLlm {
                 // Regular user/assistant message
                 messages.push(OpenAiMessage {
                     role: content.role.clone(),
-                    content: if text_parts.is_empty() { None } else { Some(text_parts.join("\n")) },
-                    tool_calls: if tool_calls.is_empty() { None } else { Some(tool_calls) },
+                    content: if text_parts.is_empty() {
+                        None
+                    } else {
+                        Some(text_parts.join("\n"))
+                    },
+                    tool_calls: if tool_calls.is_empty() {
+                        None
+                    } else {
+                        Some(tool_calls)
+                    },
                     tool_call_id: None,
                 });
             }
@@ -114,7 +127,10 @@ impl OpenAiLlm {
     /// Extract text and tool calls from Content parts.
     /// Returns (text_parts, tool_calls, tool_responses)
     /// where tool_responses is a Vec of (tool_call_id, response_content) tuples
-    fn extract_parts(&self, content: &zero_core::types::Content) -> (Vec<String>, Vec<OpenAiToolCall>, Vec<(String, String)>) {
+    fn extract_parts(
+        &self,
+        content: &zero_core::types::Content,
+    ) -> (Vec<String>, Vec<OpenAiToolCall>, Vec<(String, String)>) {
         let mut text_parts = Vec::new();
         let mut tool_calls = Vec::new();
         let mut tool_responses = Vec::new();
@@ -125,7 +141,9 @@ impl OpenAiLlm {
                 Part::FunctionCall { name, args, id } => {
                     let args_str = serde_json::to_string(args).unwrap_or_default();
                     tool_calls.push(OpenAiToolCall {
-                        id: id.clone().unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+                        id: id
+                            .clone()
+                            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
                         r#type: "function".to_string(),
                         function: OpenAiFunctionCall {
                             name: name.clone(),
@@ -155,16 +173,23 @@ impl OpenAiLlm {
             .and_then(|c| c.message.tool_calls.as_ref());
 
         if let Some(tool_calls) = tool_calls {
-            tracing::info!("from_openai_response: Response has tool_calls, count={}", tool_calls.len());
+            tracing::info!(
+                "from_openai_response: Response has tool_calls, count={}",
+                tool_calls.len()
+            );
 
             // Check if response was truncated (finish_reason: "length")
-            let is_truncated = response.choices.first()
+            let is_truncated = response
+                .choices
+                .first()
                 .and_then(|c| c.finish_reason.as_ref())
                 .map(|r| r == "length")
                 .unwrap_or(false);
 
             if is_truncated {
-                tracing::warn!("Response was truncated (finish_reason: length). Tool calls may be incomplete.");
+                tracing::warn!(
+                    "Response was truncated (finish_reason: length). Tool calls may be incomplete."
+                );
             }
 
             let our_tool_calls: Vec<ToolCall> = tool_calls
@@ -229,7 +254,11 @@ impl OpenAiLlm {
             .cloned()
             .unwrap_or_default();
 
-        tracing::debug!("from_openai_response: Extracted text with len={}, text='{}'", text.len(), text);
+        tracing::debug!(
+            "from_openai_response: Extracted text with len={}, text='{}'",
+            text.len(),
+            text
+        );
 
         let usage = response.usage.map(|u| TokenUsage {
             prompt_tokens: u.prompt_tokens,
@@ -307,18 +336,36 @@ impl Llm for OpenAiLlm {
         // Debug: Log the request being sent
         tracing::debug!("OpenAI LLM Request:");
         tracing::debug!("  model: {}", openai_request.model);
-        tracing::debug!("  system_instruction: {}", request.system_instruction.as_ref().map(|s| format!("{} chars", s.len())).unwrap_or_else(|| "None".to_string()));
+        tracing::debug!(
+            "  system_instruction: {}",
+            request
+                .system_instruction
+                .as_ref()
+                .map(|s| format!("{} chars", s.len()))
+                .unwrap_or_else(|| "None".to_string())
+        );
         tracing::debug!("  messages.count: {}", openai_request.messages.len());
         for (i, msg) in openai_request.messages.iter().enumerate() {
-            tracing::debug!("  message[{}]: role={}, content.len={:?}, tool_calls={}",
-                i, msg.role, msg.content.as_ref().map(|c| c.len()), msg.tool_calls.is_some());
+            tracing::debug!(
+                "  message[{}]: role={}, content.len={:?}, tool_calls={}",
+                i,
+                msg.role,
+                msg.content.as_ref().map(|c| c.len()),
+                msg.tool_calls.is_some()
+            );
         }
-        tracing::debug!("  tools: {:?}", openai_request.tools.as_ref().map(|t| t.len()));
+        tracing::debug!(
+            "  tools: {:?}",
+            openai_request.tools.as_ref().map(|t| t.len())
+        );
 
         let response = self
             .client
             .post(format!("{}/chat/completions", self.config.base_url()))
-            .header(header::AUTHORIZATION, format!("Bearer {}", self.config.api_key))
+            .header(
+                header::AUTHORIZATION,
+                format!("Bearer {}", self.config.api_key),
+            )
             .header(header::CONTENT_TYPE, "application/json")
             .json(&openai_request)
             .send()
@@ -328,7 +375,10 @@ impl Llm for OpenAiLlm {
         let status = response.status();
         if !status.is_success() {
             let error_text = response.text().await.unwrap_or_default();
-            return Err(ZeroError::Llm(format!("API error {}: {}", status, error_text)));
+            return Err(ZeroError::Llm(format!(
+                "API error {}: {}",
+                status, error_text
+            )));
         }
 
         let openai_response: OpenAiResponse = response
@@ -340,10 +390,21 @@ impl Llm for OpenAiLlm {
         tracing::debug!("OpenAI LLM Response:");
         tracing::debug!("  choices.count: {}", openai_response.choices.len());
         if let Some(choice) = openai_response.choices.first() {
-            tracing::debug!("  choice[0].message.content: {}",
-                choice.message.content.as_ref().map(|c| format!("{} chars", c.len())).as_deref().unwrap_or("None"));
+            tracing::debug!(
+                "  choice[0].message.content: {}",
+                choice
+                    .message
+                    .content
+                    .as_ref()
+                    .map(|c| format!("{} chars", c.len()))
+                    .as_deref()
+                    .unwrap_or("None")
+            );
             // Redacted: tool_calls may contain sensitive arguments
-            tracing::debug!("  choice[0].message.tool_calls.count: {:?}", choice.message.tool_calls.as_ref().map(|t| t.len()));
+            tracing::debug!(
+                "  choice[0].message.tool_calls.count: {:?}",
+                choice.message.tool_calls.as_ref().map(|t| t.len())
+            );
             tracing::debug!("  choice[0].finish_reason: {:?}", choice.finish_reason);
         }
         tracing::debug!("  usage: {:?}", openai_response.usage);
@@ -467,8 +528,7 @@ mod tests {
         let config = LlmConfig::new("sk-test", "gpt-4o-mini");
         let llm = OpenAiLlm::new(config).unwrap();
 
-        let request = LlmRequest::new()
-            .with_content(zero_core::types::Content::user("Hello"));
+        let request = LlmRequest::new().with_content(zero_core::types::Content::user("Hello"));
 
         let openai_req = llm.to_openai_request(&request);
         assert_eq!(openai_req.model, "gpt-4o-mini");

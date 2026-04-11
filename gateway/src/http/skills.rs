@@ -83,7 +83,9 @@ pub async fn create_skill(
         display_name: request.display_name.unwrap_or_else(|| request.name.clone()),
         description: request.description.unwrap_or_default(),
         category: request.category.unwrap_or_else(|| "general".to_string()),
-        instructions: request.instructions.unwrap_or_else(|| "You are a helpful skill.".to_string()),
+        instructions: request
+            .instructions
+            .unwrap_or_else(|| "You are a helpful skill.".to_string()),
         created_at: None,
     };
 
@@ -141,10 +143,7 @@ pub async fn update_skill(
 }
 
 /// DELETE /api/skills/:id - Delete a skill.
-pub async fn delete_skill(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> StatusCode {
+pub async fn delete_skill(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
     match state.skills.delete(&id).await {
         Ok(()) => StatusCode::NO_CONTENT,
         Err(e) => {

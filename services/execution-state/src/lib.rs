@@ -81,8 +81,14 @@ where
             "/v2/sessions/:id",
             get(handlers::get_session::<D>).delete(handlers::delete_session::<D>),
         )
-        .route("/v2/sessions/:id/full", get(handlers::get_session_full::<D>))
-        .route("/v2/sessions/:id/messages", get(handlers::get_session_messages::<D>))
+        .route(
+            "/v2/sessions/:id/full",
+            get(handlers::get_session_full::<D>),
+        )
+        .route(
+            "/v2/sessions/:id/messages",
+            get(handlers::get_session_messages::<D>),
+        )
         // Session control (works with both old and new IDs)
         .route("/sessions/:id/pause", post(handlers::pause_session::<D>))
         .route("/sessions/:id/resume", post(handlers::resume_session::<D>))

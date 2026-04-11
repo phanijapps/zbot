@@ -3,11 +3,10 @@
 //! Wraps an LlmClient and converts `chat_stream()` calls into `chat()` calls.
 //! Used for subagents where streaming adds no value and causes reliability issues.
 
-use async_trait::async_trait;
 use super::{
-    LlmClient, LlmError, ChatResponse, StreamCallback, StreamChunk, ToolCallChunk,
-    ChatMessage,
+    ChatMessage, ChatResponse, LlmClient, LlmError, StreamCallback, StreamChunk, ToolCallChunk,
 };
+use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -25,12 +24,24 @@ impl NonStreamingLlmClient {
 
 #[async_trait]
 impl LlmClient for NonStreamingLlmClient {
-    fn model(&self) -> &str { self.inner.model() }
-    fn provider(&self) -> &str { self.inner.provider() }
-    fn supports_tools(&self) -> bool { self.inner.supports_tools() }
-    fn supports_reasoning(&self) -> bool { self.inner.supports_reasoning() }
+    fn model(&self) -> &str {
+        self.inner.model()
+    }
+    fn provider(&self) -> &str {
+        self.inner.provider()
+    }
+    fn supports_tools(&self) -> bool {
+        self.inner.supports_tools()
+    }
+    fn supports_reasoning(&self) -> bool {
+        self.inner.supports_reasoning()
+    }
 
-    async fn chat(&self, messages: Vec<ChatMessage>, tools: Option<Value>) -> Result<ChatResponse, LlmError> {
+    async fn chat(
+        &self,
+        messages: Vec<ChatMessage>,
+        tools: Option<Value>,
+    ) -> Result<ChatResponse, LlmError> {
         self.inner.chat(messages, tools).await
     }
 

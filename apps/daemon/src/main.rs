@@ -53,17 +53,13 @@ use anyhow::Result;
 use clap::Parser;
 use gateway::{GatewayConfig, GatewayServer};
 use gateway_services::{AppSettings, LogSettings};
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
 use tracing::{info, Level};
 use tracing_appender::rolling::RollingFileAppender;
 use tracing_appender::rolling::Rotation;
 use tracing_subscriber::{
-    fmt,
-    fmt::writer::MakeWriterExt,
-    layer::SubscriberExt,
-    util::SubscriberInitExt,
-    EnvFilter,
+    fmt, fmt::writer::MakeWriterExt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
 
 /// z-Bot Daemon - AI agent runtime server
@@ -177,7 +173,7 @@ fn load_settings(data_dir: &PathBuf) -> AppSettings {
     // Try new path first (config/settings.json), fall back to legacy path (settings.json)
     let new_path = data_dir.join("config").join("settings.json");
     let legacy_path = data_dir.join("settings.json");
-    
+
     let settings_path = if new_path.exists() {
         new_path
     } else if legacy_path.exists() {
@@ -268,15 +264,15 @@ fn setup_logging(
     data_dir: &PathBuf,
 ) -> Result<Option<tracing_appender::non_blocking::WorkerGuard>> {
     let level = parse_level(&config.level);
-    let env_filter = EnvFilter::from_default_env()
-        .add_directive(level.into());
+    let env_filter = EnvFilter::from_default_env().add_directive(level.into());
 
     // Check if file logging is enabled
     if config.enabled {
         // Determine log directory (default: {data_dir}/logs)
-        let log_dir = config.directory.clone().unwrap_or_else(|| {
-            data_dir.join("logs")
-        });
+        let log_dir = config
+            .directory
+            .clone()
+            .unwrap_or_else(|| data_dir.join("logs"));
 
         // Ensure log directory exists
         if !log_dir.exists() {
@@ -336,7 +332,10 @@ fn setup_logging(
         }
 
         info!("File logging enabled: {:?}", log_dir);
-        info!("Log rotation: {}, max files: {}", config.rotation, config.max_files);
+        info!(
+            "Log rotation: {}, max files: {}",
+            config.rotation, config.max_files
+        );
 
         Ok(Some(file_guard))
     } else {

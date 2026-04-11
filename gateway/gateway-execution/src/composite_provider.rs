@@ -131,7 +131,9 @@ mod tests {
             _session_id: &str,
             _agent_id: &str,
         ) -> Result<serde_json::Value, String> {
-            Ok(serde_json::json!({"source": "mock", "connector": connector_id, "capability": capability}))
+            Ok(
+                serde_json::json!({"source": "mock", "connector": connector_id, "capability": capability}),
+            )
         }
     }
 
@@ -153,10 +155,8 @@ mod tests {
                 capabilities: vec![],
             }],
         };
-        let composite = CompositeResourceProvider::new(
-            Some(Arc::new(http)),
-            Some(Arc::new(bridge)),
-        );
+        let composite =
+            CompositeResourceProvider::new(Some(Arc::new(http)), Some(Arc::new(bridge)));
 
         let connectors = composite.list_connectors().await.unwrap();
         assert_eq!(connectors.len(), 2);
@@ -182,13 +182,14 @@ mod tests {
                 capabilities: vec![],
             }],
         };
-        let composite = CompositeResourceProvider::new(
-            Some(Arc::new(http)),
-            Some(Arc::new(bridge)),
-        );
+        let composite =
+            CompositeResourceProvider::new(Some(Arc::new(http)), Some(Arc::new(bridge)));
 
         // Query a bridge connector
-        let result = composite.query_resource("crm", "contacts", None).await.unwrap();
+        let result = composite
+            .query_resource("crm", "contacts", None)
+            .await
+            .unwrap();
         assert_eq!(result["source"], "mock");
         assert_eq!(result["connector"], "crm");
     }
@@ -203,16 +204,15 @@ mod tests {
                 capabilities: vec![],
             }],
         };
-        let bridge = MockProvider {
-            connectors: vec![],
-        };
-        let composite = CompositeResourceProvider::new(
-            Some(Arc::new(http)),
-            Some(Arc::new(bridge)),
-        );
+        let bridge = MockProvider { connectors: vec![] };
+        let composite =
+            CompositeResourceProvider::new(Some(Arc::new(http)), Some(Arc::new(bridge)));
 
         // Query an HTTP connector
-        let result = composite.query_resource("signal", "aliases", None).await.unwrap();
+        let result = composite
+            .query_resource("signal", "aliases", None)
+            .await
+            .unwrap();
         assert_eq!(result["connector"], "signal");
     }
 
@@ -234,10 +234,8 @@ mod tests {
                 capabilities: vec![],
             }],
         };
-        let composite = CompositeResourceProvider::new(
-            Some(Arc::new(http)),
-            Some(Arc::new(bridge)),
-        );
+        let composite =
+            CompositeResourceProvider::new(Some(Arc::new(http)), Some(Arc::new(bridge)));
 
         let result = composite
             .invoke_capability("crm", "send_email", serde_json::json!({}), "sess-1", "root")
@@ -269,7 +267,10 @@ mod tests {
         let connectors = composite.list_connectors().await.unwrap();
         assert_eq!(connectors.len(), 1);
 
-        let result = composite.query_resource("signal", "aliases", None).await.unwrap();
+        let result = composite
+            .query_resource("signal", "aliases", None)
+            .await
+            .unwrap();
         assert_eq!(result["connector"], "signal");
     }
 

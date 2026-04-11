@@ -9,7 +9,7 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
-use fastembed::{InitOptions, TextEmbedding, EmbeddingModel};
+use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use super::embedding::{EmbeddingClient, EmbeddingError};
 
@@ -43,7 +43,9 @@ impl LocalEmbeddingClient {
         let (name, dims) = model_info(&model_id);
         tracing::info!(
             "Local embedding client created (lazy): {} ({}d, idle_timeout={}s)",
-            name, dims, idle_timeout_secs
+            name,
+            dims,
+            idle_timeout_secs
         );
         Self {
             model: Mutex::new(None),
@@ -57,18 +59,20 @@ impl LocalEmbeddingClient {
     }
 
     /// Load model if not loaded, return mutex guard.
-    fn ensure_loaded(&self) -> Result<std::sync::MutexGuard<'_, Option<TextEmbedding>>, EmbeddingError> {
-        let mut guard = self.model.lock()
+    fn ensure_loaded(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, Option<TextEmbedding>>, EmbeddingError> {
+        let mut guard = self
+            .model
+            .lock()
             .map_err(|e| EmbeddingError::ModelError(format!("Mutex poisoned: {}", e)))?;
 
         if guard.is_none() {
             tracing::info!("Loading embedding model: {} ...", self.model_name);
-            let options = InitOptions::new(self.model_id.clone())
-                .with_show_download_progress(true);
-            let model = TextEmbedding::try_new(options)
-                .map_err(|e| EmbeddingError::ModelError(format!(
-                    "Failed to load fastembed model: {}", e
-                )))?;
+            let options = InitOptions::new(self.model_id.clone()).with_show_download_progress(true);
+            let model = TextEmbedding::try_new(options).map_err(|e| {
+                EmbeddingError::ModelError(format!("Failed to load fastembed model: {}", e))
+            })?;
             tracing::info!("Embedding model loaded: {}", self.model_name);
             *guard = Some(model);
         }
@@ -129,7 +133,8 @@ impl LocalEmbeddingClient {
                             *guard = None;
                             tracing::info!(
                                 "Embedding model unloaded after {}s idle: {}",
-                                timeout_secs, model_name
+                                timeout_secs,
+                                model_name
                             );
                         }
                     }
@@ -150,16 +155,20 @@ impl EmbeddingClient for LocalEmbeddingClient {
         }
 
         let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
-        tracing::debug!("Embedding {} text(s) locally via {}", owned.len(), self.model_name);
+        tracing::debug!(
+            "Embedding {} text(s) locally via {}",
+            owned.len(),
+            self.model_name
+        );
 
         let guard = self.ensure_loaded()?;
         let embeddings = guard
             .as_ref()
             .expect("ensure_loaded guarantees Some")
             .embed(owned, None)
-            .map_err(|e| EmbeddingError::ModelError(format!(
-                "Embedding failed ({}): {}", self.model_name, e
-            )))?;
+            .map_err(|e| {
+                EmbeddingError::ModelError(format!("Embedding failed ({}): {}", self.model_name, e))
+            })?;
 
         drop(guard);
         self.ensure_watcher_running();
@@ -213,7 +222,10 @@ mod tests {
         assert_eq!(client.dimensions(), 384);
         assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
         let guard = client.model.lock().unwrap();
-        assert!(guard.is_none(), "Model should be lazy — not loaded at construction");
+        assert!(
+            guard.is_none(),
+            "Model should be lazy — not loaded at construction"
+        );
     }
 
     #[test]

@@ -5,9 +5,9 @@
 //! When all delegated subagents complete and the session has requested continuation,
 //! this module spawns a new execution turn for the root agent to process the results.
 
+use execution_state::{AgentExecution, StateService};
 use gateway_database::DatabaseManager;
 use gateway_events::{EventBus, GatewayEvent};
-use execution_state::{AgentExecution, StateService};
 
 /// Spawn a continuation turn for a session.
 ///

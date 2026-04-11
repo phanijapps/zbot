@@ -158,7 +158,8 @@ pub async fn run_chat_tui(
     if !state.connected {
         state.messages.push(ChatMessage {
             role: MessageRole::System,
-            content: "Warning: Gateway daemon not running. Start with: cargo run -p daemon".to_string(),
+            content: "Warning: Gateway daemon not running. Start with: cargo run -p daemon"
+                .to_string(),
             tool_name: None,
         });
     }
@@ -220,23 +221,21 @@ async fn handle_key_event(
     }
 
     match state.input_mode {
-        InputMode::Normal => {
-            match key.code {
-                KeyCode::Char('i') | KeyCode::Char('I') => {
-                    state.input_mode = InputMode::Editing;
-                }
-                KeyCode::Char('q') | KeyCode::Char('Q') => {
-                    state.should_quit = true;
-                }
-                KeyCode::Up | KeyCode::Char('k') => {
-                    state.scroll_offset = state.scroll_offset.saturating_add(1);
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    state.scroll_offset = state.scroll_offset.saturating_sub(1);
-                }
-                _ => {}
+        InputMode::Normal => match key.code {
+            KeyCode::Char('i') | KeyCode::Char('I') => {
+                state.input_mode = InputMode::Editing;
             }
-        }
+            KeyCode::Char('q') | KeyCode::Char('Q') => {
+                state.should_quit = true;
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                state.scroll_offset = state.scroll_offset.saturating_add(1);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                state.scroll_offset = state.scroll_offset.saturating_sub(1);
+            }
+            _ => {}
+        },
         InputMode::Editing => {
             match key.code {
                 KeyCode::Enter => {
@@ -301,7 +300,10 @@ fn handle_gateway_event(state: &mut AppState, event: GatewayEvent) {
             state.current_tool = Some(tool);
         }
         GatewayEvent::ToolResult { result, error, .. } => {
-            let tool_name = state.current_tool.take().unwrap_or_else(|| "tool".to_string());
+            let tool_name = state
+                .current_tool
+                .take()
+                .unwrap_or_else(|| "tool".to_string());
             if let Some(err) = error {
                 state.add_tool_message(&tool_name, &format!("Error: {}", err));
             } else if let Some(res) = result {

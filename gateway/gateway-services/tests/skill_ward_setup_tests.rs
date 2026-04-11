@@ -46,14 +46,20 @@ ward_setup:
 
     let ward = fm.ward_setup.expect("ward_setup should be present");
     assert_eq!(ward.directories, vec!["src", "tests", "benches"]);
-    assert_eq!(ward.language_skills, vec!["rust-development", "cargo-tooling"]);
+    assert_eq!(
+        ward.language_skills,
+        vec!["rust-development", "cargo-tooling"]
+    );
     assert_eq!(
         ward.spec_guidance.as_deref(),
         Some("Follow the architecture spec in docs/spec.md")
     );
 
     let agents_md = ward.agents_md.expect("agents_md should be present");
-    assert_eq!(agents_md.purpose, "Guide the agent for Rust-first projects.");
+    assert_eq!(
+        agents_md.purpose,
+        "Guide the agent for Rust-first projects."
+    );
     assert_eq!(
         agents_md.conventions,
         vec!["Use clippy for linting", "Prefer idiomatic Rust patterns"]
@@ -71,14 +77,20 @@ description: A general-purpose helper skill.
 
     assert_eq!(fm.name, "general-helper");
     assert_eq!(fm.description, "A general-purpose helper skill.");
-    assert!(fm.ward_setup.is_none(), "ward_setup should be None when not present");
+    assert!(
+        fm.ward_setup.is_none(),
+        "ward_setup should be None when not present"
+    );
 }
 
 #[test]
 fn test_ward_agents_md_config_round_trips() {
     let config = WardAgentsMdConfig {
         purpose: "Lead a Python-focused ward.".to_string(),
-        conventions: vec!["Use black for formatting".to_string(), "Type-hint everything".to_string()],
+        conventions: vec![
+            "Use black for formatting".to_string(),
+            "Type-hint everything".to_string(),
+        ],
     };
 
     let yaml = serde_yaml::to_string(&config).expect("serialize should succeed");
@@ -100,9 +112,18 @@ ward_setup: {}
     let fm = parse_public_frontmatter(yaml);
     let ward = fm.ward_setup.expect("ward_setup should be present");
 
-    assert!(ward.directories.is_empty(), "directories should default to empty vec");
-    assert!(ward.language_skills.is_empty(), "language_skills should default to empty vec");
-    assert!(ward.spec_guidance.is_none(), "spec_guidance should default to None");
+    assert!(
+        ward.directories.is_empty(),
+        "directories should default to empty vec"
+    );
+    assert!(
+        ward.language_skills.is_empty(),
+        "language_skills should default to empty vec"
+    );
+    assert!(
+        ward.spec_guidance.is_none(),
+        "spec_guidance should default to None"
+    );
     assert!(ward.agents_md.is_none(), "agents_md should default to None");
 }
 
@@ -126,7 +147,10 @@ ward_setup:
     assert_eq!(ward.directories, vec!["src", "tests"]);
     assert_eq!(ward.language_skills, vec!["python-development"]);
     assert_eq!(ward.spec_guidance.as_deref(), Some("Follow PEP 8"));
-    assert!(ward.agents_md.is_none(), "agents_md should be None when not specified");
+    assert!(
+        ward.agents_md.is_none(),
+        "agents_md should be None when not specified"
+    );
 }
 
 #[test]
@@ -144,13 +168,16 @@ ward_setup:
     let agents_md = ward.agents_md.expect("agents_md should be present");
 
     assert_eq!(agents_md.purpose, "TypeScript-first development.");
-    assert!(agents_md.conventions.is_empty(), "conventions should default to empty vec");
+    assert!(
+        agents_md.conventions.is_empty(),
+        "conventions should default to empty vec"
+    );
 }
 
 #[test]
 fn test_get_ward_setup_method_with_tempdir() {
-    use std::fs;
     use gateway_services::SkillService;
+    use std::fs;
 
     let tmp = tempfile::tempdir().expect("create tempdir");
     let skills_dir = tmp.path().to_path_buf();
@@ -188,8 +215,8 @@ This skill helps with Rust development.
 
 #[test]
 fn test_get_ward_setup_returns_none_for_skill_without_it() {
-    use std::fs;
     use gateway_services::SkillService;
+    use std::fs;
 
     let tmp = tempfile::tempdir().expect("create tempdir");
     let skills_dir = tmp.path().to_path_buf();
@@ -213,7 +240,10 @@ Instructions here.
         .block_on(service.get_ward_setup("plain-skill"))
         .expect("get_ward_setup should succeed");
 
-    assert!(ward.is_none(), "ward_setup should be None for skill without it");
+    assert!(
+        ward.is_none(),
+        "ward_setup should be None for skill without it"
+    );
 }
 
 #[test]

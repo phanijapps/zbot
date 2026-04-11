@@ -59,7 +59,10 @@ impl ConnectorService {
 
         let content = fs::read_to_string(&self.config_path()).await?;
         let store: ConnectorsStore = serde_json::from_str(&content)?;
-        debug!(count = store.connectors.len(), "Loaded connectors from disk");
+        debug!(
+            count = store.connectors.len(),
+            "Loaded connectors from disk"
+        );
         Ok(store)
     }
 
@@ -97,7 +100,10 @@ impl ConnectorService {
     }
 
     /// Create a new connector.
-    pub async fn create(&self, request: CreateConnectorRequest) -> ConnectorResult<ConnectorConfig> {
+    pub async fn create(
+        &self,
+        request: CreateConnectorRequest,
+    ) -> ConnectorResult<ConnectorConfig> {
         // Validate ID
         if request.id.is_empty() {
             return Err(ConnectorServiceError::InvalidId(
@@ -317,8 +323,8 @@ impl Default for UpdateConnectorRequest {
 mod tests {
     use super::*;
     use crate::config::ConnectorTransport;
-    use std::collections::HashMap;
     use gateway_services::VaultPaths;
+    use std::collections::HashMap;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -421,7 +427,10 @@ mod tests {
             })
             .await;
 
-        assert!(matches!(result, Err(ConnectorServiceError::AlreadyExists(_))));
+        assert!(matches!(
+            result,
+            Err(ConnectorServiceError::AlreadyExists(_))
+        ));
     }
 
     #[tokio::test]

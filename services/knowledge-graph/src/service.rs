@@ -29,18 +29,29 @@ impl GraphService {
         let entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
         let mut entity_types: HashMap<String, usize> = HashMap::new();
         for entity in &entities {
-            *entity_types.entry(entity.entity_type.as_str().to_string()).or_default() += 1;
+            *entity_types
+                .entry(entity.entity_type.as_str().to_string())
+                .or_default() += 1;
         }
 
         // Get all relationships to count by type and find most connected entities
-        let relationships = self.storage.list_relationships(agent_id, None, 10000, 0).await?;
+        let relationships = self
+            .storage
+            .list_relationships(agent_id, None, 10000, 0)
+            .await?;
         let mut relationship_types: HashMap<String, usize> = HashMap::new();
         let mut entity_connections: HashMap<String, usize> = HashMap::new();
 
         for rel in &relationships {
-            *relationship_types.entry(rel.relationship_type.as_str().to_string()).or_default() += 1;
-            *entity_connections.entry(rel.source_entity_id.clone()).or_default() += 1;
-            *entity_connections.entry(rel.target_entity_id.clone()).or_default() += 1;
+            *relationship_types
+                .entry(rel.relationship_type.as_str().to_string())
+                .or_default() += 1;
+            *entity_connections
+                .entry(rel.source_entity_id.clone())
+                .or_default() += 1;
+            *entity_connections
+                .entry(rel.target_entity_id.clone())
+                .or_default() += 1;
         }
 
         // Find most connected entities (top 10)
@@ -52,7 +63,8 @@ impl GraphService {
         let mut connection_vec: Vec<(String, usize)> = entity_connections
             .into_iter()
             .filter_map(|(id, count)| {
-                entity_id_to_name.get(id.as_str())
+                entity_id_to_name
+                    .get(id.as_str())
                     .map(|name| (name.to_string(), count))
             })
             .collect();
@@ -75,13 +87,18 @@ impl GraphService {
         entity_name: &str,
     ) -> GraphResult<Option<EntityWithConnections>> {
         // Find the entity by name
-        let entity = match self.storage.get_entity_by_name(agent_id, entity_name).await? {
+        let entity = match self
+            .storage
+            .get_entity_by_name(agent_id, entity_name)
+            .await?
+        {
             Some(e) => e,
             None => return Ok(None),
         };
 
         // Get all neighbors
-        let neighbors = self.storage
+        let neighbors = self
+            .storage
             .get_neighbors(agent_id, &entity.id, Direction::Both, 1000)
             .await?;
 
@@ -141,7 +158,8 @@ impl GraphService {
 
             for entity_id in &current_hop {
                 // Get neighbors for this entity
-                let neighbors = self.storage
+                let neighbors = self
+                    .storage
                     .get_neighbors(agent_id, entity_id, Direction::Both, 1000)
                     .await?;
 
@@ -167,7 +185,10 @@ impl GraphService {
 
         // Get the center entity itself
         let center_entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
-        if let Some(center) = center_entities.into_iter().find(|e| e.id == center_entity_id) {
+        if let Some(center) = center_entities
+            .into_iter()
+            .find(|e| e.id == center_entity_id)
+        {
             // Insert at the beginning
             entities.insert(0, center);
         }
@@ -198,7 +219,9 @@ impl GraphService {
         limit: usize,
         offset: usize,
     ) -> GraphResult<Vec<Entity>> {
-        self.storage.list_entities(agent_id, entity_type, limit, offset).await
+        self.storage
+            .list_entities(agent_id, entity_type, limit, offset)
+            .await
     }
 
     /// List relationships for an agent with optional filters
@@ -209,7 +232,9 @@ impl GraphService {
         limit: usize,
         offset: usize,
     ) -> GraphResult<Vec<crate::types::Relationship>> {
-        self.storage.list_relationships(agent_id, relationship_type, limit, offset).await
+        self.storage
+            .list_relationships(agent_id, relationship_type, limit, offset)
+            .await
     }
 
     /// Get neighbors of an entity (1-hop)
@@ -220,7 +245,9 @@ impl GraphService {
         direction: Direction,
         limit: usize,
     ) -> GraphResult<Vec<crate::types::NeighborInfo>> {
-        self.storage.get_neighbors(agent_id, entity_id, direction, limit).await
+        self.storage
+            .get_neighbors(agent_id, entity_id, direction, limit)
+            .await
     }
 
     /// Count all entities across all agents.
@@ -240,7 +267,9 @@ impl GraphService {
         entity_type: Option<&str>,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        self.storage.list_all_entities(ward_id, entity_type, limit).await
+        self.storage
+            .list_all_entities(ward_id, entity_type, limit)
+            .await
     }
 
     /// List all relationships across all agents.
@@ -256,7 +285,7 @@ impl GraphService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{Entity, EntityType, Relationship, RelationshipType, ExtractedKnowledge};
+    use crate::types::{Entity, EntityType, ExtractedKnowledge, Relationship, RelationshipType};
     use tempfile::tempdir;
 
     async fn create_test_service() -> GraphService {
@@ -268,9 +297,17 @@ mod tests {
 
     async fn populate_test_graph(service: &GraphService) -> (Entity, Entity, Entity) {
         // Create a small graph: Alice -> uses -> Rust -> configured_in -> ProjectX
-        let alice = Entity::new("agent1".to_string(), EntityType::Person, "Alice".to_string());
+        let alice = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
         let rust = Entity::new("agent1".to_string(), EntityType::Tool, "Rust".to_string());
-        let project = Entity::new("agent1".to_string(), EntityType::Project, "ProjectX".to_string());
+        let project = Entity::new(
+            "agent1".to_string(),
+            EntityType::Project,
+            "ProjectX".to_string(),
+        );
 
         let alice_uses_rust = Relationship::new(
             "agent1".to_string(),
@@ -290,7 +327,11 @@ mod tests {
             relationships: vec![alice_uses_rust, rust_in_project],
         };
 
-        service.storage.store_knowledge("agent1", knowledge).await.unwrap();
+        service
+            .storage
+            .store_knowledge("agent1", knowledge)
+            .await
+            .unwrap();
 
         (alice, rust, project)
     }
@@ -317,7 +358,10 @@ mod tests {
         let (_alice, _rust, _project) = populate_test_graph(&service).await;
 
         // Get Alice's connections
-        let result = service.get_entity_with_connections("agent1", "Alice").await.unwrap();
+        let result = service
+            .get_entity_with_connections("agent1", "Alice")
+            .await
+            .unwrap();
         assert!(result.is_some());
 
         let connections = result.unwrap();
@@ -326,14 +370,20 @@ mod tests {
         assert_eq!(connections.incoming.len(), 0);
 
         // Get Rust's connections (has both incoming and outgoing)
-        let result = service.get_entity_with_connections("agent1", "Rust").await.unwrap();
+        let result = service
+            .get_entity_with_connections("agent1", "Rust")
+            .await
+            .unwrap();
         let connections = result.unwrap();
         assert_eq!(connections.entity.name, "Rust");
         assert_eq!(connections.incoming.len(), 1); // Alice -> Rust
-        assert_eq!(connections.outgoing.len(), 1);  // Rust -> ProjectX
+        assert_eq!(connections.outgoing.len(), 1); // Rust -> ProjectX
 
         // Non-existent entity
-        let result = service.get_entity_with_connections("agent1", "NonExistent").await.unwrap();
+        let result = service
+            .get_entity_with_connections("agent1", "NonExistent")
+            .await
+            .unwrap();
         assert!(result.is_none());
     }
 
@@ -378,12 +428,18 @@ mod tests {
         populate_test_graph(&service).await;
 
         // List only persons
-        let entities = service.list_entities("agent1", Some("person"), 10, 0).await.unwrap();
+        let entities = service
+            .list_entities("agent1", Some("person"), 10, 0)
+            .await
+            .unwrap();
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].name, "Alice");
 
         // List only tools
-        let entities = service.list_entities("agent1", Some("tool"), 10, 0).await.unwrap();
+        let entities = service
+            .list_entities("agent1", Some("tool"), 10, 0)
+            .await
+            .unwrap();
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].name, "Rust");
     }
@@ -394,13 +450,22 @@ mod tests {
         populate_test_graph(&service).await;
 
         // List only "uses" relationships
-        let rels = service.list_relationships("agent1", Some("uses"), 10, 0).await.unwrap();
+        let rels = service
+            .list_relationships("agent1", Some("uses"), 10, 0)
+            .await
+            .unwrap();
         assert_eq!(rels.len(), 1);
         assert!(matches!(rels[0].relationship_type, RelationshipType::Uses));
 
         // List only "part_of" relationships
-        let rels = service.list_relationships("agent1", Some("part_of"), 10, 0).await.unwrap();
+        let rels = service
+            .list_relationships("agent1", Some("part_of"), 10, 0)
+            .await
+            .unwrap();
         assert_eq!(rels.len(), 1);
-        assert!(matches!(rels[0].relationship_type, RelationshipType::PartOf));
+        assert!(matches!(
+            rels[0].relationship_type,
+            RelationshipType::PartOf
+        ));
     }
 }

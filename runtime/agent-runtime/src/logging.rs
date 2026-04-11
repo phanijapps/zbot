@@ -21,7 +21,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
-use tracing_subscriber::{EnvFilter, fmt, prelude::*};
+use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Log level for the application
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

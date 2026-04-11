@@ -39,8 +39,7 @@ impl RecallLogRepository {
     /// Get all fact keys recalled in a specific session.
     pub fn get_keys_for_session(&self, session_id: &str) -> Result<Vec<String>, String> {
         self.db.with_connection(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT fact_key FROM recall_log WHERE session_id = ?1")?;
+            let mut stmt = conn.prepare("SELECT fact_key FROM recall_log WHERE session_id = ?1")?;
 
             let rows = stmt.query_map(params![session_id], |row| row.get::<_, String>(0))?;
             rows.collect::<Result<Vec<_>, _>>()
@@ -132,9 +131,7 @@ mod tests {
         assert!(keys2.contains(&"user::name".to_string()));
 
         // Verify get_keys_for_sessions counts correctly
-        let counts = repo
-            .get_keys_for_sessions(&["sess-1", "sess-2"])
-            .unwrap();
+        let counts = repo.get_keys_for_sessions(&["sess-1", "sess-2"]).unwrap();
         assert_eq!(counts.get("user::name"), Some(&2)); // recalled in both sessions
         assert_eq!(counts.get("user::email"), Some(&1)); // recalled in sess-1 only
     }

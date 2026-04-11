@@ -131,10 +131,7 @@ impl EpisodeRepository {
                          ORDER BY created_at DESC
                          LIMIT ?2"
                             .to_string(),
-                        vec![
-                            Box::new(agent_id.to_string()),
-                            Box::new(limit as i64),
-                        ],
+                        vec![Box::new(agent_id.to_string()), Box::new(limit as i64)],
                     )
                 };
 
@@ -162,9 +159,8 @@ impl EpisodeRepository {
                  LIMIT ?2",
             )?;
 
-            let rows = stmt.query_map(params![agent_id, limit as i64], |row| {
-                row_to_episode(row)
-            })?;
+            let rows =
+                stmt.query_map(params![agent_id, limit as i64], |row| row_to_episode(row))?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -207,10 +203,7 @@ impl EpisodeRepository {
                 })
                 .collect();
 
-            scored.sort_by(|a, b| {
-                b.1.partial_cmp(&a.1)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
             scored.truncate(limit);
             Ok(scored)
         })
@@ -223,11 +216,10 @@ impl EpisodeRepository {
     /// Count all session episodes.
     pub fn count(&self) -> Result<i64, String> {
         self.db.with_connection(|conn| {
-            let count: i64 = conn.query_row(
-                "SELECT COUNT(*) FROM session_episodes",
-                [],
-                |row| row.get(0),
-            )?;
+            let count: i64 =
+                conn.query_row("SELECT COUNT(*) FROM session_episodes", [], |row| {
+                    row.get(0)
+                })?;
             Ok(count)
         })
     }

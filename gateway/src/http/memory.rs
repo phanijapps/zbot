@@ -216,17 +216,15 @@ pub async fn get_memory_fact(
         }
     };
 
-    let fact = memory_repo
-        .get_memory_fact_by_id(&fact_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get memory fact: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to get memory fact: {}", e),
-                }),
-            )
-        })?;
+    let fact = memory_repo.get_memory_fact_by_id(&fact_id).map_err(|e| {
+        tracing::error!("Failed to get memory fact: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get memory fact: {}", e),
+            }),
+        )
+    })?;
 
     match fact {
         Some(f) if f.agent_id == agent_id => Ok(Json(MemoryFactResponse::from(f))),
@@ -263,31 +261,27 @@ pub async fn delete_memory_fact(
     };
 
     // First verify the fact belongs to this agent
-    let fact = memory_repo
-        .get_memory_fact_by_id(&fact_id)
-        .map_err(|e| {
-            tracing::error!("Failed to get memory fact for deletion: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to get memory fact: {}", e),
-                }),
-            )
-        })?;
+    let fact = memory_repo.get_memory_fact_by_id(&fact_id).map_err(|e| {
+        tracing::error!("Failed to get memory fact for deletion: {}", e);
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to get memory fact: {}", e),
+            }),
+        )
+    })?;
 
     match fact {
         Some(f) if f.agent_id == agent_id => {
-            let deleted = memory_repo
-                .delete_memory_fact(&fact_id)
-                .map_err(|e| {
-                    tracing::error!("Failed to delete memory fact: {}", e);
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(ErrorResponse {
-                            error: format!("Failed to delete memory fact: {}", e),
-                        }),
-                    )
-                })?;
+            let deleted = memory_repo.delete_memory_fact(&fact_id).map_err(|e| {
+                tracing::error!("Failed to delete memory fact: {}", e);
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ErrorResponse {
+                        error: format!("Failed to delete memory fact: {}", e),
+                    }),
+                )
+            })?;
 
             if deleted {
                 Ok(StatusCode::NO_CONTENT)
@@ -329,8 +323,12 @@ pub struct CreateMemoryFactRequest {
     pub pinned: bool,
 }
 
-fn default_confidence() -> f64 { 1.0 }
-fn default_true() -> bool { true }
+fn default_confidence() -> f64 {
+    1.0
+}
+fn default_true() -> bool {
+    true
+}
 
 pub async fn create_memory_fact(
     State(state): State<AppState>,
@@ -342,7 +340,9 @@ pub async fn create_memory_fact(
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse { error: "Memory service not available".to_string() }),
+                Json(ErrorResponse {
+                    error: "Memory service not available".to_string(),
+                }),
             ));
         }
     };
@@ -369,7 +369,12 @@ pub async fn create_memory_fact(
     };
 
     memory_repo.upsert_memory_fact(&fact).map_err(|e| {
-        (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Failed to create fact: {}", e) }))
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: format!("Failed to create fact: {}", e),
+            }),
+        )
     })?;
 
     Ok((StatusCode::CREATED, Json(MemoryFactResponse::from(fact))))
@@ -384,7 +389,9 @@ pub struct GlobalMemorySearchQuery {
     pub category: Option<String>,
 }
 
-fn default_global_search_limit() -> usize { 50 }
+fn default_global_search_limit() -> usize {
+    50
+}
 
 pub async fn search_all_memory_facts(
     State(state): State<AppState>,
@@ -395,7 +402,9 @@ pub async fn search_all_memory_facts(
         None => {
             return Err((
                 StatusCode::SERVICE_UNAVAILABLE,
-                Json(ErrorResponse { error: "Memory service not available".to_string() }),
+                Json(ErrorResponse {
+                    error: "Memory service not available".to_string(),
+                }),
             ));
         }
     };
@@ -403,10 +412,18 @@ pub async fn search_all_memory_facts(
     let results = memory_repo
         .search_all_memory_facts_fts(&query.q, query.limit, query.category.as_deref())
         .map_err(|e| {
-            (StatusCode::INTERNAL_SERVER_ERROR, Json(ErrorResponse { error: format!("Search failed: {}", e) }))
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ErrorResponse {
+                    error: format!("Search failed: {}", e),
+                }),
+            )
         })?;
 
-    let facts: Vec<MemoryFactResponse> = results.into_iter().map(|sf| MemoryFactResponse::from(sf.fact)).collect();
+    let facts: Vec<MemoryFactResponse> = results
+        .into_iter()
+        .map(|sf| MemoryFactResponse::from(sf.fact))
+        .collect();
     let total = facts.len();
 
     Ok(Json(MemoryListResponse { facts, total }))

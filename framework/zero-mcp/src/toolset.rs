@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 
-use zero_core::{Tool, Toolset, Result as ZeroResult};
+use zero_core::{Result as ZeroResult, Tool, Toolset};
 
 use super::client::McpClient;
 use super::connection::McpConnection;
@@ -73,11 +73,7 @@ impl McpToolset {
                 }
             }
 
-            let tool = McpTool::new(
-                self.server_id.clone(),
-                def,
-                Arc::clone(&self.client),
-            );
+            let tool = McpTool::new(self.server_id.clone(), def, Arc::clone(&self.client));
             tools.push(tool);
         }
 
@@ -223,7 +219,7 @@ impl Default for McpToolsetBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{MockMcpClient, McpToolDefinition, McpServerInfo};
+    use crate::client::{McpServerInfo, McpToolDefinition, MockMcpClient};
     use crate::config::{McpServerConfig, McpTransport};
     use crate::connection::McpConnection;
 

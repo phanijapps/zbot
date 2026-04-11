@@ -7,7 +7,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
 
-use zero_core::{Agent, BeforeAgentCallback, AfterAgentCallback, EventStream, InvocationContext, Result, ZeroError};
+use zero_core::{
+    AfterAgentCallback, Agent, BeforeAgentCallback, EventStream, InvocationContext, Result,
+    ZeroError,
+};
 
 /// Handler function type for custom agent logic.
 pub type RunHandler = Arc<
@@ -139,9 +142,9 @@ impl CustomAgentBuilder {
 
     /// Build the custom agent.
     pub fn build(self) -> std::result::Result<CustomAgent, ZeroError> {
-        let handler = self.handler.ok_or_else(|| {
-            ZeroError::Generic("CustomAgent requires a handler".to_string())
-        })?;
+        let handler = self
+            .handler
+            .ok_or_else(|| ZeroError::Generic("CustomAgent requires a handler".to_string()))?;
 
         // Validate sub-agents have unique names
         let mut seen_names = std::collections::HashSet::new();
@@ -174,9 +177,9 @@ impl Default for CustomAgentBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::{Event, Content, ZeroError};
     use async_stream::stream;
     use std::result::Result as StdResult;
+    use zero_core::{Content, Event, ZeroError};
 
     #[tokio::test]
     async fn test_custom_agent_builder() {
@@ -208,8 +211,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_custom_agent_duplicate_sub_agents() {
-        let mock1 = Arc::new(MockAgent { name: "test".to_string() }) as Arc<dyn Agent>;
-        let mock2 = Arc::new(MockAgent { name: "test".to_string() }) as Arc<dyn Agent>;
+        let mock1 = Arc::new(MockAgent {
+            name: "test".to_string(),
+        }) as Arc<dyn Agent>;
+        let mock2 = Arc::new(MockAgent {
+            name: "test".to_string(),
+        }) as Arc<dyn Agent>;
 
         let result = CustomAgent::builder("test")
             .handler(|_ctx| {
@@ -251,9 +258,15 @@ mod tests {
 
     #[async_trait]
     impl Agent for MockAgent {
-        fn name(&self) -> &str { &self.name }
-        fn description(&self) -> &str { "Mock" }
-        fn sub_agents(&self) -> &[Arc<dyn Agent>] { &[] }
+        fn name(&self) -> &str {
+            &self.name
+        }
+        fn description(&self) -> &str {
+            "Mock"
+        }
+        fn sub_agents(&self) -> &[Arc<dyn Agent>] {
+            &[]
+        }
         async fn run(&self, _ctx: Arc<dyn InvocationContext>) -> Result<EventStream> {
             let s = stream! { yield Ok(Event::new("test")); };
             Ok(Box::pin(s))

@@ -16,9 +16,7 @@ impl ToolRegistry {
     /// Create a new empty registry
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            tools: Vec::new(),
-        }
+        Self { tools: Vec::new() }
     }
 
     /// Register a tool

@@ -3,15 +3,15 @@
 // Daily session management for Agent Channel architecture
 // ============================================================================
 
-pub mod types;
+pub mod cache;
 pub mod manager;
 pub mod repository;
-pub mod cache;
+pub mod types;
 
-pub use types::*;
+pub use cache::*;
 pub use manager::*;
 pub use repository::*;
-pub use cache::*;
+pub use types::*;
 
 // Result type for this crate
 pub type Result<T> = std::result::Result<T, DailySessionError>;

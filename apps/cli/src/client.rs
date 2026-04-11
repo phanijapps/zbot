@@ -29,14 +29,36 @@ pub struct GatewayStatus {
 
 #[derive(Debug, Clone)]
 pub enum GatewayEvent {
-    Connected { session_id: String },
-    Token { content: String },
-    Thinking { content: String },
-    ToolCall { tool_call_id: String, tool: String, args: serde_json::Value },
-    ToolResult { tool_call_id: String, result: Option<String>, error: Option<String> },
-    Iteration { current: u32, max: u32 },
-    Done { final_message: Option<String> },
-    Error { code: Option<String>, message: String },
+    Connected {
+        session_id: String,
+    },
+    Token {
+        content: String,
+    },
+    Thinking {
+        content: String,
+    },
+    ToolCall {
+        tool_call_id: String,
+        tool: String,
+        args: serde_json::Value,
+    },
+    ToolResult {
+        tool_call_id: String,
+        result: Option<String>,
+        error: Option<String>,
+    },
+    Iteration {
+        current: u32,
+        max: u32,
+    },
+    Done {
+        final_message: Option<String>,
+    },
+    Error {
+        code: Option<String>,
+        message: String,
+    },
 }
 
 // ============================================================================
@@ -68,18 +90,62 @@ enum ClientMessage {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum ServerMessage {
-    Connected { session_id: String },
-    AgentStarted { agent_id: String, conversation_id: String },
-    AgentCompleted { agent_id: String, conversation_id: String, result: Option<String> },
-    AgentStopped { agent_id: String, conversation_id: String, iteration: u32 },
-    Token { conversation_id: String, delta: String },
-    Thinking { conversation_id: String, content: String },
-    ToolCall { conversation_id: String, tool_call_id: String, tool: String, args: serde_json::Value },
-    ToolResult { conversation_id: String, tool_call_id: String, result: Option<String>, error: Option<String> },
-    TurnComplete { conversation_id: String, final_message: Option<String> },
-    Iteration { conversation_id: String, current: u32, max: u32 },
-    ContinuationPrompt { conversation_id: String, iteration: u32, message: String },
-    Error { conversation_id: Option<String>, code: Option<String>, message: String },
+    Connected {
+        session_id: String,
+    },
+    AgentStarted {
+        agent_id: String,
+        conversation_id: String,
+    },
+    AgentCompleted {
+        agent_id: String,
+        conversation_id: String,
+        result: Option<String>,
+    },
+    AgentStopped {
+        agent_id: String,
+        conversation_id: String,
+        iteration: u32,
+    },
+    Token {
+        conversation_id: String,
+        delta: String,
+    },
+    Thinking {
+        conversation_id: String,
+        content: String,
+    },
+    ToolCall {
+        conversation_id: String,
+        tool_call_id: String,
+        tool: String,
+        args: serde_json::Value,
+    },
+    ToolResult {
+        conversation_id: String,
+        tool_call_id: String,
+        result: Option<String>,
+        error: Option<String>,
+    },
+    TurnComplete {
+        conversation_id: String,
+        final_message: Option<String>,
+    },
+    Iteration {
+        conversation_id: String,
+        current: u32,
+        max: u32,
+    },
+    ContinuationPrompt {
+        conversation_id: String,
+        iteration: u32,
+        message: String,
+    },
+    Error {
+        conversation_id: Option<String>,
+        code: Option<String>,
+        message: String,
+    },
     Pong,
 }
 
@@ -114,7 +180,8 @@ impl GatewayClient {
 
     /// Get gateway status
     pub async fn get_status(&self) -> Result<GatewayStatus> {
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(format!("{}/api/status", self.http_url))
             .timeout(std::time::Duration::from_secs(5))
             .send()
@@ -126,7 +193,8 @@ impl GatewayClient {
 
     /// List available agents
     pub async fn list_agents(&self) -> Result<Vec<Agent>> {
-        let resp = self.http_client
+        let resp = self
+            .http_client
             .get(format!("{}/api/agents", self.http_url))
             .timeout(std::time::Duration::from_secs(10))
             .send()
@@ -151,11 +219,15 @@ impl GatewayClient {
         let message = message.to_string();
 
         tokio::spawn(async move {
-            if let Err(e) = Self::run_websocket(ws_url, agent_id, conversation_id, message, tx.clone()).await {
-                let _ = tx.send(GatewayEvent::Error {
-                    code: None,
-                    message: e.to_string(),
-                }).await;
+            if let Err(e) =
+                Self::run_websocket(ws_url, agent_id, conversation_id, message, tx.clone()).await
+            {
+                let _ = tx
+                    .send(GatewayEvent::Error {
+                        code: None,
+                        message: e.to_string(),
+                    })
+                    .await;
             }
         });
 
@@ -224,12 +296,26 @@ impl GatewayClient {
                             ServerMessage::Thinking { content, .. } => {
                                 Some(GatewayEvent::Thinking { content })
                             }
-                            ServerMessage::ToolCall { tool_call_id, tool, args, .. } => {
-                                Some(GatewayEvent::ToolCall { tool_call_id, tool, args })
-                            }
-                            ServerMessage::ToolResult { tool_call_id, result, error, .. } => {
-                                Some(GatewayEvent::ToolResult { tool_call_id, result, error })
-                            }
+                            ServerMessage::ToolCall {
+                                tool_call_id,
+                                tool,
+                                args,
+                                ..
+                            } => Some(GatewayEvent::ToolCall {
+                                tool_call_id,
+                                tool,
+                                args,
+                            }),
+                            ServerMessage::ToolResult {
+                                tool_call_id,
+                                result,
+                                error,
+                                ..
+                            } => Some(GatewayEvent::ToolResult {
+                                tool_call_id,
+                                result,
+                                error,
+                            }),
                             ServerMessage::Iteration { current, max, .. } => {
                                 Some(GatewayEvent::Iteration { current, max })
                             }
@@ -237,11 +323,13 @@ impl GatewayClient {
                                 Some(GatewayEvent::Done { final_message })
                             }
                             ServerMessage::AgentCompleted { result, .. } => {
-                                Some(GatewayEvent::Done { final_message: result })
+                                Some(GatewayEvent::Done {
+                                    final_message: result,
+                                })
                             }
-                            ServerMessage::AgentStopped { .. } => {
-                                Some(GatewayEvent::Done { final_message: None })
-                            }
+                            ServerMessage::AgentStopped { .. } => Some(GatewayEvent::Done {
+                                final_message: None,
+                            }),
                             ServerMessage::Error { code, message, .. } => {
                                 Some(GatewayEvent::Error { code, message })
                             }
@@ -249,7 +337,10 @@ impl GatewayClient {
                         };
 
                         if let Some(event) = event {
-                            let is_done = matches!(event, GatewayEvent::Done { .. } | GatewayEvent::Error { .. });
+                            let is_done = matches!(
+                                event,
+                                GatewayEvent::Done { .. } | GatewayEvent::Error { .. }
+                            );
                             let _ = tx.send(event).await;
                             if is_done {
                                 break;
@@ -261,10 +352,12 @@ impl GatewayClient {
                     break;
                 }
                 Err(e) => {
-                    let _ = tx.send(GatewayEvent::Error {
-                        code: None,
-                        message: e.to_string(),
-                    }).await;
+                    let _ = tx
+                        .send(GatewayEvent::Error {
+                            code: None,
+                            message: e.to_string(),
+                        })
+                        .await;
                     break;
                 }
                 _ => {}
@@ -283,7 +376,11 @@ impl GatewayClient {
     }
 
     /// Continue an agent execution
-    pub async fn continue_execution(&self, _conversation_id: &str, _additional_iterations: u32) -> Result<()> {
+    pub async fn continue_execution(
+        &self,
+        _conversation_id: &str,
+        _additional_iterations: u32,
+    ) -> Result<()> {
         tracing::warn!("Continue not implemented for standalone calls - use chat mode");
         Ok(())
     }

@@ -17,7 +17,9 @@ pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     let map: serde_json::Map<String, Value> = entries
         .into_iter()
         .filter_map(|(id, profile)| {
-            serde_json::to_value(profile).ok().map(|v| (id.to_string(), v))
+            serde_json::to_value(profile)
+                .ok()
+                .map(|v| (id.to_string(), v))
         })
         .collect();
     Json(Value::Object(map))

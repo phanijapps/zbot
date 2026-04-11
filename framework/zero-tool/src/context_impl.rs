@@ -2,10 +2,10 @@
 //!
 //! A concrete implementation of ToolContext that can be used by tools.
 
-use std::sync::Arc;
-use zero_core::{ToolContext, CallbackContext, ReadonlyContext};
-use zero_core::{Content, EventActions};
 use serde_json::Value;
+use std::sync::Arc;
+use zero_core::{CallbackContext, ReadonlyContext, ToolContext};
+use zero_core::{Content, EventActions};
 
 /// Concrete implementation of ToolContext for tool execution
 pub struct ToolContextImpl {
@@ -21,10 +21,7 @@ pub struct ToolContextImpl {
 
 impl ToolContextImpl {
     /// Create a new tool context
-    pub fn new(
-        function_call_id: String,
-        fs: Arc<dyn zero_core::FileSystemContext>,
-    ) -> Self {
+    pub fn new(function_call_id: String, fs: Arc<dyn zero_core::FileSystemContext>) -> Self {
         Self {
             function_call_id,
             fs,
@@ -64,11 +61,9 @@ impl ReadonlyContext for ToolContextImpl {
     }
 
     fn user_content(&self) -> &Content {
-        static EMPTY_CONTENT: std::sync::LazyLock<Content> = std::sync::LazyLock::new(|| {
-            Content {
-                role: "user".to_string(),
-                parts: vec![],
-            }
+        static EMPTY_CONTENT: std::sync::LazyLock<Content> = std::sync::LazyLock::new(|| Content {
+            role: "user".to_string(),
+            parts: vec![],
         });
         &EMPTY_CONTENT
     }
@@ -91,7 +86,10 @@ impl ToolContext for ToolContextImpl {
 
     fn actions(&self) -> EventActions {
         // Handle poisoned locks gracefully by taking the inner value
-        self.actions.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.actions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     fn set_actions(&self, actions: EventActions) {

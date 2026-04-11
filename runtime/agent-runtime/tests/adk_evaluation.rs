@@ -21,15 +21,15 @@
 // See adkrust-migration.md for detailed findings.
 // ============================================================================
 
-#![cfg(feature = "adk-eval")]  // Only compiles when feature is enabled
+#![cfg(feature = "adk-eval")] // Only compiles when feature is enabled
 
 use adk_core::{
-    Tool, ToolContext, CallbackContext, ReadonlyContext,
-    Content, EventActions, RunConfig, Result as AdkResult
+    CallbackContext, Content, EventActions, ReadonlyContext, Result as AdkResult, RunConfig, Tool,
+    ToolContext,
 };
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::sync::{Arc, Mutex, LazyLock};
+use std::sync::{Arc, LazyLock, Mutex};
 
 // ============================================================================
 // TEST TOOL: Simple Calculator
@@ -62,17 +62,18 @@ impl Tool for CalculatorTool {
     /// - ADK uses `Arc<dyn ToolContext>` (trait object)
     /// - ADK's ToolContext is more complex (requires full implementation)
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> AdkResult<Value> {
-        let operation = args.get("operation")
+        let operation = args
+            .get("operation")
             .and_then(|v| v.as_str())
             .ok_or_else(|| adk_core::AdkError::Tool("Missing 'operation' parameter".to_string()))?;
 
-        let a = args.get("a")
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing or invalid 'a' parameter".to_string()))?;
+        let a = args.get("a").and_then(|v| v.as_f64()).ok_or_else(|| {
+            adk_core::AdkError::Tool("Missing or invalid 'a' parameter".to_string())
+        })?;
 
-        let b = args.get("b")
-            .and_then(|v| v.as_f64())
-            .ok_or_else(|| adk_core::AdkError::Tool("Missing or invalid 'b' parameter".to_string()))?;
+        let b = args.get("b").and_then(|v| v.as_f64()).ok_or_else(|| {
+            adk_core::AdkError::Tool("Missing or invalid 'b' parameter".to_string())
+        })?;
 
         let result = match operation {
             "add" => a + b,
@@ -84,7 +85,12 @@ impl Tool for CalculatorTool {
                 }
                 a / b
             }
-            _ => return Err(adk_core::AdkError::Tool(format!("Unknown operation: {}", operation))),
+            _ => {
+                return Err(adk_core::AdkError::Tool(format!(
+                    "Unknown operation: {}",
+                    operation
+                )))
+            }
         };
 
         Ok(json!({ "result": result }))

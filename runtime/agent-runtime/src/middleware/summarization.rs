@@ -10,13 +10,13 @@
 //!
 //! Automatically summarize conversation history when approaching token limits.
 
-use std::sync::Arc;
-use crate::types::{ChatMessage, StreamEvent};
-use crate::llm::{LlmClient, LlmConfig};
-use crate::llm::openai::OpenAiClient;
-use super::traits::{PreProcessMiddleware, MiddlewareContext, MiddlewareEffect};
 use super::config::SummarizationConfig;
 use super::token_counter::{estimate_total_tokens, get_model_context_window};
+use super::traits::{MiddlewareContext, MiddlewareEffect, PreProcessMiddleware};
+use crate::llm::openai::OpenAiClient;
+use crate::llm::{LlmClient, LlmConfig};
+use crate::types::{ChatMessage, StreamEvent};
+use std::sync::Arc;
 
 /// Summarization middleware
 ///
@@ -72,8 +72,10 @@ impl SummarizationMiddleware {
             thinking_enabled: false,
         };
 
-        let summary_client = Arc::new(OpenAiClient::new(llm_config)
-            .map_err(|e| format!("Failed to create LLM client: {}", e))?);
+        let summary_client = Arc::new(
+            OpenAiClient::new(llm_config)
+                .map_err(|e| format!("Failed to create LLM client: {}", e))?,
+        );
 
         Ok(Self::new(config, summary_client))
     }
@@ -111,9 +113,7 @@ impl SummarizationMiddleware {
     fn build_conversation_text(&self, messages: &[ChatMessage]) -> String {
         messages
             .iter()
-            .map(|msg| {
-                format!("{}: {}", msg.role, msg.text_content())
-            })
+            .map(|msg| format!("{}: {}", msg.role, msg.text_content()))
             .collect::<Vec<_>>()
             .join("\n\n")
     }
@@ -128,7 +128,10 @@ impl SummarizationMiddleware {
         messages: &[ChatMessage],
         context_window: usize,
     ) -> (Vec<ChatMessage>, Vec<ChatMessage>) {
-        let to_keep = self.config.keep.to_keep_count(messages.len(), context_window);
+        let to_keep = self
+            .config
+            .keep
+            .to_keep_count(messages.len(), context_window);
 
         // System messages are always kept
         let system_messages: Vec<_> = messages
@@ -213,7 +216,11 @@ impl PreProcessMiddleware for SummarizationMiddleware {
         let context_window = get_model_context_window(&context.model);
 
         // Check if we should trigger summarization
-        if !self.config.trigger.should_trigger(current_tokens, message_count, context_window) {
+        if !self
+            .config
+            .trigger
+            .should_trigger(current_tokens, message_count, context_window)
+        {
             return Ok(MiddlewareEffect::Proceed);
         }
 
@@ -278,15 +285,18 @@ mod tests {
         let middleware = SummarizationMiddleware {
             config,
             // Would need a mock client for full testing
-            summary_client: Arc::new(OpenAiClient::new(LlmConfig {
-                provider_id: "test".to_string(),
-                api_key: "test".to_string(),
-                base_url: "https://test.com".to_string(),
-                model: "gpt-4o-mini".to_string(),
-                temperature: 0.3,
-                max_tokens: 1000,
-                thinking_enabled: false,
-            }).unwrap()),
+            summary_client: Arc::new(
+                OpenAiClient::new(LlmConfig {
+                    provider_id: "test".to_string(),
+                    api_key: "test".to_string(),
+                    base_url: "https://test.com".to_string(),
+                    model: "gpt-4o-mini".to_string(),
+                    temperature: 0.3,
+                    max_tokens: 1000,
+                    thinking_enabled: false,
+                })
+                .unwrap(),
+            ),
         };
 
         let messages = create_test_messages();

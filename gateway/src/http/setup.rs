@@ -38,9 +38,7 @@ pub async fn get_setup_status(
 /// GET /api/setup/mcp-defaults — sanitized MCP template for the wizard.
 pub async fn get_mcp_defaults() -> Json<serde_json::Value> {
     let template = gateway_templates::Templates::get("default_mcps.json")
-        .map(|f| {
-            serde_json::from_slice(&f.data).unwrap_or_else(|_| serde_json::json!([]))
-        })
+        .map(|f| serde_json::from_slice(&f.data).unwrap_or_else(|_| serde_json::json!([])))
         .unwrap_or_else(|| serde_json::json!([]));
 
     Json(template)

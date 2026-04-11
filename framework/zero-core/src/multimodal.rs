@@ -60,10 +60,7 @@ pub fn flush_part_to_disk(part: Part, attachments_dir: &Path) -> std::io::Result
 }
 
 /// Batch version of [`flush_part_to_disk`].
-pub fn flush_parts_to_disk(
-    parts: Vec<Part>,
-    attachments_dir: &Path,
-) -> std::io::Result<Vec<Part>> {
+pub fn flush_parts_to_disk(parts: Vec<Part>, attachments_dir: &Path) -> std::io::Result<Vec<Part>> {
     parts
         .into_iter()
         .map(|p| flush_part_to_disk(p, attachments_dir))

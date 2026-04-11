@@ -43,7 +43,11 @@ conventions:
 
     // 5. Call scaffold_ward with WardSetup containing directories and agents_md config
     let setup = WardSetup {
-        directories: vec!["core".to_string(), "output".to_string(), "specs".to_string()],
+        directories: vec![
+            "core".to_string(),
+            "output".to_string(),
+            "specs".to_string(),
+        ],
         language_skills: vec![],
         spec_guidance: None,
         agents_md: Some(WardAgentsMdConfig {

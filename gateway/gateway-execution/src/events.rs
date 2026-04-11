@@ -2,8 +2,8 @@
 //!
 //! Event conversion and emission helpers for agent execution.
 
-use gateway_events::GatewayEvent;
 use agent_runtime::StreamEvent;
+use gateway_events::GatewayEvent;
 
 /// Convert an agent runtime stream event to a gateway event.
 ///
@@ -19,7 +19,6 @@ pub fn convert_stream_event(
     session_id: &str,
     execution_id: &str,
 ) -> Option<GatewayEvent> {
-
     match event {
         StreamEvent::Metadata { .. } => Some(GatewayEvent::AgentStarted {
             agent_id: agent_id.to_string(),
@@ -148,7 +147,14 @@ mod tests {
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
 
         match gateway_event {
-            Some(GatewayEvent::Token { agent_id, session_id, execution_id, delta, conversation_id, .. }) => {
+            Some(GatewayEvent::Token {
+                agent_id,
+                session_id,
+                execution_id,
+                delta,
+                conversation_id,
+                ..
+            }) => {
                 assert_eq!(agent_id, "agent-1");
                 assert_eq!(session_id, "session-1");
                 assert_eq!(execution_id, "exec-1");
@@ -170,7 +176,14 @@ mod tests {
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
 
         match gateway_event {
-            Some(GatewayEvent::Error { agent_id, session_id, execution_id, message, conversation_id, .. }) => {
+            Some(GatewayEvent::Error {
+                agent_id,
+                session_id,
+                execution_id,
+                message,
+                conversation_id,
+                ..
+            }) => {
                 assert_eq!(agent_id, Some("agent-1".to_string()));
                 assert_eq!(session_id, Some("session-1".to_string()));
                 assert_eq!(execution_id, Some("exec-1".to_string()));
@@ -194,14 +207,16 @@ mod tests {
 
     #[test]
     fn test_convert_heartbeat_event() {
-        let event = StreamEvent::Heartbeat {
-            timestamp: 12345,
-        };
+        let event = StreamEvent::Heartbeat { timestamp: 12345 };
 
         let gateway_event = convert_stream_event(event, "agent-1", "conv-1", "session-1", "exec-1");
 
         match gateway_event {
-            Some(GatewayEvent::Heartbeat { session_id, execution_id, conversation_id }) => {
+            Some(GatewayEvent::Heartbeat {
+                session_id,
+                execution_id,
+                conversation_id,
+            }) => {
                 assert_eq!(session_id, "session-1");
                 assert_eq!(execution_id, "exec-1");
                 assert_eq!(conversation_id, Some("conv-1".to_string()));

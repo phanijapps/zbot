@@ -196,8 +196,8 @@ mod tests {
 
     #[test]
     fn test_middleware_event() {
-        let event = MiddlewareEvent::new("test_event")
-            .with_data("key", Value::String("value".to_string()));
+        let event =
+            MiddlewareEvent::new("test_event").with_data("key", Value::String("value".to_string()));
 
         assert_eq!(event.event_type, "test_event");
     }

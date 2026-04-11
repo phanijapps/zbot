@@ -5,8 +5,10 @@
 use async_trait::async_trait;
 use zero_core::Part;
 
-use super::traits::{PreProcessMiddleware, MiddlewareContext, MiddlewareEffect, MiddlewareMessage, MiddlewareEvent};
 use super::config::ContextEditingConfig;
+use super::traits::{
+    MiddlewareContext, MiddlewareEffect, MiddlewareEvent, MiddlewareMessage, PreProcessMiddleware,
+};
 
 /// Context editing middleware - clears old tool outputs
 #[derive(Clone)]

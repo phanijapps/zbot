@@ -3,10 +3,10 @@
 // Execution context for tool operations
 // ============================================================================
 
+use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::RwLock;
-use serde_json::Value;
 use zero_core::event::EventActions;
 use zero_core::types::Content;
 use zero_core::CallbackContext;
@@ -135,12 +135,18 @@ impl ToolContext {
         // Set agent_id in state for tools that need it (like memory tool)
         state.insert("app:agent_id".to_string(), Value::String(agent_id.clone()));
         if let Some(ref conv_id) = conversation_id {
-            state.insert("app:conversation_id".to_string(), Value::String(conv_id.clone()));
+            state.insert(
+                "app:conversation_id".to_string(),
+                Value::String(conv_id.clone()),
+            );
         }
         // Also store agent_id and conversation_id without prefix for tools like respond/delegate
         state.insert("agent_id".to_string(), Value::String(agent_id.clone()));
         if let Some(ref conv_id) = conversation_id {
-            state.insert("conversation_id".to_string(), Value::String(conv_id.clone()));
+            state.insert(
+                "conversation_id".to_string(),
+                Value::String(conv_id.clone()),
+            );
         }
         Self {
             agent_id: Some(agent_id),
@@ -171,7 +177,8 @@ impl ToolContext {
 
     /// Get the current function call ID
     pub fn get_function_call_id(&self) -> String {
-        self.function_call_id.read()
+        self.function_call_id
+            .read()
             .map(|id| id.clone())
             .unwrap_or_default()
     }
@@ -187,7 +194,8 @@ impl ToolContext {
     /// - `skill:loaded_skills` - List of currently loaded skill names
     #[must_use]
     pub fn export_state(&self) -> Value {
-        self.state.read()
+        self.state
+            .read()
             .map(|state| serde_json::json!(state.clone()))
             .unwrap_or(Value::Null)
     }
@@ -225,7 +233,9 @@ impl ToolContext {
     pub fn conversation_dir(&self) -> Option<PathBuf> {
         // In the library, we don't have access to the actual file system
         // The application layer should override or extend this
-        self.conversation_id.as_ref().map(|id| PathBuf::from(format!("/conversations/{}", id)))
+        self.conversation_id
+            .as_ref()
+            .map(|id| PathBuf::from(format!("/conversations/{}", id)))
     }
 }
 
@@ -329,13 +339,16 @@ mod tests {
         // Set some state
         ctx.set_state("key1".to_string(), json!("value1"));
         ctx.set_state("key2".to_string(), json!(42));
-        ctx.set_state("skill:graph".to_string(), json!({
-            "my-skill": {
-                "tool_call_id": "call_1",
-                "loaded_at": 12345,
-                "resources": []
-            }
-        }));
+        ctx.set_state(
+            "skill:graph".to_string(),
+            json!({
+                "my-skill": {
+                    "tool_call_id": "call_1",
+                    "loaded_at": 12345,
+                    "resources": []
+                }
+            }),
+        );
 
         // Export state
         let exported = ctx.export_state();
@@ -407,9 +420,12 @@ mod tests {
         assert!(ctx.get_skill_state().is_none());
 
         // Set skill graph
-        ctx.set_state("skill:graph".to_string(), json!({
-            "test-skill": {"tool_call_id": "call_1"}
-        }));
+        ctx.set_state(
+            "skill:graph".to_string(),
+            json!({
+                "test-skill": {"tool_call_id": "call_1"}
+            }),
+        );
 
         // Should now return the skill state
         let skill_state = ctx.get_skill_state();
@@ -422,9 +438,12 @@ mod tests {
         // This tests the flow: checkpoint.context_state -> initial_state -> ToolContext
         let initial_state = {
             let mut state = std::collections::HashMap::new();
-            state.insert("skill:graph".to_string(), json!({
-                "my-skill": {"tool_call_id": "call_1", "resources": []}
-            }));
+            state.insert(
+                "skill:graph".to_string(),
+                json!({
+                    "my-skill": {"tool_call_id": "call_1", "resources": []}
+                }),
+            );
             state.insert("skill:loaded_skills".to_string(), json!(["my-skill"]));
             state
         };

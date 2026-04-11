@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use zero_core::{FileSystemContext, Result, Tool, ToolContext, ZeroError};
 
@@ -67,14 +67,17 @@ impl Tool for WriteFileTool {
         }
 
         // Sanitize path — reject absolute paths and home-relative paths
-        let mut path = path.trim_start_matches("~/")
+        let mut path = path
+            .trim_start_matches("~/")
             .trim_start_matches("/")
             .trim_start_matches("./")
             .to_string();
 
         // Reject paths that try to escape the ward
         if path.contains("..") {
-            return Err(ZeroError::Tool("Path cannot contain '..' — all paths must be relative to the ward".to_string()));
+            return Err(ZeroError::Tool(
+                "Path cannot contain '..' — all paths must be relative to the ward".to_string(),
+            ));
         }
 
         // Resolve CWD from ward context
@@ -86,10 +89,13 @@ impl Tool for WriteFileTool {
         // Detect and extract only the relative part after the ward directory.
         let cwd_str = cwd.to_string_lossy();
         if let Some(home) = dirs::home_dir() {
-            let home_relative = cwd_str.trim_start_matches(home.to_string_lossy().as_ref())
+            let home_relative = cwd_str
+                .trim_start_matches(home.to_string_lossy().as_ref())
                 .trim_start_matches('/');
             if path.starts_with(home_relative) {
-                path = path[home_relative.len()..].trim_start_matches('/').to_string();
+                path = path[home_relative.len()..]
+                    .trim_start_matches('/')
+                    .to_string();
                 tracing::debug!(original = %args.get("path").and_then(|v| v.as_str()).unwrap_or(""), resolved = %path, "Fixed doubled ward path");
             }
         }
@@ -116,9 +122,8 @@ impl Tool for WriteFileTool {
 
         // Write the file
         let is_new = !full_path.exists();
-        std::fs::write(&full_path, content).map_err(|e| {
-            ZeroError::Tool(format!("Failed to write {}: {}", path, e))
-        })?;
+        std::fs::write(&full_path, content)
+            .map_err(|e| ZeroError::Tool(format!("Failed to write {}: {}", path, e)))?;
 
         let action = if is_new { "created" } else { "overwritten" };
         tracing::debug!("write_file: {} {} ({} bytes)", action, path, content.len());

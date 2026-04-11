@@ -37,7 +37,7 @@ impl Default for RunConfig {
     fn default() -> Self {
         Self {
             streaming_mode: StreamingMode::Token,
-            max_iterations: Some(25),  // Changed from 50 to reduce runaway iterations
+            max_iterations: Some(25), // Changed from 50 to reduce runaway iterations
             params: HashMap::new(),
         }
     }

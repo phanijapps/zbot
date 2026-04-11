@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use thiserror::Error;
 
 use zero_core::{FileSystemContext, Tool, ToolContext, ToolPermissions, ZeroError};
@@ -36,8 +36,13 @@ pub enum PatchError {
 /// A single patch hunk — add, delete, or update a file.
 #[derive(Debug, PartialEq, Clone)]
 pub enum Hunk {
-    AddFile { path: PathBuf, contents: String },
-    DeleteFile { path: PathBuf },
+    AddFile {
+        path: PathBuf,
+        contents: String,
+    },
+    DeleteFile {
+        path: PathBuf,
+    },
     UpdateFile {
         path: PathBuf,
         move_path: Option<PathBuf>,
@@ -75,9 +80,7 @@ const EMPTY_CONTEXT: &str = "@@";
 /// Check if a line is a patch format marker (not file content).
 fn is_patch_marker(line: &str) -> bool {
     let trimmed = line.trim();
-    trimmed.starts_with("*** ")
-        || trimmed == "@@"
-        || trimmed.starts_with("@@ ")
+    trimmed.starts_with("*** ") || trimmed == "@@" || trimmed.starts_with("@@ ")
 }
 
 // ============================================================================
@@ -114,7 +117,9 @@ fn check_boundaries(lines: &[&str]) -> Result<(), PatchError> {
     // Tolerate LLMs prefixing *** End Patch with '+' (treats it as content in Add File blocks)
     let last_normalized = last.map(|l| l.strip_prefix('+').unwrap_or(l).trim_start());
     match (first, last_normalized) {
-        (Some(f), Some(l)) if f == BEGIN_PATCH && (l == END_PATCH || l.starts_with(END_PATCH)) => Ok(()),
+        (Some(f), Some(l)) if f == BEGIN_PATCH && (l == END_PATCH || l.starts_with(END_PATCH)) => {
+            Ok(())
+        }
         (Some(f), _) if f != BEGIN_PATCH => Err(PatchError::InvalidPatch(format!(
             "Patch must start with '*** Begin Patch'. Got: '{}'. \
              Format: apply_patch <<'EOF'\\n*** Begin Patch\\n*** Add File: path\\n+content\\n*** End Patch\\nEOF",
@@ -132,8 +137,7 @@ fn try_heredoc_unwrap<'a>(lines: &'a [&'a str]) -> Result<&'a [&'a str], PatchEr
     if lines.len() >= 4 {
         let first = lines[0];
         let last = lines[lines.len() - 1];
-        if (first == "<<EOF" || first == "<<'EOF'" || first == "<<\"EOF\"")
-            && last.ends_with("EOF")
+        if (first == "<<EOF" || first == "<<'EOF'" || first == "<<\"EOF\"") && last.ends_with("EOF")
         {
             let inner = &lines[1..lines.len() - 1];
             check_boundaries(inner)?;
@@ -345,12 +349,7 @@ fn parse_chunk(
 
 /// Find `pattern` lines within `lines` starting at or after `start`.
 /// Tries exact match, then trim-end, then trim-both, then Unicode-normalized.
-fn seek_sequence(
-    lines: &[String],
-    pattern: &[String],
-    start: usize,
-    eof: bool,
-) -> Option<usize> {
+fn seek_sequence(lines: &[String], pattern: &[String], start: usize, eof: bool) -> Option<usize> {
     if pattern.is_empty() {
         return Some(start);
     }
@@ -556,10 +555,7 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
             Hunk::AddFile { path, contents } => {
                 if ward_active {
                     let path_str = path.to_string_lossy();
-                    let filename = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
 
                     // Block files in ward root (no directory component)
                     if is_ward_root_file(&path_str) && !is_allowed_root_file(filename) {
@@ -596,10 +592,7 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
             Hunk::DeleteFile { path } => {
                 // Variant check on delete (allow cleaning up, but still block variant names)
                 if ward_active {
-                    let filename = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if is_variant_filename(filename) {
                         return Err(PatchError::ApplyError(format!(
                             "Error: Do not create variant files. Fix the original instead. Got: {}",
@@ -621,10 +614,7 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
             } => {
                 // Variant check on update (not root check — updating root files is fine)
                 if ward_active {
-                    let filename = path
-                        .file_name()
-                        .and_then(|n| n.to_str())
-                        .unwrap_or("");
+                    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                     if is_variant_filename(filename) {
                         return Err(PatchError::ApplyError(format!(
                             "Error: Do not create variant files. Fix the original instead. Got: {}",
@@ -633,10 +623,7 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
                     }
                     // Also check the move destination if present
                     if let Some(dest) = move_path {
-                        let dest_name = dest
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or("");
+                        let dest_name = dest.file_name().and_then(|n| n.to_str()).unwrap_or("");
                         if is_variant_filename(dest_name) {
                             return Err(PatchError::ApplyError(format!(
                                 "Error: Do not create variant files. Fix the original instead. Got: {}",
@@ -694,9 +681,8 @@ pub fn apply_hunks(hunks: &[Hunk], cwd: &Path) -> Result<PatchResult, PatchError
 
 /// Compute new file contents by applying chunks to the existing file.
 fn derive_new_contents(path: &Path, chunks: &[UpdateFileChunk]) -> Result<String, PatchError> {
-    let original = std::fs::read_to_string(path).map_err(|e| {
-        PatchError::IoError(format!("Failed to read {}: {}", path.display(), e))
-    })?;
+    let original = std::fs::read_to_string(path)
+        .map_err(|e| PatchError::IoError(format!("Failed to read {}: {}", path.display(), e)))?;
 
     let mut lines: Vec<String> = original.split('\n').map(String::from).collect();
     // Drop trailing empty element from final newline
@@ -727,9 +713,7 @@ fn compute_replacements(
     for chunk in chunks {
         // Locate context line
         if let Some(ctx) = &chunk.change_context {
-            if let Some(idx) =
-                seek_sequence(original, std::slice::from_ref(ctx), line_idx, false)
-            {
+            if let Some(idx) = seek_sequence(original, std::slice::from_ref(ctx), line_idx, false) {
                 line_idx = idx + 1;
             } else {
                 return Err(PatchError::ApplyError(format!(
@@ -753,8 +737,7 @@ fn compute_replacements(
 
         // Find old_lines in file
         let mut pattern: &[String] = &chunk.old_lines;
-        let mut found =
-            seek_sequence(original, pattern, line_idx, chunk.is_end_of_file);
+        let mut found = seek_sequence(original, pattern, line_idx, chunk.is_end_of_file);
         let mut new_slice: &[String] = &chunk.new_lines;
 
         // Retry without trailing empty line
@@ -876,9 +859,7 @@ fn extract_heredoc_delimiter(s: &str) -> (String, &str) {
     }
 
     // Unquoted: take until whitespace or newline
-    let end = s
-        .find(|c: char| c.is_whitespace())
-        .unwrap_or(s.len());
+    let end = s.find(|c: char| c.is_whitespace()).unwrap_or(s.len());
     let delim = &s[..end];
     (delim.to_string(), &s[end..])
 }
@@ -1057,9 +1038,8 @@ mod tests {
 
     #[test]
     fn test_parse_update_file() {
-        let patch = wrap(
-            "*** Update File: main.rs\n@@ fn main\n context\n-old line\n+new line\n context2",
-        );
+        let patch =
+            wrap("*** Update File: main.rs\n@@ fn main\n context\n-old line\n+new line\n context2");
         let hunks = parse_patch(&patch).unwrap();
         match &hunks[0] {
             Hunk::UpdateFile { path, chunks, .. } => {
@@ -1128,9 +1108,7 @@ mod tests {
 
     #[test]
     fn test_parse_move_file() {
-        let patch = wrap(
-            "*** Update File: old.rs\n*** Move to: new.rs\n@@\n-old\n+new",
-        );
+        let patch = wrap("*** Update File: old.rs\n*** Move to: new.rs\n@@\n-old\n+new");
         let hunks = parse_patch(&patch).unwrap();
         match &hunks[0] {
             Hunk::UpdateFile { move_path, .. } => {
@@ -1264,7 +1242,10 @@ mod tests {
 
     #[test]
     fn test_seek_exact() {
-        let lines: Vec<String> = vec!["foo", "bar", "baz"].into_iter().map(String::from).collect();
+        let lines: Vec<String> = vec!["foo", "bar", "baz"]
+            .into_iter()
+            .map(String::from)
+            .collect();
         let pattern: Vec<String> = vec!["bar", "baz"].into_iter().map(String::from).collect();
         assert_eq!(seek_sequence(&lines, &pattern, 0, false), Some(1));
     }
@@ -1282,10 +1263,7 @@ mod tests {
     #[test]
     fn test_seek_pattern_too_long() {
         let lines: Vec<String> = vec!["one"].into_iter().map(String::from).collect();
-        let pattern: Vec<String> = vec!["too", "many"]
-            .into_iter()
-            .map(String::from)
-            .collect();
+        let pattern: Vec<String> = vec!["too", "many"].into_iter().map(String::from).collect();
         assert_eq!(seek_sequence(&lines, &pattern, 0, false), None);
     }
 
@@ -1293,7 +1271,8 @@ mod tests {
 
     #[test]
     fn test_detect_apply_patch_direct() {
-        let cmd = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: x.txt\n+hi\n*** End Patch\nEOF";
+        let cmd =
+            "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: x.txt\n+hi\n*** End Patch\nEOF";
         assert!(detect_apply_patch(cmd).is_some());
     }
 
@@ -1388,9 +1367,7 @@ mod tests {
         assert!(is_ward_context(Path::new(
             "C:\\Users\\user\\Documents\\zbot\\wards\\myward"
         )));
-        assert!(!is_ward_context(Path::new(
-            "/home/user/zbot/wards/scratch"
-        )));
+        assert!(!is_ward_context(Path::new("/home/user/zbot/wards/scratch")));
         assert!(!is_ward_context(Path::new(
             "C:\\Users\\user\\Documents\\zbot\\wards\\scratch"
         )));
@@ -1583,8 +1560,16 @@ mod tests {
         let patch = "wrong start\n*** End Patch";
         let err = parse_patch(patch).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("Begin Patch"), "Error should mention Begin Patch: {}", msg);
-        assert!(msg.contains("Format:"), "Error should include format hint: {}", msg);
+        assert!(
+            msg.contains("Begin Patch"),
+            "Error should mention Begin Patch: {}",
+            msg
+        );
+        assert!(
+            msg.contains("Format:"),
+            "Error should include format hint: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1608,6 +1593,10 @@ mod tests {
         let patch = "*** Begin Patch\n*** Add File: f.py\n+code\nbad ending";
         let err = parse_patch(patch).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("end with"), "Error should mention end boundary: {}", msg);
+        assert!(
+            msg.contains("end with"),
+            "Error should mention end boundary: {}",
+            msg
+        );
     }
 }

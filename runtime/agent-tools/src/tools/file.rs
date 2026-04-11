@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
-use zero_core::{Tool, ToolContext, ToolPermissions, Result};
 use zero_core::FileSystemContext;
+use zero_core::{Result, Tool, ToolContext, ToolPermissions};
 
 // ============================================================================
 // READ TOOL
@@ -55,7 +55,8 @@ impl Tool for ReadTool {
     }
 
     async fn execute(&self, _ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
-        let path = args.get("path")
+        let path = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
 
@@ -155,16 +156,22 @@ impl Tool for WriteTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         // Check for error markers from truncated tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
-            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-            let _truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
+            let message = args
+                .get("__message__")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            let _truncated = args
+                .get("__truncated__")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             return Err(zero_core::ZeroError::Tool(format!(
                 "{}: {}",
-                error_type,
-                message
+                error_type, message
             )));
         }
 
-        let path = args.get("path")
+        let path = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
 
@@ -178,20 +185,19 @@ impl Tool for WriteTool {
             filename, path
         );
 
-        let content = args.get("content")
+        let content = args
+            .get("content")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'content' parameter".to_string()))?;
 
         // Get write mode (default: "write", can be "append")
-        let mode = args.get("mode")
-            .and_then(|v| v.as_str())
-            .unwrap_or("write");
+        let mode = args.get("mode").and_then(|v| v.as_str()).unwrap_or("write");
         let is_append = mode == "append";
 
         // Security: Reject paths with parent directory components
         if path.contains("..") {
             return Err(zero_core::ZeroError::Tool(
-                "Path cannot contain '..' for security reasons.".to_string()
+                "Path cannot contain '..' for security reasons.".to_string(),
             ));
         }
 
@@ -203,11 +209,12 @@ impl Tool for WriteTool {
         }
 
         // Get session_id from state for path routing
-        let session_id = ctx.get_state("session_id")
+        let session_id = ctx
+            .get_state("session_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
-            .ok_or_else(|| zero_core::ZeroError::Tool(
-                "session_id not found in state.".to_string()
-            ))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("session_id not found in state.".to_string())
+            })?;
 
         tracing::info!(
             file = %file!(),
@@ -221,28 +228,29 @@ impl Tool for WriteTool {
         // attachments/ and scratchpad/ → agent_data/{session}/ (session-scoped)
         // everything else → wards/{ward_id}/ (ward-scoped, where shell runs)
         let final_path = if path.starts_with("attachments/") || path.starts_with("scratchpad/") {
-            let data_dir = self.fs.session_data_dir(&session_id)
-                .ok_or_else(|| zero_core::ZeroError::Tool(
-                    "Session data dir unavailable".to_string()
-                ))?;
+            let data_dir = self.fs.session_data_dir(&session_id).ok_or_else(|| {
+                zero_core::ZeroError::Tool("Session data dir unavailable".to_string())
+            })?;
             data_dir.join(path)
         } else {
             // Use ward_id if set, otherwise fall back to "scratch"
-            let ward_id = ctx.get_state("ward_id")
+            let ward_id = ctx
+                .get_state("ward_id")
                 .and_then(|v| v.as_str().map(|s| s.to_owned()))
                 .unwrap_or_else(|| "scratch".to_string());
 
-            let ward_dir = self.fs.ward_dir(&ward_id)
-                .ok_or_else(|| zero_core::ZeroError::Tool(
-                    "Ward dir unavailable".to_string()
-                ))?;
+            let ward_dir = self
+                .fs
+                .ward_dir(&ward_id)
+                .ok_or_else(|| zero_core::ZeroError::Tool("Ward dir unavailable".to_string()))?;
             ward_dir.join(path)
         };
 
         // Create parent directories
         if let Some(parent) = final_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to create directories: {}", e)))?;
+            std::fs::create_dir_all(parent).map_err(|e| {
+                zero_core::ZeroError::Tool(format!("Failed to create directories: {}", e))
+            })?;
         }
 
         // Write or append to the file
@@ -260,9 +268,12 @@ impl Tool for WriteTool {
                 .create(true)
                 .append(true)
                 .open(&final_path)
-                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to open file for append: {}", e)))?;
-            file.write_all(content.as_bytes())
-                .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to append to file: {}", e)))?;
+                .map_err(|e| {
+                    zero_core::ZeroError::Tool(format!("Failed to open file for append: {}", e))
+                })?;
+            file.write_all(content.as_bytes()).map_err(|e| {
+                zero_core::ZeroError::Tool(format!("Failed to append to file: {}", e))
+            })?;
         } else {
             std::fs::write(&final_path, content)
                 .map_err(|e| zero_core::ZeroError::Tool(format!("Failed to write file: {}", e)))?;
@@ -342,16 +353,22 @@ impl Tool for EditTool {
     async fn execute(&self, ctx: Arc<dyn ToolContext>, args: Value) -> Result<Value> {
         // Check for error markers from truncated tool calls
         if let Some(error_type) = args.get("__error__").and_then(|v| v.as_str()) {
-            let message = args.get("__message__").and_then(|v| v.as_str()).unwrap_or("Unknown error");
-            let _truncated = args.get("__truncated__").and_then(|v| v.as_bool()).unwrap_or(false);
+            let message = args
+                .get("__message__")
+                .and_then(|v| v.as_str())
+                .unwrap_or("Unknown error");
+            let _truncated = args
+                .get("__truncated__")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             return Err(zero_core::ZeroError::Tool(format!(
                 "{}: {}",
-                error_type,
-                message
+                error_type, message
             )));
         }
 
-        let path = args.get("path")
+        let path = args
+            .get("path")
             .and_then(|v| v.as_str())
             .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'path' parameter".to_string()))?;
 
@@ -365,14 +382,17 @@ impl Tool for EditTool {
             filename, path
         );
 
-        let replacements = args.get("replacements")
+        let replacements = args
+            .get("replacements")
             .and_then(|v| v.as_array())
-            .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'replacements' parameter".to_string()))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'replacements' parameter".to_string())
+            })?;
 
         // Security: Reject paths with parent directory components
         if path.contains("..") {
             return Err(zero_core::ZeroError::Tool(
-                "Path cannot contain '..' for security reasons.".to_string()
+                "Path cannot contain '..' for security reasons.".to_string(),
             ));
         }
 
@@ -384,11 +404,12 @@ impl Tool for EditTool {
         }
 
         // Get session_id from state for path routing
-        let session_id = ctx.get_state("session_id")
+        let session_id = ctx
+            .get_state("session_id")
             .and_then(|v| v.as_str().map(|s| s.to_owned()))
-            .ok_or_else(|| zero_core::ZeroError::Tool(
-                "session_id not found in state.".to_string()
-            ))?;
+            .ok_or_else(|| {
+                zero_core::ZeroError::Tool("session_id not found in state.".to_string())
+            })?;
 
         tracing::info!(
             file = %file!(),
@@ -399,21 +420,21 @@ impl Tool for EditTool {
 
         // Route based on path prefix (same as write tool)
         let final_path = if path.starts_with("attachments/") || path.starts_with("scratchpad/") {
-            let data_dir = self.fs.session_data_dir(&session_id)
-                .ok_or_else(|| zero_core::ZeroError::Tool(
-                    "Session data dir unavailable".to_string()
-                ))?;
+            let data_dir = self.fs.session_data_dir(&session_id).ok_or_else(|| {
+                zero_core::ZeroError::Tool("Session data dir unavailable".to_string())
+            })?;
             data_dir.join(path)
         } else {
             // Use ward_id if set, otherwise fall back to "scratch"
-            let ward_id = ctx.get_state("ward_id")
+            let ward_id = ctx
+                .get_state("ward_id")
                 .and_then(|v| v.as_str().map(|s| s.to_owned()))
                 .unwrap_or_else(|| "scratch".to_string());
 
-            let ward_dir = self.fs.ward_dir(&ward_id)
-                .ok_or_else(|| zero_core::ZeroError::Tool(
-                    "Ward dir unavailable".to_string()
-                ))?;
+            let ward_dir = self
+                .fs
+                .ward_dir(&ward_id)
+                .ok_or_else(|| zero_core::ZeroError::Tool("Ward dir unavailable".to_string()))?;
             ward_dir.join(path)
         };
 
@@ -422,13 +443,13 @@ impl Tool for EditTool {
 
         let mut count = 0;
         for repl in replacements {
-            let old = repl.get("old")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'old' in replacement".to_string()))?;
+            let old = repl.get("old").and_then(|v| v.as_str()).ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'old' in replacement".to_string())
+            })?;
 
-            let new = repl.get("new")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| zero_core::ZeroError::Tool("Missing 'new' in replacement".to_string()))?;
+            let new = repl.get("new").and_then(|v| v.as_str()).ok_or_else(|| {
+                zero_core::ZeroError::Tool("Missing 'new' in replacement".to_string())
+            })?;
 
             count += content.matches(old).count();
             content = content.replace(old, new);

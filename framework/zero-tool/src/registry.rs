@@ -2,10 +2,10 @@
 //!
 //! Registry for managing tools.
 
+use async_trait::async_trait;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
-use zero_core::{Tool, ToolPredicate, Toolset, Result};
+use zero_core::{Result, Tool, ToolPredicate, Toolset};
 
 /// Tool registry for managing available tools.
 pub struct ToolRegistry {
@@ -86,10 +86,10 @@ impl Toolset for ToolRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::ToolContext;
     use async_trait::async_trait;
     use serde_json::Value;
     use zero_core::Result;
+    use zero_core::ToolContext;
 
     #[derive(Debug)]
     struct MockTool {

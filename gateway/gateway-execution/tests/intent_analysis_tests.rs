@@ -175,11 +175,18 @@ async fn test_full_enrichment_flow() {
     assert_eq!(analysis.primary_intent, "financial_analysis");
     assert_eq!(analysis.hidden_intents.len(), 3);
     assert!(analysis.hidden_intents[0].contains("historical performance"));
-    assert_eq!(analysis.recommended_skills, vec!["web-search", "code-exec", "file-write"]);
+    assert_eq!(
+        analysis.recommended_skills,
+        vec!["web-search", "code-exec", "file-write"]
+    );
     assert_eq!(analysis.recommended_agents, vec!["researcher", "analyst"]);
     assert_eq!(analysis.execution_strategy.approach, "graph");
 
-    let graph = analysis.execution_strategy.graph.as_ref().expect("graph should be present");
+    let graph = analysis
+        .execution_strategy
+        .graph
+        .as_ref()
+        .expect("graph should be present");
     assert_eq!(graph.nodes.len(), 5);
     assert_eq!(graph.edges.len(), 5);
 
@@ -196,7 +203,13 @@ async fn test_graceful_degradation_on_llm_failure() {
     let client = FailingLlmClient;
     let fact_store = MockFactStore;
 
-    let result = analyze_intent(&client, "Create a dashboard for monitoring server metrics", &fact_store, None).await;
+    let result = analyze_intent(
+        &client,
+        "Create a dashboard for monitoring server metrics",
+        &fact_store,
+        None,
+    )
+    .await;
 
     assert!(result.is_err());
     let err = result.unwrap_err();
@@ -252,9 +265,14 @@ async fn test_simple_request_no_graph() {
     };
     let fact_store = MockFactStore;
 
-    let analysis = analyze_intent(&mock, "What is the weather forecast for this weekend", &fact_store, None)
-        .await
-        .expect("should parse simple intent");
+    let analysis = analyze_intent(
+        &mock,
+        "What is the weather forecast for this weekend",
+        &fact_store,
+        None,
+    )
+    .await
+    .expect("should parse simple intent");
 
     assert_eq!(analysis.primary_intent, "greeting");
     assert_eq!(analysis.execution_strategy.approach, "simple");
@@ -273,7 +291,10 @@ async fn test_skills_recommended() {
         .await
         .expect("should succeed");
 
-    assert_eq!(analysis.recommended_skills, vec!["web-search", "code-exec", "file-write"]);
+    assert_eq!(
+        analysis.recommended_skills,
+        vec!["web-search", "code-exec", "file-write"]
+    );
     assert_eq!(analysis.recommended_agents, vec!["researcher", "analyst"]);
     assert_eq!(analysis.execution_strategy.approach, "graph");
 }

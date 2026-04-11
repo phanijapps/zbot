@@ -19,24 +19,24 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
-use std::pin::Pin;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
-use serde_json::{json, Value};
 
-use crate::types::{ChatMessage, StreamEvent, ToolCall};
-use crate::llm::LlmClient;
-use zero_core::types::Part;
 use crate::llm::client::StreamChunk;
-use crate::tools::ToolRegistry;
-use crate::tools::context::ToolContext;
+use crate::llm::LlmClient;
 use crate::mcp::McpManager;
-use crate::middleware::MiddlewarePipeline;
-use crate::middleware::traits::MiddlewareContext;
 use crate::middleware::token_counter::estimate_total_tokens;
+use crate::middleware::traits::MiddlewareContext;
+use crate::middleware::MiddlewarePipeline;
+use crate::tools::context::ToolContext;
+use crate::tools::ToolRegistry;
+use crate::types::{ChatMessage, StreamEvent, ToolCall};
 use zero_core::event::EventActions;
+use zero_core::types::Part;
 use zero_core::ToolContext as ZeroToolContext;
 
 // ============================================================================
@@ -63,9 +63,12 @@ pub struct RecallHookResult {
 ///
 /// Returns a `RecallHookResult` with a formatted message and new keys.
 pub type RecallHook = Box<
-    dyn Fn(&str, &HashSet<String>) -> Pin<Box<dyn Future<Output = Result<RecallHookResult, String>> + Send>>
+    dyn Fn(
+            &str,
+            &HashSet<String>,
+        ) -> Pin<Box<dyn Future<Output = Result<RecallHookResult, String>> + Send>>
         + Send
-        + Sync
+        + Sync,
 >;
 
 /// Result from tool execution including any actions set by the tool
@@ -186,7 +189,6 @@ pub struct ExecutorConfig {
     /// Extra tool calls are dropped with a log message.
     /// Default: false. Set true for orchestrator agents (root).
     pub single_action_mode: bool,
-
 }
 
 impl ExecutorConfig {
@@ -214,9 +216,9 @@ impl ExecutorConfig {
             max_extensions: 3,
             extension_size: 25,
             context_window_tokens: 128_000, // Default to 128K context
-            compaction_warn_pct: 80,      // Warn at 80% by default
-            turn_budget: 25,  // Soft nudge at 25 turns
-            max_turns: 50,    // Hard stop at 50 turns
+            compaction_warn_pct: 80,        // Warn at 80% by default
+            turn_budget: 25,                // Soft nudge at 25 turns
+            max_turns: 50,                  // Hard stop at 50 turns
             before_tool_call: None,
             after_tool_call: None,
             tool_execution_mode: ToolExecutionMode::default(),
@@ -260,10 +262,19 @@ impl fmt::Debug for ExecutorConfig {
             .field("compaction_warn_pct", &self.compaction_warn_pct)
             .field("turn_budget", &self.turn_budget)
             .field("max_turns", &self.max_turns)
-            .field("before_tool_call", &self.before_tool_call.as_ref().map(|_| "<hook>"))
-            .field("after_tool_call", &self.after_tool_call.as_ref().map(|_| "<hook>"))
+            .field(
+                "before_tool_call",
+                &self.before_tool_call.as_ref().map(|_| "<hook>"),
+            )
+            .field(
+                "after_tool_call",
+                &self.after_tool_call.as_ref().map(|_| "<hook>"),
+            )
             .field("tool_execution_mode", &self.tool_execution_mode)
-            .field("transform_context", &self.transform_context.as_ref().map(|_| "<hook>"))
+            .field(
+                "transform_context",
+                &self.transform_context.as_ref().map(|_| "<hook>"),
+            )
             .field("complexity", &self.complexity)
             .field("single_action_mode", &self.single_action_mode)
             .finish()
@@ -452,7 +463,8 @@ impl AgentExecutor {
         .with_execution_state(execution_state);
 
         // Process messages through middleware pipeline
-        let processed_messages = self.middleware_pipeline
+        let processed_messages = self
+            .middleware_pipeline
             .process_messages(messages, &middleware_context, &mut on_event)
             .await
             .map_err(|e| ExecutorError::MiddlewareError(e))?;
@@ -467,7 +479,8 @@ impl AgentExecutor {
         tracing::debug!("Starting execute_with_tools_loop");
 
         // Execute with tool calling loop
-        self.execute_with_tools_loop(processed_messages, tools_schema, &mut on_event).await
+        self.execute_with_tools_loop(processed_messages, tools_schema, &mut on_event)
+            .await
     }
 
     async fn execute_with_tools_loop(
@@ -530,14 +543,14 @@ impl AgentExecutor {
             // try_claim checks for Bool(true); setting to Bool(false) releases the claim.
             {
                 use zero_core::CallbackContext;
-                shared_tool_context.set_state(
-                    "app:delegation_active".to_string(),
-                    Value::Bool(false),
-                );
+                shared_tool_context
+                    .set_state("app:delegation_active".to_string(), Value::Bool(false));
             }
 
             // Turn budget: soft nudge then hard stop
-            if self.config.max_turns > 0 && progress_tracker.total_iterations >= self.config.max_turns {
+            if self.config.max_turns > 0
+                && progress_tracker.total_iterations >= self.config.max_turns
+            {
                 tracing::warn!(
                     total_iterations = progress_tracker.total_iterations,
                     max_turns = self.config.max_turns,
@@ -653,7 +666,8 @@ impl AgentExecutor {
                 && current_messages.len() > last_compaction_check_msg_count
             {
                 last_compaction_check_msg_count = current_messages.len();
-                let warn_threshold = (self.config.context_window_tokens * self.config.compaction_warn_pct) / 100;
+                let warn_threshold =
+                    (self.config.context_window_tokens * self.config.compaction_warn_pct) / 100;
                 let compact_threshold = (self.config.context_window_tokens * 80) / 100;
                 if total_tokens_in > warn_threshold {
                     // Pre-compaction memory flush: inject a nudge to save important facts
@@ -662,7 +676,8 @@ impl AgentExecutor {
                     if !compaction_warned {
                         current_messages.push(ChatMessage::system(
                             "[system] Context is getting full. Save important facts with \
-                             memory(action=\"save_fact\", scope=\"chat\") before they are pruned.".to_string()
+                             memory(action=\"save_fact\", scope=\"chat\") before they are pruned."
+                                .to_string(),
                         ));
                         compaction_warned = true;
                         tracing::info!(
@@ -708,9 +723,7 @@ impl AgentExecutor {
                     let hook_clone = Arc::clone(hook);
                     match hook_clone(&latest_user_msg, &recall_injected_keys).await {
                         Ok(result) if !result.system_message.is_empty() => {
-                            current_messages.push(ChatMessage::system(
-                                result.system_message,
-                            ));
+                            current_messages.push(ChatMessage::system(result.system_message));
                             // Track newly injected keys for future dedup
                             for key in result.fact_keys {
                                 recall_injected_keys.insert(key);
@@ -777,13 +790,15 @@ impl AgentExecutor {
 
             // Spawn the streaming LLM call in a separate task
             let stream_handle = tokio::spawn(async move {
-                llm_client.chat_stream(
-                    messages_for_stream,
-                    tools_for_stream,
-                    Box::new(move |chunk| {
-                        let _ = tx.send(chunk);
-                    }),
-                ).await
+                llm_client
+                    .chat_stream(
+                        messages_for_stream,
+                        tools_for_stream,
+                        Box::new(move |chunk| {
+                            let _ = tx.send(chunk);
+                        }),
+                    )
+                    .await
             });
 
             // Process chunks as they arrive — emit Token events in real-time.
@@ -830,7 +845,8 @@ impl AgentExecutor {
             }
 
             // Await the final response (channel closed = stream complete)
-            let response = stream_handle.await
+            let response = stream_handle
+                .await
                 .map_err(|e| ExecutorError::LlmError(format!("Stream task panicked: {}", e)))?
                 .map_err(|e| ExecutorError::LlmError(e.to_string()))?;
 
@@ -846,8 +862,11 @@ impl AgentExecutor {
                 });
             }
 
-            tracing::debug!("LLM response - content: '{}', tool_calls: {}",
-                response.content, response.tool_calls.as_ref().map_or(0, |v| v.len()));
+            tracing::debug!(
+                "LLM response - content: '{}', tool_calls: {}",
+                response.content,
+                response.tool_calls.as_ref().map_or(0, |v| v.len())
+            );
 
             // Check for tool calls
             let mut tool_calls = response.tool_calls.clone().unwrap_or_default();
@@ -857,7 +876,8 @@ impl AgentExecutor {
             if self.config.single_action_mode && tool_calls.len() > 1 {
                 tracing::info!(
                     "Single-action mode: executing '{}', dropping {} extra tool calls",
-                    tool_calls[0].name, tool_calls.len() - 1
+                    tool_calls[0].name,
+                    tool_calls.len() - 1
                 );
                 tool_calls.truncate(1);
             }
@@ -865,7 +885,10 @@ impl AgentExecutor {
                 // No tool calls, this is the final response
                 // Text was already streamed in real-time above
                 full_response = response.content.clone();
-                tracing::debug!("No tool calls, final response length: {}", full_response.len());
+                tracing::debug!(
+                    "No tool calls, final response length: {}",
+                    full_response.len()
+                );
                 break;
             }
 
@@ -874,7 +897,9 @@ impl AgentExecutor {
             // Truncation caused the LLM to copy garbled text on retries.
             current_messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: response.content.clone() }],
+                content: vec![Part::Text {
+                    text: response.content.clone(),
+                }],
                 tool_calls: Some(tool_calls.clone()),
                 tool_call_id: None,
             });
@@ -908,37 +933,46 @@ impl AgentExecutor {
                 }
             }
 
-            let non_blocked: Vec<&ToolCall> = tool_calls.iter()
+            let non_blocked: Vec<&ToolCall> = tool_calls
+                .iter()
                 .filter(|tc| !blocked_results.contains_key(&tc.id))
                 .collect();
 
-            let results: Vec<Result<ToolExecutionResult, String>> = if self.config.tool_execution_mode == ToolExecutionMode::Sequential {
+            let results: Vec<Result<ToolExecutionResult, String>> = if self
+                .config
+                .tool_execution_mode
+                == ToolExecutionMode::Sequential
+            {
                 // Sequential: execute one at a time, in order
                 let mut seq_results = Vec::new();
                 for tc in &non_blocked {
-                    let result = self.execute_tool(
-                        &shared_tool_context, &tc.id, &tc.name, &tc.arguments
-                    ).await;
+                    let result = self
+                        .execute_tool(&shared_tool_context, &tc.id, &tc.name, &tc.arguments)
+                        .await;
                     seq_results.push(result);
                 }
                 seq_results
             } else {
                 // Parallel: all at once (current behavior)
-                let tool_futures: Vec<_> = non_blocked.iter().map(|tc| {
-                    let ctx = shared_tool_context.clone();
-                    let tool_id = tc.id.clone();
-                    let tool_name = tc.name.clone();
-                    let args = tc.arguments.clone();
-                    async move {
-                        tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
-                        self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
-                    }
-                }).collect();
+                let tool_futures: Vec<_> = non_blocked
+                    .iter()
+                    .map(|tc| {
+                        let ctx = shared_tool_context.clone();
+                        let tool_id = tc.id.clone();
+                        let tool_name = tc.name.clone();
+                        let args = tc.arguments.clone();
+                        async move {
+                            tracing::debug!("Executing tool: {} with args: {}", tool_name, args);
+                            self.execute_tool(&ctx, &tool_id, &tool_name, &args).await
+                        }
+                    })
+                    .collect();
                 futures::future::join_all(tool_futures).await
             };
 
             // Build a map of executed results (keyed by tool_call id)
-            let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> = HashMap::new();
+            let mut executed_results: HashMap<String, Result<ToolExecutionResult, String>> =
+                HashMap::new();
             for (tc, result) in non_blocked.into_iter().zip(results) {
                 executed_results.insert(tc.id.clone(), result);
             }
@@ -969,7 +1003,11 @@ impl AgentExecutor {
                             tracing::debug!("Tool result: {}", output);
 
                             // Track progress: tool succeeded
-                            progress_tracker.record_tool_call(tool_name, &tool_call.arguments, true);
+                            progress_tracker.record_tool_call(
+                                tool_name,
+                                &tool_call.arguments,
+                                true,
+                            );
 
                             // Check for respond action
                             if let Some(respond) = &actions.respond {
@@ -983,7 +1021,9 @@ impl AgentExecutor {
                                 });
                                 should_stop_after_respond = true;
                                 progress_tracker.record_respond();
-                                tracing::debug!("Respond action detected, will stop after current tool batch");
+                                tracing::debug!(
+                                    "Respond action detected, will stop after current tool batch"
+                                );
                             }
 
                             // Check for delegate action
@@ -1004,33 +1044,42 @@ impl AgentExecutor {
                                 // Stop executor loop — continuation callback will resume root
                                 // when the subagent completes.
                                 stopped_for_delegation = true;
-                                tracing::debug!("Delegation detected, will stop after current tool batch");
+                                tracing::debug!(
+                                    "Delegation detected, will stop after current tool batch"
+                                );
                             }
 
                             // Check for generative UI markers
                             if let Ok(parsed) = serde_json::from_str::<Value>(&output) {
                                 // Check for show_content marker
-                                if parsed.get("__show_content")
+                                if parsed
+                                    .get("__show_content")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false)
                                 {
-                                    let content_type = parsed.get("content_type")
+                                    let content_type = parsed
+                                        .get("content_type")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("text").to_string();
-                                    let title = parsed.get("title")
+                                        .unwrap_or("text")
+                                        .to_string();
+                                    let title = parsed
+                                        .get("title")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("Content").to_string();
-                                    let content = parsed.get("content")
+                                        .unwrap_or("Content")
+                                        .to_string();
+                                    let content = parsed
+                                        .get("content")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("").to_string();
+                                        .unwrap_or("")
+                                        .to_string();
                                     let metadata = parsed.get("metadata").cloned();
-                                    let file_path = parsed.get("file_path")
+                                    let file_path = parsed
+                                        .get("file_path")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
-                                    let is_attachment = parsed.get("is_attachment")
-                                        .and_then(|v| v.as_bool());
-                                    let base64 = parsed.get("base64")
-                                        .and_then(|v| v.as_bool());
+                                    let is_attachment =
+                                        parsed.get("is_attachment").and_then(|v| v.as_bool());
+                                    let base64 = parsed.get("base64").and_then(|v| v.as_bool());
 
                                     on_event(StreamEvent::ShowContent {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -1045,27 +1094,37 @@ impl AgentExecutor {
                                 }
 
                                 // Check for request_input marker
-                                if parsed.get("__request_input")
+                                if parsed
+                                    .get("__request_input")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false)
                                 {
-                                    let form_id = parsed.get("form_id")
+                                    let form_id = parsed
+                                        .get("form_id")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or(&format!("form_{}", chrono::Utc::now().timestamp()))
+                                        .unwrap_or(&format!(
+                                            "form_{}",
+                                            chrono::Utc::now().timestamp()
+                                        ))
                                         .to_string();
-                                    let form_type = parsed.get("form_type")
+                                    let form_type = parsed
+                                        .get("form_type")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("json_schema").to_string();
-                                    let title = parsed.get("title")
+                                        .unwrap_or("json_schema")
+                                        .to_string();
+                                    let title = parsed
+                                        .get("title")
                                         .and_then(|v| v.as_str())
-                                        .unwrap_or("Input Required").to_string();
-                                    let description = parsed.get("description")
+                                        .unwrap_or("Input Required")
+                                        .to_string();
+                                    let description = parsed
+                                        .get("description")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
-                                    let schema = parsed.get("schema")
-                                        .cloned()
-                                        .unwrap_or_else(|| json!({}));
-                                    let submit_button = parsed.get("submit_button")
+                                    let schema =
+                                        parsed.get("schema").cloned().unwrap_or_else(|| json!({}));
+                                    let submit_button = parsed
+                                        .get("submit_button")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
 
@@ -1081,11 +1140,14 @@ impl AgentExecutor {
                                 }
 
                                 // Check for ward_changed marker (from ward tool)
-                                if parsed.get("__ward_changed__")
+                                if parsed
+                                    .get("__ward_changed__")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false)
                                 {
-                                    if let Some(ward_id) = parsed.get("ward_id").and_then(|v| v.as_str()) {
+                                    if let Some(ward_id) =
+                                        parsed.get("ward_id").and_then(|v| v.as_str())
+                                    {
                                         on_event(StreamEvent::WardChanged {
                                             timestamp: chrono::Utc::now().timestamp_millis() as u64,
                                             ward_id: ward_id.to_string(),
@@ -1094,12 +1156,15 @@ impl AgentExecutor {
                                 }
 
                                 // Check for plan_update marker
-                                if parsed.get("__plan_update")
+                                if parsed
+                                    .get("__plan_update")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false)
                                 {
-                                    let plan = parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
-                                    let explanation = parsed.get("explanation")
+                                    let plan =
+                                        parsed.get("plan").cloned().unwrap_or_else(|| json!([]));
+                                    let explanation = parsed
+                                        .get("explanation")
                                         .and_then(|v| v.as_str())
                                         .map(|s| s.to_string());
 
@@ -1111,11 +1176,14 @@ impl AgentExecutor {
                                 }
 
                                 // Check for session_title_changed marker
-                                if parsed.get("__session_title_changed__")
+                                if parsed
+                                    .get("__session_title_changed__")
                                     .and_then(|v| v.as_bool())
                                     .unwrap_or(false)
                                 {
-                                    if let Some(title) = parsed.get("title").and_then(|v| v.as_str()) {
+                                    if let Some(title) =
+                                        parsed.get("title").and_then(|v| v.as_str())
+                                    {
                                         on_event(StreamEvent::SessionTitleChanged {
                                             timestamp: chrono::Utc::now().timestamp_millis() as u64,
                                             title: title.to_string(),
@@ -1142,7 +1210,8 @@ impl AgentExecutor {
 
                             // afterToolCall hook — can transform the result
                             let final_output = if let Some(ref hook) = self.config.after_tool_call {
-                                match hook(tool_name, &tool_call.arguments, &processed_output, true) {
+                                match hook(tool_name, &tool_call.arguments, &processed_output, true)
+                                {
                                     Some(replacement) => replacement,
                                     None => processed_output,
                                 }
@@ -1151,16 +1220,18 @@ impl AgentExecutor {
                             };
 
                             // Add tool result message
-                            current_messages.push(ChatMessage::tool_result(
-                                tool_call.id.clone(),
-                                final_output,
-                            ));
+                            current_messages
+                                .push(ChatMessage::tool_result(tool_call.id.clone(), final_output));
                         }
                         Err(e) => {
                             tracing::debug!("Tool error: {}", e);
 
                             // Track progress: tool failed
-                            progress_tracker.record_tool_call(tool_name, &tool_call.arguments, false);
+                            progress_tracker.record_tool_call(
+                                tool_name,
+                                &tool_call.arguments,
+                                false,
+                            );
                             progress_tracker.record_error(&e);
 
                             on_event(StreamEvent::ToolResult {
@@ -1182,10 +1253,8 @@ impl AgentExecutor {
                             };
 
                             // Add error result message
-                            current_messages.push(ChatMessage::tool_result(
-                                tool_call.id.clone(),
-                                final_error,
-                            ));
+                            current_messages
+                                .push(ChatMessage::tool_result(tool_call.id.clone(), final_error));
                         }
                     }
                 }
@@ -1210,8 +1279,11 @@ impl AgentExecutor {
 
             // If respond tool was called, stop the loop - agent has finished responding
             if should_stop_after_respond || stopped_for_delegation {
-                tracing::debug!("Stopping execution loop — respond={} delegation={}",
-                    should_stop_after_respond, stopped_for_delegation);
+                tracing::debug!(
+                    "Stopping execution loop — respond={} delegation={}",
+                    should_stop_after_respond,
+                    stopped_for_delegation
+                );
                 break;
             }
         }
@@ -1257,7 +1329,9 @@ impl AgentExecutor {
             // Clear actions before execution so we capture only this tool's actions
             shared_ctx.set_actions(EventActions::default());
 
-            let result = tool.execute(shared_ctx.clone(), arguments.clone()).await
+            let result = tool
+                .execute(shared_ctx.clone(), arguments.clone())
+                .await
                 .map_err(|e| format!("Tool execution failed: {:?}", e))?;
 
             // Atomically take any actions that were set by the tool
@@ -1295,21 +1369,30 @@ impl AgentExecutor {
                 };
 
                 // Find the original tool name by listing tools from this server
-                let actual_tool = if let Some(client) = self.mcp_manager.get_client(&server_id).await {
-                    if let Ok(tools) = client.list_tools().await {
-                        tools.into_iter()
-                            .find(|t| normalize_tool_name(&t.name) == normalized_tool)
-                            .map(|t| t.name)
-                            .unwrap_or_else(|| normalized_tool.to_string())
+                let actual_tool =
+                    if let Some(client) = self.mcp_manager.get_client(&server_id).await {
+                        if let Ok(tools) = client.list_tools().await {
+                            tools
+                                .into_iter()
+                                .find(|t| normalize_tool_name(&t.name) == normalized_tool)
+                                .map(|t| t.name)
+                                .unwrap_or_else(|| normalized_tool.to_string())
+                        } else {
+                            normalized_tool.to_string()
+                        }
                     } else {
                         normalized_tool.to_string()
-                    }
-                } else {
-                    normalized_tool.to_string()
-                };
+                    };
 
-                tracing::debug!("Executing MCP tool: server={}, tool={}", server_id, actual_tool);
-                let output = self.mcp_manager.execute_tool(&server_id, &actual_tool, arguments.clone()).await
+                tracing::debug!(
+                    "Executing MCP tool: server={}, tool={}",
+                    server_id,
+                    actual_tool
+                );
+                let output = self
+                    .mcp_manager
+                    .execute_tool(&server_id, &actual_tool, arguments.clone())
+                    .await
                     .map(|v| serde_json::to_string(&v).unwrap_or_else(|_| "null".to_string()))
                     .map_err(|e| e.to_string())?;
 
@@ -1332,8 +1415,7 @@ impl AgentExecutor {
             if obj.get("type").and_then(|v| v.as_str()) == Some("object") {
                 obj.entry("additionalProperties")
                     .or_insert(Value::Bool(false));
-                obj.entry("required")
-                    .or_insert_with(|| json!([]));
+                obj.entry("required").or_insert_with(|| json!([]));
             }
         }
         schema
@@ -1396,10 +1478,15 @@ impl AgentExecutor {
         // Add MCP tools
         for mcp_id in &self.config.mcps {
             if let Some(client) = self.mcp_manager.get_client(mcp_id).await {
-                let mcp_tools = client.list_tools().await
-                    .map_err(|e| ExecutorError::McpError(format!("Failed to list MCP tools: {}", e)))?;
+                let mcp_tools = client.list_tools().await.map_err(|e| {
+                    ExecutorError::McpError(format!("Failed to list MCP tools: {}", e))
+                })?;
 
-                tracing::info!("Loaded {} MCP tools from server {}", mcp_tools.len(), mcp_id);
+                tracing::info!(
+                    "Loaded {} MCP tools from server {}",
+                    mcp_tools.len(),
+                    mcp_id
+                );
 
                 for mcp_tool in mcp_tools {
                     // Convert MCP ID and tool name to valid OpenAI tool name format
@@ -1409,9 +1496,9 @@ impl AgentExecutor {
                     let tool_name = format!("{}__{}", mcp_id_normalized, tool_name_normalized);
 
                     // Normalize parameters to OpenAI format and harden schema
-                    let parameters = Self::harden_tool_schema(
-                        Self::normalize_mcp_parameters(mcp_tool.parameters)
-                    );
+                    let parameters = Self::harden_tool_schema(Self::normalize_mcp_parameters(
+                        mcp_tool.parameters,
+                    ));
 
                     tools.push(json!({
                         "type": "function",
@@ -1441,7 +1528,8 @@ impl AgentExecutor {
             if let StreamEvent::Token { content, .. } = event {
                 final_response.push_str(&content);
             }
-        }).await?;
+        })
+        .await?;
 
         Ok(final_response)
     }
@@ -1691,7 +1779,8 @@ impl ProgressTracker {
         // Score diversity every 10 FAILED calls (not total calls)
         self.window_tool_calls += 1;
         if !succeeded && self.tool_name_window.len() >= 10 && self.tool_name_window.len() % 5 == 0 {
-            let distinct: HashSet<&str> = self.tool_name_window.iter().map(|s| s.as_str()).collect();
+            let distinct: HashSet<&str> =
+                self.tool_name_window.iter().map(|s| s.as_str()).collect();
             let ratio = distinct.len() as f32 / self.tool_name_window.len() as f32;
 
             if ratio <= 0.15 {
@@ -1716,7 +1805,8 @@ impl ProgressTracker {
         }
 
         // Track for exact-repetition detection (keep last 5)
-        self.recent_tool_calls.push_back((name.to_string(), args_hash));
+        self.recent_tool_calls
+            .push_back((name.to_string(), args_hash));
         if self.recent_tool_calls.len() > 5 {
             self.recent_tool_calls.pop_front();
         }
@@ -1725,7 +1815,11 @@ impl ProgressTracker {
     /// Record a tool error for repeated-error detection.
     fn record_error(&mut self, error: &str) {
         // Check if this exact error appeared 3+ times recently
-        let repeat_count = self.recent_errors.iter().filter(|e| e.as_str() == error).count();
+        let repeat_count = self
+            .recent_errors
+            .iter()
+            .filter(|e| e.as_str() == error)
+            .count();
         if repeat_count >= 2 {
             self.score -= 5; // Definitely stuck
         }
@@ -1903,7 +1997,9 @@ fn extract_key_info(content: &str) -> String {
     let mut info = Vec::new();
 
     for word in content.split_whitespace() {
-        let trimmed = word.trim_matches(|c: char| c == '"' || c == '\'' || c == ',' || c == ':' || c == '(' || c == ')');
+        let trimmed = word.trim_matches(|c: char| {
+            c == '"' || c == '\'' || c == ',' || c == ':' || c == '(' || c == ')'
+        });
         if (trimmed.contains('/') || trimmed.contains('.'))
             && (trimmed.ends_with(".py")
                 || trimmed.ends_with(".json")
@@ -1953,11 +2049,13 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         if messages[i].role == "tool" {
             let text = messages[i].text_content();
             let preserved = extract_key_info(&text);
-            messages[i].content = vec![Part::Text { text: if preserved.is_empty() {
-                "[result cleared]".to_string()
-            } else {
-                format!("[result cleared — {}]", preserved)
-            }}];
+            messages[i].content = vec![Part::Text {
+                text: if preserved.is_empty() {
+                    "[result cleared]".to_string()
+                } else {
+                    format!("[result cleared — {}]", preserved)
+                },
+            }];
         }
     }
 
@@ -1977,7 +2075,10 @@ fn compact_messages(messages: Vec<ChatMessage>) -> Vec<ChatMessage> {
         }
 
         // Preserve first user message
-        if let Some(user_msg) = messages[non_system_start..].iter().find(|m| m.role == "user") {
+        if let Some(user_msg) = messages[non_system_start..]
+            .iter()
+            .find(|m| m.role == "user")
+        {
             compacted.push(user_msg.clone());
         }
 
@@ -2073,7 +2174,11 @@ fn truncate_tool_args(args: &Value, max_chars: usize) -> Value {
                 if s.len() > 200 {
                     truncated.insert(
                         key.clone(),
-                        Value::String(format!("{}... [truncated, {} chars]", zero_core::truncate_str(s, 200), s.len())),
+                        Value::String(format!(
+                            "{}... [truncated, {} chars]",
+                            zero_core::truncate_str(s, 200),
+                            s.len()
+                        )),
                     );
                 } else {
                     truncated.insert(key.clone(), value.clone());
@@ -2107,7 +2212,12 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
         let budget = max_chars.saturating_sub(notice.len());
         let head_size = (budget * 4) / 5;
         let tail_size = budget - head_size;
-        return format!("{}{}{}", &result[..head_size], notice, &result[result.len() - tail_size..]);
+        return format!(
+            "{}{}{}",
+            &result[..head_size],
+            notice,
+            &result[result.len() - tail_size..]
+        );
     }
 
     // Line-aware: keep first N + last M lines within budget
@@ -2142,7 +2252,10 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
     let omitted = total_lines.saturating_sub(head_count + tail_count);
     let notice = format!(
         "\n--- TRUNCATED: showing {}/{} lines ({} omitted, {} chars total) ---\n\n",
-        head_count + tail_count, total_lines, omitted, result.len()
+        head_count + tail_count,
+        total_lines,
+        omitted,
+        result.len()
     );
 
     // Final budget check — if combined fits, return it; otherwise trim head/tail further
@@ -2185,7 +2298,10 @@ fn truncate_tool_result(result: String, max_chars: usize) -> String {
     let tight_omitted = total_lines.saturating_sub(tight_head_count + tight_tail_count);
     let tight_notice = format!(
         "\n--- TRUNCATED: showing {}/{} lines ({} omitted, {} chars total) ---\n\n",
-        tight_head_count + tight_tail_count, total_lines, tight_omitted, result.len()
+        tight_head_count + tight_tail_count,
+        total_lines,
+        tight_omitted,
+        result.len()
     );
 
     format!("{}{}{}", tight_head, tight_notice, tight_tail)
@@ -2224,20 +2340,31 @@ mod truncation_tests {
         // Head should be ~80%, tail ~20% of budget
         let head_h = truncated.matches('H').count();
         let tail_t = truncated.matches('T').count();
-        assert!(head_h > tail_t, "head ({}) should be larger than tail ({})", head_h, tail_t);
+        assert!(
+            head_h > tail_t,
+            "head ({}) should be larger than tail ({})",
+            head_h,
+            tail_t
+        );
     }
 
     #[test]
     fn test_truncation_preserves_line_boundaries() {
-        let lines: Vec<String> = (0..100).map(|i| format!("Line {}: some content here", i)).collect();
+        let lines: Vec<String> = (0..100)
+            .map(|i| format!("Line {}: some content here", i))
+            .collect();
         let input = lines.join("\n");
         let result = truncate_tool_result(input, 500);
 
         // Should not cut mid-line
         for line in result.lines() {
             assert!(
-                line.starts_with("Line") || line.contains("TRUNCATED") || line.contains("---") || line.is_empty(),
-                "Truncated mid-line: '{}'", line
+                line.starts_with("Line")
+                    || line.contains("TRUNCATED")
+                    || line.contains("---")
+                    || line.is_empty(),
+                "Truncated mid-line: '{}'",
+                line
             );
         }
     }
@@ -2272,7 +2399,11 @@ mod progress_tracker_tests {
     fn test_unique_tools_grant_extension() {
         let mut tracker = ProgressTracker::new(3);
         // Create a plan first so the -3 planless penalty doesn't apply
-        tracker.record_tool_call("update_plan", &json!({"plan": [{"step": "read", "status": "pending"}]}), true);
+        tracker.record_tool_call(
+            "update_plan",
+            &json!({"plan": [{"step": "read", "status": "pending"}]}),
+            true,
+        );
         tracker.record_tool_call("read", &json!({"path": "/a"}), true);
         tracker.record_tool_call("write", &json!({"path": "/b"}), true);
         tracker.record_tool_call("shell", &json!({"cmd": "ls"}), true);
@@ -2301,9 +2432,9 @@ mod progress_tracker_tests {
         tracker.record_error("connection refused");
         tracker.record_error("connection refused");
         tracker.record_error("connection refused"); // 3rd time: -5
-        // tool call: +1 (unique) +0 (failed) = 1
-        // errors: -5
-        // total: 1 - 5 = -4
+                                                    // tool call: +1 (unique) +0 (failed) = 1
+                                                    // errors: -5
+                                                    // total: 1 - 5 = -4
         assert!(!tracker.should_extend());
     }
 
@@ -2327,7 +2458,10 @@ mod progress_tracker_tests {
         tracker.grant_extension();
 
         tracker.record_respond(); // +10 (fresh window)
-        assert!(!tracker.should_extend(), "Should not extend beyond max_extensions=2");
+        assert!(
+            !tracker.should_extend(),
+            "Should not extend beyond max_extensions=2"
+        );
     }
 
     #[test]
@@ -2402,15 +2536,24 @@ mod progress_tracker_tests {
     fn test_high_diversity_extends() {
         let mut tracker = ProgressTracker::new(3);
         // Use 10 unique tools in 10 calls (all succeed)
-        let tools = ["read", "write", "shell", "edit", "grep", "glob", "memory", "todo", "ward", "respond"];
+        let tools = [
+            "read", "write", "shell", "edit", "grep", "glob", "memory", "todo", "ward", "respond",
+        ];
         for (i, tool) in tools.iter().enumerate() {
             tracker.record_tool_call(tool, &json!({"i": i}), true);
         }
         // 10 unique tools: +1 each = 10, +1 success each = 10
         // No diversity check (only tracks failed calls, none here)
         // Total: 10 + 10 = 20
-        assert!(tracker.score > 0, "High diversity should produce positive score, got: {}", tracker.score);
-        assert!(tracker.should_extend(), "High diversity should allow extension");
+        assert!(
+            tracker.score > 0,
+            "High diversity should produce positive score, got: {}",
+            tracker.score
+        );
+        assert!(
+            tracker.should_extend(),
+            "High diversity should allow extension"
+        );
     }
 
     #[test]
@@ -2585,7 +2728,10 @@ mod progress_tracker_tests {
             tracker.record_tool_call("read", &json!({"path": format!("/{}", i)}), true);
         }
         assert!(tracker.needs_planning_nudge());
-        assert!(!tracker.needs_planning_nudge(), "Nudge should fire only once");
+        assert!(
+            !tracker.needs_planning_nudge(),
+            "Nudge should fire only once"
+        );
     }
 
     #[test]
@@ -2607,7 +2753,10 @@ mod progress_tracker_tests {
         tracker.record_tool_call("read", &json!({}), true); // +1 unique + 1 success = 2
         assert!(!tracker.has_plan);
         assert_eq!(tracker.score, 2);
-        assert!(!tracker.should_extend(), "Score 2 without plan should not extend (effective -1)");
+        assert!(
+            !tracker.should_extend(),
+            "Score 2 without plan should not extend (effective -1)"
+        );
 
         // Score 4 without plan → effective 1 → extends (but let's test score 3 first)
         let mut tracker2 = ProgressTracker::new(3);
@@ -2615,7 +2764,10 @@ mod progress_tracker_tests {
         tracker2.record_tool_call("write", &json!({}), true); // +2
         assert!(!tracker2.has_plan);
         assert_eq!(tracker2.score, 4);
-        assert!(tracker2.should_extend(), "Score 4 without plan should extend (effective 1)");
+        assert!(
+            tracker2.should_extend(),
+            "Score 4 without plan should extend (effective 1)"
+        );
 
         // Score 8 without plan → effective 5 → extends
         let mut tracker3 = ProgressTracker::new(3);
@@ -2625,7 +2777,10 @@ mod progress_tracker_tests {
         tracker3.record_tool_call("edit", &json!({}), true); // +2
         assert!(!tracker3.has_plan);
         assert_eq!(tracker3.score, 8);
-        assert!(tracker3.should_extend(), "Score 8 without plan should extend (effective 5)");
+        assert!(
+            tracker3.should_extend(),
+            "Score 8 without plan should extend (effective 5)"
+        );
     }
 
     #[test]
@@ -2636,7 +2791,10 @@ mod progress_tracker_tests {
         tracker.record_tool_call("write", &json!({}), true);
         assert!(tracker.has_plan);
         assert!(tracker.score > 0);
-        assert!(tracker.should_extend(), "With plan, positive score should extend");
+        assert!(
+            tracker.should_extend(),
+            "With plan, positive score should extend"
+        );
     }
 
     #[test]
@@ -2654,9 +2812,18 @@ mod progress_tracker_tests {
         tracker.grant_extension();
 
         assert!(tracker.has_plan, "has_plan should survive grant_extension");
-        assert_eq!(tracker.plan_items_created, 1, "plan_items_created should survive");
-        assert_eq!(tracker.plan_items_completed, 1, "plan_items_completed should survive");
-        assert_eq!(tracker.tool_calls_before_plan, 10, "tool_calls_before_plan should survive");
+        assert_eq!(
+            tracker.plan_items_created, 1,
+            "plan_items_created should survive"
+        );
+        assert_eq!(
+            tracker.plan_items_completed, 1,
+            "plan_items_completed should survive"
+        );
+        assert_eq!(
+            tracker.tool_calls_before_plan, 10,
+            "tool_calls_before_plan should survive"
+        );
     }
 
     #[test]
@@ -2745,14 +2912,18 @@ mod progress_tracker_tests {
         // System message
         messages.push(ChatMessage {
             role: "system".to_string(),
-            content: vec![Part::Text { text: "You are an assistant.".to_string() }],
+            content: vec![Part::Text {
+                text: "You are an assistant.".to_string(),
+            }],
             tool_calls: None,
             tool_call_id: None,
         });
         // Original user request
         messages.push(ChatMessage {
             role: "user".to_string(),
-            content: vec![Part::Text { text: "Build a trinomial cheat sheet.".to_string() }],
+            content: vec![Part::Text {
+                text: "Build a trinomial cheat sheet.".to_string(),
+            }],
             tool_calls: None,
             tool_call_id: None,
         });
@@ -2760,7 +2931,9 @@ mod progress_tracker_tests {
         for i in 0..30 {
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: format!("Step {}", i) }],
+                content: vec![Part::Text {
+                    text: format!("Step {}", i),
+                }],
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -2770,15 +2943,21 @@ mod progress_tracker_tests {
 
         // Should contain: system + original user request + compaction notice + last 20
         assert!(
-            compacted.iter().any(|m| m.text_content().contains("trinomial cheat sheet")),
+            compacted
+                .iter()
+                .any(|m| m.text_content().contains("trinomial cheat sheet")),
             "Compacted messages should preserve the original user request"
         );
         assert!(
-            compacted.iter().any(|m| m.text_content().contains("Context compacted")),
+            compacted
+                .iter()
+                .any(|m| m.text_content().contains("Context compacted")),
             "Compacted messages should include compaction notice"
         );
         assert!(
-            compacted.iter().any(|m| m.text_content().contains("original request")),
+            compacted
+                .iter()
+                .any(|m| m.text_content().contains("original request")),
             "Compaction notice should reference the preserved original request"
         );
     }
@@ -2788,13 +2967,17 @@ mod progress_tracker_tests {
         let messages = vec![
             ChatMessage {
                 role: "system".to_string(),
-                content: vec![Part::Text { text: "system".to_string() }],
+                content: vec![Part::Text {
+                    text: "system".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: None,
             },
             ChatMessage {
                 role: "user".to_string(),
-                content: vec![Part::Text { text: "hello".to_string() }],
+                content: vec![Part::Text {
+                    text: "hello".to_string(),
+                }],
                 tool_calls: None,
                 tool_call_id: None,
             },
@@ -2817,10 +3000,26 @@ mod progress_tracker_tests {
         // shell(ralph.py next) -> apply_patch(create file) -> shell(verify) -> shell(ralph.py complete)
         // All successful — score should stay positive
         for i in 0..5 {
-            tracker.record_tool_call("shell", &json!({"command": format!("ralph.py next {}", i)}), true);
-            tracker.record_tool_call("apply_patch", &json!({"file": format!("core/mod{}.py", i)}), true);
-            tracker.record_tool_call("shell", &json!({"command": format!("python3 -c 'import core.mod{}'", i)}), true);
-            tracker.record_tool_call("shell", &json!({"command": format!("ralph.py complete {}", i)}), true);
+            tracker.record_tool_call(
+                "shell",
+                &json!({"command": format!("ralph.py next {}", i)}),
+                true,
+            );
+            tracker.record_tool_call(
+                "apply_patch",
+                &json!({"file": format!("core/mod{}.py", i)}),
+                true,
+            );
+            tracker.record_tool_call(
+                "shell",
+                &json!({"command": format!("python3 -c 'import core.mod{}'", i)}),
+                true,
+            );
+            tracker.record_tool_call(
+                "shell",
+                &json!({"command": format!("ralph.py complete {}", i)}),
+                true,
+            );
         }
 
         assert!(
@@ -2843,11 +3042,7 @@ mod progress_tracker_tests {
 
         // Simulate a stuck agent: same shell command failing repeatedly
         for _ in 0..15 {
-            tracker.record_tool_call(
-                "shell",
-                &json!({"command": "cat nonexistent.py"}),
-                false,
-            );
+            tracker.record_tool_call("shell", &json!({"command": "cat nonexistent.py"}), false);
         }
 
         assert!(
@@ -2894,7 +3089,9 @@ mod hook_tests {
 
     #[test]
     fn test_tool_call_decision_block_has_reason() {
-        let decision = ToolCallDecision::Block { reason: "dangerous".to_string() };
+        let decision = ToolCallDecision::Block {
+            reason: "dangerous".to_string(),
+        };
         match decision {
             ToolCallDecision::Block { reason } => assert_eq!(reason, "dangerous"),
             _ => panic!("Expected Block"),
@@ -2911,7 +3108,7 @@ mod hook_tests {
 
     #[test]
     fn test_steering_message_format() {
-        use crate::steering::{SteeringSource, SteeringMessage, SteeringPriority};
+        use crate::steering::{SteeringMessage, SteeringPriority, SteeringSource};
         let msg = SteeringMessage {
             content: "Wrap up now".to_string(),
             source: SteeringSource::System,
@@ -3005,13 +3202,17 @@ mod compaction_tests {
             );
             messages.push(ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: format!("Creating file_{}.py with detailed explanation", i) }],
+                content: vec![Part::Text {
+                    text: format!("Creating file_{}.py with detailed explanation", i),
+                }],
                 tool_calls: Some(vec![tool]),
                 tool_call_id: None,
             });
             messages.push(ChatMessage {
                 role: "tool".to_string(),
-                content: vec![Part::Text { text: format!("File created: src/file_{}.py", i) }],
+                content: vec![Part::Text {
+                    text: format!("File created: src/file_{}.py", i),
+                }],
                 tool_calls: None,
                 tool_call_id: Some(format!("call_{}", i)),
             });
@@ -3020,14 +3221,22 @@ mod compaction_tests {
         let compacted = compact_messages(messages);
 
         // Old assistant messages should be compressed
-        let has_compressed = compacted.iter().any(|m| m.text_content().starts_with("[Turn"));
-        assert!(has_compressed, "Old assistant messages should be compressed");
+        let has_compressed = compacted
+            .iter()
+            .any(|m| m.text_content().starts_with("[Turn"));
+        assert!(
+            has_compressed,
+            "Old assistant messages should be compressed"
+        );
 
         // Old tool results should preserve file paths
-        let has_preserved = compacted.iter().any(|m|
+        let has_preserved = compacted.iter().any(|m| {
             m.text_content().contains("[result cleared") && m.text_content().contains(".py")
+        });
+        assert!(
+            has_preserved,
+            "Cleared tool results should preserve file paths"
         );
-        assert!(has_preserved, "Cleared tool results should preserve file paths");
     }
 
     #[test]

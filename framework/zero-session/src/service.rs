@@ -2,23 +2,19 @@
 //!
 //! Service layer for managing sessions.
 
+use crate::session::InMemorySession;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use uuid::Uuid;
-use zero_core::Result;
 use zero_core::context::Session;
-use crate::session::InMemorySession;
+use zero_core::Result;
 
 /// Service for creating and managing sessions.
 #[async_trait::async_trait]
 pub trait SessionService: Send + Sync {
     /// Create a new session.
-    async fn create_session(
-        &self,
-        app_name: String,
-        user_id: String,
-    ) -> Result<Arc<dyn Session>>;
+    async fn create_session(&self, app_name: String, user_id: String) -> Result<Arc<dyn Session>>;
 
     /// Get a session by ID.
     async fn get_session(&self, session_id: &str) -> Result<Option<Arc<dyn Session>>>;
@@ -55,11 +51,8 @@ impl InMemorySessionService {
         app_name: String,
         user_id: String,
     ) -> Result<Arc<dyn Session>> {
-        let session: Arc<dyn Session> = Arc::new(InMemorySession::new(
-            id.clone(),
-            app_name,
-            user_id,
-        ));
+        let session: Arc<dyn Session> =
+            Arc::new(InMemorySession::new(id.clone(), app_name, user_id));
 
         let mut sessions = self.sessions.write().await;
         sessions.insert(id, session.clone());
@@ -76,11 +69,7 @@ impl Default for InMemorySessionService {
 
 #[async_trait::async_trait]
 impl SessionService for InMemorySessionService {
-    async fn create_session(
-        &self,
-        app_name: String,
-        user_id: String,
-    ) -> Result<Arc<dyn Session>> {
+    async fn create_session(&self, app_name: String, user_id: String) -> Result<Arc<dyn Session>> {
         let id = Self::generate_id();
         self.create_with_id(id, app_name, user_id).await
     }

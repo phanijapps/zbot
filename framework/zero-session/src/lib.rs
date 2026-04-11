@@ -2,15 +2,15 @@
 //!
 //! Session and state management for the Zero framework.
 
-pub mod state;
-pub mod session;
 pub mod service;
+pub mod session;
+pub mod state;
 
 // Re-export from zero-core
 pub use zero_core::context::{Session, State};
 
 // Re-export from our modules
-pub use state::InMemoryState;
-pub use state::validate_key;
+pub use service::{InMemorySessionService, SessionService};
 pub use session::{InMemorySession, MutexSession};
-pub use service::{SessionService, InMemorySessionService};
+pub use state::validate_key;
+pub use state::InMemoryState;

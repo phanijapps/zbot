@@ -90,10 +90,7 @@ impl HookContext {
     }
 
     /// Create a connector hook context.
-    pub fn connector(
-        connector_id: impl Into<String>,
-        source_id: impl Into<String>,
-    ) -> Self {
+    pub fn connector(connector_id: impl Into<String>, source_id: impl Into<String>) -> Self {
         let cid = connector_id.into();
         Self::new(
             HookType::Connector {

@@ -62,12 +62,11 @@ async fn replace_match(ctx: &dyn CallbackContext, match_str: &str) -> Result<Str
     let var_name = match_str.trim_matches(|c| c == '{' || c == '}').trim();
 
     // Check if optional (ends with ?)
-    let (var_name, optional) =
-        if let Some(name) = var_name.strip_suffix('?') {
-            (name, true)
-        } else {
-            (var_name, false)
-        };
+    let (var_name, optional) = if let Some(name) = var_name.strip_suffix('?') {
+        (name, true)
+    } else {
+        (var_name, false)
+    };
 
     // Handle artifact.{name} pattern
     if let Some(_file_name) = var_name.strip_prefix("artifact.") {
@@ -156,9 +155,7 @@ impl Template {
 
         for captures in regex.find_iter(&self.raw) {
             let match_str = captures.as_str();
-            let var_name = match_str
-                .trim_matches(|c| c == '{' || c == '}')
-                .trim();
+            let var_name = match_str.trim_matches(|c| c == '{' || c == '}').trim();
 
             // Skip artifact references - they're handled differently
             if var_name.starts_with("artifact.") {
@@ -217,11 +214,7 @@ impl TemplateRenderer {
     /// let result = renderer.render(ctx, &template).await?;
     /// // Result: "Hello Alice, your score is 100"
     /// ```
-    pub async fn render(
-        &self,
-        ctx: &dyn CallbackContext,
-        template: &Template,
-    ) -> Result<String> {
+    pub async fn render(&self, ctx: &dyn CallbackContext, template: &Template) -> Result<String> {
         let regex = get_placeholder_regex();
         // Pre-allocate 20% extra capacity to reduce reallocations when placeholders expand
         let mut result = String::with_capacity((template.raw.len() as f32 * 1.2) as usize);
@@ -273,10 +266,7 @@ impl Default for TemplateRenderer {
 /// let result = inject_session_state(ctx, "Hello {user:name}").await?;
 /// // Returns: "Hello Alice" if user:name is "Alice"
 /// ```
-pub async fn inject_session_state(
-    ctx: &dyn CallbackContext,
-    template_str: &str,
-) -> Result<String> {
+pub async fn inject_session_state(ctx: &dyn CallbackContext, template_str: &str) -> Result<String> {
     let template = Template::new(template_str);
     let renderer = TemplateRenderer::new();
     renderer.render(ctx, &template).await
@@ -285,19 +275,31 @@ pub async fn inject_session_state(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::{CallbackContext, ReadonlyContext};
-    use zero_core::types::Content;
     use serde_json::Value;
+    use zero_core::types::Content;
+    use zero_core::{CallbackContext, ReadonlyContext};
 
     struct MockContext;
 
     impl ReadonlyContext for MockContext {
-        fn invocation_id(&self) -> &str { "test" }
-        fn agent_name(&self) -> &str { "test" }
-        fn user_id(&self) -> &str { "test" }
-        fn app_name(&self) -> &str { "test" }
-        fn session_id(&self) -> &str { "test" }
-        fn branch(&self) -> &str { "test" }
+        fn invocation_id(&self) -> &str {
+            "test"
+        }
+        fn agent_name(&self) -> &str {
+            "test"
+        }
+        fn user_id(&self) -> &str {
+            "test"
+        }
+        fn app_name(&self) -> &str {
+            "test"
+        }
+        fn session_id(&self) -> &str {
+            "test"
+        }
+        fn branch(&self) -> &str {
+            "test"
+        }
         fn user_content(&self) -> &Content {
             static CONTENT: Content = Content {
                 role: String::new(),
@@ -402,7 +404,9 @@ mod tests {
     #[tokio::test]
     async fn test_inject_session_state() {
         let ctx = MockContext;
-        let result = inject_session_state(&ctx, "Hello {user_name}").await.unwrap();
+        let result = inject_session_state(&ctx, "Hello {user_name}")
+            .await
+            .unwrap();
         assert_eq!(result, "Hello Alice");
     }
 
