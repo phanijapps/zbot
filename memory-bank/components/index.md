@@ -6,6 +6,9 @@ Quick reference for all system components. Check this before planning changes.
 
 | Component | Location | Description |
 |-----------|----------|-------------|
+| Execution Loop | [execution-loop/overview.md](execution-loop/overview.md) | End-to-end pipeline: UI message → session → recall → intent → prompt → LLM loop → delegation → continuation → response → distillation. Covers new sessions and continuations. |
+| — Data Flow | [execution-loop/data-flow.md](execution-loop/data-flow.md) | Complete call sequence with file paths, line numbers, DB operations, events, and prompt compilation |
+| — Files | [execution-loop/files.md](execution-loop/files.md) | Every file across UI, gateway, runtime, services with function references |
 | Intent Analysis | [intent-analysis/overview.md](intent-analysis/overview.md) | Pre-execution middleware: indexes resources, semantic search, LLM analysis, emits events. Root agent only. |
 | Ward Scaffolding | [ward-scaffolding/overview.md](ward-scaffolding/overview.md) | Post-execution: skill-driven directory scaffolding, AGENTS.md generation, core module indexing via language configs. |
 | — Data Flow | [intent-analysis/data-flow.md](intent-analysis/data-flow.md) | Live execution pipeline, session replay, WS event routing |

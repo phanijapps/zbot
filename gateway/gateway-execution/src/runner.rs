@@ -1566,6 +1566,16 @@ impl ExecutionRunner {
             false
         };
         let is_fast_mode = config.is_fast_mode();
+        if is_root && already_analyzed && !is_fast_mode {
+            // Notify UI that intent analysis was skipped (continuation turn)
+            self.event_bus
+                .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
+                    session_id: session_id.to_string(),
+                    execution_id: execution_id.to_string(),
+                })
+                .await;
+            tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
+        }
         if is_root && !already_analyzed && !is_fast_mode {
             if let Some(ref fs) = fact_store_for_indexing {
                 // Index resources (fast DB upsert — no LLM call)

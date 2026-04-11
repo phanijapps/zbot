@@ -437,6 +437,14 @@ pub enum ServerMessage {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+
+    /// Intent analysis skipped (already analyzed in this session).
+    IntentAnalysisSkipped {
+        session_id: String,
+        execution_id: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        seq: Option<u64>,
+    },
 }
 
 /// Error codes for subscription errors.
@@ -581,6 +589,7 @@ impl ServerMessage {
             Self::SessionTitleChanged { .. } => None,
             Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
+            Self::IntentAnalysisSkipped { .. } => None,
             Self::Pong
             | Self::Connected { .. }
             | Self::SessionPaused { .. }
@@ -915,6 +924,15 @@ impl ServerMessage {
                 recommended_agents,
                 ward_recommendation,
                 execution_strategy,
+                seq: Some(seq),
+            },
+            Self::IntentAnalysisSkipped {
+                session_id,
+                execution_id,
+                seq: _,
+            } => Self::IntentAnalysisSkipped {
+                session_id,
+                execution_id,
                 seq: Some(seq),
             },
             // Messages without sequence numbers pass through unchanged
