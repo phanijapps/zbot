@@ -201,6 +201,13 @@ function fastHandleTurnComplete(event: StreamEvent, ctx: FastChatEventCtx): void
           { ...last, content: finalMessage, isStreaming: false },
         ];
       }
+      // Check if this message already exists (e.g., loaded from history)
+      const alreadyExists = prev.some(
+        (m) => m.role === "assistant" && m.content === finalMessage
+      );
+      if (alreadyExists) {
+        return prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m));
+      }
       return [
         ...prev.map((m) => (m.isStreaming ? { ...m, isStreaming: false } : m)),
         {
@@ -362,13 +369,20 @@ export function useFastChat(): UseFastChatResult {
         sessionIdRef.current = sid;
         conversationIdRef.current = cid;
 
-        // Load existing messages
+        // Load existing messages from DB — this is the ONLY source of truth on mount.
+        // Clear any stale streaming state before setting history.
+        streamingBufferRef.current = "";
+        thinkingBufferRef.current = "";
+        lastSeqRef.current = 0;
+        toolCallMsgMapRef.current.clear();
+
         const msgResult = await fetch(
           `/api/sessions/${encodeURIComponent(sid)}/messages?limit=100`
         );
         if (msgResult.ok) {
           const msgs = await msgResult.json();
           if (!cancelled && Array.isArray(msgs)) {
+            // Use message IDs from DB to prevent duplicates with streaming
             const mapped: FastMessage[] = msgs.map((m: Record<string, unknown>) => ({
               id: (m.id as string) || crypto.randomUUID(),
               role: (m.role as FastMessage["role"]) || "assistant",
@@ -376,9 +390,13 @@ export function useFastChat(): UseFastChatResult {
               timestamp: (m.createdAt as string) || now(),
               toolName: m.toolCalls ? extractToolName(m.toolCalls) : undefined,
               toolOutput: m.toolResults ? String(m.toolResults) : undefined,
+              isStreaming: false, // History messages are never streaming
             }));
             setMessages(mapped);
           }
+        } else {
+          // No history — start with empty
+          setMessages([]);
         }
       } catch (error) {
         console.error("[FastChat] Init error:", error);
