@@ -45,6 +45,7 @@ impl WsSession {
     }
 
     /// Send a message to this session.
+    #[allow(clippy::result_large_err)]
     pub fn send(&self, msg: ServerMessage) -> Result<(), mpsc::error::SendError<ServerMessage>> {
         self.tx.send(msg)
     }

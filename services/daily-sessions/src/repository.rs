@@ -85,11 +85,11 @@ impl SqlDailySessionRepository {
                 .map_err(|e| DailySessionError::NotFound(e.to_string()))?;
         }
 
-        let conn = Connection::open(db_path).map_err(|e| DailySessionError::Database(e))?;
+        let conn = Connection::open(db_path).map_err(DailySessionError::Database)?;
 
         // Enable foreign key constraints
         conn.execute("PRAGMA foreign_keys = ON", [])
-            .map_err(|e| DailySessionError::Database(e))?;
+            .map_err(DailySessionError::Database)?;
 
         let repo = Self {
             conn: Arc::new(tokio::sync::Mutex::new(conn)),
@@ -343,7 +343,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
              FROM daily_sessions WHERE id = ?1",
         )?;
 
-        let result = stmt.query_row([&*session_id], |row| {
+        let result = stmt.query_row([session_id], |row| {
             let created_at_str: String = row.get(8)?;
             let updated_at_str: String = row.get(9)?;
             Ok(DailySession {
@@ -415,7 +415,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
 
         conn.execute(
             "UPDATE daily_sessions SET summary = ?1, updated_at = ?2 WHERE id = ?3",
-            [&*summary, &*now, &*session_id],
+            [&*summary, &*now, session_id],
         )?;
 
         Ok(())
@@ -430,7 +430,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
 
         conn.execute(
             "UPDATE daily_sessions SET message_count = message_count + 1, updated_at = ?1 WHERE id = ?2",
-            [&*now, &*session_id]
+            [&*now, session_id]
         )?;
 
         Ok(())
@@ -605,7 +605,7 @@ impl DailySessionRepository for SqlDailySessionRepository {
              FROM agents WHERE id = ?1"
         )?;
 
-        let result = stmt.query_row([&*agent_id], |row| {
+        let result = stmt.query_row([agent_id], |row| {
             let created_at_str: String = row.get(7)?;
             let updated_at_str: String = row.get(8)?;
             Ok(Agent {

@@ -7,6 +7,7 @@ use std::collections::HashMap;
 
 /// Configuration for all middleware from agent config.yaml
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct MiddlewareConfig {
     /// Summarization middleware configuration
     #[serde(default)]
@@ -21,15 +22,6 @@ pub struct MiddlewareConfig {
     pub custom: HashMap<String, serde_yaml::Value>,
 }
 
-impl Default for MiddlewareConfig {
-    fn default() -> Self {
-        Self {
-            summarization: None,
-            context_editing: None,
-            custom: HashMap::new(),
-        }
-    }
-}
 
 /// Trigger conditions for middleware activation
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

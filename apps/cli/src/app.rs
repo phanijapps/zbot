@@ -213,12 +213,11 @@ async fn handle_key_event(
     use crossterm::event::KeyModifiers;
 
     // Global quit with Ctrl+C or Ctrl+Q
-    if key.modifiers.contains(KeyModifiers::CONTROL) {
-        if matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q')) {
+    if key.modifiers.contains(KeyModifiers::CONTROL)
+        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q')) {
             state.should_quit = true;
             return Ok(());
         }
-    }
 
     match state.input_mode {
         InputMode::Normal => match key.code {

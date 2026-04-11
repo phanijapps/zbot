@@ -13,8 +13,6 @@
 //! - [`config`]: LLM client configuration
 //! - [`openai`]: OpenAI-compatible client implementation
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
 
 pub mod client;
 pub mod config;

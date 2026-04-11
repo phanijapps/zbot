@@ -286,7 +286,7 @@ mod tests {
         ];
 
         for source in sources {
-            let req = SessionRequest::new("root", "test").with_source(source.clone());
+            let req = SessionRequest::new("root", "test").with_source(source);
             assert_eq!(req.source, source);
         }
     }

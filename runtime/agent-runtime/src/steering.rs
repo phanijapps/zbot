@@ -56,6 +56,7 @@ impl SteeringQueue {
     /// Create a new steering queue, returning (queue, handle).
     ///
     /// The queue is consumed by the executor. The handle is shared with callers.
+    #[must_use] 
     pub fn new() -> (Self, SteeringHandle) {
         let (tx, rx) = mpsc::unbounded_channel();
         (Self { rx }, SteeringHandle { tx })

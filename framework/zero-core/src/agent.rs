@@ -40,7 +40,7 @@ use crate::event::Event;
 mod tests {
     use super::*;
     use crate::context::{
-        CallbackContext, InvocationContext, ReadonlyContext, RunConfig, Session, State,
+        CallbackContext, InvocationContext, ReadonlyContext, RunConfig, Session,
     };
     use crate::event::Event;
     use crate::event::EventActions;
@@ -52,6 +52,7 @@ mod tests {
     }
 
     // Mock implementation for testing
+    #[allow(dead_code)]
     struct MockInvocationContext {
         agent: Arc<dyn Agent>,
         run_config: RunConfig,

@@ -10,8 +10,8 @@ use super::embedding::{EmbeddingClient, EmbeddingError};
 
 /// OpenAI-compatible embedding client.
 ///
-/// Calls `POST {base_url}/v1/embeddings` with the standard OpenAI format.
-/// Works with: OpenAI, Ollama (`localhost:11434/v1`), Voyage, LiteLLM, etc.
+/// Calls `POST {base_url}/v1/embeddings` with the standard `OpenAI` format.
+/// Works with: `OpenAI`, Ollama (`localhost:11434/v1`), Voyage, `LiteLLM`, etc.
 pub struct OpenAiEmbeddingClient {
     base_url: String,
     api_key: String,
@@ -22,6 +22,7 @@ pub struct OpenAiEmbeddingClient {
 
 impl OpenAiEmbeddingClient {
     /// Create a new OpenAI-compatible embedding client.
+    #[must_use] 
     pub fn new(base_url: String, api_key: String, model: String, dimensions: usize) -> Self {
         Self {
             base_url,
@@ -67,15 +68,14 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
             let status = response.status();
             let error_text = response.text().await.unwrap_or_default();
             return Err(EmbeddingError::ApiError(format!(
-                "({}): {}",
-                status, error_text
+                "({status}): {error_text}"
             )));
         }
 
         let json_response: serde_json::Value = response
             .json()
             .await
-            .map_err(|e| EmbeddingError::ParseError(format!("Failed to parse response: {}", e)))?;
+            .map_err(|e| EmbeddingError::ParseError(format!("Failed to parse response: {e}")))?;
 
         // Parse OpenAI embedding response format:
         // { "data": [{ "embedding": [0.1, 0.2, ...], "index": 0 }, ...] }
@@ -90,7 +90,7 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
         for item in data {
             let index = item
                 .get("index")
-                .and_then(|i| i.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(embeddings.len() as u64) as usize;
 
             let embedding = item

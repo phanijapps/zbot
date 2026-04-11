@@ -123,7 +123,7 @@ impl StdioMcpClient {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| {
-                McpError::ConnectionFailed(format!("Failed to spawn MCP process: {}", e))
+                McpError::ConnectionFailed(format!("Failed to spawn MCP process: {e}"))
             })?;
 
         // Write all requests to stdin
@@ -131,37 +131,37 @@ impl StdioMcpClient {
             use tokio::io::AsyncWriteExt;
 
             // Send initialize request
-            let init_str = format!("{}\n", init_request);
+            let init_str = format!("{init_request}\n");
             stdin.write_all(init_str.as_bytes()).await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to write init to stdin: {}", e))
+                McpError::ProtocolError(format!("Failed to write init to stdin: {e}"))
             })?;
             stdin
                 .flush()
                 .await
-                .map_err(|e| McpError::ProtocolError(format!("Failed to flush init: {}", e)))?;
+                .map_err(|e| McpError::ProtocolError(format!("Failed to flush init: {e}")))?;
 
             // Send initialized notification
-            let notif_str = format!("{}\n", initialized_notification);
+            let notif_str = format!("{initialized_notification}\n");
             stdin.write_all(notif_str.as_bytes()).await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to write notification to stdin: {}", e))
+                McpError::ProtocolError(format!("Failed to write notification to stdin: {e}"))
             })?;
             stdin.flush().await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to flush notification: {}", e))
+                McpError::ProtocolError(format!("Failed to flush notification: {e}"))
             })?;
 
             // Send tool call request
-            let tool_str = format!("{}\n", tool_request);
+            let tool_str = format!("{tool_request}\n");
             stdin.write_all(tool_str.as_bytes()).await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to write tool request to stdin: {}", e))
+                McpError::ProtocolError(format!("Failed to write tool request to stdin: {e}"))
             })?;
             stdin.flush().await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to flush tool request: {}", e))
+                McpError::ProtocolError(format!("Failed to flush tool request: {e}"))
             })?;
         }
 
         // Read response from stdout
         let output = child.wait_with_output().await.map_err(|e| {
-            McpError::ProtocolError(format!("Failed to read from MCP process: {}", e))
+            McpError::ProtocolError(format!("Failed to read from MCP process: {e}"))
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -175,8 +175,7 @@ impl StdioMcpClient {
 
         if !output.status.success() {
             return Err(McpError::ProtocolError(format!(
-                "MCP process failed: {}",
-                stderr
+                "MCP process failed: {stderr}"
             )));
         }
 
@@ -190,10 +189,10 @@ impl StdioMcpClient {
 
             if let Ok(response) = serde_json::from_str::<Value>(line) {
                 // Look for tool call response (id: 2)
-                if response.get("id").and_then(|v| v.as_i64()) == Some(2) {
+                if response.get("id").and_then(serde_json::Value::as_i64) == Some(2) {
                     // Check for JSON-RPC error first
                     if let Some(error) = response.get("error") {
-                        return Err(McpError::ProtocolError(format!("MCP error: {}", error)));
+                        return Err(McpError::ProtocolError(format!("MCP error: {error}")));
                     }
 
                     tool_result = response
@@ -272,7 +271,7 @@ impl StdioMcpClient {
             .stderr(std::process::Stdio::piped())
             .spawn()
             .map_err(|e| {
-                McpError::ConnectionFailed(format!("Failed to spawn MCP process: {}", e))
+                McpError::ConnectionFailed(format!("Failed to spawn MCP process: {e}"))
             })?;
 
         // Write all requests to stdin
@@ -280,37 +279,37 @@ impl StdioMcpClient {
             use tokio::io::AsyncWriteExt;
 
             // Send initialize request
-            let init_str = format!("{}\n", init_request);
+            let init_str = format!("{init_request}\n");
             stdin.write_all(init_str.as_bytes()).await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to write init to stdin: {}", e))
+                McpError::ProtocolError(format!("Failed to write init to stdin: {e}"))
             })?;
             stdin
                 .flush()
                 .await
-                .map_err(|e| McpError::ProtocolError(format!("Failed to flush init: {}", e)))?;
+                .map_err(|e| McpError::ProtocolError(format!("Failed to flush init: {e}")))?;
 
             // Send initialized notification
-            let notif_str = format!("{}\n", initialized_notification);
+            let notif_str = format!("{initialized_notification}\n");
             stdin.write_all(notif_str.as_bytes()).await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to write notification to stdin: {}", e))
+                McpError::ProtocolError(format!("Failed to write notification to stdin: {e}"))
             })?;
             stdin.flush().await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to flush notification: {}", e))
+                McpError::ProtocolError(format!("Failed to flush notification: {e}"))
             })?;
 
             // Send tools/list request
-            let tools_str = format!("{}\n", tools_request);
+            let tools_str = format!("{tools_request}\n");
             stdin.write_all(tools_str.as_bytes()).await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to write tools request to stdin: {}", e))
+                McpError::ProtocolError(format!("Failed to write tools request to stdin: {e}"))
             })?;
             stdin.flush().await.map_err(|e| {
-                McpError::ProtocolError(format!("Failed to flush tools request: {}", e))
+                McpError::ProtocolError(format!("Failed to flush tools request: {e}"))
             })?;
         }
 
         // Read response
         let output = child.wait_with_output().await.map_err(|e| {
-            McpError::ProtocolError(format!("Failed to read from MCP process: {}", e))
+            McpError::ProtocolError(format!("Failed to read from MCP process: {e}"))
         })?;
 
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -324,8 +323,7 @@ impl StdioMcpClient {
 
         if !output.status.success() {
             return Err(McpError::ProtocolError(format!(
-                "MCP process failed: {}",
-                stderr
+                "MCP process failed: {stderr}"
             )));
         }
 
@@ -341,15 +339,15 @@ impl StdioMcpClient {
                 tracing::debug!("STDIO MCP parsed response line: {}", response);
 
                 // Skip initialize response (id: 1)
-                if response.get("id").and_then(|v| v.as_i64()) == Some(1) {
+                if response.get("id").and_then(serde_json::Value::as_i64) == Some(1) {
                     continue;
                 }
 
                 // Look for tools/list response (id: 2)
-                if response.get("id").and_then(|v| v.as_i64()) == Some(2) {
+                if response.get("id").and_then(serde_json::Value::as_i64) == Some(2) {
                     // Check for JSON-RPC error first
                     if let Some(error) = response.get("error") {
-                        return Err(McpError::ProtocolError(format!("MCP error: {}", error)));
+                        return Err(McpError::ProtocolError(format!("MCP error: {error}")));
                     }
 
                     if let Some(tools) = response

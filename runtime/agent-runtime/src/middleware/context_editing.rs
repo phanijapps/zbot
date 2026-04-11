@@ -21,7 +21,7 @@ use zero_core::types::Part;
 
 /// Compress an assistant message into a one-line summary.
 ///
-/// Extracts tool names and file paths from tool_calls arguments.
+/// Extracts tool names and file paths from `tool_calls` arguments.
 /// Pure pattern matching — no LLM call.
 ///
 /// Format: `[Turn N: tool1(file1), tool2(file2)]` or `[Turn N: <truncated reasoning>]`
@@ -43,15 +43,15 @@ pub(crate) fn compress_assistant_message(msg: &ChatMessage, turn_number: usize) 
         let text = msg.text_content();
         let truncated: String = text.chars().take(60).collect();
         let ellipsis = if text.len() > 60 { "..." } else { "" };
-        format!("[Turn {}: {}{}]", turn_number, truncated, ellipsis)
+        format!("[Turn {turn_number}: {truncated}{ellipsis}]")
     } else {
-        format!("[Turn {}]", turn_number)
+        format!("[Turn {turn_number}]")
     }
 }
 
 /// Extract a file path from tool call arguments.
 ///
-/// Looks for common keys: "path", "file_path", "file", "filename".
+/// Looks for common keys: "path", "`file_path`", "file", "filename".
 pub(crate) fn extract_file_path(args: &serde_json::Value) -> Option<String> {
     let path_keys = ["path", "file_path", "file", "filename"];
     if let Some(obj) = args.as_object() {
@@ -81,23 +81,23 @@ pub(crate) fn compress_old_assistant_messages(messages: &mut [ChatMessage], keep
     let compress_boundary = total.saturating_sub(keep_recent);
     let mut turn_counter = 0;
 
-    for i in 0..compress_boundary {
-        if messages[i].role == "assistant" {
+    for message in &mut messages[..compress_boundary] {
+        if message.role == "assistant" {
             turn_counter += 1;
 
             // Skip already-compressed messages
-            if messages[i].text_content().starts_with("[Turn") {
+            if message.text_content().starts_with("[Turn") {
                 continue;
             }
 
-            let compressed = compress_assistant_message(&messages[i], turn_counter);
-            messages[i].content = vec![Part::Text { text: compressed }];
+            let compressed = compress_assistant_message(message, turn_counter);
+            message.content = vec![Part::Text { text: compressed }];
             // Keep tool_calls intact — the LLM API requires them for tool result pairing
         }
     }
 }
 
-/// Build an index mapping tool_call_id → tool_name from all assistant messages.
+/// Build an index mapping `tool_call_id` → `tool_name` from all assistant messages.
 /// This is O(n) over messages, enabling O(1) lookups instead of O(n) backwards search.
 fn build_tool_call_index(messages: &[ChatMessage]) -> std::collections::HashMap<String, String> {
     let mut index = std::collections::HashMap::new();
@@ -124,11 +124,13 @@ pub struct ContextEditingMiddleware {
 
 impl ContextEditingMiddleware {
     /// Create a new context editing middleware
+    #[must_use] 
     pub fn new(config: ContextEditingConfig) -> Self {
         Self { config }
     }
 
     /// Find tool result messages that should be cleared
+    #[allow(dead_code)]
     fn find_tool_results_to_clear(&self, messages: &[ChatMessage]) -> Vec<usize> {
         self.find_tool_results_to_clear_with_cascade(messages, &ExecutionState::default())
     }
@@ -171,7 +173,7 @@ impl ContextEditingMiddleware {
         }
 
         // Determine how many to keep vs clear (basic logic)
-        let to_keep = self.config.keep_tool_results as usize;
+        let to_keep = self.config.keep_tool_results;
 
         let mut indices_to_clear = if tool_result_indices.len() > to_keep {
             // Clear all but the most recent N tool results
@@ -233,7 +235,7 @@ impl ContextEditingMiddleware {
     /// respecting the `skill_aware_placeholders` config option.
     fn clear_tool_results(
         &self,
-        messages: &mut Vec<ChatMessage>,
+        messages: &mut [ChatMessage],
         indices_to_clear: &[usize],
         execution_state: &ExecutionState,
     ) -> Vec<String> {
@@ -291,8 +293,7 @@ impl ContextEditingMiddleware {
             template.replace("{skill_name}", skill_name)
         } else {
             format!(
-                "[Skill '{}' was loaded and unloaded. Reload with load_skill(skill=\"{}\") if needed.]",
-                skill_name, skill_name
+                "[Skill '{skill_name}' was loaded and unloaded. Reload with load_skill(skill=\"{skill_name}\") if needed.]"
             )
         }
     }
@@ -302,12 +303,12 @@ impl ContextEditingMiddleware {
         if let Some(template) = &self.config.resource_placeholder_template {
             template.replace("{skill_name}", skill_name)
         } else {
-            format!("[Resource from skill '{}' was unloaded.]", skill_name)
+            format!("[Resource from skill '{skill_name}' was unloaded.]")
         }
     }
 
     /// Find if a tool call ID corresponds to a skill or skill resource.
-    /// Returns (skill_name, is_main_skill) where is_main_skill is true for SKILL.md loads.
+    /// Returns (`skill_name`, `is_main_skill`) where `is_main_skill` is true for SKILL.md loads.
     fn find_skill_for_tool_call(
         &self,
         tool_call_id: &str,
@@ -330,23 +331,22 @@ impl ContextEditingMiddleware {
     }
 
     /// Clear tool call inputs (arguments) from assistant messages
-    fn clear_tool_call_inputs(&self, messages: &mut Vec<ChatMessage>, tool_result_idx: usize) {
+    fn clear_tool_call_inputs(&self, messages: &mut [ChatMessage], tool_result_idx: usize) {
         // First, extract the tool_call_id we need to find
         let tool_call_id_to_clear = messages
             .get(tool_result_idx)
-            .and_then(|msg| msg.tool_call_id.as_ref())
-            .map(|id| id.clone());
+            .and_then(|msg| msg.tool_call_id.as_ref()).cloned();
 
         if let Some(tool_call_id) = tool_call_id_to_clear {
             // Now we can mutably iterate through messages
             for message in messages.iter_mut() {
                 if let Some(tool_calls) = &mut message.tool_calls {
-                    for i in 0..tool_calls.len() {
-                        if tool_calls[i].id == tool_call_id {
+                    for tc in tool_calls.iter_mut() {
+                        if tc.id == tool_call_id {
                             // Replace with a new tool call with empty arguments
-                            tool_calls[i] = ToolCall::new(
-                                tool_calls[i].id.clone(),
-                                tool_calls[i].name.clone(),
+                            *tc = ToolCall::new(
+                                tc.id.clone(),
+                                tc.name.clone(),
                                 json!({}),
                             );
                             break;
@@ -362,7 +362,7 @@ impl ContextEditingMiddleware {
         indices
             .iter()
             .filter_map(|idx| messages.get(*idx))
-            .map(|msg| estimate_message_tokens(msg))
+            .map(estimate_message_tokens)
             .sum()
     }
 }
@@ -373,8 +373,7 @@ fn estimate_message_tokens(msg: &ChatMessage) -> usize {
     let tool_call_tokens = msg
         .tool_calls
         .as_ref()
-        .map(|tc| serde_json::to_string(tc).unwrap_or_default().len() / 4)
-        .unwrap_or(0);
+        .map_or(0, |tc| serde_json::to_string(tc).unwrap_or_default().len() / 4);
     content_tokens + tool_call_tokens + 4 // +4 for message overhead
 }
 
@@ -437,7 +436,7 @@ impl PreProcessMiddleware for ContextEditingMiddleware {
         );
 
         // Compress old assistant messages to one-line summaries
-        let keep_recent = (self.config.keep_tool_results as usize + 1) * 3;
+        let keep_recent = (self.config.keep_tool_results + 1) * 3;
         compress_old_assistant_messages(&mut modified_messages, keep_recent);
 
         // Log the context editing action
@@ -513,7 +512,7 @@ mod tests {
             },
             ChatMessage {
                 role: "assistant".to_string(),
-                content: vec![Part::Text { text: "".to_string() }],
+                content: vec![Part::Text { text: String::new() }],
                 tool_calls: Some(vec![tool1, tool2]),
                 tool_call_id: None,
             },
@@ -638,7 +637,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
@@ -701,7 +700,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
@@ -762,7 +761,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
@@ -828,7 +827,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
@@ -844,7 +843,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
@@ -913,7 +912,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![skill_tool_call]),
                 tool_call_id: None,
@@ -929,7 +928,7 @@ mod tests {
             ChatMessage {
                 role: "assistant".to_string(),
                 content: vec![Part::Text {
-                    text: "".to_string(),
+                    text: String::new(),
                 }],
                 tool_calls: Some(vec![resource_tool_call]),
                 tool_call_id: None,
@@ -1085,7 +1084,7 @@ mod tests {
         let msg = ChatMessage {
             role: "assistant".to_string(),
             content: vec![Part::Text {
-                text: "".to_string(),
+                text: String::new(),
             }],
             tool_calls: Some(vec![tool]),
             tool_call_id: None,

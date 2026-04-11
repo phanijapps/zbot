@@ -179,7 +179,7 @@ mod tests {
     use super::*;
     use async_stream::stream;
     use std::result::Result as StdResult;
-    use zero_core::{Content, Event, ZeroError};
+    use zero_core::{Content, Event};
 
     #[tokio::test]
     async fn test_custom_agent_builder() {

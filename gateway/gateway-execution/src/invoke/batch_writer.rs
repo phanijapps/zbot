@@ -135,6 +135,7 @@ async fn batch_writer_loop(
     // Pending log entries
     let mut log_entries: Vec<ExecutionLog> = Vec::new();
     // Pending session messages (NOT coalesced — each is unique)
+    #[allow(clippy::type_complexity)]
     let mut session_messages: Vec<(
         String,
         String,
@@ -187,6 +188,7 @@ async fn batch_writer_loop(
 }
 
 /// Flush all pending writes to the database.
+#[allow(clippy::type_complexity)]
 fn flush_all(
     state_service: &StateService<DatabaseManager>,
     log_service: &LogService<DatabaseManager>,
@@ -237,13 +239,11 @@ fn flush_all(
                 tracing::warn!("BatchWriter: failed to append session message: {}", e);
             }
         }
-    } else {
-        if !session_messages.is_empty() {
-            tracing::warn!(
-                "BatchWriter: {} session messages dropped (no conversation repo)",
-                session_messages.len()
-            );
-            session_messages.clear();
-        }
+    } else if !session_messages.is_empty() {
+        tracing::warn!(
+            "BatchWriter: {} session messages dropped (no conversation repo)",
+            session_messages.len()
+        );
+        session_messages.clear();
     }
 }

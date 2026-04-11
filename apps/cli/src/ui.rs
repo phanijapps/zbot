@@ -19,6 +19,7 @@ use crate::app::{AppState, ChatMessage, InputMode, MessageRole};
 // Color Scheme
 // ============================================================================
 
+#[allow(dead_code)]
 const COLOR_BG: Color = Color::Rgb(26, 26, 26);
 const COLOR_FG: Color = Color::Rgb(230, 230, 230);
 const COLOR_ACCENT: Color = Color::Rgb(138, 43, 226); // Purple

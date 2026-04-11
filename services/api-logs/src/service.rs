@@ -127,6 +127,7 @@ impl<D: DbProvider> LogService<D> {
     }
 
     /// Log tool result.
+    #[allow(clippy::too_many_arguments)]
     pub fn log_tool_result(
         &self,
         session_id: &str,
@@ -201,6 +202,7 @@ impl<D: DbProvider> LogService<D> {
     }
 
     /// Log delegation complete.
+    #[allow(clippy::too_many_arguments)]
     pub fn log_delegation_complete(
         &self,
         session_id: &str,
@@ -334,9 +336,9 @@ impl<D: DbProvider> LogService<D> {
                 let db_status = self
                     .repo
                     .get_session_status_from_sessions_table(&session.conversation_id);
-                if matches!(db_status.as_deref(), Some("crashed") | Some("error")) {
-                    session.status = SessionStatus::Error;
-                } else if session.error_count > 0 {
+                if matches!(db_status.as_deref(), Some("crashed") | Some("error"))
+                    || session.error_count > 0
+                {
                     session.status = SessionStatus::Error;
                 } else if matches!(db_status.as_deref(), Some("running")) {
                     session.status = SessionStatus::Running;

@@ -88,7 +88,7 @@ impl EpisodeRepository {
                  WHERE session_id = ?1",
             )?;
 
-            let result = stmt.query_row(params![session_id], |row| row_to_episode(row));
+            let result = stmt.query_row(params![session_id], row_to_episode);
 
             match result {
                 Ok(ep) => Ok(Some(ep)),
@@ -138,7 +138,7 @@ impl EpisodeRepository {
             let mut stmt = conn.prepare(&sql)?;
             let param_refs: Vec<&dyn rusqlite::types::ToSql> =
                 params_vec.iter().map(|p| p.as_ref()).collect();
-            let rows = stmt.query_map(param_refs.as_slice(), |row| row_to_episode(row))?;
+            let rows = stmt.query_map(param_refs.as_slice(), row_to_episode)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -160,7 +160,7 @@ impl EpisodeRepository {
             )?;
 
             let rows =
-                stmt.query_map(params![agent_id, limit as i64], |row| row_to_episode(row))?;
+                stmt.query_map(params![agent_id, limit as i64], row_to_episode)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }
@@ -188,7 +188,7 @@ impl EpisodeRepository {
                  WHERE agent_id = ?1 AND embedding IS NOT NULL",
             )?;
 
-            let rows = stmt.query_map(params![agent_id], |row| row_to_episode(row))?;
+            let rows = stmt.query_map(params![agent_id], row_to_episode)?;
 
             let mut scored: Vec<(SessionEpisode, f64)> = rows
                 .filter_map(|r| r.ok())
@@ -485,7 +485,9 @@ mod tests {
         let repo = EpisodeRepository::new(db);
 
         let mut ep = make_episode("agent-1", "sess-001", "success");
-        ep.embedding = Some(vec![1.5, -2.5, 0.0, 3.14159]);
+        #[allow(clippy::approx_constant)]
+        let pi_approx = 3.14159_f32;
+        ep.embedding = Some(vec![1.5, -2.5, 0.0, pi_approx]);
         repo.insert(&ep).unwrap();
 
         let found = repo.get_by_session_id("sess-001").unwrap().unwrap();
@@ -493,6 +495,6 @@ mod tests {
         assert_eq!(emb.len(), 4);
         assert!((emb[0] - 1.5).abs() < 0.0001);
         assert!((emb[1] - (-2.5)).abs() < 0.0001);
-        assert!((emb[3] - 3.14159).abs() < 0.001);
+        assert!((emb[3] - pi_approx).abs() < 0.001);
     }
 }

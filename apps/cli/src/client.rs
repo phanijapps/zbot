@@ -28,6 +28,7 @@ pub struct GatewayStatus {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum GatewayEvent {
     Connected {
         session_id: String,
@@ -67,6 +68,7 @@ pub enum GatewayEvent {
 
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
 enum ClientMessage {
     Invoke {
         agent_id: String,
@@ -89,6 +91,7 @@ enum ClientMessage {
 
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
+#[allow(dead_code)]
 enum ServerMessage {
     Connected {
         session_id: String,
@@ -253,12 +256,12 @@ impl GatewayClient {
         while let Some(msg) = read.next().await {
             match msg {
                 Ok(Message::Text(text)) => {
-                    if let Ok(server_msg) = serde_json::from_str::<ServerMessage>(&text) {
-                        if let ServerMessage::Connected { session_id } = server_msg {
-                            let _ = tx.send(GatewayEvent::Connected { session_id }).await;
-                            connected = true;
-                            break;
-                        }
+                    if let Ok(ServerMessage::Connected { session_id }) =
+                        serde_json::from_str::<ServerMessage>(&text)
+                    {
+                        let _ = tx.send(GatewayEvent::Connected { session_id }).await;
+                        connected = true;
+                        break;
                     }
                 }
                 Ok(Message::Close(_)) => {
@@ -368,6 +371,7 @@ impl GatewayClient {
     }
 
     /// Stop an agent execution
+    #[allow(dead_code)]
     pub async fn stop(&self, _conversation_id: &str) -> Result<()> {
         // This would need an active WebSocket connection
         // For now, we'll just note that this needs the WS connection
@@ -376,6 +380,7 @@ impl GatewayClient {
     }
 
     /// Continue an agent execution
+    #[allow(dead_code)]
     pub async fn continue_execution(
         &self,
         _conversation_id: &str,

@@ -318,8 +318,10 @@ mod tests {
 
         let service = PluginService::new(plugins_dir);
 
-        let mut config = PluginUserConfig::default();
-        config.enabled = Some(true);
+        let mut config = PluginUserConfig {
+            enabled: Some(true),
+            ..PluginUserConfig::default()
+        };
         config.set_setting("agent".to_string(), serde_json::json!("assistant"));
         config.set_secret("token".to_string(), "secret123".to_string());
 

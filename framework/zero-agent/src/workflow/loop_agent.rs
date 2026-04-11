@@ -133,7 +133,7 @@ impl Agent for LoopAgent {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use zero_core::{Event, EventActions};
+    use zero_core::Event;
 
     struct MockAgent {
         name: String,

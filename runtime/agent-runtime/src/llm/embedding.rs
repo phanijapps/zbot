@@ -32,7 +32,7 @@ pub enum EmbeddingError {
 
 /// Trait for embedding providers.
 ///
-/// Implementations can wrap remote APIs (OpenAI, Ollama, Voyage) or
+/// Implementations can wrap remote APIs (`OpenAI`, Ollama, Voyage) or
 /// local ONNX models (fastembed). The trait is object-safe so it can
 /// be stored behind `Arc<dyn EmbeddingClient>`.
 #[async_trait]
@@ -63,7 +63,7 @@ pub struct EmbeddingConfig {
     /// Output dimensionality.
     pub dimensions: usize,
 
-    /// Maximum texts per embed() call (default 32).
+    /// Maximum texts per `embed()` call (default 32).
     #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 
@@ -87,7 +87,7 @@ pub enum EmbeddingProviderType {
     /// Use an existing LLM provider's embedding endpoint.
     /// The `provider_id` references a Provider in providers.json.
     Provider {
-        /// The provider ID whose base_url and api_key will be used.
+        /// The provider ID whose `base_url` and `api_key` will be used.
         provider_id: String,
     },
 }
@@ -118,6 +118,7 @@ const fn default_idle_timeout() -> u64 {
 }
 
 /// Compute SHA-256 hash of text content for embedding cache lookups.
+#[must_use] 
 pub fn content_hash(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());

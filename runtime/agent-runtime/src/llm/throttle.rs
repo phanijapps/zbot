@@ -104,10 +104,10 @@ mod tests {
 
     #[async_trait]
     impl LlmClient for CountingClient {
-        fn model(&self) -> &str {
+        fn model(&self) -> &'static str {
             "test"
         }
-        fn provider(&self) -> &str {
+        fn provider(&self) -> &'static str {
             "test"
         }
 

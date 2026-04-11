@@ -350,7 +350,7 @@ impl Agent for LlmAgent {
 
                 // Emit separate events for tool results (for streaming to frontend)
                 // Clone into a separate vector to avoid lifetime issues in stream
-                let tool_responses_for_events: Vec<Content> = tool_responses.iter().cloned().collect();
+                let tool_responses_for_events: Vec<Content> = tool_responses.to_vec();
                 for tool_response in tool_responses_for_events {
                     let tool_result_event = Event {
                         id: Uuid::new_v4().to_string(),

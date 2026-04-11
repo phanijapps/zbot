@@ -71,7 +71,7 @@ impl OutboxRepository {
                 )?;
                 Ok(())
             })
-            .map_err(|e| BridgeError::Database(e))?;
+            .map_err(BridgeError::Database)?;
 
         Ok(id)
     }
@@ -95,7 +95,7 @@ impl OutboxRepository {
 
                 Ok(items)
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Get items created after a specific outbox ID (for replay after resume).
@@ -149,7 +149,7 @@ impl OutboxRepository {
                     Ok(items)
                 }
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Mark an item as inflight (being sent to worker).
@@ -163,7 +163,7 @@ impl OutboxRepository {
                 )?;
                 Ok(())
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Mark an item as sent (ACK received from worker).
@@ -177,7 +177,7 @@ impl OutboxRepository {
                 )?;
                 Ok(())
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Mark an item as failed.
@@ -201,7 +201,7 @@ impl OutboxRepository {
                 )?;
                 Ok(())
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Reset all inflight items for an adapter back to pending (on disconnect).
@@ -216,7 +216,7 @@ impl OutboxRepository {
                 )?;
                 Ok(count)
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Reset all inflight items across all adapters (crash recovery on startup).
@@ -229,7 +229,7 @@ impl OutboxRepository {
                 )?;
                 Ok(count)
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Delete sent items older than the specified number of days.
@@ -245,7 +245,7 @@ impl OutboxRepository {
                 )?;
                 Ok(count)
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 
     /// Get items eligible for retry (failed items past their retry_after time).
@@ -269,7 +269,7 @@ impl OutboxRepository {
 
                 Ok(items)
             })
-            .map_err(|e| BridgeError::Database(e))
+            .map_err(BridgeError::Database)
     }
 }
 

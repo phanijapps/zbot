@@ -29,8 +29,6 @@
 //! - `SummarizationMiddleware`: Compresses long conversations
 //! - `ContextEditingMiddleware`: Clears old tool results
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
 
 pub mod config;
 pub mod context_editing;
@@ -44,7 +42,7 @@ pub use config::{
     ContextEditingConfig, KeepPolicy, MiddlewareConfig, SummarizationConfig, TriggerCondition,
 };
 pub use context_editing::ContextEditingMiddleware;
-pub(crate) use context_editing::{compress_assistant_message, compress_old_assistant_messages};
+pub(crate) use context_editing::compress_old_assistant_messages;
 pub use pipeline::MiddlewarePipeline;
 pub use summarization::SummarizationMiddleware;
 pub use traits::{

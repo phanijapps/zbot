@@ -3,7 +3,7 @@
 //! Tool for sending responses back to the originating hook.
 //!
 //! This tool routes messages to the correct channel (WebSocket, webhook, etc)
-//! based on the HookContext that was set when the agent was invoked.
+//! based on the `HookContext` that was set when the agent was invoked.
 
 use async_trait::async_trait;
 use serde_json::{json, Value};
@@ -28,6 +28,7 @@ pub struct RespondTool;
 
 impl RespondTool {
     /// Create a new respond tool.
+    #[must_use] 
     pub fn new() -> Self {
         Self
     }
@@ -41,11 +42,11 @@ impl Default for RespondTool {
 
 #[async_trait]
 impl Tool for RespondTool {
-    fn name(&self) -> &str {
+    fn name(&self) -> &'static str {
         "respond"
     }
 
-    fn description(&self) -> &str {
+    fn description(&self) -> &'static str {
         "Send a response message back to the user through the originating channel. \
          Use this to communicate with the user who initiated the conversation."
     }
@@ -109,7 +110,7 @@ impl Tool for RespondTool {
         // Get conversation ID for response routing
         let conversation_id = ctx
             .get_state("conversation_id")
-            .and_then(|v| v.as_str().map(|s| s.to_string()));
+            .and_then(|v| v.as_str().map(std::string::ToString::to_string));
 
         // If we have hook context, use it to determine response routing
         let hook_type = hook_context
@@ -124,7 +125,7 @@ impl Tool for RespondTool {
             .and_then(|v| v.get("hook_type"))
             .and_then(|v| v.get("session_id"))
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string());
+            .map(std::string::ToString::to_string);
 
         // Set response in actions for the executor to pick up
         let mut actions = ctx.actions();

@@ -165,6 +165,7 @@ impl OpenAiLlm {
     }
 
     /// Convert OpenAI response to our format.
+    #[allow(clippy::wrong_self_convention)]
     fn from_openai_response(&self, response: OpenAiResponse) -> LlmResponse {
         // Check for tool calls in the message (OpenAI API location, not response root)
         let tool_calls = response

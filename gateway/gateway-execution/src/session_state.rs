@@ -464,11 +464,10 @@ impl SessionStateBuilder {
 
         // Third: look for a Response-category log
         for log in logs.iter().rev() {
-            if log.category == LogCategory::Response {
-                if !log.message.is_empty() {
+            if log.category == LogCategory::Response
+                && !log.message.is_empty() {
                     return Some(log.message.clone());
                 }
-            }
         }
 
         // Fallback: last assistant message from conversation (skip tool-call-only messages)

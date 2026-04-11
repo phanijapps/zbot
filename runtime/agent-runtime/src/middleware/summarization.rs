@@ -74,7 +74,7 @@ impl SummarizationMiddleware {
 
         let summary_client = Arc::new(
             OpenAiClient::new(llm_config)
-                .map_err(|e| format!("Failed to create LLM client: {}", e))?,
+                .map_err(|e| format!("Failed to create LLM client: {e}"))?,
         );
 
         Ok(Self::new(config, summary_client))
@@ -91,8 +91,7 @@ impl SummarizationMiddleware {
         } else {
             format!(
                 "Summarize the following conversation concisely. \
-                 Preserve key information, decisions, and context:\n\n{}",
-                conversation_text
+                 Preserve key information, decisions, and context:\n\n{conversation_text}"
             )
         };
 
@@ -104,7 +103,7 @@ impl SummarizationMiddleware {
                 None, // No tools needed for summarization
             )
             .await
-            .map_err(|e| format!("Summarization failed: {}", e))?;
+            .map_err(|e| format!("Summarization failed: {e}"))?;
 
         Ok(response.content)
     }
@@ -120,7 +119,7 @@ impl SummarizationMiddleware {
 
     /// Split messages into keep and summarize groups.
     ///
-    /// IMPORTANT: Never splits between an assistant message with tool_calls
+    /// IMPORTANT: Never splits between an assistant message with `tool_calls`
     /// and its tool responses. The split boundary is walked forward to find
     /// a clean break point.
     fn split_messages(
@@ -154,8 +153,7 @@ impl SummarizationMiddleware {
             // Walk the split boundary forward to find a clean break point.
             // A clean break is NOT inside an assistant+tool pair.
             let mut split_idx = target_split;
-            for i in target_split..non_system_messages.len() {
-                let msg = &non_system_messages[i];
+            for (i, msg) in non_system_messages.iter().enumerate().skip(target_split) {
                 // Clean boundary: user message or assistant message (not a tool response)
                 if msg.role == "user" || (msg.role == "assistant" && msg.tool_call_id.is_none()) {
                     split_idx = i;
@@ -300,7 +298,7 @@ mod tests {
         };
 
         let messages = create_test_messages();
-        let (keep, summarize) = middleware.split_messages(&messages, 128000);
+        let (keep, summarize) = middleware.split_messages(&messages, 128_000);
 
         // All messages should be kept (3 total, default keep is 10)
         assert_eq!(keep.len(), 3); // all messages kept

@@ -62,7 +62,7 @@ impl McpService {
             return Ok(vec![]);
         }
 
-        let content = fs::read_to_string(&self.config_path())
+        let content = fs::read_to_string(self.config_path())
             .map_err(|e| format!("Failed to read mcps.json: {}", e))?;
 
         let configs: Vec<McpServerConfig> = serde_json::from_str(&content)
@@ -136,7 +136,7 @@ impl McpService {
         let content = serde_json::to_string_pretty(configs)
             .map_err(|e| format!("Failed to serialize mcps.json: {}", e))?;
 
-        fs::write(&self.config_path(), content)
+        fs::write(self.config_path(), content)
             .map_err(|e| format!("Failed to write mcps.json: {}", e))?;
 
         // Update cache with the data we just wrote

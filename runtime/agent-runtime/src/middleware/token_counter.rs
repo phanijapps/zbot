@@ -13,6 +13,7 @@ use crate::types::ChatMessage;
 ///
 /// Uses a simple heuristic: ~4 characters per token for English text
 /// This is approximate but works well for most use cases
+#[must_use] 
 pub fn estimate_tokens(text: &str) -> usize {
     if text.is_empty() {
         return 0;
@@ -23,6 +24,7 @@ pub fn estimate_tokens(text: &str) -> usize {
 }
 
 /// Estimate token count for a single message
+#[must_use] 
 pub fn estimate_message_tokens(message: &ChatMessage) -> usize {
     let mut tokens = estimate_tokens(&message.text_content());
 
@@ -45,6 +47,7 @@ pub fn estimate_total_tokens(messages: &[ChatMessage]) -> usize {
 }
 
 /// Estimate fraction of context window used
+#[must_use] 
 pub fn estimate_context_fraction(tokens: usize, context_window: usize) -> f64 {
     if context_window == 0 {
         return 0.0;
@@ -53,6 +56,7 @@ pub fn estimate_context_fraction(tokens: usize, context_window: usize) -> f64 {
 }
 
 /// Get default context window size for common models
+#[must_use] 
 pub fn get_model_context_window(model: &str) -> usize {
     // Common context window sizes
     match model {

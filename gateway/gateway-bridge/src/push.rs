@@ -102,6 +102,7 @@ pub fn spawn_retry_loop(
 }
 
 /// Insert an outbox item and push it immediately if the worker is connected.
+#[allow(clippy::too_many_arguments)]
 pub async fn enqueue_and_push(
     adapter_id: &str,
     capability: &str,

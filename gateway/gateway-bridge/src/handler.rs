@@ -91,7 +91,7 @@ pub async fn handle_worker_connection(
             };
             let _ = ws_tx
                 .send(axum::extract::ws::Message::Text(
-                    serde_json::to_string(&err_msg).unwrap().into(),
+                    serde_json::to_string(&err_msg).unwrap(),
                 ))
                 .await;
             return;
@@ -103,7 +103,7 @@ pub async fn handle_worker_connection(
             };
             let _ = ws_tx
                 .send(axum::extract::ws::Message::Text(
-                    serde_json::to_string(&err_msg).unwrap().into(),
+                    serde_json::to_string(&err_msg).unwrap(),
                 ))
                 .await;
             return;
@@ -138,7 +138,7 @@ pub async fn handle_worker_connection(
         };
         let _ = ws_tx
             .send(axum::extract::ws::Message::Text(
-                serde_json::to_string(&err_msg).unwrap().into(),
+                serde_json::to_string(&err_msg).unwrap(),
             ))
             .await;
         return;
@@ -151,7 +151,7 @@ pub async fn handle_worker_connection(
     };
     if ws_tx
         .send(axum::extract::ws::Message::Text(
-            serde_json::to_string(&ack).unwrap().into(),
+            serde_json::to_string(&ack).unwrap(),
         ))
         .await
         .is_err()
@@ -251,7 +251,7 @@ pub async fn handle_worker_connection(
                                 continue;
                             }
                         };
-                        if ws_tx.send(axum::extract::ws::Message::Text(json.into())).await.is_err() {
+                        if ws_tx.send(axum::extract::ws::Message::Text(json)).await.is_err() {
                             tracing::info!(adapter_id = %adapter_id_clone, "Send failed, disconnecting");
                             break;
                         }

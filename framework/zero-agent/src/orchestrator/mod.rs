@@ -459,6 +459,7 @@ impl OrchestratorAgent {
 
         // Get parallel execution groups - collect task info to avoid borrow issues
         // Tuple: (task_id, required_capability, description, input)
+        #[allow(clippy::type_complexity)]
         let groups: Vec<Vec<(String, Option<String>, String, Option<serde_json::Value>)>> = {
             let raw_groups = graph.parallel_groups().map_err(|e| {
                 ZeroError::Config(format!("Failed to compute execution order: {}", e))
@@ -522,7 +523,7 @@ impl OrchestratorAgent {
                             agent_id, task_id
                         ));
                         if let Some(t) = graph.get_task_mut(task_id) {
-                            t.fail(&format!("Agent {} not found in store", agent_id));
+                            t.fail(format!("Agent {} not found in store", agent_id));
                         }
                         continue;
                     }

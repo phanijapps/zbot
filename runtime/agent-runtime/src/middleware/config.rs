@@ -12,6 +12,7 @@ use std::collections::HashMap;
 
 /// Configuration for all middleware from agent config.yaml
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Default)]
 pub struct MiddlewareConfig {
     /// Summarization middleware configuration
     #[serde(default)]
@@ -26,15 +27,6 @@ pub struct MiddlewareConfig {
     pub custom: HashMap<String, serde_yaml::Value>,
 }
 
-impl Default for MiddlewareConfig {
-    fn default() -> Self {
-        Self {
-            summarization: None,
-            context_editing: None,
-            custom: HashMap::new(),
-        }
-    }
-}
 
 /// Trigger conditions for middleware activation
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -50,6 +42,7 @@ pub struct TriggerCondition {
 }
 
 impl TriggerCondition {
+    #[must_use] 
     pub fn should_trigger(&self, tokens: usize, messages: usize, context_window: usize) -> bool {
         if let Some(trigger_tokens) = self.tokens {
             if tokens >= trigger_tokens {
@@ -74,6 +67,7 @@ impl TriggerCondition {
     }
 
     /// Check if any trigger condition is set (for validation)
+    #[must_use] 
     pub fn is_valid(&self) -> bool {
         self.tokens.is_some() || self.messages.is_some() || self.fraction.is_some()
     }
@@ -94,6 +88,7 @@ pub struct KeepPolicy {
 
 impl KeepPolicy {
     /// Get the number of items to keep based on policy
+    #[must_use] 
     pub fn to_keep_count(&self, total_items: usize, _context_window: usize) -> usize {
         if let Some(keep_messages) = self.messages {
             return keep_messages.min(total_items);
@@ -113,6 +108,7 @@ impl KeepPolicy {
     }
 
     /// Check if any keep policy is set (for validation)
+    #[must_use] 
     pub fn is_valid(&self) -> bool {
         self.messages.is_some() || self.tokens.is_some() || self.fraction.is_some()
     }
@@ -217,7 +213,7 @@ pub struct ContextEditingConfig {
     // =========================================================================
     /// Whether to use skill-specific placeholder messages when unloading skills.
     /// When true, unloaded skills show a message like:
-    /// "[Skill 'skill-name' was loaded and unloaded. Reload with load_skill(skill=\"skill-name\") if needed.]"
+    /// "[Skill 'skill-name' was loaded and unloaded. Reload with `load_skill(skill`=\"skill-name\") if needed.]"
     /// When false, uses the generic placeholder for all tool results.
     #[serde(default = "default_skill_aware_placeholders")]
     pub skill_aware_placeholders: bool,
@@ -230,14 +226,14 @@ pub struct ContextEditingConfig {
     pub cascade_unload: bool,
 
     /// Custom template for skill placeholder messages.
-    /// Available variables: {skill_name}
-    /// Default: "[Skill '{skill_name}' was loaded and unloaded. Reload with load_skill(skill=\"{skill_name}\") if needed.]"
+    /// Available variables: {`skill_name`}
+    /// Default: "[Skill '{`skill_name`}' was loaded and unloaded. Reload with `load_skill(skill`=\"{`skill_name`}\") if needed.]"
     #[serde(default)]
     pub skill_placeholder_template: Option<String>,
 
     /// Custom template for skill resource placeholder messages.
-    /// Available variables: {skill_name}
-    /// Default: "[Resource from skill '{skill_name}' was unloaded.]"
+    /// Available variables: {`skill_name`}
+    /// Default: "[Resource from skill '{`skill_name`}' was unloaded.]"
     #[serde(default)]
     pub resource_placeholder_template: Option<String>,
 }
@@ -339,13 +335,13 @@ mod tests {
             fraction: None,
         };
 
-        assert_eq!(keep.to_keep_count(100, 100000), 10);
-        assert_eq!(keep.to_keep_count(5, 100000), 5);
+        assert_eq!(keep.to_keep_count(100, 100_000), 10);
+        assert_eq!(keep.to_keep_count(5, 100_000), 5);
     }
 
     #[test]
     fn test_deserialize_summarization_config() {
-        let yaml = r#"
+        let yaml = r"
 enabled: true
 model: gpt-4o-mini
 provider: openai
@@ -355,7 +351,7 @@ trigger:
 keep:
   messages: 10
 summary_max_tokens: 16000
-"#;
+";
 
         let config: SummarizationConfig = serde_yaml::from_str(yaml).unwrap();
         assert!(config.enabled);

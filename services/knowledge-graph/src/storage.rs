@@ -25,7 +25,7 @@ impl GraphStorage {
                 .map_err(|e| GraphError::Config(format!("Failed to create directory: {}", e)))?;
         }
 
-        let conn = Connection::open(&db_path).map_err(|e| GraphError::Database(e))?;
+        let conn = Connection::open(&db_path).map_err(GraphError::Database)?;
 
         // Initialize schema
         initialize_schema(&conn)?;
@@ -74,7 +74,7 @@ impl GraphStorage {
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'"
-        ).map_err(|e| GraphError::Database(e))?;
+        ).map_err(GraphError::Database)?;
 
         let rows = stmt
             .query_map(params![agent_id], |row| {
@@ -89,7 +89,7 @@ impl GraphStorage {
                     row.get::<_, i64>(7)?,
                 ))
             })
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         let mut entities = Vec::new();
         for row in rows {
@@ -137,7 +137,7 @@ impl GraphStorage {
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_relationships WHERE agent_id = ?1 OR agent_id = '__global__'"
-        ).map_err(|e| GraphError::Database(e))?;
+        ).map_err(GraphError::Database)?;
 
         let rows = stmt
             .query_map(params![agent_id], |row| {
@@ -153,7 +153,7 @@ impl GraphStorage {
                     row.get::<_, i64>(8)?,
                 ))
             })
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         let mut relationships = Vec::new();
         for row in rows {
@@ -205,7 +205,7 @@ impl GraphStorage {
              FROM kg_entities
              WHERE (agent_id = ?1 OR agent_id = '__global__') AND name LIKE ?2
              ORDER BY mention_count DESC"
-        ).map_err(|e| GraphError::Database(e))?;
+        ).map_err(GraphError::Database)?;
 
         let pattern = format!("%{}%", query);
         let rows = stmt
@@ -221,7 +221,7 @@ impl GraphStorage {
                     row.get::<_, i64>(7)?,
                 ))
             })
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         let mut entities = Vec::new();
         for row in rows {
@@ -288,7 +288,7 @@ impl GraphStorage {
                 "DELETE FROM kg_relationships WHERE agent_id = ?1",
                 params![agent_id],
             )
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         // Delete entities
         let ent_count = conn
@@ -296,7 +296,7 @@ impl GraphStorage {
                 "DELETE FROM kg_entities WHERE agent_id = ?1",
                 params![agent_id],
             )
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         Ok((rel_count + ent_count) as usize)
     }
@@ -328,7 +328,7 @@ impl GraphStorage {
              LIMIT ?2 OFFSET ?3"
         };
 
-        let mut stmt = conn.prepare(sql).map_err(|e| GraphError::Database(e))?;
+        let mut stmt = conn.prepare(sql).map_err(GraphError::Database)?;
 
         // Helper to parse entity from row
         let parse_entity = |row: &rusqlite::Row| {
@@ -349,10 +349,10 @@ impl GraphStorage {
                 params![agent_id, type_filter, limit as i64, offset as i64],
                 parse_entity,
             )
-            .map_err(|e| GraphError::Database(e))?
+            .map_err(GraphError::Database)?
         } else {
             stmt.query_map(params![agent_id, limit as i64, offset as i64], parse_entity)
-                .map_err(|e| GraphError::Database(e))?
+                .map_err(GraphError::Database)?
         };
 
         let mut entities = Vec::new();
@@ -419,7 +419,7 @@ impl GraphStorage {
              LIMIT ?2 OFFSET ?3"
         };
 
-        let mut stmt = conn.prepare(sql).map_err(|e| GraphError::Database(e))?;
+        let mut stmt = conn.prepare(sql).map_err(GraphError::Database)?;
 
         // Helper to parse relationship from row
         let parse_relationship = |row: &rusqlite::Row| {
@@ -441,13 +441,13 @@ impl GraphStorage {
                 params![agent_id, type_filter, limit as i64, offset as i64],
                 parse_relationship,
             )
-            .map_err(|e| GraphError::Database(e))?
+            .map_err(GraphError::Database)?
         } else {
             stmt.query_map(
                 params![agent_id, limit as i64, offset as i64],
                 parse_relationship,
             )
-            .map_err(|e| GraphError::Database(e))?
+            .map_err(GraphError::Database)?
         };
 
         let mut relationships = Vec::new();
@@ -504,7 +504,7 @@ impl GraphStorage {
              FROM kg_entities
              WHERE (agent_id = ?1 OR agent_id = '__global__') AND name = ?2 COLLATE NOCASE
              LIMIT 1"
-        ).map_err(|e| GraphError::Database(e))?;
+        ).map_err(GraphError::Database)?;
 
         let lower_name = name.to_lowercase();
         let mut rows = stmt
@@ -520,7 +520,7 @@ impl GraphStorage {
                     row.get::<_, i64>(7)?,
                 ))
             })
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         if let Some(row) = rows.next() {
             let (
@@ -563,7 +563,7 @@ impl GraphStorage {
     /// Get neighbors of an entity (1-hop)
     pub async fn get_neighbors(
         &self,
-        agent_id: &str,
+        _agent_id: &str,
         entity_id: &str,
         direction: Direction,
         limit: usize,
@@ -582,7 +582,7 @@ impl GraphStorage {
                  WHERE r.source_entity_id = ?1
                  ORDER BY r.mention_count DESC
                  LIMIT ?2"
-            ).map_err(|e| GraphError::Database(e))?;
+            ).map_err(GraphError::Database)?;
 
             let rows = stmt
                 .query_map(params![entity_id, limit as i64], |row| {
@@ -608,7 +608,7 @@ impl GraphStorage {
                         row.get::<_, i64>(16)?,
                     ))
                 })
-                .map_err(|e| GraphError::Database(e))?;
+                .map_err(GraphError::Database)?;
 
             for row in rows {
                 let (
@@ -684,7 +684,7 @@ impl GraphStorage {
                  WHERE r.target_entity_id = ?1
                  ORDER BY r.mention_count DESC
                  LIMIT ?2"
-            ).map_err(|e| GraphError::Database(e))?;
+            ).map_err(GraphError::Database)?;
 
             let rows = stmt
                 .query_map(params![entity_id, limit as i64], |row| {
@@ -710,7 +710,7 @@ impl GraphStorage {
                         row.get::<_, i64>(16)?,
                     ))
                 })
-                .map_err(|e| GraphError::Database(e))?;
+                .map_err(GraphError::Database)?;
 
             for row in rows {
                 let (
@@ -789,7 +789,7 @@ impl GraphStorage {
                 params![agent_id],
                 |row| row.get(0),
             )
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         Ok(count as usize)
     }
@@ -802,7 +802,7 @@ impl GraphStorage {
             "SELECT COUNT(*) FROM kg_relationships WHERE agent_id = ?1 OR agent_id = '__global__'",
             params![agent_id],
             |row| row.get(0),
-        ).map_err(|e| GraphError::Database(e))?;
+        ).map_err(GraphError::Database)?;
 
         Ok(count as usize)
     }
@@ -812,7 +812,7 @@ impl GraphStorage {
         let conn = self.conn.lock().await;
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM kg_entities", [], |row| row.get(0))
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
         Ok(count as usize)
     }
 
@@ -823,7 +823,7 @@ impl GraphStorage {
             .query_row("SELECT COUNT(*) FROM kg_relationships", [], |row| {
                 row.get(0)
             })
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
         Ok(count as usize)
     }
 
@@ -838,7 +838,7 @@ impl GraphStorage {
              FROM kg_relationships
              ORDER BY mention_count DESC
              LIMIT ?1"
-        ).map_err(|e| GraphError::Database(e))?;
+        ).map_err(GraphError::Database)?;
 
         let rows = stmt
             .query_map(params![limit as i64], |row| {
@@ -854,7 +854,7 @@ impl GraphStorage {
                     row.get::<_, i64>(8)?,
                 ))
             })
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         let mut relationships = Vec::new();
         for row in rows {
@@ -941,7 +941,7 @@ impl GraphStorage {
 
         let params_refs: Vec<&dyn rusqlite::types::ToSql> =
             param_values.iter().map(|p| p.as_ref()).collect();
-        let mut stmt = conn.prepare(&sql).map_err(|e| GraphError::Database(e))?;
+        let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
 
         let parse_entity = |row: &rusqlite::Row| {
             Ok((
@@ -958,7 +958,7 @@ impl GraphStorage {
 
         let rows = stmt
             .query_map(params_refs.as_slice(), parse_entity)
-            .map_err(|e| GraphError::Database(e))?;
+            .map_err(GraphError::Database)?;
 
         let mut entities = Vec::new();
         for row_result in rows {
@@ -1016,20 +1016,20 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
         )",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     // Create indexes for entities
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_entities_agent ON kg_entities(agent_id)",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_entities_name ON kg_entities(name)",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     // Create relationships table
     conn.execute(
@@ -1048,26 +1048,26 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
         )",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     // Create indexes for relationships
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_relationships_agent ON kg_relationships(agent_id)",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_relationships_source ON kg_relationships(source_entity_id)",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_relationships_target ON kg_relationships(target_entity_id)",
         [],
     )
-    .map_err(|e| GraphError::Database(e))?;
+    .map_err(GraphError::Database)?;
 
     // Migration: Add mention_count column if it doesn't exist (for databases created before this feature)
     // Check if mention_count column exists in kg_entities
@@ -1085,7 +1085,7 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
             "ALTER TABLE kg_entities ADD COLUMN mention_count INTEGER DEFAULT 1",
             [],
         )
-        .map_err(|e| GraphError::Database(e))?;
+        .map_err(GraphError::Database)?;
     }
 
     // Check if mention_count column exists in kg_relationships
@@ -1103,7 +1103,7 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
             "ALTER TABLE kg_relationships ADD COLUMN mention_count INTEGER DEFAULT 1",
             [],
         )
-        .map_err(|e| GraphError::Database(e))?;
+        .map_err(GraphError::Database)?;
     }
 
     // One-time migration: dedup existing relationships before adding unique index
@@ -1211,7 +1211,7 @@ fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResu
             entity.last_seen_at.to_rfc3339(),
             entity.mention_count,
         ],
-    ).map_err(|e| GraphError::Database(e))?;
+    ).map_err(GraphError::Database)?;
 
     Ok(new_id)
 }
@@ -1308,7 +1308,7 @@ fn store_relationship(
             relationship.last_seen_at.to_rfc3339(),
             relationship.mention_count,
         ],
-    ).map_err(|e| GraphError::Database(e))?;
+    ).map_err(GraphError::Database)?;
 
     Ok(())
 }

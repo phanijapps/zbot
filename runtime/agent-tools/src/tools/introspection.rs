@@ -61,8 +61,8 @@ impl Tool for ListSkillsTool {
             .unwrap_or_default();
 
         // Try to read cached skill list from context state first
-        if let Some(cached_skills) = ctx.get_state("available_skills") {
-            if let Some(skills_array) = cached_skills.as_array() {
+        if let Some(cached_skills) = ctx.get_state("available_skills")
+            && let Some(skills_array) = cached_skills.as_array() {
                 // Annotate skills with loaded status
                 let annotated_skills: Vec<Value> = skills_array
                     .iter()
@@ -86,7 +86,6 @@ impl Tool for ListSkillsTool {
                     "usage": "Use load_skill with the skill name to load a skill's instructions. Skills marked 'loaded: true' are already in context."
                 }));
             }
-        }
 
         // Fall back to reading from disk if no cache
         let skills_dir = match self.fs.skills_dir() {

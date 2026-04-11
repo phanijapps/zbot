@@ -53,6 +53,7 @@ impl RuntimeService {
     }
 
     /// Create a runtime service with an execution runner.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_runner(
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
@@ -87,6 +88,7 @@ impl RuntimeService {
     }
 
     /// Create a runtime service with execution runner and connector registry.
+    #[allow(clippy::too_many_arguments)]
     pub fn with_runner_and_connectors(
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
@@ -134,7 +136,7 @@ impl RuntimeService {
             .unwrap_or_default();
         runner.set_model_registry(Arc::new(gateway_services::models::ModelRegistry::load(
             &bundled_models,
-            &paths.vault_dir(),
+            paths.vault_dir(),
         )));
 
         Self {
@@ -240,6 +242,7 @@ impl RuntimeService {
     ///
     /// The callback fires after session creation but before any events are
     /// emitted, allowing the caller to subscribe before intent analysis fires.
+    #[allow(clippy::too_many_arguments)]
     pub async fn invoke_with_hook_and_callback(
         &self,
         agent_id: &str,
@@ -413,6 +416,7 @@ pub fn shared_runtime_service(event_bus: Arc<EventBus>) -> Arc<RuntimeService> {
 }
 
 /// Create a shared runtime service with execution runner.
+#[allow(clippy::too_many_arguments)]
 pub fn shared_runtime_service_with_runner(
     event_bus: Arc<EventBus>,
     agent_service: Arc<AgentService>,

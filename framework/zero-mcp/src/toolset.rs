@@ -219,8 +219,8 @@ impl Default for McpToolsetBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::client::{McpServerInfo, McpToolDefinition, MockMcpClient};
-    use crate::config::{McpServerConfig, McpTransport};
+    use crate::client::MockMcpClient;
+    use crate::config::McpServerConfig;
     use crate::connection::McpConnection;
 
     #[tokio::test]

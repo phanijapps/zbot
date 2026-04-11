@@ -21,8 +21,6 @@
 //! - [`error`]: Error types for MCP operations
 //! - [`tool`]: Tool types provided by MCP servers
 
-#![warn(missing_docs)]
-#![warn(clippy::all)]
 
 mod client;
 mod config;

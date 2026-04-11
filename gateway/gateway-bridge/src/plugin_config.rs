@@ -276,7 +276,7 @@ impl PluginUserConfig {
     pub fn save(&self, path: &std::path::Path) -> Result<(), PluginError> {
         // Ensure parent directory exists
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| PluginError::Io(e))?;
+            std::fs::create_dir_all(parent).map_err(PluginError::Io)?;
         }
 
         let content = serde_json::to_string_pretty(self)
@@ -289,7 +289,7 @@ impl PluginUserConfig {
         {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
-                .map_err(|e| PluginError::Io(e))?;
+                .map_err(PluginError::Io)?;
         }
 
         Ok(())

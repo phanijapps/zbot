@@ -112,7 +112,6 @@ impl Default for ToolFilter {
 }
 
 /// Helper functions for common tool filters.
-
 /// Accept all tools.
 pub fn accept_all() -> ToolFilter {
     ToolFilter::new()
@@ -125,7 +124,7 @@ pub fn accept_none() -> ToolFilter {
 
 /// Filter tools by name patterns.
 pub fn by_names(names: Vec<String>) -> ToolFilter {
-    ToolFilter::new().with_predicate(Box::new(move |tool| names.iter().any(|n| tool.name == *n)))
+    ToolFilter::new().with_predicate(Box::new(move |tool| names.contains(&tool.name)))
 }
 
 /// Filter tools by name prefix.
@@ -135,7 +134,7 @@ pub fn by_prefix(prefix: impl Into<String>) -> ToolFilter {
 
 /// Filter tools excluding certain names.
 pub fn exclude_names(names: Vec<String>) -> ToolFilter {
-    ToolFilter::new().with_predicate(Box::new(move |tool| !names.iter().any(|n| tool.name == *n)))
+    ToolFilter::new().with_predicate(Box::new(move |tool| !names.contains(&tool.name)))
 }
 
 /// Filter tools to only those that have a specific property in their schema.

@@ -30,15 +30,22 @@ pub struct LocalEmbeddingClient {
     unload_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+impl Default for LocalEmbeddingClient {
+    fn default() -> Self {
+        Self::with_model(EmbeddingModel::AllMiniLML6V2, 600)
+    }
+}
+
 impl LocalEmbeddingClient {
     /// Create with default model (all-MiniLM-L6-v2), 600s idle timeout.
-    /// Does NOT load the model — loads lazily on first embed().
+    /// Does NOT load the model — loads lazily on first `embed()`.
+    #[must_use]
     pub fn new() -> Self {
-        Self::with_model(EmbeddingModel::AllMiniLML6V2, 600)
+        Self::default()
     }
 
     /// Create with specific model and idle timeout.
-    /// Set idle_timeout_secs=0 to never unload.
+    /// Set `idle_timeout_secs=0` to never unload.
     pub fn with_model(model_id: EmbeddingModel, idle_timeout_secs: u64) -> Self {
         let (name, dims) = model_info(&model_id);
         tracing::info!(
@@ -65,13 +72,13 @@ impl LocalEmbeddingClient {
         let mut guard = self
             .model
             .lock()
-            .map_err(|e| EmbeddingError::ModelError(format!("Mutex poisoned: {}", e)))?;
+            .map_err(|e| EmbeddingError::ModelError(format!("Mutex poisoned: {e}")))?;
 
         if guard.is_none() {
             tracing::info!("Loading embedding model: {} ...", self.model_name);
             let options = InitOptions::new(self.model_id.clone()).with_show_download_progress(true);
             let model = TextEmbedding::try_new(options).map_err(|e| {
-                EmbeddingError::ModelError(format!("Failed to load fastembed model: {}", e))
+                EmbeddingError::ModelError(format!("Failed to load fastembed model: {e}"))
             })?;
             tracing::info!("Embedding model loaded: {}", self.model_name);
             *guard = Some(model);
@@ -92,9 +99,8 @@ impl LocalEmbeddingClient {
             return;
         }
 
-        let mut handle_guard = match self.unload_handle.lock() {
-            Ok(g) => g,
-            Err(_) => return,
+        let Ok(mut handle_guard) = self.unload_handle.lock() else {
+            return;
         };
 
         if handle_guard.as_ref().is_some_and(|h| !h.is_finished()) {
@@ -102,8 +108,8 @@ impl LocalEmbeddingClient {
         }
 
         let timeout_secs = self.idle_timeout_secs;
-        let last_used = &self.last_used as *const AtomicU64 as usize;
-        let model_ptr = &self.model as *const Mutex<Option<TextEmbedding>> as usize;
+        let last_used = &raw const self.last_used as usize;
+        let model_ptr = &raw const self.model as usize;
         let model_name = self.model_name.clone();
 
         // SAFETY: The watcher only runs while `self` is alive because:
@@ -154,7 +160,7 @@ impl EmbeddingClient for LocalEmbeddingClient {
             return Ok(Vec::new());
         }
 
-        let owned: Vec<String> = texts.iter().map(|s| s.to_string()).collect();
+        let owned: Vec<String> = texts.iter().map(std::string::ToString::to_string).collect();
         tracing::debug!(
             "Embedding {} text(s) locally via {}",
             owned.len(),
@@ -238,7 +244,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore]
+    #[ignore = "requires ONNX model download"]
     fn test_local_embedding_end_to_end() {
         let client = LocalEmbeddingClient::new();
         assert_eq!(client.dimensions(), 384);

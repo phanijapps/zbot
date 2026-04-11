@@ -15,6 +15,12 @@ use zero_core::{Result, Tool, ToolContext, ToolPermissions, ZeroError};
 
 pub struct MultimodalAnalyzeTool;
 
+impl Default for MultimodalAnalyzeTool {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MultimodalAnalyzeTool {
     pub fn new() -> Self {
         Self
@@ -215,11 +221,10 @@ impl Tool for MultimodalAnalyzeTool {
             .to_string();
 
         // Try to parse as JSON if output_schema was provided
-        if args.get("output_schema").is_some() {
-            if let Ok(parsed) = serde_json::from_str::<Value>(&content) {
+        if args.get("output_schema").is_some()
+            && let Ok(parsed) = serde_json::from_str::<Value>(&content) {
                 return Ok(parsed);
             }
-        }
 
         Ok(json!({ "analysis": content }))
     }

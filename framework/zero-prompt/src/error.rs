@@ -6,6 +6,7 @@ use thiserror::Error;
 
 /// Prompt-specific errors.
 #[derive(Debug, Error)]
+#[allow(missing_docs)]
 pub enum PromptError {
     /// Template parsing error
     #[error("Template parse error: {message}")]

@@ -25,6 +25,7 @@ pub enum AppEvent {
     Tick,
 
     /// Resize event
+    #[allow(dead_code)]
     Resize(u16, u16),
 }
 
@@ -86,6 +87,7 @@ impl EventHandler {
 // Key Helpers
 // ============================================================================
 
+#[allow(dead_code)]
 pub fn is_quit(key: &KeyEvent) -> bool {
     matches!(
         key,
@@ -101,30 +103,37 @@ pub fn is_quit(key: &KeyEvent) -> bool {
     )
 }
 
+#[allow(dead_code)]
 pub fn is_enter(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Enter)
 }
 
+#[allow(dead_code)]
 pub fn is_backspace(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Backspace)
 }
 
+#[allow(dead_code)]
 pub fn is_escape(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Esc)
 }
 
+#[allow(dead_code)]
 pub fn is_up(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Up)
 }
 
+#[allow(dead_code)]
 pub fn is_down(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::Down)
 }
 
+#[allow(dead_code)]
 pub fn is_page_up(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::PageUp)
 }
 
+#[allow(dead_code)]
 pub fn is_page_down(key: &KeyEvent) -> bool {
     matches!(key.code, KeyCode::PageDown)
 }

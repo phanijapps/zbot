@@ -166,7 +166,7 @@ impl GatewayBus for HttpGatewayBus {
     async fn status(&self, session_id: &str) -> Result<SessionStatus, BusError> {
         self.state_service
             .get_session(session_id)
-            .map_err(|e| BusError::Internal(e))?
+            .map_err(BusError::Internal)?
             .map(|s| s.status)
             .ok_or_else(|| BusError::SessionNotFound(session_id.to_string()))
     }
@@ -249,7 +249,7 @@ mod tests {
         ];
 
         for (source, name) in sources {
-            let request = SessionRequest::new("root", "test").with_source(source.clone());
+            let request = SessionRequest::new("root", "test").with_source(source);
             assert_eq!(request.source, source, "Source mismatch for {}", name);
         }
     }

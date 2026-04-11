@@ -47,15 +47,13 @@ pub fn get_context_window(model_name: &str) -> usize {
         16384
     } else if model.contains("gpt-3.5") {
         4096
-    } else if model.contains("claude-3-opus") || model.contains("claude-3-5-sonnet") {
+    } else if model.contains("claude-3-opus")
+        || model.contains("claude-3-5-sonnet")
+        || model.contains("claude-3-sonnet")
+        || model.contains("claude-3-haiku")
+    {
         200000
-    } else if model.contains("claude-3-sonnet") {
-        200000
-    } else if model.contains("claude-3-haiku") {
-        200000
-    } else if model.contains("claude-2") {
-        100000
-    } else if model.contains("glm-4.7") {
+    } else if model.contains("claude-2") || model.contains("glm-4.7") {
         100000
     } else {
         // Conservative default

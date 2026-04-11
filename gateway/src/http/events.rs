@@ -17,23 +17,20 @@
 //! - `tool_call` - Tool invocation
 //! - `tool_result` - Tool result
 
-use crate::events::{EventBus, GatewayEvent};
+use crate::events::GatewayEvent;
 use crate::state::AppState;
 use axum::{
     extract::{Path, State},
-    response::{
-        sse::{Event, Sse},
-        IntoResponse,
-    },
+    response::sse::{Event, Sse},
 };
 use futures::stream::{self, Stream};
 use serde::Serialize;
 use std::convert::Infallible;
 use std::time::Duration;
-use tokio_stream::StreamExt;
 
 /// Event data for SSE streaming.
 #[derive(Debug, Clone, Serialize)]
+#[allow(dead_code)]
 pub struct SseEventData {
     /// Event type (respond, agent_completed, token, etc).
     pub event_type: String,
@@ -311,7 +308,7 @@ fn gateway_event_to_sse(event: &GatewayEvent) -> Option<Event> {
         _ => return None,
     };
 
-    Some(Event::default().event(event_type).json_data(data).ok()?)
+    Event::default().event(event_type).json_data(data).ok()
 }
 
 #[cfg(test)]

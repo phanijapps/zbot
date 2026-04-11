@@ -253,9 +253,9 @@ async fn handle_connection(
         session_id: session_id.clone(),
     };
     let msg_text =
-        serde_json::to_string(&connected_msg).map_err(|e| GatewayError::Serialization(e))?;
+        serde_json::to_string(&connected_msg).map_err(GatewayError::Serialization)?;
     ws_tx
-        .send(Message::Text(msg_text.into()))
+        .send(Message::Text(msg_text))
         .await
         .map_err(|e| GatewayError::WebSocket(e.to_string()))?;
 
@@ -269,7 +269,7 @@ async fn handle_connection(
         while let Some(msg) = rx.recv().await {
             match serde_json::to_string(&msg) {
                 Ok(text) => {
-                    if ws_tx.send(Message::Text(text.into())).await.is_err() {
+                    if ws_tx.send(Message::Text(text)).await.is_err() {
                         break;
                     }
                 }

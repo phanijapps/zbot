@@ -35,6 +35,7 @@ pub enum PatchError {
 
 /// A single patch hunk — add, delete, or update a file.
 #[derive(Debug, PartialEq, Clone)]
+#[allow(clippy::enum_variant_names)]
 pub enum Hunk {
     AddFile {
         path: PathBuf,
@@ -349,6 +350,7 @@ fn parse_chunk(
 
 /// Find `pattern` lines within `lines` starting at or after `start`.
 /// Tries exact match, then trim-end, then trim-both, then Unicode-normalized.
+#[allow(clippy::manual_find)]
 fn seek_sequence(lines: &[String], pattern: &[String], start: usize, eof: bool) -> Option<usize> {
     if pattern.is_empty() {
         return Some(start);
@@ -829,12 +831,11 @@ pub fn detect_apply_patch(command: &str) -> Option<String> {
     // Also detect if command body contains *** Begin Patch (piped or embedded)
     if trimmed.contains(BEGIN_PATCH) && trimmed.contains(END_PATCH) {
         // Extract the patch between markers
-        if let Some(start) = trimmed.find(BEGIN_PATCH) {
-            if let Some(end) = trimmed.find(END_PATCH) {
+        if let Some(start) = trimmed.find(BEGIN_PATCH)
+            && let Some(end) = trimmed.find(END_PATCH) {
                 let patch = &trimmed[start..end + END_PATCH.len()];
                 return Some(patch.to_string());
             }
-        }
     }
 
     None
@@ -845,18 +846,16 @@ fn extract_heredoc_delimiter(s: &str) -> (String, &str) {
     let s = s.trim_start();
 
     // Handle quoted delimiters: 'EOF' or "EOF"
-    if s.starts_with('\'') {
-        if let Some(end) = s[1..].find('\'') {
+    if s.starts_with('\'')
+        && let Some(end) = s[1..].find('\'') {
             let delim = &s[1..end + 1];
             return (delim.to_string(), &s[end + 2..]);
         }
-    }
-    if s.starts_with('"') {
-        if let Some(end) = s[1..].find('"') {
+    if s.starts_with('"')
+        && let Some(end) = s[1..].find('"') {
             let delim = &s[1..end + 1];
             return (delim.to_string(), &s[end + 2..]);
         }
-    }
 
     // Unquoted: take until whitespace or newline
     let end = s.find(|c: char| c.is_whitespace()).unwrap_or(s.len());
@@ -1292,9 +1291,7 @@ mod tests {
     #[test]
     fn test_intercept_full_flow() {
         let dir = tempfile::tempdir().unwrap();
-        let cmd = format!(
-            "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: hello.txt\n+hello world\n*** End Patch\nEOF"
-        );
+        let cmd = "apply_patch <<'EOF'\n*** Begin Patch\n*** Add File: hello.txt\n+hello world\n*** End Patch\nEOF".to_string();
         let result = intercept_apply_patch(&cmd, dir.path());
         assert!(result.is_some());
         let output = result.unwrap().unwrap();

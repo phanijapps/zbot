@@ -23,6 +23,7 @@ struct SlidingWindow {
 
 impl ProviderRateLimiter {
     /// Create a new rate limiter with the given concurrency and RPM limits.
+    #[must_use] 
     pub fn new(concurrent: u32, rpm: u32) -> Self {
         Self {
             concurrency: Arc::new(Semaphore::new(concurrent as usize)),
@@ -40,13 +41,13 @@ impl ProviderRateLimiter {
             {
                 let mut window = self.window.lock().await;
                 let now = Instant::now();
-                let one_minute_ago = now - Duration::from_secs(60);
+                let one_minute_ago = now.checked_sub(Duration::from_secs(60)).unwrap();
 
                 // Remove old timestamps
                 while window
                     .timestamps
                     .front()
-                    .map_or(false, |t| *t < one_minute_ago)
+                    .is_some_and(|t| *t < one_minute_ago)
                 {
                     window.timestamps.pop_front();
                 }

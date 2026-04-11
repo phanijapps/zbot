@@ -119,6 +119,7 @@ mod tests {
     use super::super::config::McpServerConfig;
     use super::*;
 
+    #[allow(dead_code)]
     fn create_mock_context() -> Arc<dyn ToolContext> {
         use zero_core::EventActions;
         use zero_core::{CallbackContext, ReadonlyContext, ToolContext};

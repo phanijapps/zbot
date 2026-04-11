@@ -1,6 +1,6 @@
 //! # Non-Streaming LLM Client Wrapper
 //!
-//! Wraps an LlmClient and converts `chat_stream()` calls into `chat()` calls.
+//! Wraps an `LlmClient` and converts `chat_stream()` calls into `chat()` calls.
 //! Used for subagents where streaming adds no value and causes reliability issues.
 
 use super::{
@@ -10,7 +10,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 use std::sync::Arc;
 
-/// Wraps an LlmClient to disable streaming — `chat_stream()` calls `chat()` internally.
+/// Wraps an `LlmClient` to disable streaming — `chat_stream()` calls `chat()` internally.
 pub struct NonStreamingLlmClient {
     inner: Arc<dyn LlmClient>,
 }

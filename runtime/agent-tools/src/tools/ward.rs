@@ -345,8 +345,8 @@ impl Tool for WardTool {
             "list" => {
                 let mut wards = Vec::new();
 
-                if wards_root.exists() {
-                    if let Ok(entries) = std::fs::read_dir(&wards_root) {
+                if wards_root.exists()
+                    && let Ok(entries) = std::fs::read_dir(&wards_root) {
                         for entry in entries.flatten() {
                             if entry.path().is_dir() {
                                 let name = entry.file_name().to_string_lossy().to_string();
@@ -364,7 +364,6 @@ impl Tool for WardTool {
                             }
                         }
                     }
-                }
 
                 wards.sort_by(|a, b| {
                     a.get("name")

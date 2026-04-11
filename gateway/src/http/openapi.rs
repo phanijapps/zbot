@@ -46,8 +46,7 @@ pub async fn openapi_json() -> Response {
 
 /// GET /api/docs - Serve Swagger UI.
 pub async fn swagger_ui() -> Html<String> {
-    Html(format!(
-        r#"<!DOCTYPE html>
+    Html(r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -55,27 +54,27 @@ pub async fn swagger_ui() -> Html<String> {
     <title>AgentZero API Documentation</title>
     <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
     <style>
-        body {{
+        body {
             margin: 0;
             padding: 0;
-        }}
-        .swagger-ui .topbar {{
+        }
+        .swagger-ui .topbar {
             display: none;
-        }}
-        .swagger-ui .info {{
+        }
+        .swagger-ui .info {
             margin: 20px 0;
-        }}
-        .swagger-ui .info .title {{
+        }
+        .swagger-ui .info .title {
             font-size: 2em;
-        }}
+        }
     </style>
 </head>
 <body>
     <div id="swagger-ui"></div>
     <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
     <script>
-        window.onload = function() {{
-            SwaggerUIBundle({{
+        window.onload = function() {
+            SwaggerUIBundle({
                 url: "/api/openapi.json",
                 dom_id: '#swagger-ui',
                 deepLinking: true,
@@ -91,10 +90,9 @@ pub async fn swagger_ui() -> Html<String> {
                 showExtensions: true,
                 showCommonExtensions: true,
                 tryItOutEnabled: true
-            }});
-        }};
+            });
+        };
     </script>
 </body>
-</html>"#
-    ))
+</html>"#.to_string())
 }

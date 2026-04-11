@@ -91,7 +91,7 @@ mod tests {
     use crate::context::{CallbackContext, ReadonlyContext, ToolContext};
     use crate::event::EventActions;
     use crate::types::Content;
-    use std::sync::Mutex;
+    
 
     struct TestTool {
         name: String,

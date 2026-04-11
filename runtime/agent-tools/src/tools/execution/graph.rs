@@ -257,7 +257,7 @@ impl ExecutionGraph {
             // Check dependencies
             let deps_met = match node.depend_mode {
                 DependMode::All => node.depends_on.iter().all(|dep| {
-                    self.nodes.get(dep).map_or(false, |n| {
+                    self.nodes.get(dep).is_some_and(|n| {
                         n.status == NodeStatus::Completed || n.status == NodeStatus::Skipped
                     })
                 }),
@@ -266,13 +266,13 @@ impl ExecutionGraph {
                         || node.depends_on.iter().any(|dep| {
                             self.nodes
                                 .get(dep)
-                                .map_or(false, |n| n.status == NodeStatus::Completed)
+                                .is_some_and(|n| n.status == NodeStatus::Completed)
                         })
                 }
                 DependMode::AnyOne => {
                     node.depends_on.is_empty()
                         || node.depends_on.iter().any(|dep| {
-                            self.nodes.get(dep).map_or(false, |n| {
+                            self.nodes.get(dep).is_some_and(|n| {
                                 matches!(
                                     n.status,
                                     NodeStatus::Completed
@@ -382,13 +382,12 @@ impl ExecutionGraph {
             node.attempts += 1;
 
             // Check retry policy
-            if let Some(retry) = &node.retry {
-                if node.attempts < retry.max {
+            if let Some(retry) = &node.retry
+                && node.attempts < retry.max {
                     node.status = NodeStatus::Pending; // will be re-evaluated next cycle
                     node.error = Some(error);
                     return true;
                 }
-            }
 
             node.status = NodeStatus::Failed;
             node.error = Some(error);
@@ -585,14 +584,13 @@ impl ExecutionGraphTool {
                 }
             }
             // Validate condition references
-            if let Some(cond) = &node.when {
-                if !node_ids.contains(cond.ref_node.as_str()) {
+            if let Some(cond) = &node.when
+                && !node_ids.contains(cond.ref_node.as_str()) {
                     return Err(ZeroError::Tool(format!(
                         "Node '{}' condition references unknown node '{}'",
                         node.id, cond.ref_node
                     )));
                 }
-            }
             // Validate input references
             for (param, input_ref) in &node.inputs {
                 if !node_ids.contains(input_ref.from.as_str()) {
