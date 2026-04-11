@@ -25,3 +25,6 @@ thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 once_cell = { workspace = true }
+
+[lints]
+workspace = true

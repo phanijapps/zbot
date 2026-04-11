@@ -46,3 +46,6 @@ uuid = { workspace = true }
 gateway-services = { path = "../gateway-services" }
 tokio-test = "0.4"
 tempfile = "3"
+
+[lints]
+workspace = true

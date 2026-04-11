@@ -52,10 +52,10 @@ pub(crate) fn has_placeholder_specs(ctx: &dyn ToolContext) -> bool {
 fn dir_has_placeholder_spec(dir: &std::path::Path) -> bool {
     let Ok(files) = std::fs::read_dir(dir) else { return false };
     for file in files.filter_map(|f| f.ok()) {
-        if let Ok(content) = std::fs::read_to_string(file.path()) {
-            if content.contains("Status: placeholder") {
-                return true;
-            }
+        if let Ok(content) = std::fs::read_to_string(file.path())
+            && content.contains("Status: placeholder")
+        {
+            return true;
         }
     }
     false
