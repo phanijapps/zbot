@@ -153,10 +153,10 @@ function ArtifactViewer({ artifact }: { artifact: Artifact }) {
     return <div className="artifacts-panel__viewer"><img src={contentUrl} alt={artifact.fileName} style={{ maxWidth: "100%", maxHeight: 500 }} /></div>;
   }
   if (["mp4", "webm"].includes(ft)) {
-    return <div className="artifacts-panel__viewer"><video src={contentUrl} controls style={{ maxWidth: "100%" }} /></div>;
+    return <div className="artifacts-panel__viewer"><video src={contentUrl} controls style={{ maxWidth: "100%" }}><track kind="captions" /></video></div>;
   }
   if (["mp3", "wav"].includes(ft)) {
-    return <div className="artifacts-panel__viewer"><audio src={contentUrl} controls /></div>;
+    return <div className="artifacts-panel__viewer"><audio src={contentUrl} controls><track kind="captions" /></audio></div>;
   }
   if (ft === "pdf") {
     return <div className="artifacts-panel__viewer"><embed src={contentUrl} type="application/pdf" width="100%" height="500px" /></div>;

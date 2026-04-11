@@ -37,8 +37,9 @@ export function NameStep({ agentName, namePreset, aboutMe, onChange, onAboutMeCh
       </div>
 
       <div className="form-group">
-        <label className="form-label">Agent Name</label>
+        <label className="form-label" htmlFor="name-agent-name">Agent Name</label>
         <input
+          id="name-agent-name"
           className="form-input"
           value={agentName}
           onChange={(e) => {
@@ -55,8 +56,9 @@ export function NameStep({ agentName, namePreset, aboutMe, onChange, onAboutMeCh
       </div>
 
       <div className="form-group">
-        <label className="form-label">About You</label>
+        <label className="form-label" htmlFor="name-about-me">About You</label>
         <textarea
+          id="name-about-me"
           className="form-input"
           rows={3}
           value={aboutMe}
