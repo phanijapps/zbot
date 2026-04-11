@@ -1536,4 +1536,179 @@ mod tests {
         // Different agent also sees __global__ entities
         assert_eq!(storage.count_entities("agent2").await.unwrap(), 2);
     }
+
+    #[tokio::test]
+    async fn test_delete_agent_data() {
+        let storage = create_test_storage().await;
+
+        // Store entities and relationships for an agent
+        let entity1 = Entity::new(
+            "agent-del".to_string(),
+            EntityType::Person,
+            "DeleteMe".to_string(),
+        );
+        let entity2 = Entity::new(
+            "agent-del".to_string(),
+            EntityType::Tool,
+            "AlsoDeleteMe".to_string(),
+        );
+        let rel = Relationship::new(
+            "agent-del".to_string(),
+            entity1.id.clone(),
+            entity2.id.clone(),
+            RelationshipType::Uses,
+        );
+
+        let knowledge = ExtractedKnowledge {
+            entities: vec![entity1, entity2],
+            relationships: vec![rel],
+        };
+        storage
+            .store_knowledge("agent-del", knowledge)
+            .await
+            .unwrap();
+
+        // Entities are stored as __global__ due to cross-agent dedup, so
+        // delete_agent_data("agent-del") won't remove them (they belong to __global__).
+        // Verify the entities exist under __global__
+        assert!(storage.count_all_entities().await.unwrap() >= 2);
+
+        // Delete with __global__ agent_id to actually remove them
+        let deleted = storage.delete_agent_data("__global__").await.unwrap();
+        assert!(deleted >= 2); // At least 2 entities removed
+
+        // Verify clean
+        assert_eq!(storage.count_all_entities().await.unwrap(), 0);
+        assert_eq!(storage.count_all_relationships().await.unwrap(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_upsert_entity() {
+        let storage = create_test_storage().await;
+
+        // Insert an entity
+        let entity = Entity::new(
+            "agent-ups".to_string(),
+            EntityType::Person,
+            "UpsertUser".to_string(),
+        );
+
+        let knowledge = ExtractedKnowledge {
+            entities: vec![entity],
+            relationships: vec![],
+        };
+        storage
+            .store_knowledge("agent-ups", knowledge)
+            .await
+            .unwrap();
+
+        // Verify initial mention_count is 1
+        let found = storage
+            .get_entity_by_name("agent-ups", "UpsertUser")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        let first = found.unwrap();
+        assert_eq!(first.mention_count, 1);
+
+        // Insert same entity name again — should deduplicate and bump mention_count
+        let entity2 = Entity::new(
+            "agent-ups".to_string(),
+            EntityType::Person,
+            "UpsertUser".to_string(),
+        );
+
+        let knowledge2 = ExtractedKnowledge {
+            entities: vec![entity2],
+            relationships: vec![],
+        };
+        storage
+            .store_knowledge("agent-ups", knowledge2)
+            .await
+            .unwrap();
+
+        // Verify mention_count was incremented
+        let found = storage
+            .get_entity_by_name("agent-ups", "UpsertUser")
+            .await
+            .unwrap();
+        assert!(found.is_some());
+        let second = found.unwrap();
+        assert_eq!(second.mention_count, 2);
+
+        // Verify still only one entity with that name
+        assert_eq!(storage.count_all_entities().await.unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_duplicate_relationship() {
+        let storage = create_test_storage().await;
+
+        // Create two entities
+        let entity1 = Entity::new(
+            "agent-dup".to_string(),
+            EntityType::Person,
+            "DupAlice".to_string(),
+        );
+        let entity2 = Entity::new(
+            "agent-dup".to_string(),
+            EntityType::Tool,
+            "DupRust".to_string(),
+        );
+
+        let e1_id = entity1.id.clone();
+        let e2_id = entity2.id.clone();
+
+        // First insert with relationship
+        let rel1 = Relationship::new(
+            "agent-dup".to_string(),
+            e1_id.clone(),
+            e2_id.clone(),
+            RelationshipType::Uses,
+        );
+
+        let knowledge1 = ExtractedKnowledge {
+            entities: vec![entity1, entity2],
+            relationships: vec![rel1],
+        };
+        storage
+            .store_knowledge("agent-dup", knowledge1)
+            .await
+            .unwrap();
+
+        assert_eq!(storage.count_all_relationships().await.unwrap(), 1);
+
+        // Insert same relationship again (same source, target, type) — should not error
+        // We need to use the actual entity IDs that were stored (they may have been remapped)
+        let entities = storage.get_entities("agent-dup").await.unwrap();
+        let alice = entities.iter().find(|e| e.name == "DupAlice").unwrap();
+        let rust = entities.iter().find(|e| e.name == "DupRust").unwrap();
+
+        let rel2 = Relationship::new(
+            "agent-dup".to_string(),
+            alice.id.clone(),
+            rust.id.clone(),
+            RelationshipType::Uses,
+        );
+
+        let knowledge2 = ExtractedKnowledge {
+            entities: vec![],
+            relationships: vec![rel2],
+        };
+        // This should not error — the unique index uses ON CONFLICT DO UPDATE
+        storage
+            .store_knowledge("agent-dup", knowledge2)
+            .await
+            .unwrap();
+
+        // Still only 1 relationship, but mention_count should have incremented
+        assert_eq!(storage.count_all_relationships().await.unwrap(), 1);
+
+        let rels = storage
+            .list_relationships("agent-dup", None, 10, 0)
+            .await
+            .unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].mention_count, 2);
+    }
 }

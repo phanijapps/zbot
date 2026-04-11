@@ -84,9 +84,21 @@ export function FastChat() {
             Send a message to start chatting
           </div>
         )}
-        {state.messages.map((msg) => (
-          <MessageBubble key={msg.id} message={msg} showThinking={showThinking} />
-        ))}
+        {(() => {
+          // Find the index of the last tool message — only show that one
+          let lastToolIdx = -1;
+          for (let i = state.messages.length - 1; i >= 0; i--) {
+            if (state.messages[i].role === "tool") {
+              lastToolIdx = i;
+              break;
+            }
+          }
+          return state.messages.map((msg, idx) => {
+            // Hide all tool messages except the latest one
+            if (msg.role === "tool" && idx !== lastToolIdx) return null;
+            return <MessageBubble key={msg.id} message={msg} showThinking={showThinking} />;
+          });
+        })()}
         {isRunning && (
           <div className="fast-chat__typing">
             <div className="thinking-indicator__dots">

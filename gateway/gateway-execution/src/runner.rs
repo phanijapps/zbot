@@ -592,7 +592,7 @@ impl ExecutionRunner {
     /// analysis events fire.
     pub async fn invoke_with_callback(
         &self,
-        config: ExecutionConfig,
+        mut config: ExecutionConfig,
         message: String,
         on_session_ready: Option<OnSessionReady>,
     ) -> Result<(ExecutionHandle, String), String> {
@@ -608,6 +608,13 @@ impl ExecutionRunner {
         );
         let session_id = setup.session_id;
         let execution_id = setup.execution_id;
+
+        // If session has a persisted mode, use it (overrides invoke mode)
+        if let Ok(Some(session)) = self.state_service.get_session(&session_id) {
+            if let Some(ref persisted_mode) = session.mode {
+                config.mode = Some(persisted_mode.clone());
+            }
+        }
 
         // Persist routing fields on the session (thread_id, connector_id, respond_to)
         if config.thread_id.is_some()
@@ -1004,14 +1011,15 @@ impl ExecutionRunner {
                 "Execution stream completed"
             );
 
-            // Emit final assistant response to session stream
-            // (only if there's content not already emitted as part of a tool-call turn)
-            if !accumulated_response.is_empty() {
+            // Emit any remaining text that wasn't flushed as part of a tool-call turn.
+            // If turn_text is empty, the response was already written when the last
+            // ToolResult (e.g., from the respond tool) flushed it. Don't write again.
+            if !turn_text.is_empty() {
                 batch_writer.session_message(
                     &session_id,
                     &execution_id,
                     "assistant",
-                    &accumulated_response,
+                    &turn_text,
                     None,
                     None,
                 );
@@ -2243,13 +2251,13 @@ async fn invoke_continuation(
 
         let accumulated_response = response_acc.into_response();
 
-        // Emit final assistant response to session stream
-        if !accumulated_response.is_empty() {
+        // Emit any remaining text that wasn't flushed as part of a tool-call turn.
+        if !turn_text.is_empty() {
             batch_writer.session_message(
                 &session_id_clone,
                 &execution_id,
                 "assistant",
-                &accumulated_response,
+                &turn_text,
                 None,
                 None,
             );
