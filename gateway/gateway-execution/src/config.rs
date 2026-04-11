@@ -114,6 +114,9 @@ pub struct ExecutionConfig {
     pub source: TriggerSource,
     /// Metadata from the request (e.g., plugin context, sender info)
     pub metadata: Option<Value>,
+    /// Execution mode: "fast" skips intent analysis, uses lean prompt, allows multi-tool turns.
+    /// Any other value (including "deep") uses the default behavior.
+    pub mode: Option<String>,
 }
 
 impl ExecutionConfig {
@@ -131,6 +134,7 @@ impl ExecutionConfig {
             connector_id: None,
             source: TriggerSource::default(),
             metadata: None,
+            mode: None,
         }
     }
 
@@ -181,6 +185,18 @@ impl ExecutionConfig {
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = Some(metadata);
         self
+    }
+
+    /// Set the execution mode ("fast" or "deep").
+    #[must_use]
+    pub fn with_mode(mut self, mode: String) -> Self {
+        self.mode = Some(mode);
+        self
+    }
+
+    /// Returns true if this execution is in fast chat mode.
+    pub fn is_fast_mode(&self) -> bool {
+        self.mode.as_deref() == Some("fast")
     }
 }
 

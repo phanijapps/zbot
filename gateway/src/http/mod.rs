@@ -5,6 +5,7 @@
 mod agents;
 mod artifacts;
 mod bridge;
+mod chat;
 mod connectors;
 mod conversations;
 mod cron;
@@ -157,6 +158,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route("/api/memory/:agent_id/facts/:fact_id", delete(memory::delete_memory_fact))
         // Upload endpoint
         .route("/api/upload", post(upload::upload_file).layer(DefaultBodyLimit::max(50 * 1024 * 1024)))
+        // Chat session endpoints
+        .route("/api/chat/init", post(chat::init_chat_session))
+        .route("/api/sessions/:session_id/messages", get(chat::get_session_messages))
         // Session archive endpoints
         .route("/api/sessions/archive", post(sessions::archive_sessions))
         .route("/api/sessions/restore/:id", post(sessions::restore_session))

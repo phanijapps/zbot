@@ -64,6 +64,9 @@ pub enum ClientMessage {
         /// Optional metadata
         #[serde(default)]
         metadata: Option<Value>,
+        /// Execution mode: "deep" (default) or "fast" (skip intent analysis)
+        #[serde(default = "default_invoke_mode")]
+        mode: String,
     },
 
     /// Stop the current execution.
@@ -96,6 +99,10 @@ pub enum ClientMessage {
 
 fn default_additional_iterations() -> u32 {
     25
+}
+
+fn default_invoke_mode() -> String {
+    "deep".to_string()
 }
 
 /// Messages from server to client.

@@ -56,6 +56,7 @@ pub struct ExecutorBuilder {
     is_delegated: bool,
     subagent_non_streaming: bool,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
+    fast_mode: bool,
 }
 
 impl ExecutorBuilder {
@@ -72,6 +73,7 @@ impl ExecutorBuilder {
             is_delegated: false,
             subagent_non_streaming: true,
             extra_initial_state: None,
+            fast_mode: false,
         }
     }
 
@@ -117,6 +119,12 @@ impl ExecutorBuilder {
     /// Set the model registry for capability lookups and context window resolution.
     pub fn with_model_registry(mut self, registry: Arc<ModelRegistry>) -> Self {
         self.model_registry = Some(registry);
+        self
+    }
+
+    /// Enable fast chat mode (disables single_action_mode for multi-tool turns).
+    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
+        self.fast_mode = fast_mode;
         self
     }
 
@@ -355,15 +363,22 @@ impl ExecutorBuilder {
 
         // Create middleware pipeline with context editing
         // Must be after context_window_tokens is resolved (above)
+        // Chat mode: trigger later (80%) but keep fewer results — conversations are long-running
+        // Deep mode: trigger earlier (70%) and keep more results — tasks need full context
         let middleware_pipeline = {
             let pipeline = MiddlewarePipeline::new();
             let pipeline = if executor_config.context_window_tokens > 0 {
+                let (trigger_pct, keep_results) = if self.fast_mode {
+                    (80, 5)  // Chat: 80% trigger, keep 5 recent tool results
+                } else {
+                    (70, 8)  // Deep: 70% trigger, keep 8 recent tool results
+                };
                 pipeline.add_pre_processor(Box::new(
                     ContextEditingMiddleware::new(
                         ContextEditingConfig {
                             enabled: true,
-                            trigger_tokens: (executor_config.context_window_tokens as usize * 70) / 100,
-                            keep_tool_results: 8,
+                            trigger_tokens: (executor_config.context_window_tokens as usize * trigger_pct) / 100,
+                            keep_tool_results: keep_results,
                             min_reclaim: 500,
                             clear_tool_inputs: true,
                             cascade_unload: true,
@@ -378,9 +393,14 @@ impl ExecutorBuilder {
             Arc::new(pipeline)
         };
 
-        // Root is an orchestrator — enforce single action per turn
-        if !self.is_delegated {
+        // Root is an orchestrator — enforce single action per turn (except fast chat mode)
+        if !self.is_delegated && !self.fast_mode {
             executor_config.single_action_mode = true;
+        }
+
+        // Chat mode: nudge at 70% so agent saves facts before 80% middleware prune
+        if self.fast_mode {
+            executor_config.compaction_warn_pct = 70;
         }
 
         // Wire execution hooks for subagents (code-agent, research-agent, etc.)

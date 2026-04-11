@@ -59,6 +59,9 @@ pub struct ExecutionSettings {
     /// Multimodal model configuration (vision analysis fallback).
     #[serde(default)]
     pub multimodal: MultimodalConfig,
+    /// Persistent chat session configuration.
+    #[serde(default)]
+    pub chat: ChatConfig,
 }
 
 /// Root agent (orchestrator) configuration.
@@ -151,6 +154,18 @@ impl Default for MultimodalConfig {
     }
 }
 
+/// Configuration for the persistent chat session.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatConfig {
+    /// The permanent session ID for chat mode. Created on first /chat visit.
+    #[serde(default)]
+    pub session_id: Option<String>,
+    /// The conversation ID for WebSocket routing.
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+}
+
 impl Default for ExecutionSettings {
     fn default() -> Self {
         Self {
@@ -161,6 +176,7 @@ impl Default for ExecutionSettings {
             orchestrator: OrchestratorConfig::default(),
             distillation: DistillationConfig::default(),
             multimodal: MultimodalConfig::default(),
+            chat: ChatConfig::default(),
         }
     }
 }

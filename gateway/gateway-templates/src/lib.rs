@@ -39,6 +39,14 @@ pub fn load_system_prompt(data_dir: &Path) -> String {
     assemble_prompt(&config_dir, data_dir)
 }
 
+/// Load a lean system prompt for fast chat mode using VaultPaths.
+///
+/// Assembly: SOUL.md + chat_instructions.md + OS.md + chat_protocol + tooling_skills
+pub fn load_chat_prompt_from_paths(paths: &Arc<VaultPaths>) -> String {
+    let config_dir = paths.vault_dir().join("config");
+    assemble_chat_prompt(&config_dir, paths.vault_dir())
+}
+
 /// Get the embedded default system prompt (fallback).
 pub fn default_system_prompt() -> String {
     Templates::get("system_prompt.md")
@@ -49,6 +57,68 @@ pub fn default_system_prompt() -> String {
 // =========================================================================
 // Assembly
 // =========================================================================
+
+/// Assemble a lean system prompt for fast chat mode.
+///
+/// Includes only: SOUL.md + chat_instructions.md + OS.md + chat_protocol + tooling_skills.
+/// Skips: INSTRUCTIONS.md, first_turn_protocol, memory_learning, planning_autonomy shards.
+fn assemble_chat_prompt(config_dir: &Path, vault_dir: &Path) -> String {
+    std::fs::create_dir_all(config_dir).ok();
+
+    let mut parts: Vec<String> = Vec::new();
+
+    // 1. SOUL.md — same identity
+    let soul = load_or_create_config(config_dir, "SOUL.md", "soul_starter.md");
+    if !soul.is_empty() {
+        parts.push(soul);
+    }
+
+    // 2. Chat-specific instructions (instead of full INSTRUCTIONS.md)
+    let chat_instructions = load_or_create_config(config_dir, "chat_instructions.md", "chat_instructions.md");
+    if !chat_instructions.is_empty() {
+        parts.push(chat_instructions);
+    }
+
+    // 3. OS.md — platform-specific commands
+    let os_md = load_or_create_os(config_dir);
+    if !os_md.is_empty() {
+        parts.push(os_md);
+    }
+
+    // 4. Minimal shards: chat_protocol + tooling_skills only
+    let shards_dir = config_dir.join("shards");
+    std::fs::create_dir_all(&shards_dir).ok();
+    for name in &["chat_protocol", "tooling_skills"] {
+        let user_path = shards_dir.join(format!("{}.md", name));
+        if user_path.exists() {
+            if let Ok(content) = std::fs::read_to_string(&user_path) {
+                if !content.trim().is_empty() {
+                    parts.push(content);
+                }
+            }
+        } else if let Some(embedded) = Templates::get(&format!("shards/{}.md", name)) {
+            let content = String::from_utf8_lossy(&embedded.data).to_string();
+            let _ = std::fs::write(&user_path, &content);
+            parts.push(content);
+        }
+    }
+
+    // 5. Runtime environment info
+    parts.push(runtime_info(vault_dir));
+
+    let result = parts.join("\n\n");
+
+    if result.trim().is_empty() {
+        tracing::warn!("Fast chat prompt is empty, using embedded default");
+        return default_system_prompt();
+    }
+
+    tracing::info!(
+        chars = result.len(),
+        "Assembled fast chat prompt from config"
+    );
+    result
+}
 
 /// Assemble the full system prompt from config files and shards.
 fn assemble_prompt(config_dir: &Path, vault_dir: &Path) -> String {
