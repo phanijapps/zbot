@@ -32,7 +32,7 @@ pub struct DelegateTool;
 
 impl DelegateTool {
     /// Create a new delegate tool.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

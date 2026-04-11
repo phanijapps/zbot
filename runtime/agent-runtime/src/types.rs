@@ -12,7 +12,6 @@
 //! - [`messages`]: Chat message and tool call types
 //! - [`events`]: Streaming event types for execution feedback
 
-
 pub mod events;
 pub mod messages;
 

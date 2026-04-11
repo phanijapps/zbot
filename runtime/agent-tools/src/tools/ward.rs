@@ -346,24 +346,25 @@ impl Tool for WardTool {
                 let mut wards = Vec::new();
 
                 if wards_root.exists()
-                    && let Ok(entries) = std::fs::read_dir(&wards_root) {
-                        for entry in entries.flatten() {
-                            if entry.path().is_dir() {
-                                let name = entry.file_name().to_string_lossy().to_string();
-                                // Skip hidden directories (.venv, .node_env)
-                                if name.starts_with('.') {
-                                    continue;
-                                }
-                                let files = self.list_ward_files(&entry.path());
-                                let description = self.ward_description(&entry.path());
-                                wards.push(json!({
-                                    "name": name,
-                                    "files": files.len(),
-                                    "description": description,
-                                }));
+                    && let Ok(entries) = std::fs::read_dir(&wards_root)
+                {
+                    for entry in entries.flatten() {
+                        if entry.path().is_dir() {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            // Skip hidden directories (.venv, .node_env)
+                            if name.starts_with('.') {
+                                continue;
                             }
+                            let files = self.list_ward_files(&entry.path());
+                            let description = self.ward_description(&entry.path());
+                            wards.push(json!({
+                                "name": name,
+                                "files": files.len(),
+                                "description": description,
+                            }));
                         }
                     }
+                }
 
                 wards.sort_by(|a, b| {
                     a.get("name")

@@ -35,7 +35,6 @@
 //! - `SummarizationMiddleware`: Compresses long conversations
 //! - `ContextEditingMiddleware`: Clears old tool results
 
-
 pub mod config;
 pub mod context_editing;
 pub mod pipeline;

@@ -16,7 +16,6 @@
 //! - [`respond`]: Tool for sending responses to originating hooks
 //! - [`delegate`]: Tool for delegating tasks to subagents
 
-
 pub mod builtin;
 pub mod context;
 pub mod delegate;

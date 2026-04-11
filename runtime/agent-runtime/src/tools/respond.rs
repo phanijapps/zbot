@@ -28,7 +28,7 @@ pub struct RespondTool;
 
 impl RespondTool {
     /// Create a new respond tool.
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self
     }

@@ -832,10 +832,11 @@ pub fn detect_apply_patch(command: &str) -> Option<String> {
     if trimmed.contains(BEGIN_PATCH) && trimmed.contains(END_PATCH) {
         // Extract the patch between markers
         if let Some(start) = trimmed.find(BEGIN_PATCH)
-            && let Some(end) = trimmed.find(END_PATCH) {
-                let patch = &trimmed[start..end + END_PATCH.len()];
-                return Some(patch.to_string());
-            }
+            && let Some(end) = trimmed.find(END_PATCH)
+        {
+            let patch = &trimmed[start..end + END_PATCH.len()];
+            return Some(patch.to_string());
+        }
     }
 
     None
@@ -847,15 +848,17 @@ fn extract_heredoc_delimiter(s: &str) -> (String, &str) {
 
     // Handle quoted delimiters: 'EOF' or "EOF"
     if s.starts_with('\'')
-        && let Some(end) = s[1..].find('\'') {
-            let delim = &s[1..end + 1];
-            return (delim.to_string(), &s[end + 2..]);
-        }
+        && let Some(end) = s[1..].find('\'')
+    {
+        let delim = &s[1..end + 1];
+        return (delim.to_string(), &s[end + 2..]);
+    }
     if s.starts_with('"')
-        && let Some(end) = s[1..].find('"') {
-            let delim = &s[1..end + 1];
-            return (delim.to_string(), &s[end + 2..]);
-        }
+        && let Some(end) = s[1..].find('"')
+    {
+        let delim = &s[1..end + 1];
+        return (delim.to_string(), &s[end + 2..]);
+    }
 
     // Unquoted: take until whitespace or newline
     let end = s.find(|c: char| c.is_whitespace()).unwrap_or(s.len());

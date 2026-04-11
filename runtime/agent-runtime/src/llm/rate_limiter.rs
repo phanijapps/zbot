@@ -23,7 +23,7 @@ struct SlidingWindow {
 
 impl ProviderRateLimiter {
     /// Create a new rate limiter with the given concurrency and RPM limits.
-    #[must_use] 
+    #[must_use]
     pub fn new(concurrent: u32, rpm: u32) -> Self {
         Self {
             concurrency: Arc::new(Semaphore::new(concurrent as usize)),

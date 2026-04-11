@@ -122,9 +122,7 @@ impl StdioMcpClient {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                McpError::ConnectionFailed(format!("Failed to spawn MCP process: {e}"))
-            })?;
+            .map_err(|e| McpError::ConnectionFailed(format!("Failed to spawn MCP process: {e}")))?;
 
         // Write all requests to stdin
         if let Some(mut stdin) = child.stdin.take() {
@@ -270,9 +268,7 @@ impl StdioMcpClient {
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
             .spawn()
-            .map_err(|e| {
-                McpError::ConnectionFailed(format!("Failed to spawn MCP process: {e}"))
-            })?;
+            .map_err(|e| McpError::ConnectionFailed(format!("Failed to spawn MCP process: {e}")))?;
 
         // Write all requests to stdin
         if let Some(mut stdin) = child.stdin.take() {

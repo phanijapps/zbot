@@ -70,7 +70,7 @@ impl ChatMessage {
     }
 
     /// Get all text content joined as a single string.
-    #[must_use] 
+    #[must_use]
     pub fn text_content(&self) -> String {
         self.content
             .iter()
@@ -83,7 +83,7 @@ impl ChatMessage {
     }
 
     /// Returns true if this message contains any non-text parts.
-    #[must_use] 
+    #[must_use]
     pub fn has_multimodal_content(&self) -> bool {
         self.content.iter().any(zero_core::Part::is_multimodal)
     }

@@ -296,8 +296,7 @@ fn load_shards(config_dir: &Path) -> String {
             .filter_map(|e| e.ok())
             .filter(|e| {
                 let name = e.file_name().to_string_lossy().into_owned();
-                name.ends_with(".md")
-                    && !loaded_names.contains(name.trim_end_matches(".md"))
+                name.ends_with(".md") && !loaded_names.contains(name.trim_end_matches(".md"))
             })
             .collect();
         extras.sort_by_key(|e| e.file_name());

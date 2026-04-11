@@ -127,7 +127,6 @@ pub struct DistillationConfig {
     pub model: Option<String>,
 }
 
-
 /// Default multimodal model configuration.
 /// Used by the multimodal_analyze tool as a universal vision fallback.
 #[derive(Debug, Clone, Serialize, Deserialize)]

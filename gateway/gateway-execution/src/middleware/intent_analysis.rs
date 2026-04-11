@@ -836,7 +836,6 @@ mod tests {
 
     use agent_runtime::{ChatResponse, LlmError, StreamCallback};
     use async_trait::async_trait;
-    
 
     struct MockLlmClient {
         response: String,

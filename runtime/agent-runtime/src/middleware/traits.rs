@@ -46,7 +46,7 @@ impl ExecutionState {
     ///
     /// This extracts skill information from the message history, allowing middleware
     /// to identify which tool results are skill loads vs regular tool calls.
-    #[must_use] 
+    #[must_use]
     pub fn from_messages(messages: &[crate::types::ChatMessage]) -> Self {
         let mut loaded_skills: HashMap<String, SkillInfo> = HashMap::new();
 
@@ -148,7 +148,7 @@ pub struct MiddlewareContext {
 
 impl MiddlewareContext {
     /// Create a new middleware context
-    #[must_use] 
+    #[must_use]
     pub fn new(
         agent_id: String,
         conversation_id: Option<String>,
@@ -168,7 +168,7 @@ impl MiddlewareContext {
     }
 
     /// Set message and token counts
-    #[must_use] 
+    #[must_use]
     pub fn with_counts(mut self, message_count: usize, estimated_tokens: usize) -> Self {
         self.message_count = message_count;
         self.estimated_tokens = estimated_tokens;
@@ -176,7 +176,7 @@ impl MiddlewareContext {
     }
 
     /// Set additional metadata
-    #[must_use] 
+    #[must_use]
     pub fn with_metadata(mut self, metadata: Value) -> Self {
         self.metadata = metadata;
         self
@@ -187,7 +187,7 @@ impl MiddlewareContext {
     /// This allows middleware to access skill information for context-aware
     /// processing, such as leaving meaningful placeholders when compacting
     /// skill-related tool results.
-    #[must_use] 
+    #[must_use]
     pub fn with_execution_state(mut self, execution_state: ExecutionState) -> Self {
         self.execution_state = execution_state;
         self

@@ -52,7 +52,7 @@ pub struct StreamContext {
 
 impl StreamContext {
     /// Create a new stream context.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         agent_id: String,
         conversation_id: String,

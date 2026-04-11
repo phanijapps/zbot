@@ -16,7 +16,6 @@
 //! 5. Handles tool execution and result collection
 //! 6. Emits events for real-time feedback
 
-
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fmt;
@@ -705,7 +704,9 @@ impl AgentExecutor {
             // multi-turn sessions.
             if self.recall_every_n_turns > 0
                 && progress_tracker.total_iterations > 0
-                && progress_tracker.total_iterations.is_multiple_of(self.recall_every_n_turns)
+                && progress_tracker
+                    .total_iterations
+                    .is_multiple_of(self.recall_every_n_turns)
             {
                 if let Some(hook) = &self.recall_hook {
                     // Find the latest user message for query context
@@ -1073,9 +1074,11 @@ impl AgentExecutor {
                                         .get("file_path")
                                         .and_then(|v| v.as_str())
                                         .map(std::string::ToString::to_string);
-                                    let is_attachment =
-                                        parsed.get("is_attachment").and_then(serde_json::Value::as_bool);
-                                    let base64 = parsed.get("base64").and_then(serde_json::Value::as_bool);
+                                    let is_attachment = parsed
+                                        .get("is_attachment")
+                                        .and_then(serde_json::Value::as_bool);
+                                    let base64 =
+                                        parsed.get("base64").and_then(serde_json::Value::as_bool);
 
                                     on_event(StreamEvent::ShowContent {
                                         timestamp: chrono::Utc::now().timestamp_millis() as u64,
@@ -1370,7 +1373,8 @@ impl AgentExecutor {
                         if let Ok(tools) = client.list_tools().await {
                             tools
                                 .into_iter()
-                                .find(|t| normalize_tool_name(&t.name) == normalized_tool).map_or_else(|| normalized_tool.to_string(), |t| t.name)
+                                .find(|t| normalize_tool_name(&t.name) == normalized_tool)
+                                .map_or_else(|| normalized_tool.to_string(), |t| t.name)
                         } else {
                             normalized_tool.to_string()
                         }
@@ -1769,9 +1773,15 @@ impl ProgressTracker {
 
         // Score diversity every 10 FAILED calls (not total calls)
         self.window_tool_calls += 1;
-        if !succeeded && self.tool_name_window.len() >= 10 && self.tool_name_window.len().is_multiple_of(5) {
-            let distinct: HashSet<&str> =
-                self.tool_name_window.iter().map(std::string::String::as_str).collect();
+        if !succeeded
+            && self.tool_name_window.len() >= 10
+            && self.tool_name_window.len().is_multiple_of(5)
+        {
+            let distinct: HashSet<&str> = self
+                .tool_name_window
+                .iter()
+                .map(std::string::String::as_str)
+                .collect();
             let ratio = distinct.len() as f32 / self.tool_name_window.len() as f32;
 
             if ratio <= 0.15 {
@@ -2001,13 +2011,15 @@ fn extract_key_info(content: &str) -> String {
                 || trimmed.ends_with(".ts")
                 || trimmed.ends_with(".yaml")
                 || trimmed.ends_with(".toml"))
-            && !info.contains(&trimmed.to_string()) {
-                info.push(trimmed.to_string());
-            }
+            && !info.contains(&trimmed.to_string())
+        {
+            info.push(trimmed.to_string());
+        }
         if (trimmed.starts_with("http://") || trimmed.starts_with("https://"))
-            && !info.contains(&trimmed.to_string()) {
-                info.push(trimmed.to_string());
-            }
+            && !info.contains(&trimmed.to_string())
+        {
+            info.push(trimmed.to_string());
+        }
     }
 
     info.join(", ")
@@ -3060,7 +3072,6 @@ mod progress_tracker_tests {
 #[cfg(test)]
 mod hook_tests {
     use super::*;
-    
 
     #[test]
     fn test_tool_call_decision_default_is_allow() {

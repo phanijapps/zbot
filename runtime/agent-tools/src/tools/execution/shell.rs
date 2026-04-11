@@ -526,9 +526,10 @@ impl Tool for ShellTool {
 
             let ward_dir = wards_dir.join(&ward_id);
             if !ward_dir.exists()
-                && let Err(e) = std::fs::create_dir_all(&ward_dir) {
-                    tracing::warn!("Failed to create ward dir {}: {}", ward_dir.display(), e);
-                }
+                && let Err(e) = std::fs::create_dir_all(&ward_dir)
+            {
+                tracing::warn!("Failed to create ward dir {}: {}", ward_dir.display(), e);
+            }
             if ward_dir.exists() {
                 tracing::debug!(
                     "Shell: cwd set to {} (ward: {})",
@@ -610,9 +611,11 @@ fn is_file_writing_command(command: &str) -> bool {
 
     // Heredoc: << 'EOF' or << EOF (but not inside apply_patch or python stdin)
     if (cmd.contains("<< '") || cmd.contains("<<'") || cmd.contains("<< \""))
-        && !cmd.contains("apply_patch") && !cmd.starts_with("python") {
-            return true;
-        }
+        && !cmd.contains("apply_patch")
+        && !cmd.starts_with("python")
+    {
+        return true;
+    }
 
     // Python file writing via -c: python -c "open('file', 'w').write(...)"
     // This is too broad — skip for now, apply_patch enforcement handles the intent

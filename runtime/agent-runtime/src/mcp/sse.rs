@@ -89,9 +89,8 @@ impl SseMcpClient {
             )));
         }
 
-        let response_json: Value = serde_json::from_str(&response_text).map_err(|e| {
-            McpError::ProtocolError(format!("Failed to parse JSON response: {e}"))
-        })?;
+        let response_json: Value = serde_json::from_str(&response_text)
+            .map_err(|e| McpError::ProtocolError(format!("Failed to parse JSON response: {e}")))?;
 
         // Check for JSON-RPC error
         if let Some(error) = response_json.get("error") {

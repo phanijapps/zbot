@@ -323,8 +323,7 @@ mod tests {
 
         // Spawn worker simulator
         tokio::spawn(async move {
-            if let Some(BridgeServerMessage::CapabilityInvoke { request_id, .. }) =
-                rx.recv().await
+            if let Some(BridgeServerMessage::CapabilityInvoke { request_id, .. }) = rx.recv().await
             {
                 pending_clone.resolve(
                     &request_id,

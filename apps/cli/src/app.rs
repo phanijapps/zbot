@@ -214,10 +214,11 @@ async fn handle_key_event(
 
     // Global quit with Ctrl+C or Ctrl+Q
     if key.modifiers.contains(KeyModifiers::CONTROL)
-        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q')) {
-            state.should_quit = true;
-            return Ok(());
-        }
+        && matches!(key.code, KeyCode::Char('c') | KeyCode::Char('q'))
+    {
+        state.should_quit = true;
+        return Ok(());
+    }
 
     match state.input_mode {
         InputMode::Normal => match key.code {

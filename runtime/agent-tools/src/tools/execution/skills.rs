@@ -384,16 +384,17 @@ fn list_skill_resources(skill_dir: &std::path::Path, skill_name: &str) -> Vec<Va
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_file()
-                && let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Skip SKILL.md itself
-                    if name.eq_ignore_ascii_case("SKILL.md") {
-                        continue;
-                    }
-                    resources.push(json!({
-                        "file": name,
-                        "load_with": format!("load_skill(file=\"{}\")", name),
-                    }));
+                && let Some(name) = path.file_name().and_then(|n| n.to_str())
+            {
+                // Skip SKILL.md itself
+                if name.eq_ignore_ascii_case("SKILL.md") {
+                    continue;
                 }
+                resources.push(json!({
+                    "file": name,
+                    "load_with": format!("load_skill(file=\"{}\")", name),
+                }));
+            }
         }
     }
     // Also check subdirectories one level deep
@@ -401,22 +402,22 @@ fn list_skill_resources(skill_dir: &std::path::Path, skill_name: &str) -> Vec<Va
         for entry in entries.flatten() {
             let path = entry.path();
             if path.is_dir()
-                && let Ok(sub_entries) = std::fs::read_dir(&path) {
-                    for sub_entry in sub_entries.flatten() {
-                        let sub_path = sub_entry.path();
-                        if sub_path.is_file()
-                            && let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
-                                && let Some(file_name) =
-                                    sub_path.file_name().and_then(|n| n.to_str())
-                                {
-                                    let rel_path = format!("{}/{}", dir_name, file_name);
-                                    resources.push(json!({
+                && let Ok(sub_entries) = std::fs::read_dir(&path)
+            {
+                for sub_entry in sub_entries.flatten() {
+                    let sub_path = sub_entry.path();
+                    if sub_path.is_file()
+                        && let Some(dir_name) = path.file_name().and_then(|n| n.to_str())
+                        && let Some(file_name) = sub_path.file_name().and_then(|n| n.to_str())
+                    {
+                        let rel_path = format!("{}/{}", dir_name, file_name);
+                        resources.push(json!({
                                         "file": rel_path.clone(),
                                         "load_with": format!("load_skill(file=\"@skill:{}/{}\")", skill_name, rel_path),
                                     }));
-                                }
                     }
                 }
+            }
         }
     }
     resources

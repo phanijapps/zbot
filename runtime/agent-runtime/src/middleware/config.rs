@@ -11,8 +11,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 /// Configuration for all middleware from agent config.yaml
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct MiddlewareConfig {
     /// Summarization middleware configuration
     #[serde(default)]
@@ -26,7 +25,6 @@ pub struct MiddlewareConfig {
     #[serde(flatten)]
     pub custom: HashMap<String, serde_yaml::Value>,
 }
-
 
 /// Trigger conditions for middleware activation
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -42,7 +40,7 @@ pub struct TriggerCondition {
 }
 
 impl TriggerCondition {
-    #[must_use] 
+    #[must_use]
     pub fn should_trigger(&self, tokens: usize, messages: usize, context_window: usize) -> bool {
         if let Some(trigger_tokens) = self.tokens {
             if tokens >= trigger_tokens {
@@ -67,7 +65,7 @@ impl TriggerCondition {
     }
 
     /// Check if any trigger condition is set (for validation)
-    #[must_use] 
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.tokens.is_some() || self.messages.is_some() || self.fraction.is_some()
     }
@@ -88,7 +86,7 @@ pub struct KeepPolicy {
 
 impl KeepPolicy {
     /// Get the number of items to keep based on policy
-    #[must_use] 
+    #[must_use]
     pub fn to_keep_count(&self, total_items: usize, _context_window: usize) -> usize {
         if let Some(keep_messages) = self.messages {
             return keep_messages.min(total_items);
@@ -108,7 +106,7 @@ impl KeepPolicy {
     }
 
     /// Check if any keep policy is set (for validation)
-    #[must_use] 
+    #[must_use]
     pub fn is_valid(&self) -> bool {
         self.messages.is_some() || self.tokens.is_some() || self.fraction.is_some()
     }

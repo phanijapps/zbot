@@ -71,10 +71,9 @@ impl RetryPolicy {
             LlmError::HttpError(_) => self.retry_on_transport,
             LlmError::ApiError(msg) => {
                 // Retry on 5xx server errors
-                if self.retry_on_server_error
-                    && msg.starts_with("(5") {
-                        return true;
-                    }
+                if self.retry_on_server_error && msg.starts_with("(5") {
+                    return true;
+                }
                 // Retry on 429 rate limit errors from API
                 if self.retry_on_rate_limit && msg.contains("429") {
                     return true;

@@ -105,27 +105,25 @@ impl Tool for UpdatePlanTool {
         // Part B: Check for plan replacement (existing plan with progress being fully reset)
         let mut replacement_warning = None;
         if let Some(existing) = ctx.get_state("app:plan")
-            && let Some(existing_steps) = existing.get("plan").and_then(|p| p.as_array()) {
-                let has_progress = existing_steps.iter().any(|s| {
-                    let st = s.get("status").and_then(|v| v.as_str()).unwrap_or("");
-                    st == "completed" || st == "failed"
-                });
-                if has_progress
-                    && let Some(new_steps) = args.get("plan").and_then(|p| p.as_array()) {
-                        let all_pending = new_steps
-                            .iter()
-                            .all(|s| s.get("status").and_then(|v| v.as_str()) == Some("pending"));
-                        if all_pending {
-                            replacement_warning = Some(
-                                "Warning: You are replacing a plan that had completed/failed steps. \
+            && let Some(existing_steps) = existing.get("plan").and_then(|p| p.as_array())
+        {
+            let has_progress = existing_steps.iter().any(|s| {
+                let st = s.get("status").and_then(|v| v.as_str()).unwrap_or("");
+                st == "completed" || st == "failed"
+            });
+            if has_progress && let Some(new_steps) = args.get("plan").and_then(|p| p.as_array()) {
+                let all_pending = new_steps
+                    .iter()
+                    .all(|s| s.get("status").and_then(|v| v.as_str()) == Some("pending"));
+                if all_pending {
+                    replacement_warning = Some(
+                        "Warning: You are replacing a plan that had completed/failed steps. \
                                  Update step statuses instead of creating a new plan.",
-                            );
-                            tracing::warn!(
-                                "Plan replacement detected — existing plan had progress"
-                            );
-                        }
-                    }
+                    );
+                    tracing::warn!("Plan replacement detected — existing plan had progress");
+                }
             }
+        }
 
         // Part C: Subagent plan cap — delegated executors limited to 5 steps
         let mut truncation_warning = None;
@@ -137,15 +135,16 @@ impl Tool for UpdatePlanTool {
         let mut plan_args = args.clone();
         if is_delegated
             && let Some(plan_array) = plan_args.get_mut("plan").and_then(|p| p.as_array_mut())
-                && plan_array.len() > 5 {
-                    let original_len = plan_array.len();
-                    plan_array.truncate(5);
-                    truncation_warning = Some(format!(
-                        "Plan truncated from {} to 5 steps. You are a specialist — keep tasks focused.",
-                        original_len
-                    ));
-                    tracing::info!("Subagent plan truncated from {} to 5 steps", original_len);
-                }
+            && plan_array.len() > 5
+        {
+            let original_len = plan_array.len();
+            plan_array.truncate(5);
+            truncation_warning = Some(format!(
+                "Plan truncated from {} to 5 steps. You are a specialist — keep tasks focused.",
+                original_len
+            ));
+            tracing::info!("Subagent plan truncated from {} to 5 steps", original_len);
+        }
 
         // Store the (possibly truncated) plan in session state for UI rendering
         ctx.set_state("app:plan".to_string(), plan_args.clone());

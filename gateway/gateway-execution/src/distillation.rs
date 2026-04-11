@@ -164,7 +164,7 @@ impl SessionDistiller {
     /// The distiller resolves the default provider and creates a lightweight
     /// LLM client on-demand in `distill()`, avoiding the need for a concrete
     /// LLM client at construction time.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         provider_service: Arc<ProviderService>,
         embedding_client: Option<Arc<dyn EmbeddingClient>>,

@@ -91,7 +91,6 @@ mod tests {
     use crate::context::{CallbackContext, ReadonlyContext, ToolContext};
     use crate::event::EventActions;
     use crate::types::Content;
-    
 
     struct TestTool {
         name: String,

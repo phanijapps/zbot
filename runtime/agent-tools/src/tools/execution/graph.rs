@@ -383,11 +383,12 @@ impl ExecutionGraph {
 
             // Check retry policy
             if let Some(retry) = &node.retry
-                && node.attempts < retry.max {
-                    node.status = NodeStatus::Pending; // will be re-evaluated next cycle
-                    node.error = Some(error);
-                    return true;
-                }
+                && node.attempts < retry.max
+            {
+                node.status = NodeStatus::Pending; // will be re-evaluated next cycle
+                node.error = Some(error);
+                return true;
+            }
 
             node.status = NodeStatus::Failed;
             node.error = Some(error);
@@ -585,12 +586,13 @@ impl ExecutionGraphTool {
             }
             // Validate condition references
             if let Some(cond) = &node.when
-                && !node_ids.contains(cond.ref_node.as_str()) {
-                    return Err(ZeroError::Tool(format!(
-                        "Node '{}' condition references unknown node '{}'",
-                        node.id, cond.ref_node
-                    )));
-                }
+                && !node_ids.contains(cond.ref_node.as_str())
+            {
+                return Err(ZeroError::Tool(format!(
+                    "Node '{}' condition references unknown node '{}'",
+                    node.id, cond.ref_node
+                )));
+            }
             // Validate input references
             for (param, input_ref) in &node.inputs {
                 if !node_ids.contains(input_ref.from.as_str()) {

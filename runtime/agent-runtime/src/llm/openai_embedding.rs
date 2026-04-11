@@ -22,7 +22,7 @@ pub struct OpenAiEmbeddingClient {
 
 impl OpenAiEmbeddingClient {
     /// Create a new OpenAI-compatible embedding client.
-    #[must_use] 
+    #[must_use]
     pub fn new(base_url: String, api_key: String, model: String, dimensions: usize) -> Self {
         Self {
             base_url,

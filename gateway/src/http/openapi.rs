@@ -46,7 +46,8 @@ pub async fn openapi_json() -> Response {
 
 /// GET /api/docs - Serve Swagger UI.
 pub async fn swagger_ui() -> Html<String> {
-    Html(r#"<!DOCTYPE html>
+    Html(
+        r#"<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -94,5 +95,7 @@ pub async fn swagger_ui() -> Html<String> {
         };
     </script>
 </body>
-</html>"#.to_string())
+</html>"#
+            .to_string(),
+    )
 }

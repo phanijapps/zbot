@@ -492,7 +492,8 @@ impl LlmClient for OpenAiClient {
                 if let Some(u) = json_data.get("usage") {
                     if let (Some(pt), Some(ct), Some(tt)) = (
                         u.get("prompt_tokens").and_then(serde_json::Value::as_u64),
-                        u.get("completion_tokens").and_then(serde_json::Value::as_u64),
+                        u.get("completion_tokens")
+                            .and_then(serde_json::Value::as_u64),
                         u.get("total_tokens").and_then(serde_json::Value::as_u64),
                     ) {
                         stream_usage = Some(TokenUsage {
@@ -546,7 +547,10 @@ impl LlmClient for OpenAiClient {
                 // Tool calls — accumulate deltas by index
                 if let Some(calls) = delta.get("tool_calls").and_then(|c| c.as_array()) {
                     for call in calls {
-                        let index = call.get("index").and_then(serde_json::Value::as_u64).unwrap_or(0);
+                        let index = call
+                            .get("index")
+                            .and_then(serde_json::Value::as_u64)
+                            .unwrap_or(0);
 
                         let acc =
                             tool_accumulators

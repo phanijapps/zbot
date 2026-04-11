@@ -27,7 +27,7 @@ impl Default for MiddlewarePipeline {
 
 impl MiddlewarePipeline {
     /// Create a new empty pipeline
-    #[must_use] 
+    #[must_use]
     pub fn new() -> Self {
         Self {
             pre_processors: Vec::new(),
@@ -36,28 +36,28 @@ impl MiddlewarePipeline {
     }
 
     /// Create a pipeline with pre-process middleware
-    #[must_use] 
+    #[must_use]
     pub fn with_pre_processors(mut self, middleware: Vec<Box<dyn PreProcessMiddleware>>) -> Self {
         self.pre_processors = middleware;
         self
     }
 
     /// Create a pipeline with event handlers
-    #[must_use] 
+    #[must_use]
     pub fn with_event_handlers(mut self, handlers: Vec<Box<dyn EventMiddleware>>) -> Self {
         self.event_handlers = handlers;
         self
     }
 
     /// Add a pre-process middleware to the pipeline
-    #[must_use] 
+    #[must_use]
     pub fn add_pre_processor(mut self, middleware: Box<dyn PreProcessMiddleware>) -> Self {
         self.pre_processors.push(middleware);
         self
     }
 
     /// Add an event handler to the pipeline
-    #[must_use] 
+    #[must_use]
     pub fn add_event_handler(mut self, handler: Box<dyn EventMiddleware>) -> Self {
         self.event_handlers.push(handler);
         self
@@ -147,19 +147,19 @@ impl MiddlewarePipeline {
     }
 
     /// Get the number of pre-process middleware in the pipeline
-    #[must_use] 
+    #[must_use]
     pub fn pre_processor_count(&self) -> usize {
         self.pre_processors.len()
     }
 
     /// Get the number of event handlers in the pipeline
-    #[must_use] 
+    #[must_use]
     pub fn event_handler_count(&self) -> usize {
         self.event_handlers.len()
     }
 
     /// Get names of all enabled pre-process middleware
-    #[must_use] 
+    #[must_use]
     pub fn enabled_pre_processors(&self) -> Vec<&'static str> {
         self.pre_processors
             .iter()
@@ -169,7 +169,7 @@ impl MiddlewarePipeline {
     }
 
     /// Get names of all enabled event handlers
-    #[must_use] 
+    #[must_use]
     pub fn enabled_event_handlers(&self) -> Vec<&'static str> {
         self.event_handlers
             .iter()

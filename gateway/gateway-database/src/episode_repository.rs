@@ -159,8 +159,7 @@ impl EpisodeRepository {
                  LIMIT ?2",
             )?;
 
-            let rows =
-                stmt.query_map(params![agent_id, limit as i64], row_to_episode)?;
+            let rows = stmt.query_map(params![agent_id, limit as i64], row_to_episode)?;
             rows.collect::<Result<Vec<_>, _>>()
         })
     }

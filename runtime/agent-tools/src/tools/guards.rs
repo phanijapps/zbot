@@ -37,18 +37,21 @@ pub(crate) fn has_placeholder_specs(ctx: &dyn ToolContext) -> bool {
 
     if let Some(specs_dir) = specs_dir
         && specs_dir.exists()
-            && let Ok(entries) = std::fs::read_dir(&specs_dir) {
-                for entry in entries.filter_map(|e| e.ok()) {
-                    if entry.path().is_dir()
-                        && let Ok(files) = std::fs::read_dir(entry.path()) {
-                            for file in files.filter_map(|f| f.ok()) {
-                                if let Ok(content) = std::fs::read_to_string(file.path())
-                                    && content.contains("Status: placeholder") {
-                                        return true;
-                                    }
-                            }
-                        }
+        && let Ok(entries) = std::fs::read_dir(&specs_dir)
+    {
+        for entry in entries.filter_map(|e| e.ok()) {
+            if entry.path().is_dir()
+                && let Ok(files) = std::fs::read_dir(entry.path())
+            {
+                for file in files.filter_map(|f| f.ok()) {
+                    if let Ok(content) = std::fs::read_to_string(file.path())
+                        && content.contains("Status: placeholder")
+                    {
+                        return true;
+                    }
                 }
             }
+        }
+    }
     false
 }

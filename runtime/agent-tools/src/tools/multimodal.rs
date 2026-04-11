@@ -222,9 +222,10 @@ impl Tool for MultimodalAnalyzeTool {
 
         // Try to parse as JSON if output_schema was provided
         if args.get("output_schema").is_some()
-            && let Ok(parsed) = serde_json::from_str::<Value>(&content) {
-                return Ok(parsed);
-            }
+            && let Ok(parsed) = serde_json::from_str::<Value>(&content)
+        {
+            return Ok(parsed);
+        }
 
         Ok(json!({ "analysis": content }))
     }

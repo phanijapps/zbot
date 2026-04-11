@@ -289,7 +289,6 @@ pub enum Direction {
     Both,
 }
 
-
 /// Information about a neighboring entity
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NeighborInfo {

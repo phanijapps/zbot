@@ -18,7 +18,6 @@
 //!
 //! See the README.md file for detailed usage examples.
 
-
 use tracing_subscriber::{fmt, prelude::*, EnvFilter};
 
 /// Log level for the application

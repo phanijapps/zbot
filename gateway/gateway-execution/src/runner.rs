@@ -113,7 +113,7 @@ impl ExecutionRunner {
     ///
     /// This initializes the runner and spawns a background task for
     /// processing delegation requests from running agents.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         event_bus: Arc<EventBus>,
         agent_service: Arc<AgentService>,
@@ -147,7 +147,7 @@ impl ExecutionRunner {
         )
     }
 
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     /// Create a new execution runner with connector registry for response routing.
     pub fn with_connector_registry(
         event_bus: Arc<EventBus>,
@@ -1459,7 +1459,7 @@ impl ExecutionRunner {
     }
 
     /// Create an executor for the agent using the ExecutorBuilder.
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     ///
     /// Returns the executor and any recommended skill IDs from intent analysis
     /// (empty when analysis is skipped or fails).
@@ -3084,8 +3084,7 @@ fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Pa
             for entry in entries.filter_map(|e| e.ok()) {
                 if entry.path().extension().and_then(|e| e.to_str()) == Some("py") {
                     if let Ok(src) = std::fs::read_to_string(entry.path()) {
-                        if src.contains("import yfinance") && !tech.contains(&"yfinance")
-                        {
+                        if src.contains("import yfinance") && !tech.contains(&"yfinance") {
                             tech.push("yfinance");
                         }
                         if src.contains("import pandas") && !tech.contains(&"pandas") {

@@ -23,7 +23,6 @@
 //! - **Variable Validation**: Type-safe variable resolution
 //! - **State Integration**: Seamless integration with zero-core state management
 
-
 mod error;
 mod template;
 

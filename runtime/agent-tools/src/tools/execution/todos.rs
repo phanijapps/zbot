@@ -175,9 +175,7 @@ impl TodoTool {
             .and_then(|v| v.as_str().map(String::from));
 
         // Check if this is the orchestrator (no root_agent_id or same as agent_id)
-        let is_orchestrator = root_agent_id
-            .as_ref()
-            .is_none_or(|root| root == &agent_id);
+        let is_orchestrator = root_agent_id.as_ref().is_none_or(|root| root == &agent_id);
 
         // Extract agent name from agent_id (e.g., "parent.subagent" -> "subagent")
         let agent_name = if is_orchestrator {

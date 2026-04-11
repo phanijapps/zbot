@@ -124,7 +124,7 @@ pub struct ContextEditingMiddleware {
 
 impl ContextEditingMiddleware {
     /// Create a new context editing middleware
-    #[must_use] 
+    #[must_use]
     pub fn new(config: ContextEditingConfig) -> Self {
         Self { config }
     }
@@ -335,7 +335,8 @@ impl ContextEditingMiddleware {
         // First, extract the tool_call_id we need to find
         let tool_call_id_to_clear = messages
             .get(tool_result_idx)
-            .and_then(|msg| msg.tool_call_id.as_ref()).cloned();
+            .and_then(|msg| msg.tool_call_id.as_ref())
+            .cloned();
 
         if let Some(tool_call_id) = tool_call_id_to_clear {
             // Now we can mutably iterate through messages
@@ -344,11 +345,7 @@ impl ContextEditingMiddleware {
                     for tc in tool_calls.iter_mut() {
                         if tc.id == tool_call_id {
                             // Replace with a new tool call with empty arguments
-                            *tc = ToolCall::new(
-                                tc.id.clone(),
-                                tc.name.clone(),
-                                json!({}),
-                            );
+                            *tc = ToolCall::new(tc.id.clone(), tc.name.clone(), json!({}));
                             break;
                         }
                     }
@@ -370,10 +367,9 @@ impl ContextEditingMiddleware {
 /// Estimate tokens for a single message without cloning.
 fn estimate_message_tokens(msg: &ChatMessage) -> usize {
     let content_tokens = msg.content.len() / 4;
-    let tool_call_tokens = msg
-        .tool_calls
-        .as_ref()
-        .map_or(0, |tc| serde_json::to_string(tc).unwrap_or_default().len() / 4);
+    let tool_call_tokens = msg.tool_calls.as_ref().map_or(0, |tc| {
+        serde_json::to_string(tc).unwrap_or_default().len() / 4
+    });
     content_tokens + tool_call_tokens + 4 // +4 for message overhead
 }
 

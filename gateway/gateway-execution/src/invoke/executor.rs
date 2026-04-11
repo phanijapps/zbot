@@ -157,7 +157,7 @@ impl ExecutorBuilder {
     /// * `hook_context` - Optional hook context for initial state
     /// * `mcp_service` - MCP service for starting servers
     /// * `ward_id` - Optional active ward from existing session
-#[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     pub async fn build(
         &self,
         agent: &Agent,
@@ -608,7 +608,9 @@ pub async fn collect_skills_summary(skill_service: &SkillService) -> Vec<serde_j
 ///
 /// Reads `agents_data/shared/workspace.json` and returns its contents
 /// as a HashMap for injection into executor initial state.
-fn load_workspace_from_disk(config_dir: &std::path::Path) -> Option<HashMap<String, serde_json::Value>> {
+fn load_workspace_from_disk(
+    config_dir: &std::path::Path,
+) -> Option<HashMap<String, serde_json::Value>> {
     let workspace_path = config_dir
         .join("agents_data")
         .join("shared")

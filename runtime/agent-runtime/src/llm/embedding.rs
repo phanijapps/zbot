@@ -118,7 +118,7 @@ const fn default_idle_timeout() -> u64 {
 }
 
 /// Compute SHA-256 hash of text content for embedding cache lookups.
-#[must_use] 
+#[must_use]
 pub fn content_hash(text: &str) -> String {
     let mut hasher = Sha256::new();
     hasher.update(text.as_bytes());

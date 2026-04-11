@@ -21,7 +21,6 @@
 //! - [`error`]: Error types for MCP operations
 //! - [`tool`]: Tool types provided by MCP servers
 
-
 mod client;
 mod config;
 mod error;

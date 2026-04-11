@@ -252,8 +252,7 @@ async fn handle_connection(
     let connected_msg = ServerMessage::Connected {
         session_id: session_id.clone(),
     };
-    let msg_text =
-        serde_json::to_string(&connected_msg).map_err(GatewayError::Serialization)?;
+    let msg_text = serde_json::to_string(&connected_msg).map_err(GatewayError::Serialization)?;
     ws_tx
         .send(Message::Text(msg_text))
         .await
