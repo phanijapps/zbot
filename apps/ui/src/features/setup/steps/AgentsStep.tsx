@@ -150,8 +150,9 @@ export function AgentsStep({
         <div className="agent-global-card__label">Default for all</div>
         <div className="agent-global-card__fields">
           <div className="form-group">
-            <label className="form-label">Provider</label>
+            <label className="form-label" htmlFor="agents-global-provider">Provider</label>
             <select
+              id="agents-global-provider"
               className="form-input form-select"
               value={globalDefault.providerId}
               onChange={(e) => {
@@ -169,8 +170,9 @@ export function AgentsStep({
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Model</label>
+            <label className="form-label" htmlFor="agents-global-model">Model</label>
             <select
+              id="agents-global-model"
               className="form-input form-select"
               value={globalDefault.model}
               onChange={(e) => onGlobalChange({ ...globalDefault, model: e.target.value })}
@@ -184,8 +186,9 @@ export function AgentsStep({
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Temperature</label>
+            <label className="form-label" htmlFor="agents-global-temp">Temperature</label>
             <input
+              id="agents-global-temp"
               className="form-input"
               type="number"
               value={globalDefault.temperature}
@@ -194,8 +197,9 @@ export function AgentsStep({
             />
           </div>
           <div className="form-group">
-            <label className="form-label">Max Output Tokens</label>
+            <label className="form-label" htmlFor="agents-global-tokens">Max Output Tokens</label>
             <input
+              id="agents-global-tokens"
               className="form-input"
               type="number"
               value={globalDefault.maxTokens}

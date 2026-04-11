@@ -97,7 +97,7 @@ export function IntelligenceFeed({
         <details className="intel-section">
           <summary className="intel-section__header">
             <span className="intel-section__icon">&#x1f9e0;</span>
-            Intent Analysis
+            {" "}Intent Analysis{" "}
             <span className="intel-badge">{intentAnalysis.executionStrategy.approach}</span>
           </summary>
           <div className="intel-section__body">

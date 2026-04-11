@@ -435,8 +435,9 @@ export function WebSettingsPanel() {
 
                       {toolSettings.offloadLargeResults && (
                         <div>
-                          <label className="settings-field-label">Threshold (tokens)</label>
+                          <label className="settings-field-label" htmlFor="gen-offload-threshold">Threshold (tokens)</label>
                           <input
+                            id="gen-offload-threshold"
                             type="number"
                             value={toolSettings.offloadThresholdTokens}
                             onChange={(e) => handleOffloadChange({ offloadThresholdTokens: Number.parseInt(e.target.value, 10) || 1000 })}
@@ -502,8 +503,8 @@ export function WebSettingsPanel() {
                     {/* Level + Rotation side by side */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="settings-field-label">Level</label>
-                        <select value={logSettings.level}
+                        <label className="settings-field-label" htmlFor="log-level">Level</label>
+                        <select id="log-level" value={logSettings.level}
                           onChange={(e) => handleLogChange({ level: e.target.value as LogSettings["level"] })}
                           disabled={isSavingLogs} className="form-select form-input">
                           <option value="info">Info (default)</option>
@@ -514,8 +515,8 @@ export function WebSettingsPanel() {
                         </select>
                       </div>
                       <div>
-                        <label className="settings-field-label">Rotation</label>
-                        <select value={logSettings.rotation}
+                        <label className="settings-field-label" htmlFor="log-rotation">Rotation</label>
+                        <select id="log-rotation" value={logSettings.rotation}
                           onChange={(e) => handleLogChange({ rotation: e.target.value as LogSettings["rotation"] })}
                           disabled={isSavingLogs} className="form-select form-input">
                           <option value="daily">Daily (default)</option>
@@ -528,8 +529,8 @@ export function WebSettingsPanel() {
                     {/* Max files + Suppress stdout side by side */}
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="settings-field-label">Keep Last N Files</label>
-                        <input type="number" value={logSettings.maxFiles}
+                        <label className="settings-field-label" htmlFor="log-max-files">Keep Last N Files</label>
+                        <input id="log-max-files" type="number" value={logSettings.maxFiles}
                           onChange={(e) => handleLogChange({ maxFiles: Number.parseInt(e.target.value, 10) || 0 })}
                           disabled={isSavingLogs} className="form-input" min={0} />
                         <p className="settings-hint">0 = unlimited</p>
@@ -600,8 +601,9 @@ export function WebSettingsPanel() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="settings-field-label">Provider</label>
+                      <label className="settings-field-label" htmlFor="orch-provider">Provider</label>
                       <select
+                        id="orch-provider"
                         className="form-input form-select"
                         value={execSettings.orchestrator?.providerId || ""}
                         onChange={(e) => handleExecChange({
@@ -619,8 +621,9 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                     <div>
-                      <label className="settings-field-label">Model</label>
+                      <label className="settings-field-label" htmlFor="orch-model">Model</label>
                       <select
+                        id="orch-model"
                         className="form-input form-select"
                         value={execSettings.orchestrator?.model || ""}
                         onChange={(e) => handleExecChange({
@@ -637,8 +640,9 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                     <div>
-                      <label className="settings-field-label">Temperature</label>
+                      <label className="settings-field-label" htmlFor="orch-temp">Temperature</label>
                       <input
+                        id="orch-temp"
                         className="form-input"
                         type="number"
                         min={0} max={2} step={0.1}
@@ -652,8 +656,9 @@ export function WebSettingsPanel() {
                       />
                     </div>
                     <div>
-                      <label className="settings-field-label">Max Output Tokens</label>
+                      <label className="settings-field-label" htmlFor="orch-tokens">Max Output Tokens</label>
                       <input
+                        id="orch-tokens"
                         className="form-input"
                         type="number"
                         min={1024} step={1024}
@@ -701,8 +706,9 @@ export function WebSettingsPanel() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="settings-field-label">Provider</label>
+                      <label className="settings-field-label" htmlFor="dist-provider">Provider</label>
                       <select
+                        id="dist-provider"
                         className="form-input form-select"
                         value={execSettings.distillation?.providerId || ""}
                         onChange={(e) => handleExecChange({
@@ -720,8 +726,9 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                     <div>
-                      <label className="settings-field-label">Model</label>
+                      <label className="settings-field-label" htmlFor="dist-model">Model</label>
                       <select
+                        id="dist-model"
                         className="form-input form-select"
                         value={execSettings.distillation?.model || ""}
                         onChange={(e) => handleExecChange({
@@ -759,8 +766,9 @@ export function WebSettingsPanel() {
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="settings-field-label">Provider</label>
+                      <label className="settings-field-label" htmlFor="mm-provider">Provider</label>
                       <select
+                        id="mm-provider"
                         className="form-input form-select"
                         value={execSettings.multimodal?.providerId || ""}
                         onChange={(e) => handleExecChange({
@@ -778,8 +786,9 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                     <div>
-                      <label className="settings-field-label">Model</label>
+                      <label className="settings-field-label" htmlFor="mm-model">Model</label>
                       <select
+                        id="mm-model"
                         className="form-input form-select"
                         value={execSettings.multimodal?.model || ""}
                         onChange={(e) => handleExecChange({
@@ -799,8 +808,9 @@ export function WebSettingsPanel() {
                       </select>
                     </div>
                     <div>
-                      <label className="settings-field-label">Temperature</label>
+                      <label className="settings-field-label" htmlFor="mm-temp">Temperature</label>
                       <input
+                        id="mm-temp"
                         className="form-input"
                         type="number"
                         min={0} max={2} step={0.1}
@@ -814,8 +824,9 @@ export function WebSettingsPanel() {
                       />
                     </div>
                     <div>
-                      <label className="settings-field-label">Max Output Tokens</label>
+                      <label className="settings-field-label" htmlFor="mm-tokens">Max Output Tokens</label>
                       <input
+                        id="mm-tokens"
                         className="form-input"
                         type="number"
                         min={256} step={256}
@@ -844,8 +855,9 @@ export function WebSettingsPanel() {
                   </div>
 
                   <div>
-                    <label className="settings-field-label">Max Parallel Agents</label>
+                    <label className="settings-field-label" htmlFor="exec-parallel">Max Parallel Agents</label>
                     <input
+                      id="exec-parallel"
                       className="form-input"
                       type="number"
                       value={execSettings.maxParallelAgents}

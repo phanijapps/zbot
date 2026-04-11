@@ -102,8 +102,8 @@ function renderContent(artifact: Artifact, content: string | null, contentUrl: s
   if (["png", "jpg", "jpeg", "gif", "svg"].includes(ft)) {
     return <img src={contentUrl} alt={artifact.fileName} style={{ maxWidth: "100%", maxHeight: "80vh", objectFit: "contain" }} />;
   }
-  if (["mp4", "webm"].includes(ft)) return <video src={contentUrl} controls style={{ maxWidth: "100%" }} />;
-  if (["mp3", "wav"].includes(ft)) return <audio src={contentUrl} controls style={{ width: "100%" }} />;
+  if (["mp4", "webm"].includes(ft)) return <video src={contentUrl} controls style={{ maxWidth: "100%" }}><track kind="captions" /></video>;
+  if (["mp3", "wav"].includes(ft)) return <audio src={contentUrl} controls style={{ width: "100%" }}><track kind="captions" /></audio>;
   if (ft === "pdf") return <embed src={contentUrl} type="application/pdf" width="100%" height="100%" />;
   return (
     <div style={{ textAlign: "center", padding: "40px" }}>

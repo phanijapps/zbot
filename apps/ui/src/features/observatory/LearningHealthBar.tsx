@@ -23,7 +23,7 @@ export function LearningHealthBar() {
     <div className="observatory__health">
       {/* Distillation status */}
       <div className="observatory__health-item">
-        Sessions distilled:
+        Sessions distilled:{" "}
         <span className="observatory__health-value">
           {distilled} / {total}
         </span>
@@ -33,19 +33,19 @@ export function LearningHealthBar() {
       {stats && (
         <>
           <div className="observatory__health-item">
-            Facts:
+            Facts:{" "}
             <span className="observatory__health-value">{stats.facts}</span>
           </div>
           <div className="observatory__health-item">
-            Entities:
+            Entities:{" "}
             <span className="observatory__health-value">{stats.entities}</span>
           </div>
           <div className="observatory__health-item">
-            Relationships:
+            Relationships:{" "}
             <span className="observatory__health-value">{stats.relationships}</span>
           </div>
           <div className="observatory__health-item">
-            Episodes:
+            Episodes:{" "}
             <span className="observatory__health-value">{stats.episodes}</span>
           </div>
         </>
@@ -56,7 +56,7 @@ export function LearningHealthBar() {
         <>
           {failed > 0 && (
             <div className="observatory__health-item">
-              Failed:
+              Failed:{" "}
               <span className="observatory__health-value observatory__health-value--error">
                 {failed}
               </span>
@@ -64,7 +64,7 @@ export function LearningHealthBar() {
           )}
           {skipped > 0 && (
             <div className="observatory__health-item">
-              Skipped:
+              Skipped:{" "}
               <span className="observatory__health-value observatory__health-value--warning">
                 {skipped}
               </span>
