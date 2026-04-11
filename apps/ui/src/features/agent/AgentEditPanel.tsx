@@ -172,8 +172,9 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
           Basic Information
         </h3>
         <div className="form-group">
-          <label className="form-label">Display Name</label>
+          <label className="form-label" htmlFor="edit-agent-display-name">Display Name</label>
           <input
+            id="edit-agent-display-name"
             className="form-input"
             type="text"
             value={formData.displayName || ""}
@@ -182,8 +183,9 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
           />
         </div>
         <div className="form-group">
-          <label className="form-label">Description</label>
+          <label className="form-label" htmlFor="edit-agent-description">Description</label>
           <textarea
+            id="edit-agent-description"
             className="form-textarea"
             value={formData.description || ""}
             onChange={(e) => setFormData({ ...formData, description: e.target.value })}
@@ -204,8 +206,9 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
         </h3>
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "var(--spacing-3)" }}>
           <div className="form-group">
-            <label className="form-label">Provider</label>
+            <label className="form-label" htmlFor="edit-agent-provider">Provider</label>
             <select
+              id="edit-agent-provider"
               className="form-select"
               value={formData.providerId || ""}
               onChange={(e) => {
@@ -223,8 +226,9 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
             </select>
           </div>
           <div className="form-group">
-            <label className="form-label">Model</label>
+            <label className="form-label" htmlFor="edit-agent-model">Model</label>
             <select
+              id="edit-agent-model"
               className="form-select"
               value={formData.model || ""}
               onChange={(e) => setFormData({ ...formData, model: e.target.value })}
@@ -257,7 +261,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
                 max="2"
                 step="0.1"
                 value={formData.temperature || 0.7}
-                onChange={(e) => setFormData({ ...formData, temperature: parseFloat(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, temperature: Number.parseFloat(e.target.value) })}
                 style={{ flex: 1 }}
               />
               <span style={{ fontSize: "var(--text-sm)", color: "var(--foreground)", width: 40, textAlign: "right" }}>
@@ -274,7 +278,7 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
               className="form-input"
               type="number"
               value={formData.maxTokens || 4096}
-              onChange={(e) => setFormData({ ...formData, maxTokens: parseInt(e.target.value) || 4096 })}
+              onChange={(e) => setFormData({ ...formData, maxTokens: Number.parseInt(e.target.value) || 4096 })}
               min="1"
               max="128000"
             />
@@ -302,7 +306,10 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
             {/* Thinking toggle */}
             <div
               className="skill-toggle"
+              role="button"
+              tabIndex={0}
               onClick={() => setFormData({ ...formData, thinkingEnabled: !formData.thinkingEnabled })}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setFormData({ ...formData, thinkingEnabled: !formData.thinkingEnabled }); }}
             >
               <button
                 className={`toggle-switch ${formData.thinkingEnabled ? "toggle-switch--on" : "toggle-switch--off"}`}
@@ -321,7 +328,10 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
             {/* Voice toggle */}
             <div
               className="skill-toggle"
+              role="button"
+              tabIndex={0}
               onClick={() => setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled })}
+              onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") setFormData({ ...formData, voiceRecordingEnabled: !formData.voiceRecordingEnabled }); }}
             >
               <button
                 className={`toggle-switch ${formData.voiceRecordingEnabled ? "toggle-switch--on" : "toggle-switch--off"}`}
@@ -371,7 +381,10 @@ export function AgentEditPanel({ agent, providers, modelRegistry, onClose, onSav
                       <div
                         key={mcp.id}
                         className={`skill-toggle ${isOn ? "skill-toggle--on" : ""}`}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => toggleMcp(mcp.id)}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") toggleMcp(mcp.id); }}
                       >
                         <button
                           className={`toggle-switch ${isOn ? "toggle-switch--on" : "toggle-switch--off"}`}

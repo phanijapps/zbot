@@ -259,7 +259,7 @@ function FormViewer({ event, onSubmit, onCancel }: FormViewerProps) {
           <input
             type="number"
             value={(value as number) || ""}
-            onChange={(e) => setFormData({ ...formData, [name]: parseFloat(e.target.value) })}
+            onChange={(e) => setFormData({ ...formData, [name]: Number.parseFloat(e.target.value) })}
             placeholder={propSchema.description || ""}
             className="form-input"
           />

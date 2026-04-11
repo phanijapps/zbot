@@ -260,11 +260,11 @@ export function GraphCanvas({
     // Selection highlight on circles
     gSel
       .selectAll<SVGCircleElement, SimNode>("g.graph-node circle")
-      .classed("graph-node--selected", function (this: SVGCircleElement) {
-        const parent = this.parentNode as Element | null;
+      .classed("graph-node--selected", (_d, i, nodes) => {
+        const parent = (nodes[i] as SVGCircleElement).parentNode as Element | null;
         if (!parent) return false;
-        const d = select<Element, SimNode>(parent).datum();
-        return d?.entity.id === selectedEntityId;
+        const datum = select<Element, SimNode>(parent).datum();
+        return datum?.entity.id === selectedEntityId;
       });
 
     // Highlight / dimming on node groups
@@ -272,20 +272,20 @@ export function GraphCanvas({
 
     gSel
       .selectAll<SVGGElement, SimNode>("g.graph-node")
-      .classed("graph-node--dimmed", function (this: SVGGElement) {
+      .classed("graph-node--dimmed", (_d, i, nodes) => {
         if (!hasTerm) return false;
-        const d = select<SVGGElement, SimNode>(this).datum();
-        return !matchesHighlight(d.entity, highlightTerm!);
+        const datum = select<SVGGElement, SimNode>(nodes[i]).datum();
+        return !matchesHighlight(datum.entity, highlightTerm!);
       });
 
     gSel
       .selectAll<SVGTextElement, SimNode>("text.graph-label")
-      .classed("graph-label--dimmed", function (this: SVGTextElement) {
+      .classed("graph-label--dimmed", (_d, i, nodes) => {
         if (!hasTerm) return false;
-        const parent = this.parentNode as Element | null;
+        const parent = (nodes[i] as SVGTextElement).parentNode as Element | null;
         if (!parent) return false;
-        const d = select<Element, SimNode>(parent).datum();
-        return !matchesHighlight(d.entity, highlightTerm!);
+        const datum = select<Element, SimNode>(parent).datum();
+        return !matchesHighlight(datum.entity, highlightTerm!);
       });
   }, [selectedEntityId, highlightTerm]);
 

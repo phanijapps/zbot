@@ -194,7 +194,10 @@ function SessionCard({
       {/* Session header */}
       <div
         className="flex items-center gap-2 p-3 hover:bg-muted/50 cursor-pointer"
+        role="button"
+        tabIndex={0}
         onClick={onToggle}
+        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") onToggle(); }}
       >
         <button className="p-1 hover:bg-muted rounded flex-shrink-0">
           {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
@@ -226,7 +229,7 @@ function SessionCard({
           )}
         </div>
 
-        <div className="flex items-center gap-1 flex-shrink-0" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center gap-1 flex-shrink-0" role="group" onClick={(e) => e.stopPropagation()} onKeyDown={(e) => e.stopPropagation()}>
           {showControls && canPause && onPause && (
             <button
               className="btn btn--secondary btn--sm"

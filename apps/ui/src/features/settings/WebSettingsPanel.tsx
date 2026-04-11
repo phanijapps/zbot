@@ -203,10 +203,10 @@ export function WebSettingsPanel() {
       const transport = await getTransport();
       const result = await transport.updateToolSettings(newSettings);
       setSaveMessage(result.success ? "Saved" : result.error || "Failed to save");
-      if (!result.success) setToolSettings(toolSettings);
+      if (!result.success) setToolSettings(prev => prev);
     } catch {
       setSaveMessage("Failed to save");
-      setToolSettings(toolSettings);
+      setToolSettings(prev => prev);
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(null), 2500);
@@ -224,10 +224,10 @@ export function WebSettingsPanel() {
       const transport = await getTransport();
       const result = await transport.updateLogSettings(updates);
       setLogsSaveMessage(result.success ? "Saved" : result.error || "Failed to save");
-      if (!result.success) setLogSettings(logSettings);
+      if (!result.success) setLogSettings(prev => prev);
     } catch {
       setLogsSaveMessage("Failed to save");
-      setLogSettings(logSettings);
+      setLogSettings(prev => prev);
     } finally {
       setIsSavingLogs(false);
       setTimeout(() => setLogsSaveMessage(null), 2500);
@@ -251,11 +251,11 @@ export function WebSettingsPanel() {
         setExecRestartRequired(result.data?.restartRequired ?? false);
       } else {
         setExecSaveMessage(result.error || "Failed to save");
-        setExecSettings(execSettings);
+        setExecSettings(prev => prev);
       }
     } catch {
       setExecSaveMessage("Failed to save");
-      setExecSettings(execSettings);
+      setExecSettings(prev => prev);
     } finally {
       setIsSavingExec(false);
       setTimeout(() => setExecSaveMessage(null), 2500);
@@ -536,7 +536,7 @@ export function WebSettingsPanel() {
                         <p className="settings-hint">0 = unlimited</p>
                       </div>
                       <div>
-                        <label className="settings-field-label">&nbsp;</label>
+                        <label className="settings-field-label" aria-hidden="true">&nbsp;</label>
                         <label className="settings-toggle-option" style={{ opacity: isSavingLogs ? 0.7 : 1, marginTop: 0 }}>
                           <input type="checkbox" checked={logSettings.suppressStdout}
                             onChange={() => handleLogChange({ suppressStdout: !logSettings.suppressStdout })}

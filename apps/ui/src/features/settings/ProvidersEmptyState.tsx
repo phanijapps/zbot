@@ -141,13 +141,14 @@ export function ProvidersEmptyState({ existingProviders, onProviderCreated, onOp
             return (
               <>
                 <div className="form-group">
-                  <label className="form-label">API Key</label>
+                  <label className="form-label" htmlFor="provider-api-key">API Key</label>
                   {preset.apiKeyHint && (
                     <p style={{ fontSize: "var(--text-xs)", color: "var(--muted-foreground)", marginBottom: "var(--spacing-2)" }}>
                       Get your key from <span style={{ color: "var(--primary)" }}>{preset.apiKeyHint}</span>
                     </p>
                   )}
                   <input
+                    id="provider-api-key"
                     className="form-input"
                     type="password"
                     placeholder={preset.apiKeyPlaceholder}
