@@ -561,35 +561,26 @@ export function useFastChat(): UseFastChatResult {
   useEffect(() => {
     if (!conversationId) return;
 
-    const unsubs: (() => void)[] = [];
+    let unsub: (() => void) | null = null;
     let cancelled = false;
 
     const setup = async () => {
       const transport = await getTransport();
       if (cancelled) return;
 
-      unsubs.push(
-        transport.subscribeConversation(conversationId, {
-          onEvent: handleStreamEvent,
-          scope: "session",
-        })
-      );
-
-      if (sessionId && sessionId !== conversationId) {
-        unsubs.push(
-          transport.subscribeConversation(sessionId, {
-            onEvent: handleStreamEvent,
-            scope: "session",
-          })
-        );
-      }
+      // Subscribe to conversationId only — events route through this single subscription.
+      // Do NOT also subscribe to sessionId — that causes duplicate events.
+      unsub = transport.subscribeConversation(conversationId, {
+        onEvent: handleStreamEvent,
+        scope: "session",
+      });
     };
 
     setup();
 
     return () => {
       cancelled = true;
-      unsubs.forEach((u) => u());
+      unsub?.();
       if (rafIdRef.current !== null) {
         cancelAnimationFrame(rafIdRef.current);
         rafIdRef.current = null;
@@ -602,7 +593,7 @@ export function useFastChat(): UseFastChatResult {
       thinkingBufferRef.current = "";
       lastSeqRef.current = 0;
     };
-  }, [sessionId, conversationId, handleStreamEvent]);
+  }, [conversationId, handleStreamEvent]);
 
   // ========================================================================
   // Send message
