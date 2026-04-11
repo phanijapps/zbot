@@ -90,7 +90,7 @@ export function GraphView({ agentId }: GraphViewProps) {
           const centerY = 300;
           const graphNodes: GraphNode[] = entities.map((e, i) => {
             const angle = (2 * Math.PI * i) / entities.length;
-            const radius = 150 + Math.random() * 100;
+            const radius = 150 + ((i * 7919) % 100);
             return {
               id: e.id,
               name: e.name,
