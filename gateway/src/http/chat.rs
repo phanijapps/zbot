@@ -74,6 +74,20 @@ pub async fn init_chat_session(
     let session_id = format!("sess-chat-{}", uuid::Uuid::new_v4());
     let conversation_id = format!("chat-{}", uuid::Uuid::new_v4());
 
+    // Create the session record in the database so get_or_create_session finds it
+    let runner = state.runtime.runner().ok_or_else(|| {
+        (StatusCode::SERVICE_UNAVAILABLE, "Runtime not available".to_string())
+    })?;
+
+    let mut session = execution_state::Session::new_with_source(
+        "root",
+        execution_state::TriggerSource::Web,
+    );
+    session.id = session_id.clone();
+    if let Err(e) = runner.state_service().create_session_from(&session) {
+        tracing::warn!("Failed to create chat session in DB: {}", e);
+    }
+
     // Persist the chat session IDs in settings
     let mut updated_settings = settings.clone();
     updated_settings.chat = gateway_services::ChatConfig {
