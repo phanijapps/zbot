@@ -1098,6 +1098,16 @@ fn gateway_event_to_server_message(event: GatewayEvent) -> Option<ServerMessage>
                 seq: None,
             })
         }
+
+        // Intent analysis skipped (continuation of existing session)
+        GatewayEvent::IntentAnalysisSkipped {
+            session_id,
+            execution_id,
+        } => Some(ServerMessage::IntentAnalysisSkipped {
+            session_id,
+            execution_id,
+            seq: None,
+        }),
     }
 }
 

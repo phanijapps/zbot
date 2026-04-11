@@ -972,6 +972,10 @@ export function useMissionControl() {
       case "intent_analysis_complete":
         handleIntentAnalysisComplete(event, ctx);
         break;
+      case "intent_analysis_skipped":
+        // Intent was already analyzed in a prior turn — skip straight to executing
+        ctx.setPhase("executing");
+        break;
       case "turn_complete":
         handleTurnComplete(event, ctx);
         break;
@@ -1209,13 +1213,15 @@ export function useMissionControl() {
       ]);
 
       setStatus("running");
-      setPhase("intent");
+      // Only show intent phase for new sessions; continuations skip to executing
+      // (the backend emits intent_analysis_skipped which also sets executing)
+      const currentSessionId = getSessionId() ?? undefined;
+      setPhase(currentSessionId ? "executing" : "intent");
       executionAgentMapRef.current.clear();
       startDurationTimer();
 
       try {
         const transport = await getTransport();
-        const currentSessionId = getSessionId() ?? undefined;
 
         // Build message — if attachments, include their references
         let message = text.trim();

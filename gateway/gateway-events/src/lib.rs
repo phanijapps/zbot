@@ -284,6 +284,12 @@ pub enum GatewayEvent {
         ward_recommendation: serde_json::Value,
         execution_strategy: serde_json::Value,
     },
+
+    /// Intent analysis skipped (already analyzed in this session)
+    IntentAnalysisSkipped {
+        session_id: String,
+        execution_id: String,
+    },
 }
 
 impl GatewayEvent {
@@ -318,6 +324,7 @@ impl GatewayEvent {
             Self::SessionTitleChanged { .. } => None,
             Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
+            Self::IntentAnalysisSkipped { .. } => None,
         }
     }
 
@@ -352,6 +359,7 @@ impl GatewayEvent {
             Self::SessionTitleChanged { session_id, .. } => Some(session_id),
             Self::IntentAnalysisStarted { session_id, .. } => Some(session_id),
             Self::IntentAnalysisComplete { session_id, .. } => Some(session_id),
+            Self::IntentAnalysisSkipped { session_id, .. } => Some(session_id),
         }
     }
 
@@ -393,6 +401,7 @@ impl GatewayEvent {
             Self::SessionTitleChanged { .. } => None,
             Self::IntentAnalysisStarted { execution_id, .. } => Some(execution_id),
             Self::IntentAnalysisComplete { execution_id, .. } => Some(execution_id),
+            Self::IntentAnalysisSkipped { execution_id, .. } => Some(execution_id),
         }
     }
 
@@ -465,6 +474,7 @@ impl GatewayEvent {
             Self::SessionTitleChanged { .. } => None,
             Self::IntentAnalysisStarted { .. } => None,
             Self::IntentAnalysisComplete { .. } => None,
+            Self::IntentAnalysisSkipped { .. } => None,
         }
     }
 }
