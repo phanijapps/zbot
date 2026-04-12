@@ -110,6 +110,8 @@ pub struct ExecutionRunner {
     >,
     /// Knowledge graph storage for the graph_query tool.
     graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    /// KG episode repository for ward artifact indexing after distillation.
+    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
 }
 
 impl ExecutionRunner {
@@ -203,6 +205,7 @@ impl ExecutionRunner {
                 std::collections::HashMap::new(),
             )),
             graph_storage: None,
+            kg_episode_repo: None,
         };
 
         // Spawn delegation handler task
@@ -222,6 +225,11 @@ impl ExecutionRunner {
     /// Set the knowledge graph storage for the graph_query tool.
     pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
         self.graph_storage = Some(storage);
+    }
+
+    /// Set the KG episode repository used by post-distillation ward indexing.
+    pub fn set_kg_episode_repo(&mut self, repo: Arc<gateway_database::KgEpisodeRepository>) {
+        self.kg_episode_repo = Some(repo);
     }
 
     /// Get or create a shared rate limiter for a provider.
@@ -511,6 +519,7 @@ impl ExecutionRunner {
         let memory_recall = self.memory_recall.clone();
         let model_registry = self.model_registry.clone();
         let graph_storage = self.graph_storage.clone();
+        let kg_episode_repo = self.kg_episode_repo.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -559,6 +568,7 @@ impl ExecutionRunner {
                             memory_recall.clone(),
                             model_registry.clone(),
                             graph_storage.clone(),
+                            kg_episode_repo.clone(),
                         )
                         .await
                         {
@@ -894,6 +904,7 @@ impl ExecutionRunner {
         let _skill_service = self.skill_service.clone();
         let memory_repo = self.memory_repo.clone();
         let graph_storage = self.graph_storage.clone();
+        let kg_episode_repo = self.kg_episode_repo.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -1191,15 +1202,28 @@ impl ExecutionRunner {
                         auto_update_memory_bank(paths.vault_dir(), ward_id);
                     }
 
-                    // Fire-and-forget session distillation
+                    // Fire-and-forget session distillation, followed by ward artifact indexing.
                     if let Some(distiller) = distiller.as_ref() {
                         let distiller = distiller.clone();
                         let sid = session_id.clone();
                         let aid = agent_id.clone();
+                        let ward_id_for_indexer = session_ward.clone();
+                        let kg_episode_repo_for_indexer = kg_episode_repo.clone();
+                        let graph_storage_for_indexer = graph_storage.clone();
+                        let paths_for_indexer = paths.clone();
                         tokio::spawn(async move {
                             if let Err(e) = distiller.distill(&sid, &aid).await {
                                 tracing::warn!("Session distillation failed: {}", e);
                             }
+                            run_ward_artifact_indexer(
+                                &ward_id_for_indexer,
+                                &sid,
+                                &aid,
+                                kg_episode_repo_for_indexer.as_ref(),
+                                graph_storage_for_indexer.as_ref(),
+                                &paths_for_indexer,
+                            )
+                            .await;
                         });
                     }
                 }
@@ -1995,6 +2019,7 @@ async fn invoke_continuation(
     memory_recall: Option<Arc<super::recall::MemoryRecall>>,
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -2132,6 +2157,7 @@ async fn invoke_continuation(
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
+    let graph_storage_for_indexer = graph_storage.clone();
     if let Some(gs) = graph_storage {
         builder = builder.with_graph_storage(gs);
     }
@@ -2416,14 +2442,31 @@ async fn invoke_continuation(
                     .await;
                 }
 
-                // Fire-and-forget session distillation
+                // Fire-and-forget session distillation, followed by ward artifact indexing.
                 if let Some(distiller) = distiller {
                     let sid = session_id_clone.clone();
                     let aid = agent_id_clone.clone();
+                    let ward_id_for_indexer = state_service
+                        .get_session(&sid)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.ward_id);
+                    let kg_episode_repo_for_indexer = kg_episode_repo.clone();
+                    let graph_storage_for_indexer = graph_storage_for_indexer.clone();
+                    let paths_for_indexer = paths.clone();
                     tokio::spawn(async move {
                         if let Err(e) = distiller.distill(&sid, &aid).await {
                             tracing::warn!("Continuation distillation failed: {}", e);
                         }
+                        run_ward_artifact_indexer(
+                            &ward_id_for_indexer,
+                            &sid,
+                            &aid,
+                            kg_episode_repo_for_indexer.as_ref(),
+                            graph_storage_for_indexer.as_ref(),
+                            &paths_for_indexer,
+                        )
+                        .await;
                     });
                 }
             }
@@ -3385,4 +3428,40 @@ fn generate_core_docs_md(
     if let Err(e) = std::fs::write(output_path, &content) {
         tracing::warn!("Failed to write core_docs.md: {}", e);
     }
+}
+
+/// Phase 6a: index structured ward artifacts into the knowledge graph after distillation.
+///
+/// Skips when the session has no ward (scratch), the KG episode repo is not wired,
+/// graph storage is unavailable, or the ward path does not exist on disk. All errors
+/// from the indexer are logged and never propagate — this must not crash the pipeline.
+async fn run_ward_artifact_indexer(
+    ward_id: &Option<String>,
+    session_id: &str,
+    agent_id: &str,
+    kg_episode_repo: Option<&Arc<gateway_database::KgEpisodeRepository>>,
+    graph_storage: Option<&Arc<knowledge_graph::GraphStorage>>,
+    paths: &SharedVaultPaths,
+) {
+    let (Some(wid), Some(ep_repo), Some(graph)) = (ward_id, kg_episode_repo, graph_storage) else {
+        return;
+    };
+    let ward_path = paths.vault_dir().join("wards").join(wid);
+    if !ward_path.exists() {
+        return;
+    }
+    let n = crate::ward_artifact_indexer::index_ward(
+        &ward_path,
+        session_id,
+        agent_id,
+        ep_repo.as_ref(),
+        graph,
+    )
+    .await;
+    tracing::info!(
+        ward = %wid,
+        indexed_entities = n,
+        session = %session_id,
+        "Ward artifact indexing complete"
+    );
 }

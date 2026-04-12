@@ -85,6 +85,7 @@ impl RuntimeService {
             None,
             2,    // default max_parallel_agents
             None, // graph_storage
+            None, // kg_episode_repo
         )
     }
 
@@ -110,6 +111,7 @@ impl RuntimeService {
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
         graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+        kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
     ) -> Self {
         let mut runner = ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -143,6 +145,10 @@ impl RuntimeService {
 
         if let Some(gs) = graph_storage {
             runner.set_graph_storage(gs);
+        }
+
+        if let Some(repo) = kg_episode_repo {
+            runner.set_kg_episode_repo(repo);
         }
 
         Self {

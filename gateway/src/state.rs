@@ -23,8 +23,8 @@ use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
 use gateway_database::{
-    DistillationRepository, EpisodeRepository, MemoryRepository, ProcedureRepository,
-    RecallLogRepository, WardWikiRepository,
+    DistillationRepository, EpisodeRepository, KgEpisodeRepository, MemoryRepository,
+    ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
 use knowledge_graph::{GraphService, GraphStorage, SqliteGraphTraversal};
 use std::collections::HashMap;
@@ -175,6 +175,7 @@ impl AppState {
         let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
         let episode_repo = Arc::new(EpisodeRepository::new(db_manager.clone()));
+        let kg_episode_repo = Arc::new(KgEpisodeRepository::new(db_manager.clone()));
 
         // Initialize knowledge graph service and storage
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
@@ -309,6 +310,7 @@ impl AppState {
             runner_embedding_client,
             max_parallel_agents,
             runner_graph_storage,
+            Some(kg_episode_repo.clone()),
         ));
 
         // Create hook registry
