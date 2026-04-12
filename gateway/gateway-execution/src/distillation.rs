@@ -532,7 +532,16 @@ impl SessionDistiller {
                 }
             }
 
-            for er in &response.relationships {
+            // Canonicalize relationships before storage: fix common direction
+            // errors from the LLM (passive voice inversions, agent/ward confusion).
+            // See `canonicalize_relationship` for the rules.
+            let canonicalized: Vec<_> = response
+                .relationships
+                .iter()
+                .filter_map(|er| canonicalize_relationship(er, &response.entities))
+                .collect();
+
+            for er in &canonicalized {
                 // Resolve entity names to IDs (or use names as IDs if not found)
                 let source_id = entity_map
                     .get(&er.source)
@@ -1384,6 +1393,116 @@ impl SessionDistiller {
     }
 }
 
+/// Canonicalize a relationship extracted by the LLM — fix common direction
+/// errors before persisting to the knowledge graph.
+///
+/// The LLM is instructed in the distillation prompt about directional
+/// semantics, but it still makes mistakes. This function applies rule-based
+/// fixes that catch the common patterns:
+///
+/// 1. **Passive voice normalization**: `analyzed_by`, `used_by`, `created_by`
+///    must have the agent entity as TARGET (object of the passive verb), not
+///    source. If the LLM inverts, we swap source and target.
+///
+/// 2. **Agent-ticker confusion**: Agents (ending in `-agent`) don't analyze
+///    tickers or projects directly — wards/workspaces do. If we see
+///    `agent --analyzed_by--> ticker`, we drop it rather than store garbage.
+///
+/// 3. **Bidirectional redundancy**: If a relationship has both `uses` and
+///    `used_by` between the same pair, keep only `uses` (we canonicalize
+///    `used_by` → inverse `uses`).
+///
+/// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
+fn canonicalize_relationship(
+    er: &ExtractedRelationship,
+    entities: &[ExtractedEntity],
+) -> Option<ExtractedRelationship> {
+    let rel = er.relationship_type.to_lowercase();
+    let rel = rel.trim();
+
+    // Rule 2: drop nonsensical agent-is-analyzed-by-ticker relationships.
+    // These appear when the LLM confuses who is acting on whom.
+    if (rel == "analyzed_by" || rel == "analyzedby") && is_agent_name(&er.source) {
+        tracing::debug!(
+            source = %er.source,
+            target = %er.target,
+            "Dropping nonsensical agent--analyzed_by--> relationship"
+        );
+        return None;
+    }
+
+    // Rule 3: canonicalize `used_by` / `usedby` into inverse `uses`.
+    // `A used_by B` means `B uses A` — swap source/target and normalize type.
+    if rel == "used_by" || rel == "usedby" || rel == "usedfor" || rel == "used_for" {
+        return Some(ExtractedRelationship {
+            source: er.target.clone(),
+            target: er.source.clone(),
+            relationship_type: "uses".to_string(),
+        });
+    }
+
+    // Rule 3b: canonicalize `created_by` / `createdby` into inverse `created`.
+    if rel == "created_by" || rel == "createdby" {
+        return Some(ExtractedRelationship {
+            source: er.target.clone(),
+            target: er.source.clone(),
+            relationship_type: "created".to_string(),
+        });
+    }
+
+    // Rule 1: for `analyzed_by`, ensure target is the analyzer (ward/workspace),
+    // not the analyzed thing. If source is a workspace-like entity and target
+    // is a ticker/person/organization, swap them — the LLM inverted.
+    if rel == "analyzed_by" || rel == "analyzedby" {
+        let source_type = entity_type_for(&er.source, entities);
+        let target_type = entity_type_for(&er.target, entities);
+
+        // Ticker/person/org analyzed_by ward/project — correct direction.
+        let source_is_subject = matches!(
+            source_type.as_deref(),
+            Some("organization") | Some("person") | Some("concept")
+        );
+        let target_is_analyzer = matches!(target_type.as_deref(), Some("project") | Some("ward"));
+
+        // If inverted (analyzer is source), swap.
+        let source_is_analyzer = matches!(source_type.as_deref(), Some("project") | Some("ward"));
+        let target_is_subject = matches!(
+            target_type.as_deref(),
+            Some("organization") | Some("person") | Some("concept")
+        );
+
+        if !source_is_subject && !target_is_analyzer && source_is_analyzer && target_is_subject {
+            return Some(ExtractedRelationship {
+                source: er.target.clone(),
+                target: er.source.clone(),
+                relationship_type: "analyzed_by".to_string(),
+            });
+        }
+    }
+
+    // Default: keep as-is, normalize type name.
+    Some(ExtractedRelationship {
+        source: er.source.clone(),
+        target: er.target.clone(),
+        relationship_type: rel.to_string(),
+    })
+}
+
+/// Heuristic: does the name look like an agent? (e.g. "planner-agent", "code-agent")
+fn is_agent_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with("-agent") || lower.ends_with("_agent") || lower == "agent"
+}
+
+/// Look up the entity type for a name from the extracted entities list.
+fn entity_type_for(name: &str, entities: &[ExtractedEntity]) -> Option<String> {
+    let lower = name.to_lowercase();
+    entities
+        .iter()
+        .find(|e| e.name.to_lowercase() == lower)
+        .map(|e| e.entity_type.to_lowercase())
+}
+
 /// Derive a sanitized task type from a task summary for use as a fact key.
 ///
 /// Takes the first few words, lowercases them, replaces spaces and dots with
@@ -1829,9 +1948,26 @@ Include `properties` where relevant:
 - Files: ward (workspace path), exports, purpose
 - Tools: version, usage context
 
-## Relationship Types
+## Relationship Types (directional — follow the exact semantics below)
 
-`related_to`, `uses`, `created`, `part_of`, `is_in`, `has_module`, `exports`, `prefers`, `analyzed_by`
+Every relationship has a specific direction: `source --type--> target`. Read the arrow as "source TYPE target":
+
+- `uses` — source actively uses target. Example: `portfolio-analysis uses yfinance` (NOT `yfinance uses portfolio-analysis`).
+- `part_of` — source is a component of target. Example: `chart_utils part_of portfolio-analysis`.
+- `has_module` — source contains target as a module. Example: `portfolio-analysis has_module financial_analysis.py`.
+- `exports` — source makes target available. Example: `financial_analysis.py exports correlation_matrix`.
+- `created` — source created target. Example: `code-agent created financial_analysis.py`.
+- `is_in` — source lives inside target. Example: `correlation_matrix is_in financial_analysis.py`.
+- `analyzed_by` — source is analyzed by target (passive voice). Example: `AAPL analyzed_by portfolio-analysis`. NEVER `portfolio-analysis analyzed_by AAPL`.
+- `prefers` — source prefers target. Example: `user prefers plotly`.
+- `related_to` — generic bidirectional link; use only when no specific type fits.
+
+## Relationship Rules
+
+- NEVER use both `A uses B` and `B uses A` for the same pair — pick the direction that matches reality.
+- NEVER use redundant inverse relationships (e.g., do not emit both `uses` and `used_by` for the same pair — pick ONE).
+- Agents don't "analyze" tickers directly — wards do. Example: `PTON analyzed_by portfolio-analysis`, NOT `PTON analyzed_by planner-agent`.
+- A tool agent (like `planner-agent`) is USED BY a workspace. Emit `portfolio-analysis uses planner-agent`, NOT `planner-agent uses portfolio-analysis`.
 
 ## Ward File Summaries
 
@@ -2035,5 +2171,131 @@ mod tests {
     #[test]
     fn test_sanitize_task_type_empty() {
         assert_eq!(sanitize_task_type(""), "");
+    }
+
+    // ========================================================================
+    // Relationship canonicalization tests
+    // ========================================================================
+
+    fn make_entity(name: &str, entity_type: &str) -> ExtractedEntity {
+        ExtractedEntity {
+            name: name.to_string(),
+            entity_type: entity_type.to_string(),
+            properties: std::collections::HashMap::new(),
+        }
+    }
+
+    fn make_rel(source: &str, rel: &str, target: &str) -> ExtractedRelationship {
+        ExtractedRelationship {
+            source: source.to_string(),
+            target: target.to_string(),
+            relationship_type: rel.to_string(),
+        }
+    }
+
+    #[test]
+    fn canonicalize_drops_agent_analyzed_by_ticker() {
+        // The LLM sometimes emits `planner-agent analyzed_by PTON` which is
+        // nonsense. These should be dropped entirely.
+        let entities = vec![
+            make_entity("planner-agent", "tool"),
+            make_entity("PTON", "organization"),
+        ];
+        let rel = make_rel("planner-agent", "analyzed_by", "PTON");
+        assert!(canonicalize_relationship(&rel, &entities).is_none());
+    }
+
+    #[test]
+    fn canonicalize_inverts_used_by_to_uses() {
+        // `A used_by B` should become `B uses A`.
+        let entities = vec![
+            make_entity("code-agent", "tool"),
+            make_entity("portfolio-analysis", "project"),
+        ];
+        let rel = make_rel("code-agent", "used_by", "portfolio-analysis");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "portfolio-analysis");
+        assert_eq!(result.target, "code-agent");
+        assert_eq!(result.relationship_type, "uses");
+    }
+
+    #[test]
+    fn canonicalize_inverts_usedfor_to_uses() {
+        // `A usedfor B` → `B uses A` (same rule as used_by).
+        let entities = vec![
+            make_entity("planner-agent", "tool"),
+            make_entity("portfolio-analysis", "project"),
+        ];
+        let rel = make_rel("planner-agent", "usedfor", "portfolio-analysis");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "portfolio-analysis");
+        assert_eq!(result.target, "planner-agent");
+        assert_eq!(result.relationship_type, "uses");
+    }
+
+    #[test]
+    fn canonicalize_inverts_created_by_to_created() {
+        // `A created_by B` → `B created A`.
+        let entities = vec![
+            make_entity("financial_analysis.py", "file"),
+            make_entity("code-agent", "tool"),
+        ];
+        let rel = make_rel("financial_analysis.py", "created_by", "code-agent");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "code-agent");
+        assert_eq!(result.target, "financial_analysis.py");
+        assert_eq!(result.relationship_type, "created");
+    }
+
+    #[test]
+    fn canonicalize_preserves_correct_direction() {
+        // `PTON analyzed_by portfolio-analysis` is correct — keep as is.
+        let entities = vec![
+            make_entity("PTON", "organization"),
+            make_entity("portfolio-analysis", "project"),
+        ];
+        let rel = make_rel("PTON", "analyzed_by", "portfolio-analysis");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "PTON");
+        assert_eq!(result.target, "portfolio-analysis");
+        assert_eq!(result.relationship_type, "analyzed_by");
+    }
+
+    #[test]
+    fn canonicalize_swaps_inverted_analyzed_by() {
+        // `portfolio-analysis analyzed_by AAPL` is inverted — swap to
+        // `AAPL analyzed_by portfolio-analysis`.
+        let entities = vec![
+            make_entity("portfolio-analysis", "project"),
+            make_entity("AAPL", "organization"),
+        ];
+        let rel = make_rel("portfolio-analysis", "analyzed_by", "AAPL");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "AAPL");
+        assert_eq!(result.target, "portfolio-analysis");
+    }
+
+    #[test]
+    fn canonicalize_keeps_generic_relationships() {
+        // Relationships without special rules pass through unchanged.
+        let entities = vec![
+            make_entity("yfinance", "tool"),
+            make_entity("pandas", "tool"),
+        ];
+        let rel = make_rel("yfinance", "uses", "pandas");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "yfinance");
+        assert_eq!(result.target, "pandas");
+        assert_eq!(result.relationship_type, "uses");
+    }
+
+    #[test]
+    fn is_agent_name_detects_agent_suffixes() {
+        assert!(is_agent_name("planner-agent"));
+        assert!(is_agent_name("code-agent"));
+        assert!(is_agent_name("research_agent"));
+        assert!(is_agent_name("Planner-Agent")); // case insensitive
+        assert!(!is_agent_name("portfolio-analysis"));
+        assert!(!is_agent_name("yfinance"));
     }
 }

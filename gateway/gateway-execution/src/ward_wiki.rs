@@ -79,7 +79,14 @@ pub async fn compile_ward_wiki(
     // Parse response
     let compiled: CompilationResponse = parse_compilation_response(response_text)?;
 
-    // Upsert articles
+    // Upsert articles. Two-stage dedup:
+    // 1. Title-match: if the LLM reused an exact existing title (preferred
+    //    behavior per prompt), the UNIQUE(ward_id, title) constraint on
+    //    upsert updates in place.
+    // 2. Embedding-similarity: if the LLM produced a *new* title for a topic
+    //    that semantically overlaps with an existing article, merge into the
+    //    existing article instead of creating a near-duplicate. Requires an
+    //    embedding_client.
     let now = chrono::Utc::now().to_rfc3339();
     let mut upserted = 0;
 
@@ -99,11 +106,43 @@ pub async fn compile_ward_wiki(
             None => None,
         };
 
+        // Stage 2 dedup: if this is a "new" title (not matching any existing)
+        // but its content embedding is very close to an existing article,
+        // merge into that existing article by reusing its title.
+        //
+        // Threshold 0.82 chosen empirically: high enough to avoid false
+        // merges of genuinely-distinct topics, low enough to catch the LLM
+        // producing minor title variations like
+        // `Portfolio Analysis Ward` vs `Portfolio Analysis Ward Data Availability`.
+        let mut effective_title = article_data.title.clone();
+        let title_is_new = !existing
+            .iter()
+            .any(|e| e.title == article_data.title && e.title != "__index__");
+
+        if title_is_new {
+            if let Some(ref new_emb) = embedding {
+                if let Ok(matches) = wiki_repo.search_by_similarity(ward_id, new_emb, 1) {
+                    if let Some((nearest, score)) = matches.first() {
+                        if *score >= 0.82 && nearest.title != "__index__" {
+                            tracing::info!(
+                                ward = %ward_id,
+                                new_title = %article_data.title,
+                                merged_into = %nearest.title,
+                                similarity = %format!("{:.3}", score),
+                                "Wiki dedup: merging similar-topic article into existing"
+                            );
+                            effective_title = nearest.title.clone();
+                        }
+                    }
+                }
+            }
+        }
+
         let article = WikiArticle {
             id: format!("wiki-{}-{}", ward_id, uuid::Uuid::new_v4()),
             ward_id: ward_id.to_string(),
             agent_id: agent_id.to_string(),
-            title: article_data.title.clone(),
+            title: effective_title,
             content: article_data.content.clone(),
             tags: article_data
                 .tags
@@ -150,18 +189,39 @@ fn build_compilation_prompt(existing: &[WikiArticle], new_facts: &[FactSummary])
     let mut prompt = String::new();
 
     prompt.push_str(
-        "Given new facts from a session and existing wiki articles, \
-         produce updated or new articles.\n\n\
-         Rules:\n\
-         - Each article covers ONE topic\n\
-         - Article content: 100-500 words, factual, concise\n\
-         - Update existing articles if new facts are relevant\n\
-         - Create new articles for uncovered topics\n\
-         - Note contradictions between new and existing knowledge\n\n",
+        "You are compiling a ward knowledge base. Given new facts from a session \
+         and existing wiki articles, produce UPDATED or NEW articles.\n\n\
+         ## Core Principle\n\n\
+         PREFER UPDATING EXISTING ARTICLES over creating new ones. Only create \
+         a new article if the topic is genuinely not covered by any existing \
+         article. Articles with overlapping topics are a failure mode — avoid \
+         them.\n\n\
+         ## Rules\n\n\
+         - Each article covers ONE focused topic\n\
+         - Article content: 100-500 words, factual, concise, no fluff\n\
+         - Use the EXACT same `title` as an existing article when updating it \
+           — titles are the dedup key. Never rename.\n\
+         - If new facts don't fit any existing article, ONLY THEN create a new \
+           article with a distinct, specific title\n\
+         - Title conventions: Title Case, specific not generic \
+           (e.g., `yfinance Rate Limiting Patterns`, not `Patterns`)\n\
+         - Note contradictions between new and existing knowledge inside the \
+           relevant article's content\n\n\
+         ## Dedup Checklist (apply before emitting each article)\n\n\
+         Before outputting a NEW article, ask:\n\
+         1. Is there an existing article whose topic overlaps? → UPDATE it instead \
+            (reuse its exact title)\n\
+         2. Could this be merged into a broader existing article? → Merge instead \
+            of creating\n\
+         3. Is the title too generic (e.g., `Workflow`, `Structure`)? → Make it \
+            specific to the ward/domain\n\n",
     );
 
     if !existing.is_empty() {
-        prompt.push_str("## Existing Articles\n\n");
+        prompt.push_str(&format!(
+            "## Existing Articles ({} total — reuse these titles when updating)\n\n",
+            existing.iter().filter(|a| a.title != "__index__").count()
+        ));
         for article in existing {
             if article.title == "__index__" {
                 continue;
@@ -172,6 +232,10 @@ fn build_compilation_prompt(existing: &[WikiArticle], new_facts: &[FactSummary])
                 truncate_str(&article.content, 500)
             ));
         }
+    } else {
+        prompt.push_str(
+            "## Existing Articles\n\n(none yet — this is the first compilation for this ward)\n\n",
+        );
     }
 
     prompt.push_str("## New Facts From This Session\n\n");
