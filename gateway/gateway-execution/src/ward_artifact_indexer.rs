@@ -6,8 +6,9 @@
 //! Zero LLM cost. Domain content that previously lived only in ward files
 //! (timeline.json, people.json, etc.) now reaches the knowledge graph.
 
+use crate::indexer::relationship_rules;
 use gateway_database::{EpisodeSource, KgEpisode, KgEpisodeRepository};
-use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage};
+use knowledge_graph::{Entity, EntityType, ExtractedKnowledge, GraphStorage, Relationship};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -133,13 +134,28 @@ async fn index_one_file(
 
     // Extract entities based on the detected schema
     let schema = detect_collection_schema(&value);
-    let entities = extract_entities(&value, schema, agent_id, &episode.id, &source_ref);
-    let count = entities.len();
+    let primary_entities = extract_entities(&value, schema, agent_id, &episode.id, &source_ref);
+    let paired_objects: Vec<serde_json::Map<String, Value>> =
+        object_iter_for_schema(&value, schema);
 
+    let mut all_entities: Vec<Entity> = Vec::new();
+    let mut all_rels: Vec<Relationship> = Vec::new();
+
+    // zip stops at the shorter length; extract_entities and object_iter_for_schema
+    // align filters so lengths match. If they diverge we gracefully emit only
+    // what pairs — best-effort, no panic.
+    for (entity, obj) in primary_entities.into_iter().zip(paired_objects.into_iter()) {
+        let (ents, rels) =
+            entity_with_relationships(entity, &obj, agent_id, &episode.id, &source_ref);
+        all_entities.extend(ents);
+        all_rels.extend(rels);
+    }
+
+    let count = all_entities.len();
     if count > 0 {
         let knowledge = ExtractedKnowledge {
-            entities,
-            relationships: vec![],
+            entities: all_entities,
+            relationships: all_rels,
         };
         graph
             .store_knowledge(agent_id, knowledge)
@@ -408,6 +424,141 @@ fn build_entity(
     entity
 }
 
+/// For one parsed object, return: the primary entity, plus any additional
+/// target entities referenced by rule outputs, plus the relationships.
+fn entity_with_relationships(
+    primary: Entity,
+    obj: &serde_json::Map<String, Value>,
+    agent_id: &str,
+    episode_id: &str,
+    source_ref: &str,
+) -> (Vec<Entity>, Vec<Relationship>) {
+    let candidates = relationship_rules::extract(&primary.name, primary.entity_type.clone(), obj);
+
+    let primary_id = primary.id.clone();
+    let primary_name = primary.name.clone();
+    let primary_type = primary.entity_type.clone();
+
+    let mut extra_entities: Vec<Entity> = Vec::new();
+    let mut relationships: Vec<Relationship> = Vec::new();
+    // (name, type_key) -> id map within this object so the same target shares
+    // an ID across multiple rules before `store_knowledge` dedups globally.
+    let mut name_to_id: std::collections::HashMap<(String, String), String> =
+        std::collections::HashMap::new();
+    name_to_id.insert((primary_name, entity_type_key(&primary_type)), primary_id);
+
+    for cand in candidates {
+        let source_id = ensure_entity(
+            &cand.source_name,
+            cand.source_type,
+            agent_id,
+            episode_id,
+            source_ref,
+            &mut name_to_id,
+            &mut extra_entities,
+        );
+        let target_id = ensure_entity(
+            &cand.target_name,
+            cand.target_type,
+            agent_id,
+            episode_id,
+            source_ref,
+            &mut name_to_id,
+            &mut extra_entities,
+        );
+        relationships.push(Relationship::new(
+            agent_id.to_string(),
+            source_id,
+            target_id,
+            cand.relationship_type,
+        ));
+    }
+
+    let mut all_entities = vec![primary];
+    all_entities.extend(extra_entities);
+    (all_entities, relationships)
+}
+
+fn ensure_entity(
+    name: &str,
+    entity_type: EntityType,
+    agent_id: &str,
+    episode_id: &str,
+    source_ref: &str,
+    map: &mut std::collections::HashMap<(String, String), String>,
+    extras: &mut Vec<Entity>,
+) -> String {
+    let key = (name.to_string(), entity_type_key(&entity_type));
+    if let Some(id) = map.get(&key) {
+        return id.clone();
+    }
+    let empty_props = serde_json::Map::new();
+    let entity = build_entity(
+        name,
+        entity_type,
+        &empty_props,
+        agent_id,
+        episode_id,
+        source_ref,
+    );
+    let id = entity.id.clone();
+    map.insert(key, id.clone());
+    extras.push(entity);
+    id
+}
+
+fn entity_type_key(t: &EntityType) -> String {
+    format!("{:?}", t)
+}
+
+/// Return the JSON objects in the same iteration order used by
+/// `extract_entities(schema=...)`. Callers pair-zip entity with its object.
+fn object_iter_for_schema(
+    value: &Value,
+    schema: CollectionSchema,
+) -> Vec<serde_json::Map<String, Value>> {
+    match schema {
+        CollectionSchema::NamedObjectArray => value
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_object().cloned())
+                    .filter(|obj| {
+                        obj.get("name")
+                            .or_else(|| obj.get("title"))
+                            .or_else(|| obj.get("label"))
+                            .and_then(|v| v.as_str())
+                            .is_some()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        CollectionSchema::DatedObjectArray => value
+            .as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|item| item.as_object().cloned())
+                    .filter(|obj| {
+                        obj.get("name").and_then(|v| v.as_str()).is_some()
+                            || obj.get("title").and_then(|v| v.as_str()).is_some()
+                            || obj.get("year").is_some()
+                            || obj.get("date").is_some()
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        CollectionSchema::NamedObjectMap => value
+            .as_object()
+            .map(|obj| {
+                obj.values()
+                    .filter_map(|v| v.as_object().cloned())
+                    .collect()
+            })
+            .unwrap_or_default(),
+        CollectionSchema::Unknown => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -528,5 +679,43 @@ mod tests {
         let h3 = compute_hash("different");
         assert_eq!(h1, h2);
         assert_ne!(h1, h3);
+    }
+
+    #[test]
+    fn index_one_file_produces_relationships_for_people_json() {
+        let value: Value = serde_json::json!([
+            {"name": "V.D. Savarkar", "organization": "Hindu Mahasabha", "role": "President", "born_in": "Bhagur"}
+        ]);
+        let schema = detect_collection_schema(&value);
+        assert_eq!(schema, CollectionSchema::NamedObjectArray);
+
+        let primary = extract_entities(&value, schema, "root", "ep-1", "/ward/people.json");
+        assert_eq!(primary.len(), 1);
+
+        let objs = object_iter_for_schema(&value, schema);
+        assert_eq!(objs.len(), 1);
+
+        let (entities, relationships) = entity_with_relationships(
+            primary.into_iter().next().unwrap(),
+            &objs[0],
+            "root",
+            "ep-1",
+            "/ward/people.json",
+        );
+
+        // Primary + 3 targets (organization, role, location)
+        assert!(
+            entities.len() >= 4,
+            "expected 4+ entities, got {}",
+            entities.len()
+        );
+        assert_eq!(relationships.len(), 3);
+        let kinds: std::collections::HashSet<String> = relationships
+            .iter()
+            .map(|r| format!("{:?}", r.relationship_type))
+            .collect();
+        assert!(kinds.iter().any(|k| k.contains("MemberOf")));
+        assert!(kinds.iter().any(|k| k.contains("HeldRole")));
+        assert!(kinds.iter().any(|k| k.contains("BornIn")));
     }
 }
