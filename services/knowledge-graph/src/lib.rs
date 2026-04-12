@@ -11,6 +11,7 @@
 pub mod causal;
 pub mod error;
 pub mod extractor;
+pub mod resolver;
 pub mod service;
 pub mod storage;
 pub mod traversal;
@@ -19,6 +20,9 @@ pub mod types;
 pub use causal::{CausalEdge, CausalEdgeStore};
 pub use error::{GraphError, GraphResult};
 pub use extractor::EntityExtractor;
+pub use resolver::{
+    levenshtein, merge_alias, normalize_name, resolve, MatchReason, ResolveOutcome,
+};
 pub use service::GraphService;
 pub use storage::GraphStorage;
 pub use traversal::{GraphTraversal, SqliteGraphTraversal, TraversalNode};
