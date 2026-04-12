@@ -1339,6 +1339,24 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
         ],
     ).map_err(GraphError::Database)?;
 
+    // Seed self-alias so future mentions of this exact surface form short-circuit
+    // at resolver stage 1 (alias-table lookup).
+    let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
+    let normalized = crate::resolver::normalize_name(&entity.name);
+    conn.execute(
+        "INSERT OR IGNORE INTO kg_aliases (
+             id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at
+         ) VALUES (?1, ?2, ?3, ?4, 'extraction', 1.0, ?5)",
+        params![
+            alias_id,
+            new_id,
+            entity.name,
+            normalized,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )
+    .map_err(GraphError::Database)?;
+
     Ok(new_id)
 }
 
@@ -1814,4 +1832,40 @@ mod tests {
         assert_eq!(rels.len(), 1);
         assert_eq!(rels[0].mention_count, 2);
     }
+
+    #[test]
+    fn store_entity_seeds_self_alias() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths =
+            std::sync::Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = std::sync::Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+
+        let storage = GraphStorage::new(db.clone()).unwrap();
+
+        let mut entity = Entity::new(
+            "root".to_string(),
+            crate::EntityType::Person,
+            "V.D. Savarkar".to_string(),
+        );
+        entity.id = "e1".to_string();
+
+        let knowledge = ExtractedKnowledge {
+            entities: vec![entity],
+            relationships: vec![],
+        };
+        storage.store_knowledge("root", knowledge).unwrap();
+
+        db.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM kg_aliases WHERE normalized_form = ?1",
+                rusqlite::params!["vd savarkar"],
+                |r| r.get(0),
+            )?;
+            assert_eq!(count, 1, "self-alias should be seeded on entity create");
+            Ok(())
+        })
+        .unwrap();
+    }
+
 }
