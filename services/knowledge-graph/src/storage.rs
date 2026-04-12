@@ -35,15 +35,6 @@ impl GraphStorage {
     /// Schema v22 is already initialized by `KnowledgeDatabase::new`, so this
     /// constructor is effectively a no-op wrapper.
     pub fn new(db: Arc<KnowledgeDatabase>) -> GraphResult<Self> {
-        // Bridge: v22 schema (in gateway-database) doesn't yet carry the
-        // `aliases` TEXT column that the EntityResolver expects on
-        // `kg_entities`. Add it idempotently so store/resolve paths work.
-        // TODO: Fold this column into the v22 schema definition proper.
-        db.with_connection(|conn| {
-            let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN aliases TEXT", []);
-            Ok(())
-        })
-        .map_err(GraphError::Other)?;
         Ok(Self { db })
     }
 
