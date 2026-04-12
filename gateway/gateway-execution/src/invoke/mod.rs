@@ -10,6 +10,8 @@ mod executor;
 pub mod graph_adapter;
 pub mod setup;
 pub mod stream;
+pub mod working_memory;
+pub mod working_memory_middleware;
 
 pub use batch_writer::{spawn_batch_writer, spawn_batch_writer_with_repo, BatchWriterHandle};
 pub use executor::{
@@ -22,3 +24,4 @@ pub use setup::{
 pub use stream::{
     broadcast_event, process_stream_event, ResponseAccumulator, StreamContext, ToolCallAccumulator,
 };
+pub use working_memory::WorkingMemory;

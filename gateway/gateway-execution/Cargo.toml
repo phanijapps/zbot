@@ -58,6 +58,7 @@ regex = { workspace = true }
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }
+indexmap = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
