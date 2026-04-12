@@ -273,7 +273,10 @@ impl AppState {
             "article_id",
             384,
         ));
-        let wiki_repo = Arc::new(WardWikiRepository::new(knowledge_db.clone(), wiki_vec.clone()));
+        let wiki_repo = Arc::new(WardWikiRepository::new(
+            knowledge_db.clone(),
+            wiki_vec.clone(),
+        ));
         memory_recall_inner.set_wiki_repo(wiki_repo);
 
         // Wire procedure repository for procedure recall during intent analysis
