@@ -8,6 +8,7 @@
 mod connection;
 pub mod distillation_repository;
 pub mod episode_repository;
+pub mod goal_repository;
 pub mod kg_episode_repository;
 pub mod knowledge_db;
 pub mod knowledge_schema;
@@ -25,6 +26,7 @@ pub use distillation_repository::{
     DistillationRepository, DistillationRun, DistillationStats, UndistilledSession,
 };
 pub use episode_repository::{EpisodeRepository, SessionEpisode};
+pub use goal_repository::{Goal, GoalRepository};
 pub use kg_episode_repository::{EpisodeSource, KgEpisode, KgEpisodeRepository};
 pub use knowledge_db::KnowledgeDatabase;
 pub use memory_fact_store::GatewayMemoryFactStore;
