@@ -182,7 +182,7 @@ impl AppState {
 
         // Initialize knowledge graph service and storage
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
-            match GraphStorage::new(paths.knowledge_graph_db()) {
+            match GraphStorage::new(paths.knowledge_db()) {
                 Ok(storage) => {
                     let storage = Arc::new(storage);
                     let service = Arc::new(GraphService::new(storage.clone()));

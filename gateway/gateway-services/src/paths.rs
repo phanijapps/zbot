@@ -84,9 +84,9 @@ impl VaultPaths {
         self.vault_dir.join("data").join("conversations.db")
     }
 
-    /// Path to `data/knowledge_graph.db`
-    pub fn knowledge_graph_db(&self) -> PathBuf {
-        self.vault_dir.join("data").join("knowledge_graph.db")
+    /// Path to `data/knowledge.db` — long-term memory + graph + vec0 indexes.
+    pub fn knowledge_db(&self) -> PathBuf {
+        self.vault_dir.join("data").join("knowledge.db")
     }
 
     /// Path to the data directory
