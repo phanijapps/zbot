@@ -3,3 +3,7 @@
 
 pub mod chunker;
 pub mod extractor;
+pub mod queue;
+
+pub use extractor::{Extractor, NoopExtractor};
+pub use queue::IngestionQueue;
