@@ -353,6 +353,34 @@ pub async fn analyze_intent(
         String::new()
     };
 
+    // Step 0b: Recall proven procedures that match the user's request
+    let mut procedure_context = String::new();
+    if let Some(recall) = memory_recall {
+        if let Ok(procedures) = recall
+            .recall_procedures(user_message, "root", None, 3)
+            .await
+        {
+            for (proc, score) in &procedures {
+                if *score > 0.7 && proc.success_count >= 2 {
+                    let total = (proc.success_count + proc.failure_count).max(1) as f64;
+                    let success_rate = proc.success_count as f64 / total;
+                    procedure_context = format!(
+                        "\n## Proven Procedure Available: {}\n{}\nSteps: {}\nSuccess rate: {:.0}% ({} uses)\n",
+                        proc.name, proc.description, proc.steps,
+                        success_rate * 100.0, proc.success_count,
+                    );
+                    break; // Only use the top match
+                }
+            }
+        }
+    }
+
+    // Combine memory context with procedure context
+    let mut memory_context = memory_context;
+    if !procedure_context.is_empty() {
+        memory_context = format!("{}\n{}", memory_context, procedure_context);
+    }
+
     if !memory_context.is_empty() {
         tracing::info!(
             memory_context_len = memory_context.len(),

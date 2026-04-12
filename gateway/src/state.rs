@@ -23,8 +23,8 @@ use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
 use gateway_database::{
-    DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository,
-    WardWikiRepository,
+    DistillationRepository, EpisodeRepository, MemoryRepository, ProcedureRepository,
+    RecallLogRepository, WardWikiRepository,
 };
 use knowledge_graph::{GraphService, GraphStorage, SqliteGraphTraversal};
 use std::collections::HashMap;
@@ -244,6 +244,10 @@ impl AppState {
         let wiki_repo = Arc::new(WardWikiRepository::new(db_manager.clone()));
         memory_recall_inner.set_wiki_repo(wiki_repo);
 
+        // Wire procedure repository for procedure recall during intent analysis
+        let procedure_repo = Arc::new(ProcedureRepository::new(db_manager.clone()));
+        memory_recall_inner.set_procedure_repo(procedure_repo.clone());
+
         let memory_recall = Arc::new(memory_recall_inner);
 
         // Clone embedding client before it's moved into distiller — the runner
@@ -273,6 +277,7 @@ impl AppState {
             Some(settings.clone()),
         );
         distiller_inner.set_wiki_repo(wiki_repo);
+        distiller_inner.set_procedure_repo(procedure_repo);
         let distiller = Arc::new(distiller_inner);
 
         // Keep a handle for on-demand distillation (backfill, trigger)

@@ -23,8 +23,8 @@ use agent_runtime::llm::embedding::EmbeddingClient;
 #[cfg(test)]
 use gateway_database::MemoryFact;
 use gateway_database::{
-    EpisodeRepository, MemoryRepository, RecallLogRepository, ScoredFact, SessionEpisode,
-    WardWikiRepository,
+    EpisodeRepository, MemoryRepository, Procedure, ProcedureRepository, RecallLogRepository,
+    ScoredFact, SessionEpisode, WardWikiRepository,
 };
 use gateway_services::RecallConfig;
 use knowledge_graph::{
@@ -62,6 +62,7 @@ pub struct MemoryRecall {
     episode_repo: Option<Arc<EpisodeRepository>>,
     recall_log: Option<Arc<RecallLogRepository>>,
     wiki_repo: Option<Arc<WardWikiRepository>>,
+    procedure_repo: Option<Arc<ProcedureRepository>>,
 }
 
 impl MemoryRecall {
@@ -80,6 +81,7 @@ impl MemoryRecall {
             episode_repo: None,
             recall_log: None,
             wiki_repo: None,
+            procedure_repo: None,
         }
     }
 
@@ -104,6 +106,7 @@ impl MemoryRecall {
             episode_repo: None,
             recall_log: None,
             wiki_repo: None,
+            procedure_repo: None,
         }
     }
 
@@ -130,6 +133,35 @@ impl MemoryRecall {
     /// Set the ward wiki repository for wiki-first recall.
     pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
         self.wiki_repo = Some(repo);
+    }
+
+    /// Set the procedure repository for procedure recall.
+    pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
+        self.procedure_repo = Some(repo);
+    }
+
+    /// Search for proven procedures similar to a query.
+    ///
+    /// Returns matching procedures with their similarity scores, filtered to
+    /// the given agent and optional ward scope.
+    pub async fn recall_procedures(
+        &self,
+        query: &str,
+        agent_id: &str,
+        ward_id: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<(Procedure, f64)>, String> {
+        let procedure_repo = match &self.procedure_repo {
+            Some(r) => r,
+            None => return Ok(Vec::new()),
+        };
+
+        let embedding = match self.embed_query(query).await {
+            Some(emb) => emb,
+            None => return Ok(Vec::new()),
+        };
+
+        procedure_repo.search_by_similarity(&embedding, agent_id, ward_id, limit)
     }
 
     /// Recall relevant facts for a given agent and user message.
