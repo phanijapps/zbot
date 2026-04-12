@@ -84,25 +84,58 @@ fn non_empty_string(v: Option<&Value>) -> Option<String> {
     }
 }
 fn rule_organization(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(target) = non_empty_string(obj.get("organization")) else {
+        return;
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: target,
+        target_type: EntityType::Organization,
+        relationship_type: RelationshipType::MemberOf,
+    });
 }
+
 fn rule_role(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(target) = non_empty_string(obj.get("role")) else {
+        return;
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: target,
+        target_type: EntityType::Role,
+        relationship_type: RelationshipType::HeldRole,
+    });
 }
+
 fn rule_founder_reversed(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(founder) = non_empty_string(obj.get("founder")) else {
+        return;
+    };
+    // Direction inversion: person --founder_of--> org.
+    out.push(RelationshipCandidate {
+        source_name: founder,
+        source_type: EntityType::Person,
+        target_name: source_name.to_string(),
+        target_type: source_type,
+        relationship_type: RelationshipType::FounderOf,
+    });
 }
 fn rule_founded_in(
     _s: &str,
@@ -187,5 +220,41 @@ mod tests {
         assert!(extract("X", EntityType::Event, &obj(json!({}))).is_empty());
         assert!(extract("X", EntityType::Event, &obj(json!({"location": ""}))).is_empty());
         assert!(extract("X", EntityType::Event, &obj(json!({"location": null}))).is_empty());
+    }
+
+    #[test]
+    fn organization_emits_member_of() {
+        let o = obj(json!({"organization": "Hindu Mahasabha"}));
+        let out = extract("V.D. Savarkar", EntityType::Person, &o);
+        assert!(out
+            .iter()
+            .any(|r| r.relationship_type == RelationshipType::MemberOf
+                && r.target_name == "Hindu Mahasabha"
+                && r.target_type == EntityType::Organization));
+    }
+
+    #[test]
+    fn role_emits_held_role() {
+        let o = obj(json!({"role": "President"}));
+        let out = extract("V.D. Savarkar", EntityType::Person, &o);
+        assert!(out
+            .iter()
+            .any(|r| r.relationship_type == RelationshipType::HeldRole
+                && r.target_name == "President"
+                && r.target_type == EntityType::Role));
+    }
+
+    #[test]
+    fn founder_is_reversed_person_founder_of_org() {
+        let o = obj(json!({"founder": "B.S. Moonje"}));
+        let out = extract("Hindu Mahasabha", EntityType::Organization, &o);
+        let r = out
+            .iter()
+            .find(|r| r.relationship_type == RelationshipType::FounderOf)
+            .expect("founder_of relationship");
+        assert_eq!(r.source_name, "B.S. Moonje");
+        assert_eq!(r.source_type, EntityType::Person);
+        assert_eq!(r.target_name, "Hindu Mahasabha");
+        assert_eq!(r.target_type, EntityType::Organization);
     }
 }
