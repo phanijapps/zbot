@@ -213,6 +213,48 @@ impl MemoryRepository {
         })
     }
 
+    /// Get the currently-valid fact for a given key (not yet superseded).
+    ///
+    /// Returns `None` if no active fact exists for this agent/scope/ward/key combo.
+    pub fn get_fact_by_key(
+        &self,
+        agent_id: &str,
+        scope: &str,
+        ward_id: &str,
+        key: &str,
+    ) -> Result<Option<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
+                 FROM memory_facts
+                 WHERE agent_id = ?1 AND scope = ?2 AND ward_id = ?3 AND key = ?4 AND valid_until IS NULL
+                 LIMIT 1",
+            )?;
+
+            let result = stmt.query_row(params![agent_id, scope, ward_id, key], row_to_memory_fact);
+
+            match result {
+                Ok(fact) => Ok(Some(fact)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
+    /// Mark an existing fact as superseded by a newer fact.
+    ///
+    /// Sets `valid_until` to now and records the new fact's ID in `superseded_by`.
+    pub fn supersede_fact(&self, old_id: &str, new_id: &str) -> Result<(), String> {
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE memory_facts SET valid_until = datetime('now'), superseded_by = ?1 WHERE id = ?2",
+                params![new_id, old_id],
+            )?;
+            Ok(())
+        })
+    }
+
     /// List memory facts with optional filters (category, scope) and pagination.
     pub fn list_memory_facts(
         &self,

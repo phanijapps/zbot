@@ -390,11 +390,21 @@ impl SessionDistiller {
             // Embed the fact content
             let embedding = self.embed_text(&ef.content).await;
 
+            let scope = "agent";
+            let ward_id = "__global__";
+
+            // Check if an active fact with the same key exists and has different content
+            let existing_fact = self
+                .memory_repo
+                .get_fact_by_key(agent_id, scope, ward_id, &ef.key)
+                .ok()
+                .flatten();
+
             let fact = MemoryFact {
-                id: fact_id,
+                id: fact_id.clone(),
                 session_id: Some(session_id.to_string()),
                 agent_id: agent_id.to_string(),
-                scope: "agent".to_string(),
+                scope: scope.to_string(),
                 category: ef.category.clone(),
                 key: ef.key.clone(),
                 content: ef.content.clone(),
@@ -402,16 +412,37 @@ impl SessionDistiller {
                 mention_count: 1,
                 source_summary: Some(format!("Distilled from session {}", session_id)),
                 embedding,
-                ward_id: "__global__".to_string(),
+                ward_id: ward_id.to_string(),
                 contradicted_by: None,
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
-                valid_from: None,
+                valid_from: Some(now.clone()),
                 valid_until: None,
                 superseded_by: None,
                 pinned: false,
             };
+
+            // Supersede the old fact if content differs
+            if let Some(ref existing) = existing_fact {
+                if existing.content != ef.content && !existing.pinned {
+                    if let Err(e) = self.memory_repo.supersede_fact(&existing.id, &fact_id) {
+                        tracing::warn!(
+                            key = %ef.key,
+                            old_id = %existing.id,
+                            error = %e,
+                            "Failed to supersede old fact"
+                        );
+                    } else {
+                        tracing::debug!(
+                            key = %ef.key,
+                            old_id = %existing.id,
+                            new_id = %fact_id,
+                            "Superseded old fact with new content"
+                        );
+                    }
+                }
+            }
 
             if let Err(e) = self.memory_repo.upsert_memory_fact(&fact) {
                 tracing::warn!(
@@ -933,14 +964,23 @@ impl SessionDistiller {
         );
 
         // Upsert the strategy as a memory fact
+        let strategy_fact_id = format!("fact-{}", uuid::Uuid::new_v4());
+
+        // Check for existing strategy fact to supersede
+        let existing_strategy = self
+            .memory_repo
+            .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+            .ok()
+            .flatten();
+
         let fact = MemoryFact {
-            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            id: strategy_fact_id.clone(),
             session_id: Some(episode.session_id.clone()),
             agent_id: agent_id.to_string(),
             scope: "agent".to_string(),
             category: "strategy".to_string(),
-            key: fact_key,
-            content: strategy_description,
+            key: fact_key.clone(),
+            content: strategy_description.clone(),
             confidence: 0.92,
             mention_count: 1,
             source_summary: Some(format!(
@@ -954,11 +994,34 @@ impl SessionDistiller {
             created_at: now.to_string(),
             updated_at: now.to_string(),
             expires_at: None,
-            valid_from: None,
+            valid_from: Some(now.to_string()),
             valid_until: None,
             superseded_by: None,
             pinned: false,
         };
+
+        // Supersede old strategy if content differs
+        if let Some(ref existing) = existing_strategy {
+            if existing.content != strategy_description && !existing.pinned {
+                if let Err(e) = self
+                    .memory_repo
+                    .supersede_fact(&existing.id, &strategy_fact_id)
+                {
+                    tracing::warn!(
+                        key = %fact_key,
+                        error = %e,
+                        "Failed to supersede old strategy fact"
+                    );
+                } else {
+                    tracing::debug!(
+                        key = %fact_key,
+                        old_id = %existing.id,
+                        new_id = %strategy_fact_id,
+                        "Superseded old strategy fact"
+                    );
+                }
+            }
+        }
 
         self.memory_repo.upsert_memory_fact(&fact)?;
 
@@ -1032,17 +1095,27 @@ impl SessionDistiller {
         );
 
         // Upsert the correction as a memory fact
+        let correction_fact_id = format!("fact-{}", uuid::Uuid::new_v4());
+        let correction_content = format!(
+            "Recurring failure ({} episodes): {}",
+            cluster_size, latest_key_learning
+        );
+
+        // Check for existing correction fact to supersede
+        let existing_correction = self
+            .memory_repo
+            .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+            .ok()
+            .flatten();
+
         let fact = MemoryFact {
-            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            id: correction_fact_id.clone(),
             session_id: Some(episode.session_id.clone()),
             agent_id: agent_id.to_string(),
             scope: "agent".to_string(),
             category: "correction".to_string(),
-            key: fact_key,
-            content: format!(
-                "Recurring failure ({} episodes): {}",
-                cluster_size, latest_key_learning
-            ),
+            key: fact_key.clone(),
+            content: correction_content.clone(),
             confidence: (0.85 + 0.02 * cluster_size as f64).min(0.98),
             mention_count: cluster_size as i32,
             source_summary: Some("Clustered from repeated failures".to_string()),
@@ -1050,13 +1123,36 @@ impl SessionDistiller {
             ward_id: ward_id.to_string(),
             contradicted_by: None,
             created_at: now.clone(),
-            updated_at: now,
+            updated_at: now.clone(),
             expires_at: None,
-            valid_from: None,
+            valid_from: Some(now),
             valid_until: None,
             superseded_by: None,
             pinned: false,
         };
+
+        // Supersede old correction if content differs
+        if let Some(ref existing) = existing_correction {
+            if existing.content != correction_content && !existing.pinned {
+                if let Err(e) = self
+                    .memory_repo
+                    .supersede_fact(&existing.id, &correction_fact_id)
+                {
+                    tracing::warn!(
+                        key = %fact_key,
+                        error = %e,
+                        "Failed to supersede old correction fact"
+                    );
+                } else {
+                    tracing::debug!(
+                        key = %fact_key,
+                        old_id = %existing.id,
+                        new_id = %correction_fact_id,
+                        "Superseded old correction fact"
+                    );
+                }
+            }
+        }
 
         self.memory_repo.upsert_memory_fact(&fact)?;
 
