@@ -1012,7 +1012,13 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
             properties TEXT,
             first_seen_at TEXT NOT NULL,
             last_seen_at TEXT NOT NULL,
-            mention_count INTEGER DEFAULT 1
+            mention_count INTEGER DEFAULT 1,
+            aliases TEXT,
+            epistemic_class TEXT DEFAULT 'current',
+            source_episode_ids TEXT,
+            valid_from TEXT,
+            valid_until TEXT,
+            confidence REAL DEFAULT 0.8
         )",
         [],
     )
@@ -1043,6 +1049,11 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
             first_seen_at TEXT NOT NULL,
             last_seen_at TEXT NOT NULL,
             mention_count INTEGER DEFAULT 1,
+            valid_at TEXT,
+            invalidated_at TEXT,
+            epistemic_class TEXT DEFAULT 'current',
+            source_episode_ids TEXT,
+            confidence REAL DEFAULT 0.8,
             FOREIGN KEY (source_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
             FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
         )",
@@ -1121,6 +1132,54 @@ fn initialize_schema(conn: &Connection) -> GraphResult<()> {
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_rel_unique
          ON kg_relationships(source_entity_id, target_entity_id, relationship_type)",
+        [],
+    )
+    .map_err(GraphError::Database)?;
+
+    // Idempotent migrations: add epistemic/bitemporal/provenance columns.
+    // ALTER TABLE fails silently if the column already exists (re-run safe).
+    let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN aliases TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE kg_entities ADD COLUMN epistemic_class TEXT DEFAULT 'current'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kg_entities ADD COLUMN source_episode_ids TEXT",
+        [],
+    );
+    let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN valid_from TEXT", []);
+    let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN valid_until TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE kg_entities ADD COLUMN confidence REAL DEFAULT 0.8",
+        [],
+    );
+
+    let _ = conn.execute("ALTER TABLE kg_relationships ADD COLUMN valid_at TEXT", []);
+    let _ = conn.execute(
+        "ALTER TABLE kg_relationships ADD COLUMN invalidated_at TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kg_relationships ADD COLUMN epistemic_class TEXT DEFAULT 'current'",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kg_relationships ADD COLUMN source_episode_ids TEXT",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE kg_relationships ADD COLUMN confidence REAL DEFAULT 0.8",
+        [],
+    );
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entities_class ON kg_entities(agent_id, epistemic_class)",
+        [],
+    )
+    .map_err(GraphError::Database)?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_rels_valid_at ON kg_relationships(valid_at)",
         [],
     )
     .map_err(GraphError::Database)?;
