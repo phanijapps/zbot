@@ -52,11 +52,36 @@ const RULES: &[Rule] = &[
 // --- Individual rules are added in later tasks. Stubs below keep the build green. ---
 
 fn rule_location(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(target) = non_empty_string(obj.get("location")) else {
+        return;
+    };
+    let rel = if matches!(source_type, EntityType::Event) {
+        RelationshipType::HeldAt
+    } else {
+        RelationshipType::LocatedIn
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: target,
+        target_type: EntityType::Location,
+        relationship_type: rel,
+    });
+}
+
+/// Return `Some(s.trim().to_owned())` only when the value is a non-empty string.
+fn non_empty_string(v: Option<&Value>) -> Option<String> {
+    let s = v?.as_str()?.trim();
+    if s.is_empty() {
+        None
+    } else {
+        Some(s.to_string())
+    }
 }
 fn rule_organization(
     _s: &str,
@@ -135,5 +160,32 @@ mod tests {
     fn no_rules_fire_on_empty_object() {
         let o = obj(json!({}));
         assert!(extract("X", EntityType::Concept, &o).is_empty());
+    }
+
+    #[test]
+    fn location_on_event_emits_held_at() {
+        let o = obj(json!({"location": "Ahmedabad"}));
+        let out = extract("Session 1937", EntityType::Event, &o);
+        assert_eq!(out.len(), 1);
+        let r = &out[0];
+        assert_eq!(r.source_name, "Session 1937");
+        assert_eq!(r.target_name, "Ahmedabad");
+        assert_eq!(r.target_type, EntityType::Location);
+        assert_eq!(r.relationship_type, RelationshipType::HeldAt);
+    }
+
+    #[test]
+    fn location_on_non_event_emits_located_in() {
+        let o = obj(json!({"location": "Mumbai"}));
+        let out = extract("Acme Corp", EntityType::Organization, &o);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].relationship_type, RelationshipType::LocatedIn);
+    }
+
+    #[test]
+    fn empty_or_missing_location_emits_nothing() {
+        assert!(extract("X", EntityType::Event, &obj(json!({}))).is_empty());
+        assert!(extract("X", EntityType::Event, &obj(json!({"location": ""}))).is_empty());
+        assert!(extract("X", EntityType::Event, &obj(json!({"location": null}))).is_empty());
     }
 }
