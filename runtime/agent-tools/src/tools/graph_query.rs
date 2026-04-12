@@ -53,6 +53,24 @@ pub trait GraphStorageAccess: Send + Sync + 'static {
         limit: usize,
     ) -> std::result::Result<Vec<EntityInfo>, String>;
 
+    /// Find entities whose name matches `query`, ranked by the requested view.
+    ///
+    /// `view` is one of `"semantic"`, `"temporal"`, `"entity"`, `"hybrid"`.
+    /// Unknown values fall back to `"semantic"`.
+    ///
+    /// Default implementation delegates to [`search_entities_by_name`], so
+    /// implementors only need to override for MAGMA-style views.
+    async fn search_entities_with_view(
+        &self,
+        query: &str,
+        entity_type: Option<&str>,
+        _view: &str,
+        limit: usize,
+    ) -> std::result::Result<Vec<EntityInfo>, String> {
+        self.search_entities_by_name(query, entity_type, limit)
+            .await
+    }
+
     /// Get entities connected to `entity_name`.
     /// `direction` is one of "outgoing", "incoming", or "both".
     async fn get_entity_neighbors(
@@ -135,6 +153,11 @@ impl Tool for GraphQueryTool {
                     "type": "integer",
                     "default": 20,
                     "description": "Maximum number of results"
+                },
+                "view": {
+                    "type": "string",
+                    "enum": ["semantic", "temporal", "entity", "hybrid"],
+                    "description": "Query view: semantic (by similarity/mentions, default), temporal (most recent first), entity (most connected first), hybrid (reranked combination)"
                 }
             },
             "required": ["action"]
@@ -172,10 +195,14 @@ impl GraphQueryTool {
         })?;
 
         let entity_type = args.get("entity_type").and_then(|v| v.as_str());
+        let view = args
+            .get("view")
+            .and_then(|v| v.as_str())
+            .unwrap_or("semantic");
 
         let entities = self
             .storage
-            .search_entities_by_name(query, entity_type, limit)
+            .search_entities_with_view(query, entity_type, view, limit)
             .await
             .map_err(|e| ZeroError::Tool(format!("Graph search failed: {e}")))?;
 
@@ -306,10 +333,15 @@ impl GraphQueryTool {
             ZeroError::Tool("Missing 'query' parameter for context action".to_string())
         })?;
 
+        let view = args
+            .get("view")
+            .and_then(|v| v.as_str())
+            .unwrap_or("semantic");
+
         // Search for entities matching the topic
         let entities = self
             .storage
-            .search_entities_by_name(topic, None, limit)
+            .search_entities_with_view(topic, None, view, limit)
             .await
             .map_err(|e| ZeroError::Tool(format!("Context search failed: {e}")))?;
 

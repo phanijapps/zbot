@@ -262,6 +262,104 @@ impl GraphStorage {
         Ok(entities)
     }
 
+    /// Search entities ordered by a caller-provided clause.
+    ///
+    /// `order_clause` is whitelisted to prevent SQL injection; any value
+    /// outside the whitelist falls back to `mention_count DESC`.
+    pub async fn search_entities_order_by(
+        &self,
+        agent_id: &str,
+        query: &str,
+        order_clause: &str,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        // Whitelist to prevent SQL injection — only accept known safe clauses.
+        let safe_order = match order_clause {
+            "last_seen_at DESC" | "mention_count DESC" | "first_seen_at DESC" => order_clause,
+            _ => "mention_count DESC",
+        };
+
+        let sql = format!(
+            "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
+             FROM kg_entities
+             WHERE (agent_id = ?1 OR agent_id = '__global__') AND name LIKE ?2
+             ORDER BY {}
+             LIMIT ?3",
+            safe_order
+        );
+
+        let conn = self.conn.lock().await;
+        let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+
+        let pattern = format!("%{}%", query);
+        let rows = stmt
+            .query_map(params![agent_id, pattern, limit as i64], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, i64>(7)?,
+                ))
+            })
+            .map_err(GraphError::Database)?;
+
+        let mut entities = Vec::new();
+        for row in rows {
+            let (
+                id,
+                agent_id,
+                entity_type_str,
+                name,
+                properties_json,
+                first_seen_at,
+                last_seen_at,
+                mention_count,
+            ) = row?;
+
+            let entity_type = EntityType::from_str(&entity_type_str);
+            let properties = if let Some(json) = properties_json {
+                serde_json::from_str(&json).unwrap_or_default()
+            } else {
+                Default::default()
+            };
+
+            entities.push(Entity {
+                id,
+                agent_id,
+                entity_type,
+                name,
+                properties,
+                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+                    .unwrap_or_else(|_| chrono::Utc::now()),
+                mention_count,
+            });
+        }
+
+        Ok(entities)
+    }
+
+    /// Count relationships referencing a particular entity (source OR target).
+    pub async fn count_relationships_for(&self, entity_id: &str) -> GraphResult<i64> {
+        let conn = self.conn.lock().await;
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM kg_relationships
+                 WHERE source_entity_id = ?1 OR target_entity_id = ?1",
+                params![entity_id],
+                |row| row.get(0),
+            )
+            .map_err(GraphError::Database)?;
+        Ok(count)
+    }
+
     /// Find an existing entity by agent_id + name (case-insensitive), returning its ID.
     pub async fn find_entity_by_name(
         &self,

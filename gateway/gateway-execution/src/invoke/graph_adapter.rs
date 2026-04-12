@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use agent_tools::{EntityInfo, GraphStorageAccess, NeighborInfo};
 use async_trait::async_trait;
-use knowledge_graph::{Direction, GraphStorage};
+use knowledge_graph::{Direction, GraphService, GraphStorage, GraphView};
 
 /// Adapter that implements [`GraphStorageAccess`] by delegating to a
 /// [`GraphStorage`] instance.
@@ -58,6 +58,36 @@ impl GraphStorageAccess for GraphStorageAdapter {
             .collect();
 
         Ok(results)
+    }
+
+    async fn search_entities_with_view(
+        &self,
+        query: &str,
+        entity_type: Option<&str>,
+        view: &str,
+        limit: usize,
+    ) -> Result<Vec<EntityInfo>, String> {
+        let service = GraphService::new(self.storage.clone());
+        let graph_view = GraphView::from_str(view);
+        let entities = service
+            .search_entities_view(GLOBAL_AGENT_ID, query, graph_view, limit.saturating_mul(2))
+            .await
+            .map_err(|e| format!("graph view search failed: {e}"))?;
+
+        Ok(entities
+            .into_iter()
+            .filter(|e| {
+                entity_type
+                    .map(|t| e.entity_type.as_str() == t)
+                    .unwrap_or(true)
+            })
+            .take(limit)
+            .map(|e| EntityInfo {
+                name: e.name,
+                entity_type: e.entity_type.as_str().to_string(),
+                mention_count: e.mention_count,
+            })
+            .collect())
     }
 
     async fn get_entity_neighbors(

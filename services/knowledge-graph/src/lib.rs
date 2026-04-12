@@ -23,7 +23,7 @@ pub use extractor::EntityExtractor;
 pub use resolver::{
     levenshtein, merge_alias, normalize_name, resolve, MatchReason, ResolveOutcome,
 };
-pub use service::GraphService;
+pub use service::{GraphService, GraphView};
 pub use storage::GraphStorage;
 pub use traversal::{GraphTraversal, SqliteGraphTraversal, TraversalNode};
 pub use types::{
