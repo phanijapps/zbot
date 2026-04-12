@@ -415,6 +415,25 @@ mod tests {
     }
 
     #[test]
+    fn graph_traversal_defaults_remain_enabled_depth_two() {
+        // Pack A contract: these defaults must stay in sync with the activation spec.
+        // See docs/superpowers/specs/2026-04-12-kg-activation-pack-a-design.md (Fix 6).
+        let c = RecallConfig::default();
+        assert!(
+            c.graph_traversal.enabled,
+            "graph_traversal.enabled default must remain true (Pack A contract)"
+        );
+        assert_eq!(
+            c.graph_traversal.max_hops, 2,
+            "graph_traversal.max_hops default must remain 2 (Pack A contract)"
+        );
+        assert!(
+            c.graph_traversal.max_graph_facts >= 5,
+            "graph_traversal.max_graph_facts default must be >= 5"
+        );
+    }
+
+    #[test]
     fn test_partial_override_new_sections() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config");
