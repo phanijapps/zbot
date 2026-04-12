@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 18;
+const SCHEMA_VERSION: i32 = 19;
 
 /// Run migrations for existing databases.
 ///
@@ -260,6 +260,27 @@ fn migrate_database(conn: &Connection) -> Result<()> {
             );
             CREATE INDEX IF NOT EXISTS idx_causal_cause ON kg_causal_edges(cause_entity_id);
             CREATE INDEX IF NOT EXISTS idx_causal_effect ON kg_causal_edges(effect_entity_id);",
+        )?;
+    }
+
+    // v18 → v19: Add ward_wiki_articles table for compiled wiki knowledge per ward
+    if version < 19 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ward_wiki_articles (
+                id TEXT PRIMARY KEY,
+                ward_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT,
+                source_fact_ids TEXT,
+                embedding BLOB,
+                version INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(ward_id, title)
+            );
+            CREATE INDEX IF NOT EXISTS idx_wiki_ward ON ward_wiki_articles(ward_id);",
         )?;
     }
 
@@ -759,6 +780,33 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // WARD WIKI ARTICLES
+    // Compiled wiki knowledge per ward
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS ward_wiki_articles (
+            id TEXT PRIMARY KEY,
+            ward_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            content TEXT NOT NULL,
+            tags TEXT,
+            source_fact_ids TEXT,
+            embedding BLOB,
+            version INTEGER DEFAULT 1,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(ward_id, title)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_wiki_ward ON ward_wiki_articles(ward_id)",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -893,7 +941,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 18, "schema version should be 18");
+        assert_eq!(version, 19, "schema version should be 19");
     }
 
     #[test]
