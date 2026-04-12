@@ -308,17 +308,37 @@ fn default_non_streaming() -> bool {
     true
 }
 
-impl From<UpdateExecutionSettingsRequest> for ExecutionSettings {
-    fn from(req: UpdateExecutionSettingsRequest) -> Self {
+impl UpdateExecutionSettingsRequest {
+    /// Apply this request to existing execution settings, producing the new
+    /// settings to persist.
+    ///
+    /// The request represents the user-configurable subset of
+    /// [`ExecutionSettings`]. Fields present on [`ExecutionSettings`] but
+    /// absent from the request are **runtime state** and must be preserved
+    /// across updates. Currently this is:
+    ///
+    /// - [`ExecutionSettings::chat`] — session/conversation IDs owned by
+    ///   `/api/chat/init` for the persistent chat session. Resetting these
+    ///   causes orphan `sess-chat-*` records (the chat UI will create a
+    ///   fresh session on next load, so the old one never receives any
+    ///   messages and gets marked crashed on daemon restart).
+    ///
+    /// When adding a new field to [`ExecutionSettings`], decide whether it is
+    /// user-configurable (add to the request, accept from client) or runtime
+    /// state (preserve here). Never lose runtime state on config updates.
+    pub fn merge_into(self, existing: &ExecutionSettings) -> ExecutionSettings {
         ExecutionSettings {
-            max_parallel_agents: req.max_parallel_agents,
-            setup_complete: req.setup_complete,
-            agent_name: req.agent_name,
-            subagent_non_streaming: req.subagent_non_streaming,
-            orchestrator: req.orchestrator.unwrap_or_default(),
-            distillation: req.distillation.unwrap_or_default(),
-            multimodal: req.multimodal.unwrap_or_default(),
-            chat: gateway_services::ChatConfig::default(),
+            // User-configurable fields (taken from request)
+            max_parallel_agents: self.max_parallel_agents,
+            setup_complete: self.setup_complete,
+            agent_name: self.agent_name,
+            subagent_non_streaming: self.subagent_non_streaming,
+            orchestrator: self.orchestrator.unwrap_or_default(),
+            distillation: self.distillation.unwrap_or_default(),
+            multimodal: self.multimodal.unwrap_or_default(),
+
+            // Runtime state (preserved from existing settings)
+            chat: existing.chat.clone(),
         }
     }
 }
@@ -334,7 +354,12 @@ pub async fn update_execution_settings(
     Json<SettingsResponse<ExecutionSettingsResponse>>,
     (StatusCode, Json<SettingsResponse<()>>),
 > {
-    let settings: ExecutionSettings = request.into();
+    // Read existing settings first so the request merge can preserve runtime
+    // state (e.g. the persistent chat session IDs). If no settings exist yet,
+    // merge into defaults — the fresh chat config will remain empty and
+    // `/api/chat/init` will lazily populate it.
+    let existing = state.settings.get_execution_settings().unwrap_or_default();
+    let settings: ExecutionSettings = request.merge_into(&existing);
 
     // Update SOUL.md if agent_name is provided
     if let Some(ref name) = settings.agent_name {
@@ -372,5 +397,83 @@ pub async fn update_execution_settings(
                 error: Some(e),
             }),
         )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_services::{ChatConfig, ExecutionSettings};
+
+    fn sample_request() -> UpdateExecutionSettingsRequest {
+        UpdateExecutionSettingsRequest {
+            max_parallel_agents: 4,
+            setup_complete: true,
+            agent_name: Some("Arthur".to_string()),
+            subagent_non_streaming: false,
+            orchestrator: None,
+            distillation: None,
+            multimodal: None,
+        }
+    }
+
+    /// Regression test: updating execution settings must preserve the chat
+    /// config, which is runtime state owned by `/api/chat/init`, not a
+    /// user-configurable field.
+    ///
+    /// If this invariant breaks, the chat UI will create orphan
+    /// `sess-chat-*` sessions on every subsequent page load because its
+    /// idempotency check (`settings.chat.session_id.is_some()`) will fail.
+    #[test]
+    fn merge_preserves_chat_config() {
+        let existing = ExecutionSettings {
+            chat: ChatConfig {
+                session_id: Some("sess-chat-preserved".to_string()),
+                conversation_id: Some("chat-preserved".to_string()),
+            },
+            ..Default::default()
+        };
+
+        let merged = sample_request().merge_into(&existing);
+
+        assert_eq!(
+            merged.chat.session_id.as_deref(),
+            Some("sess-chat-preserved"),
+            "session_id must be preserved across settings updates",
+        );
+        assert_eq!(
+            merged.chat.conversation_id.as_deref(),
+            Some("chat-preserved"),
+            "conversation_id must be preserved across settings updates",
+        );
+    }
+
+    /// When the request carries new user-configurable values, they must
+    /// replace the existing values (merge semantics only apply to runtime
+    /// state, not user config).
+    #[test]
+    fn merge_overwrites_user_configurable_fields() {
+        let existing = ExecutionSettings {
+            max_parallel_agents: 1,
+            setup_complete: false,
+            agent_name: Some("OldName".to_string()),
+            ..Default::default()
+        };
+
+        let merged = sample_request().merge_into(&existing);
+
+        assert_eq!(merged.max_parallel_agents, 4);
+        assert!(merged.setup_complete);
+        assert_eq!(merged.agent_name.as_deref(), Some("Arthur"));
+    }
+
+    /// When no existing settings exist (fresh install), the merge falls back
+    /// to default chat config. `/api/chat/init` then lazily populates it.
+    #[test]
+    fn merge_with_default_existing_leaves_chat_empty() {
+        let merged = sample_request().merge_into(&ExecutionSettings::default());
+
+        assert!(merged.chat.session_id.is_none());
+        assert!(merged.chat.conversation_id.is_none());
     }
 }
