@@ -372,9 +372,11 @@ fn guess_type_from_source_ref(source_ref: &str) -> EntityType {
         EntityType::Person
     } else if lower.contains("org") || lower.contains("company") {
         EntityType::Organization
+    } else if lower.contains("place") || lower.contains("location") || lower.contains("geo") {
+        EntityType::Location
     } else {
-        // Place / Event / generic — Phase 6b adds dedicated variants.
-        // TODO(Phase 6b): map place/location → EntityType::Place, timeline/event → EntityType::Event
+        // Event / generic — Phase 6b adds a dedicated Event variant.
+        // TODO(Phase 6b): map timeline/event files → EntityType::Event.
         EntityType::Concept
     }
 }
@@ -496,6 +498,18 @@ mod tests {
         assert!(matches!(
             guess_type_from_source_ref("/ward/foo/people.json"),
             EntityType::Person
+        ));
+    }
+
+    #[test]
+    fn guess_type_from_places_filename() {
+        assert!(matches!(
+            guess_type_from_source_ref("/ward/foo/places.json"),
+            EntityType::Location
+        ));
+        assert!(matches!(
+            guess_type_from_source_ref("/ward/foo/locations.json"),
+            EntityType::Location
         ));
     }
 
