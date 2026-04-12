@@ -38,6 +38,7 @@ pub mod resource_provider;
 pub mod runner;
 pub mod session_state;
 pub mod ward_sync;
+pub mod ward_wiki;
 
 // Re-export public types
 pub use archiver::SessionArchiver;
