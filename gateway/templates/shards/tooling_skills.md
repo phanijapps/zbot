@@ -57,3 +57,22 @@ execution_graph(action="create", nodes=[
    "inputs": {"data": {"from": "A", "field": "result"}}}
 ])
 ```
+
+## Knowledge Graph
+
+### graph_query
+Query the knowledge graph of entities and relationships accumulated from prior sessions, ward artifacts, and tool results.
+
+Three actions:
+- `graph_query(action="search", query="<name>", entity_type?, limit?)` — find entities whose name contains the query string.
+- `graph_query(action="neighbors", entity_name="<name>", direction?="both", depth?=1, limit?)` — list entities connected to this one. `depth=2` traverses 2 hops.
+- `graph_query(action="context", query="<topic>", limit?)` — semantic search plus surrounding subgraph for a topic.
+
+When to call:
+- User mentions a named entity (person, organization, location, document, tool) you don't already have context on from the session's recall block → `search` it first.
+- You need to understand how two or more entities relate, or identify the central figures in a domain → `neighbors` with `depth=2`.
+- Starting a research task on a topic you've touched before → `context` to retrieve the relevant subgraph.
+
+When NOT to call:
+- For simple fact lookup that should live in `memory_facts` — use `memory(action="recall")` instead.
+- More than 2 consecutive `graph_query` calls on the same turn — if you're still lost, delegate to a subagent with the information you have.
