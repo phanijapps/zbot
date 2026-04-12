@@ -26,11 +26,11 @@ use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
 use gateway_database::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
-    MemoryRepository, SessionEpisode, WardWikiRepository,
+    MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
 };
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, RelationshipType};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Distills completed sessions into structured memory facts.
 pub struct SessionDistiller {
@@ -44,6 +44,7 @@ pub struct SessionDistiller {
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
     pub wiki_repo: Option<Arc<WardWikiRepository>>,
+    pub procedure_repo: Option<Arc<ProcedureRepository>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -85,7 +86,31 @@ struct ExtractedEpisode {
     key_learnings: Option<String>,
 }
 
-/// Full distillation response including facts, entities, relationships, and episode.
+/// A procedure extracted by the distillation LLM call.
+#[derive(Debug, Clone, Deserialize)]
+struct ExtractedProcedure {
+    name: String,
+    description: String,
+    steps: Vec<ProcedureStep>,
+    #[serde(default)]
+    parameters: Option<Vec<String>>,
+    #[serde(default)]
+    trigger_pattern: Option<String>,
+}
+
+/// A single step within an extracted procedure.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProcedureStep {
+    action: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    task_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    note: Option<String>,
+}
+
+/// Full distillation response including facts, entities, relationships, episode, and procedure.
 #[derive(Debug, Clone, Deserialize)]
 struct DistillationResponse {
     #[serde(default)]
@@ -96,6 +121,8 @@ struct DistillationResponse {
     relationships: Vec<ExtractedRelationship>,
     #[serde(default)]
     episode: Option<ExtractedEpisode>,
+    #[serde(default)]
+    procedure: Option<ExtractedProcedure>,
 }
 
 fn default_confidence() -> f64 {
@@ -188,12 +215,18 @@ impl SessionDistiller {
             paths,
             settings_service,
             wiki_repo: None,
+            procedure_repo: None,
         }
     }
 
     /// Set the ward wiki repository for post-distillation wiki compilation.
     pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
         self.wiki_repo = Some(repo);
+    }
+
+    /// Set the procedure repository for storing extracted procedures.
+    pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
+        self.procedure_repo = Some(repo);
     }
 
     /// Resolve the target provider ID and model for distillation.
@@ -561,6 +594,47 @@ impl SessionDistiller {
             }
         }
 
+        // 6b. Store extracted procedure (if any)
+        if let Some(ref procedure) = response.procedure {
+            if let Some(ref procedure_repo) = self.procedure_repo {
+                let ward_id = self
+                    .conversation_repo
+                    .get_session_ward_id(session_id)
+                    .unwrap_or(None);
+
+                let steps_json = serde_json::to_string(&procedure.steps).unwrap_or_default();
+                let params_json = procedure
+                    .parameters
+                    .as_ref()
+                    .map(|p| serde_json::to_string(p).unwrap_or_default());
+
+                let proc = gateway_database::Procedure {
+                    id: format!("proc-{}", uuid::Uuid::new_v4()),
+                    agent_id: agent_id.to_string(),
+                    ward_id: ward_id.or_else(|| Some("__global__".to_string())),
+                    name: procedure.name.clone(),
+                    description: procedure.description.clone(),
+                    trigger_pattern: procedure.trigger_pattern.clone(),
+                    steps: steps_json,
+                    parameters: params_json,
+                    success_count: 1,
+                    failure_count: 0,
+                    avg_duration_ms: None,
+                    avg_token_cost: None,
+                    last_used: Some(chrono::Utc::now().to_rfc3339()),
+                    embedding: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                };
+
+                if let Err(e) = procedure_repo.upsert_procedure(&proc) {
+                    tracing::warn!(name = %procedure.name, error = %e, "Failed to store procedure");
+                } else {
+                    tracing::info!(name = %procedure.name, "Stored procedure from session");
+                }
+            }
+        }
+
         let duration_ms = started.elapsed().as_millis() as i64;
 
         // 7. Record success in distillation_runs
@@ -875,6 +949,7 @@ impl SessionDistiller {
                                 entities = parsed.entities.len(),
                                 relationships = parsed.relationships.len(),
                                 has_episode = parsed.episode.is_some(),
+                                has_procedure = parsed.procedure.is_some(),
                                 "Distillation parsed successfully"
                             );
                             return Ok(parsed);
@@ -1466,6 +1541,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
             entities: Vec::new(),
             relationships: Vec::new(),
             episode: None,
+            procedure: None,
         });
     }
 
@@ -1482,6 +1558,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
             entities: Vec::new(),
             relationships: Vec::new(),
             episode: None,
+            procedure: None,
         });
     }
 
@@ -1526,6 +1603,10 @@ fn parse_distillation_from_value(val: &serde_json::Value) -> Result<Distillation
         .get("episode")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
+    let procedure: Option<ExtractedProcedure> = obj
+        .get("procedure")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
     if facts.is_empty() && entities.is_empty() && episode.is_none() {
         // The JSON parsed but all arrays were empty or had incompatible fields
         // Log what was actually in the JSON to help debug
@@ -1541,6 +1622,7 @@ fn parse_distillation_from_value(val: &serde_json::Value) -> Result<Distillation
         entities,
         relationships,
         episode,
+        procedure,
     })
 }
 
@@ -1656,6 +1738,12 @@ Include `properties` where relevant:
 ## Ward File Summaries
 
 When a session analyzes or works with files in a ward (workspace), include a `domain.{subdomain}.data_available` fact summarizing what data/files are available (e.g., `domain.finance.portfolio_data_available`).
+
+## Procedure Extraction (optional)
+
+If this session followed a reusable multi-step approach with 2+ steps, extract it:
+{"procedure": {"name": "short_name", "description": "what it does", "steps": [{"action": "ward|delegate|shell|respond", "agent": "agent-id", "task_template": "...", "note": "..."}], "parameters": ["param1"], "trigger_pattern": "when to use"}}
+If too simple or unique, set "procedure": null.
 
 ## Rules
 
