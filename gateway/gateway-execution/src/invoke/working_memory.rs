@@ -240,12 +240,19 @@ impl WorkingMemory {
     }
 }
 
-/// Truncate a string to max_len, appending "..." if truncated.
+/// Truncate a string to at most `max_len` bytes, appending "..." if truncated.
+///
+/// Snaps to the nearest UTF-8 char boundary to avoid panicking when the
+/// limit falls inside a multi-byte character (em-dashes, CJK, emoji).
 fn truncate_str(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let mut end = max_len.min(s.len());
+        while end > 0 && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}...", &s[..end])
     }
 }
 

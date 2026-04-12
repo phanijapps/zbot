@@ -92,12 +92,10 @@ fn extract_key_lines(text: &str, max_lines: usize) -> Vec<String> {
 
 /// Extract entity candidates from text and add to working memory.
 fn extract_and_add_entities(wm: &mut WorkingMemory, text: &str, iteration: u32, source: &str) {
-    // Only scan first 2000 chars to keep it fast
-    let scan_text = if text.len() > 2000 {
-        &text[..2000]
-    } else {
-        text
-    };
+    // Only scan first 2000 bytes to keep it fast. Use a char-boundary-safe
+    // slice — tool outputs contain em-dashes, CJK text, emoji, etc., and
+    // naive byte slicing panics mid-character.
+    let scan_text = safe_prefix(text, 2000);
 
     for cap in ENTITY_RE.captures_iter(scan_text) {
         let name = cap
@@ -143,10 +141,16 @@ fn handle_delegation_result(wm: &mut WorkingMemory, result: &str) {
 }
 
 /// Extract a brief context snippet around a name in text.
+///
+/// Tool outputs contain multi-byte UTF-8 characters (em-dashes, CJK, emoji).
+/// Slicing into the middle of one panics, so every index is clamped to the
+/// nearest char boundary before use.
 fn extract_context_snippet(text: &str, name: &str) -> String {
     if let Some(pos) = text.find(name) {
-        let start = pos.saturating_sub(20);
-        let end = (pos + name.len() + 40).min(text.len());
+        let start_byte = pos.saturating_sub(20);
+        let end_byte = (pos + name.len() + 40).min(text.len());
+        let start = floor_char_boundary(text, start_byte);
+        let end = floor_char_boundary(text, end_byte);
         let snippet = &text[start..end];
         // Clean up: take the line containing the match
         snippet
@@ -231,13 +235,37 @@ fn is_common_word(word: &str) -> bool {
     )
 }
 
-/// Truncate a string to max_len.
+/// Truncate a string to at most `max_len` bytes, snapping to the nearest
+/// char boundary to avoid slicing mid-character.
 fn truncate(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
         s.to_string()
     } else {
-        format!("{}...", &s[..max_len])
+        let end = floor_char_boundary(s, max_len);
+        format!("{}...", &s[..end])
     }
+}
+
+/// Return the largest byte index `i <= idx` such that `i` lies on a UTF-8
+/// character boundary. Equivalent to the nightly `str::floor_char_boundary`.
+///
+/// Rust requires string slicing to align with character boundaries; slicing
+/// into the middle of a multi-byte character (em-dash, CJK glyph, emoji,
+/// etc.) panics. This helper is used wherever we need to clamp a byte-index
+/// into a `&str` to the nearest safe position.
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    let idx = idx.min(s.len());
+    let mut i = idx;
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Return a prefix of at most `max_bytes` bytes, ending on a char boundary.
+fn safe_prefix(s: &str, max_bytes: usize) -> &str {
+    let end = floor_char_boundary(s, max_bytes);
+    &s[..end]
 }
 
 #[cfg(test)]
@@ -315,6 +343,46 @@ mod tests {
         let lines = extract_key_lines(text, 2);
         assert_eq!(lines.len(), 2);
         assert!(lines[0].contains("longer line"));
+    }
+
+    /// Regression test for a panic that stuck a real session for ~49 minutes.
+    ///
+    /// Tool output contained em-dashes (3-byte UTF-8 `—`) and the naive byte
+    /// slicing at `&text[start..end]` landed inside a char boundary when
+    /// `start = pos.saturating_sub(20)` snapped mid-em-dash. Rust panics on
+    /// non-boundary slices, which killed the tokio worker running the
+    /// execution. The root session had `status='running'` with
+    /// `completed_at=...` set from a PRIOR turn — and no watchdog noticed.
+    ///
+    /// This test ensures the extraction helpers handle any multi-byte UTF-8
+    /// content (em-dashes, CJK, emoji) without panicking.
+    #[test]
+    fn extract_context_snippet_handles_em_dashes() {
+        // Em-dashes (U+2014) are 3 bytes in UTF-8; slicing near them
+        // was the trigger for the original panic.
+        let text = r#"{"stdout":"- **Alpha** — value-1\n- **Beta** — value-2"}"#;
+        let _ = extract_context_snippet(text, "Alpha");
+        // No panic = pass
+    }
+
+    #[test]
+    fn extract_and_add_entities_handles_multibyte_at_2000_boundary() {
+        // Place an em-dash such that its bytes straddle the 2000-byte scan
+        // cutoff — the helper must snap to the nearest char boundary.
+        let mut text = "a".repeat(1998);
+        text.push('—'); // 3 bytes starting at 1998
+        text.push_str(" PascalName TestEntity");
+        let mut wm = WorkingMemory::new(1000);
+        extract_and_add_entities(&mut wm, &text, 0, "shell");
+        // No panic = pass
+    }
+
+    #[test]
+    fn truncate_handles_multibyte_at_boundary() {
+        // max_len lands mid em-dash
+        let s = "hello — world";
+        let _ = truncate(s, 7); // byte 7 is inside '—'
+                                // No panic = pass
     }
 
     #[test]
