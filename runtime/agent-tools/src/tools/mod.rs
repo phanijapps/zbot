@@ -6,6 +6,7 @@ mod agent;
 mod connectors;
 mod execution;
 mod file;
+mod graph_query;
 pub(crate) mod guards;
 mod introspection;
 mod memory;
@@ -35,6 +36,9 @@ pub use execution::UpdatePlanTool;
 pub use execution::WriteFileTool;
 pub use execution::skills::LoadSkillTool;
 pub use file::{EditTool, ReadTool, WriteTool};
+// graph_query types are public API for downstream crates (e.g., pi-mono wiring)
+#[allow(unused_imports)]
+pub use graph_query::{EntityInfo, GraphQueryTool, GraphStorageAccess, NeighborInfo};
 pub use introspection::{ListMcpsTool, ListSkillsTool, ListToolsTool};
 pub use memory::{MemoryEntry, MemoryStore, MemoryTool};
 pub use multimodal::MultimodalAnalyzeTool;
