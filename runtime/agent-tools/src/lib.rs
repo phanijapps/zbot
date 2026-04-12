@@ -15,6 +15,9 @@ pub use tools::{
     ApplyPatchTool,
     EditFileTool,
     GlobTool,
+    // Knowledge graph query tool
+    GraphQueryTool,
+    GraphStorageAccess,
     GrepTool,
     // Composite re-exports
     ListAgentsTool,
