@@ -32,6 +32,10 @@ pub enum GraphError {
     /// Configuration errors
     #[error("Configuration error: {0}")]
     Config(String),
+
+    /// Other/uncategorized errors (e.g., from entity resolver).
+    #[error("{0}")]
+    Other(String),
 }
 
 /// Result type alias for graph operations

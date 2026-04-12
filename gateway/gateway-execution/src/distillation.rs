@@ -1935,39 +1935,81 @@ If a fact updates something already known, use the SAME key so it overwrites.
 
 ## Entity Types
 
-- `person` — people mentioned by name
-- `organization` — companies and organizations (use "organization", NOT "company")
-- `project` — software projects, repos, products
-- `tool` — tools, libraries, frameworks, technologies
-- `concept` — abstract concepts, topics, methodologies
-- `file` — important ward files (core modules, config files, data files)
+Choose the most specific type that fits:
 
-Include `properties` where relevant:
-- Organizations: sector, ticker, industry
-- Projects: language, framework, ward (workspace path)
-- Files: ward (workspace path), exports, purpose
-- Tools: version, usage context
+- `person` — individuals by name. Properties: {birth_date, death_date, nationality, occupation}
+- `organization` — companies, parties, groups. Properties: {founding_date, dissolution_date, type, location}
+- `location` — countries, cities, regions, coordinates. Properties: {country, region, type}
+- `event` — historical events, meetings, conferences, sessions. Properties: {start_date, end_date, location, outcome}
+- `time_period` — years, eras, date ranges. Properties: {start, end, era}
+- `document` — books, articles, PDFs, URLs. Properties: {author, publisher, publication_date, source_url}
+- `role` — position title held by a person at a time. Properties: {organization, start_date, end_date}
+- `artifact` — generated files, reports, data outputs. Properties: {format, generator}
+- `ward` — workspace/container. Properties: {purpose}
+- `concept` — abstract ideas, methodologies, topics. Properties: {domain}
+- `tool` — libraries, frameworks, technologies. Properties: {version, language}
+- `project` — software projects or initiatives. Properties: {language, framework}
+- `file` — important ward files. Properties: {path, exports, purpose}
 
-## Relationship Types (directional — follow the exact semantics below)
+Include `properties` populated appropriately for the type. Use ISO 8601 for dates when available.
 
-Every relationship has a specific direction: `source --type--> target`. Read the arrow as "source TYPE target":
+## Relationship Types (directional — `source --type--> target`)
 
-- `uses` — source actively uses target. Example: `portfolio-analysis uses yfinance` (NOT `yfinance uses portfolio-analysis`).
-- `part_of` — source is a component of target. Example: `chart_utils part_of portfolio-analysis`.
-- `has_module` — source contains target as a module. Example: `portfolio-analysis has_module financial_analysis.py`.
-- `exports` — source makes target available. Example: `financial_analysis.py exports correlation_matrix`.
-- `created` — source created target. Example: `code-agent created financial_analysis.py`.
-- `is_in` — source lives inside target. Example: `correlation_matrix is_in financial_analysis.py`.
-- `analyzed_by` — source is analyzed by target (passive voice). Example: `AAPL analyzed_by portfolio-analysis`. NEVER `portfolio-analysis analyzed_by AAPL`.
-- `prefers` — source prefers target. Example: `user prefers plotly`.
-- `related_to` — generic bidirectional link; use only when no specific type fits.
+**Temporal**:
+- `before(A, B)`, `after(A, B)`, `during(A, B)`, `concurrent_with(A, B)`, `succeeded_by(A, B)`, `preceded_by(A, B)`
+
+**Role-based**:
+- `president_of(P, O)` — P is/was president of O
+- `founder_of(P, O)` — P founded O
+- `member_of(P, O)` — P is a member of O
+- `author_of(P, D)` — P authored document D
+- `held_role(P, R)`, `employed_by(P, O)`
+
+**Spatial**:
+- `located_in(X, L)` — X is located in L
+- `held_at(E, L)` — event E was held at L
+- `born_in(P, L)`, `died_in(P, L)`
+
+**Causal**:
+- `caused(A, B)`, `enabled(A, B)`, `prevented(A, B)`, `triggered_by(A, B)`
+
+**Hierarchical**:
+- `part_of(A, B)`, `contains(A, B)`, `instance_of(A, T)`, `subtype_of(T1, T2)`
+
+**Generic** (fallback): `uses, created, related_to, exports, has_module, analyzed_by, prefers, mentions`
 
 ## Relationship Rules
 
-- NEVER use both `A uses B` and `B uses A` for the same pair — pick the direction that matches reality.
-- NEVER use redundant inverse relationships (e.g., do not emit both `uses` and `used_by` for the same pair — pick ONE).
-- Agents don't "analyze" tickers directly — wards do. Example: `PTON analyzed_by portfolio-analysis`, NOT `PTON analyzed_by planner-agent`.
-- A tool agent (like `planner-agent`) is USED BY a workspace. Emit `portfolio-analysis uses planner-agent`, NOT `planner-agent uses portfolio-analysis`.
+- ALWAYS use the most specific relationship type that fits.
+- NEVER use both `A uses B` and `B uses A` for the same pair.
+- For role/presidency: emit `PersonX president_of OrgY`, NOT the reverse.
+- Date-qualified relationships: mention the time range in the entity's properties (Role entity's start_date/end_date).
+
+## Example Extraction (for grounding)
+
+Given this transcript snippet:
+> "V.D. Savarkar was the president of Hindu Mahasabha from 1937 to 1943, during which time the Ahmedabad Session of 1937 was held."
+
+A high-quality extraction looks like:
+
+{
+  "facts": [
+    {"category": "domain", "key": "hindu_mahasabha.savarkar.presidency",
+     "content": "V.D. Savarkar served as president of Hindu Mahasabha from 1937 to 1943",
+     "confidence": 0.95}
+  ],
+  "entities": [
+    {"name": "V.D. Savarkar", "type": "person", "properties": {"role": "Indian independence activist"}},
+    {"name": "Hindu Mahasabha", "type": "organization", "properties": {"type": "political", "founding_date": "1915"}},
+    {"name": "Ahmedabad Session 1937", "type": "event", "properties": {"start_date": "1937", "location": "Ahmedabad"}},
+    {"name": "Ahmedabad", "type": "location", "properties": {"country": "India", "type": "city"}}
+  ],
+  "relationships": [
+    {"source": "V.D. Savarkar", "target": "Hindu Mahasabha", "type": "president_of"},
+    {"source": "Ahmedabad Session 1937", "target": "Ahmedabad", "type": "held_at"},
+    {"source": "Ahmedabad Session 1937", "target": "Hindu Mahasabha", "type": "part_of"}
+  ]
+}
 
 ## Ward File Summaries
 

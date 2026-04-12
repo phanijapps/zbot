@@ -1209,12 +1209,65 @@ fn normalize_entity_name(name: &str, entity_type: &str) -> String {
 /// Returns the actual entity ID used (either the existing entity's ID if
 /// deduped, or the new entity's ID if inserted). The caller uses this to
 /// remap relationship references.
-fn store_entity(conn: &Connection, _agent_id: &str, entity: Entity) -> GraphResult<String> {
+/// Run the EntityResolver cascade and return the matched entity id, if any.
+fn resolve_via_resolver(
+    conn: &Connection,
+    agent_id: &str,
+    entity: &Entity,
+) -> GraphResult<Option<String>> {
+    match crate::resolver::resolve(conn, agent_id, entity, None).map_err(GraphError::Other)? {
+        crate::resolver::ResolveOutcome::Merge {
+            existing_id,
+            reason,
+        } => {
+            tracing::debug!(
+                new_name = %entity.name,
+                existing_id = %existing_id,
+                reason = ?reason,
+                "EntityResolver merged variant into existing entity"
+            );
+            Ok(Some(existing_id))
+        }
+        crate::resolver::ResolveOutcome::Create => Ok(None),
+    }
+}
+
+/// Merge a candidate entity into an existing one: add alias, bump mention_count,
+/// update last_seen_at.
+fn merge_into_existing(
+    conn: &Connection,
+    existing_id: &str,
+    candidate: &Entity,
+) -> GraphResult<()> {
+    let current_aliases: Option<String> = conn
+        .query_row(
+            "SELECT aliases FROM kg_entities WHERE id = ?1",
+            params![existing_id],
+            |r| r.get(0),
+        )
+        .ok();
+    let new_aliases = crate::resolver::merge_alias(current_aliases.as_deref(), &candidate.name);
+    conn.execute(
+        "UPDATE kg_entities SET aliases = ?1, mention_count = mention_count + 1, last_seen_at = ?2 WHERE id = ?3",
+        params![new_aliases, chrono::Utc::now().to_rfc3339(), existing_id],
+    )
+    .map_err(GraphError::Database)?;
+    Ok(())
+}
+
+fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResult<String> {
     let entity_type_str = entity.entity_type.as_str();
     let properties_json =
         serde_json::to_string(&entity.properties).unwrap_or_else(|_| "".to_string());
 
-    // Check for existing entity with same name + type across ALL agents
+    // 1. EntityResolver cascade: exact-normalized → fuzzy → embedding.
+    //    Scoped to the same agent (plus __global__) and entity_type.
+    if let Some(existing_id) = resolve_via_resolver(conn, agent_id, &entity)? {
+        merge_into_existing(conn, &existing_id, &entity)?;
+        return Ok(existing_id);
+    }
+
+    // 2. Legacy fallback: cross-agent name dedup (handles file basename fallback).
     let normalized_name = normalize_entity_name(&entity.name, entity_type_str);
     if let Some(existing_id) = find_entity_by_name_global(conn, &normalized_name, entity_type_str)?
     {
