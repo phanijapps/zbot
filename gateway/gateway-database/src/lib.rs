@@ -9,6 +9,7 @@ mod connection;
 pub mod distillation_repository;
 pub mod episode_repository;
 pub mod kg_episode_repository;
+pub mod knowledge_schema;
 pub mod memory_fact_store;
 pub mod memory_repository;
 pub mod procedure_repository;
