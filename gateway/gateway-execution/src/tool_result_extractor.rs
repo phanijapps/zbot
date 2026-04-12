@@ -233,7 +233,12 @@ fn ensure_episode(
         content_hash,
         session_id: Some(session_id.to_string()),
         agent_id: agent_id.to_string(),
+        status: "done".to_string(),
+        retry_count: 0,
+        error: None,
         created_at: chrono::Utc::now().to_rfc3339(),
+        started_at: None,
+        completed_at: None,
     };
     repo.upsert_episode(&ep)?;
     Ok(ep.id)
