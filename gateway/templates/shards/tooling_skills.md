@@ -76,3 +76,18 @@ When to call:
 When NOT to call:
 - For simple fact lookup that should live in `memory_facts` — use `memory(action="recall")` instead.
 - More than 2 consecutive `graph_query` calls on the same turn — if you're still lost, delegate to a subagent with the information you have.
+
+### ingest
+Enqueue a document or text for background extraction into the knowledge graph. Returns immediately; work drains in the background.
+
+- `ingest(source_id="<stable-id>", text="<full text>", source_type?="document")` — returns `{source_id, episode_count, status}`.
+- Chunks are automatically split (paragraph-aware, ~1000 tokens with 100-token overlap).
+- Progress pollable via the HTTP endpoint `GET /api/graph/ingest/:source_id/progress`.
+
+**When to use:**
+- User pastes a long document / you have extracted text from a PDF / you want a prose corpus in the graph.
+- Extracted entities become queryable via `graph_query` within seconds per chunk.
+
+**Don't use:**
+- For structured JSON data — the ward artifact indexer handles that synchronously.
+- For one-off facts — use `memory(action="save_fact")`.
