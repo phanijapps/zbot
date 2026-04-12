@@ -256,20 +256,6 @@ fn embedding_match(
     Ok(None)
 }
 
-/// Add a new alias to an existing entity's alias list (JSON array).
-/// Caller handles the actual DB update; this just computes the new JSON.
-pub fn merge_alias(existing_aliases_json: Option<&str>, new_alias: &str) -> String {
-    let mut list: Vec<String> = existing_aliases_json
-        .and_then(|s| serde_json::from_str::<Vec<String>>(s).ok())
-        .unwrap_or_default();
-
-    let norm_new = normalize_name(new_alias);
-    if !list.iter().any(|a| normalize_name(a) == norm_new) {
-        list.push(new_alias.to_string());
-    }
-    serde_json::to_string(&list).unwrap_or_else(|_| "[]".to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,34 +285,5 @@ mod tests {
     #[test]
     fn levenshtein_handles_savarkar_variants() {
         assert_eq!(levenshtein("savarkar", "savarker"), 1);
-    }
-
-    #[test]
-    fn merge_alias_dedups_normalized() {
-        let existing = Some(r#"["V.D. Savarkar"]"#);
-        let merged = merge_alias(existing, "v.d. savarkar");
-        let list: Vec<String> = serde_json::from_str(&merged).unwrap();
-        assert_eq!(list.len(), 1, "Case/punct variants should dedup");
-    }
-
-    #[test]
-    fn merge_alias_adds_new() {
-        let existing = Some(r#"["Savarkar"]"#);
-        let merged = merge_alias(existing, "V.D. Savarkar");
-        let list: Vec<String> = serde_json::from_str(&merged).unwrap();
-        assert_eq!(list.len(), 2);
-    }
-
-    #[test]
-    fn merge_alias_from_empty() {
-        let merged = merge_alias(None, "Savarkar");
-        let list: Vec<String> = serde_json::from_str(&merged).unwrap();
-        assert_eq!(list, vec!["Savarkar"]);
-    }
-
-    #[test]
-    fn alias_list_contains_matches_normalized() {
-        assert!(alias_list_contains(r#"["V.D. Savarkar"]"#, "vd savarkar"));
-        assert!(!alias_list_contains(r#"["V.D. Savarkar"]"#, "gandhi"));
     }
 }

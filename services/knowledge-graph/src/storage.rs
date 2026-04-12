@@ -1242,17 +1242,30 @@ fn merge_into_existing(
     existing_id: &str,
     candidate: &Entity,
 ) -> GraphResult<()> {
-    let current_aliases: Option<String> = conn
-        .query_row(
-            "SELECT aliases FROM kg_entities WHERE id = ?1",
-            params![existing_id],
-            |r| r.get(0),
-        )
-        .ok();
-    let new_aliases = crate::resolver::merge_alias(current_aliases.as_deref(), &candidate.name);
+    // Append candidate's surface form as an alias of the winning entity.
+    let alias_id = format!("alias-{}", uuid::Uuid::new_v4());
+    let normalized = crate::resolver::normalize_name(&candidate.name);
     conn.execute(
-        "UPDATE kg_entities SET aliases = ?1, mention_count = mention_count + 1, last_seen_at = ?2 WHERE id = ?3",
-        params![new_aliases, chrono::Utc::now().to_rfc3339(), existing_id],
+        "INSERT OR IGNORE INTO kg_aliases (
+             id, entity_id, surface_form, normalized_form, source, confidence, first_seen_at
+         ) VALUES (?1, ?2, ?3, ?4, 'merge', 1.0, ?5)",
+        params![
+            alias_id,
+            existing_id,
+            candidate.name,
+            normalized,
+            chrono::Utc::now().to_rfc3339(),
+        ],
+    )
+    .map_err(GraphError::Database)?;
+
+    // Bump mention_count + last_seen_at on the winner.
+    conn.execute(
+        "UPDATE kg_entities
+         SET mention_count = mention_count + 1,
+             last_seen_at = ?1
+         WHERE id = ?2",
+        params![chrono::Utc::now().to_rfc3339(), existing_id],
     )
     .map_err(GraphError::Database)?;
     Ok(())
@@ -1868,4 +1881,56 @@ mod tests {
         .unwrap();
     }
 
+    #[test]
+    fn merge_appends_alias_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths =
+            std::sync::Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = std::sync::Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let storage = GraphStorage::new(db.clone()).unwrap();
+
+        let mut e1 = Entity::new(
+            "root".to_string(),
+            crate::EntityType::Person,
+            "V.D. Savarkar".to_string(),
+        );
+        e1.id = "e1".to_string();
+        storage
+            .store_knowledge(
+                "root",
+                ExtractedKnowledge {
+                    entities: vec![e1],
+                    relationships: vec![],
+                },
+            )
+            .unwrap();
+
+        let mut e2 = Entity::new(
+            "root".to_string(),
+            crate::EntityType::Person,
+            "Vinayak Savarkar".to_string(),
+        );
+        e2.id = "e2".to_string();
+        storage
+            .store_knowledge(
+                "root",
+                ExtractedKnowledge {
+                    entities: vec![e2],
+                    relationships: vec![],
+                },
+            )
+            .unwrap();
+
+        db.with_connection(|conn| {
+            let e1_alias_count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM kg_aliases WHERE entity_id = 'e1'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert!(e1_alias_count >= 1, "at least one alias row for e1");
+            Ok(())
+        })
+        .unwrap();
+    }
 }
