@@ -37,6 +37,7 @@ pub mod recall;
 pub mod resource_provider;
 pub mod runner;
 pub mod session_state;
+pub mod tool_result_extractor;
 pub mod ward_artifact_indexer;
 pub mod ward_sync;
 pub mod ward_wiki;
