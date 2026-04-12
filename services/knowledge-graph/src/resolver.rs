@@ -26,7 +26,6 @@ pub enum ResolveOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MatchReason {
     ExactNormalized,
-    FuzzyName,
     EmbeddingSimilarity,
 }
 
@@ -48,15 +47,7 @@ pub fn resolve(
         });
     }
 
-    // 2. Fuzzy name match
-    if let Some(existing_id) = fuzzy_match(conn, agent_id, candidate)? {
-        return Ok(ResolveOutcome::Merge {
-            existing_id,
-            reason: MatchReason::FuzzyName,
-        });
-    }
-
-    // 3. Embedding similarity (only if embedding provided)
+    // 2. Embedding similarity (only if embedding provided)
     if let Some(emb) = candidate_embedding {
         if let Some(existing_id) = embedding_match(conn, agent_id, candidate, emb)? {
             return Ok(ResolveOutcome::Merge {
@@ -119,79 +110,6 @@ fn exact_match(
 
 /// Fuzzy name match: Levenshtein distance ≤ 3 within the same type.
 /// Only applied when candidate name is long enough to avoid false matches
-/// on short strings (e.g., "A" and "B" have distance 1).
-fn fuzzy_match(
-    conn: &Connection,
-    agent_id: &str,
-    candidate: &Entity,
-) -> Result<Option<String>, String> {
-    let candidate_norm = normalize_name(&candidate.name);
-    if candidate_norm.len() < 6 {
-        return Ok(None); // too short for reliable fuzzy matching
-    }
-
-    let type_str = candidate.entity_type.as_str();
-    let mut stmt = conn
-        .prepare(
-            "SELECT id, name FROM kg_entities \
-             WHERE (agent_id = ?1 OR agent_id = '__global__') AND entity_type = ?2 \
-             ORDER BY mention_count DESC LIMIT 100",
-        )
-        .map_err(|e| format!("prepare failed: {e}"))?;
-
-    let rows = stmt
-        .query_map(params![agent_id, type_str], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-        })
-        .map_err(|e| format!("query failed: {e}"))?;
-
-    for row in rows {
-        let (id, name) = row.map_err(|e| format!("row read failed: {e}"))?;
-        let name_norm = normalize_name(&name);
-        if name_norm.len() < 6 {
-            continue;
-        }
-        if levenshtein(&candidate_norm, &name_norm) <= 3 {
-            return Ok(Some(id));
-        }
-    }
-    Ok(None)
-}
-
-/// Compute Levenshtein distance between two strings.
-pub fn levenshtein(a: &str, b: &str) -> usize {
-    let a_chars: Vec<char> = a.chars().collect();
-    let b_chars: Vec<char> = b.chars().collect();
-    let (m, n) = (a_chars.len(), b_chars.len());
-
-    if m == 0 {
-        return n;
-    }
-    if n == 0 {
-        return m;
-    }
-
-    let mut prev: Vec<usize> = (0..=n).collect();
-    let mut curr = vec![0_usize; n + 1];
-
-    for i in 1..=m {
-        curr[0] = i;
-        for j in 1..=n {
-            let cost = if a_chars[i - 1] == b_chars[j - 1] {
-                0
-            } else {
-                1
-            };
-            let insert = curr[j - 1] + 1;
-            let delete = prev[j] + 1;
-            let substitute = prev[j - 1] + cost;
-            curr[j] = insert.min(delete).min(substitute);
-        }
-        std::mem::swap(&mut prev, &mut curr);
-    }
-    prev[n]
-}
-
 /// Embedding similarity match — queries `kg_name_index` (sqlite-vec virtual table)
 /// for nearest neighbours, then filters by agent and entity type.
 ///
@@ -256,17 +174,4 @@ mod tests {
         assert_eq!(normalize_name("Shri Patel"), "patel");
     }
 
-    #[test]
-    fn levenshtein_basic() {
-        assert_eq!(levenshtein("", ""), 0);
-        assert_eq!(levenshtein("abc", "abc"), 0);
-        assert_eq!(levenshtein("abc", "abd"), 1);
-        assert_eq!(levenshtein("kitten", "sitting"), 3);
-        assert_eq!(levenshtein("", "abc"), 3);
-    }
-
-    #[test]
-    fn levenshtein_handles_savarkar_variants() {
-        assert_eq!(levenshtein("savarkar", "savarker"), 1);
-    }
 }

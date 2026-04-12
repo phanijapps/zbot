@@ -20,7 +20,7 @@ pub mod types;
 pub use causal::{CausalEdge, CausalEdgeStore};
 pub use error::{GraphError, GraphResult};
 pub use extractor::EntityExtractor;
-pub use resolver::{levenshtein, normalize_name, resolve, MatchReason, ResolveOutcome};
+pub use resolver::{normalize_name, resolve, MatchReason, ResolveOutcome};
 pub use service::{GraphService, GraphView};
 pub use storage::GraphStorage;
 pub use traversal::{GraphTraversal, SqliteGraphTraversal, TraversalNode};
