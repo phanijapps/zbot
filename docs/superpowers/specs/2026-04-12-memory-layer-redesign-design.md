@@ -126,9 +126,9 @@ AGENT-FACING TOOLS (promoted in prompt shards)
 
 ---
 
-## Schema Changes
+## Schema (v22, clean slate)
 
-All changes ship under schema version 22 as one atomic migration.
+Both `conversations.db` and `knowledge_graph.db` are deleted before rollout. Schema v22 is the initial schema — no ALTER TABLEs, no backfills, no rollback. On daemon boot, if either DB is missing, the full v22 schema is created. Everything below defines v22 directly.
 
 ### New tables
 
@@ -204,45 +204,130 @@ CREATE INDEX idx_compactions_run ON kg_compactions(run_id);
 
 No foreign keys — we preserve history even after referenced rows are deleted.
 
-### Modifications to existing tables
+### Core tables defined at v22
 
-**`kg_entities`** — add normalized hash + bitemporal columns
+**`kg_entities`** (full definition, replaces all prior schemas):
 
 ```sql
-ALTER TABLE kg_entities ADD COLUMN normalized_name TEXT;
-ALTER TABLE kg_entities ADD COLUMN normalized_hash TEXT;
-ALTER TABLE kg_entities ADD COLUMN compressed_into TEXT;
-ALTER TABLE kg_entities ADD COLUMN t_valid_from TEXT;
-ALTER TABLE kg_entities ADD COLUMN t_valid_to TEXT;
-ALTER TABLE kg_entities ADD COLUMN t_invalidated_by TEXT;
-ALTER TABLE kg_entities ADD COLUMN last_accessed_at TEXT;
-ALTER TABLE kg_entities ADD COLUMN access_count INTEGER DEFAULT 0;
-
+CREATE TABLE kg_entities (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    entity_type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    normalized_name TEXT NOT NULL,
+    normalized_hash TEXT NOT NULL,
+    properties TEXT,                    -- JSON
+    epistemic_class TEXT NOT NULL DEFAULT 'current',  -- archival|current|convention|procedural
+    confidence REAL NOT NULL DEFAULT 0.8,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    last_accessed_at TEXT,
+    t_valid_from TEXT,                  -- bitemporal
+    t_valid_to TEXT,
+    t_invalidated_by TEXT,              -- episode or entity that invalidated this
+    compressed_into TEXT,               -- set when compactor merges into another entity
+    source_episode_ids TEXT             -- JSON array
+);
 CREATE INDEX idx_entities_normalized_hash ON kg_entities(agent_id, entity_type, normalized_hash);
+CREATE INDEX idx_entities_agent_type ON kg_entities(agent_id, entity_type);
+CREATE INDEX idx_entities_name ON kg_entities(name);
 CREATE INDEX idx_entities_last_accessed ON kg_entities(last_accessed_at);
+CREATE INDEX idx_entities_epistemic ON kg_entities(agent_id, epistemic_class);
 ```
 
-One-shot backfill populates `normalized_name`, `normalized_hash` on migration.
-
-**`kg_relationships`** — already has `valid_at`/`invalidated_at` (Phase 6c). Add:
+**`kg_relationships`** (full definition):
 
 ```sql
-ALTER TABLE kg_relationships ADD COLUMN t_invalidated_by TEXT;
-ALTER TABLE kg_relationships ADD COLUMN last_accessed_at TEXT;
-ALTER TABLE kg_relationships ADD COLUMN access_count INTEGER DEFAULT 0;
+CREATE TABLE kg_relationships (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    source_entity_id TEXT NOT NULL,
+    target_entity_id TEXT NOT NULL,
+    relationship_type TEXT NOT NULL,
+    properties TEXT,                    -- JSON
+    epistemic_class TEXT NOT NULL DEFAULT 'current',
+    confidence REAL NOT NULL DEFAULT 0.8,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    access_count INTEGER NOT NULL DEFAULT 0,
+    first_seen_at TEXT NOT NULL,
+    last_seen_at TEXT NOT NULL,
+    last_accessed_at TEXT,
+    valid_at TEXT,                      -- bitemporal
+    invalidated_at TEXT,
+    t_invalidated_by TEXT,
+    source_episode_ids TEXT,
+    UNIQUE(source_entity_id, target_entity_id, relationship_type),
+    FOREIGN KEY (source_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
+    FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
+);
+CREATE INDEX idx_rels_source ON kg_relationships(source_entity_id);
+CREATE INDEX idx_rels_target ON kg_relationships(target_entity_id);
+CREATE INDEX idx_rels_agent ON kg_relationships(agent_id);
+CREATE INDEX idx_rels_valid ON kg_relationships(valid_at);
 ```
 
-**`kg_episodes`** — add status for queue observability
+**`kg_episodes`** (full definition, with queue lifecycle):
 
 ```sql
-ALTER TABLE kg_episodes ADD COLUMN status TEXT DEFAULT 'done';
-ALTER TABLE kg_episodes ADD COLUMN retry_count INTEGER DEFAULT 0;
-ALTER TABLE kg_episodes ADD COLUMN error TEXT;
-ALTER TABLE kg_episodes ADD COLUMN started_at TEXT;
-ALTER TABLE kg_episodes ADD COLUMN completed_at TEXT;
+CREATE TABLE kg_episodes (
+    id TEXT PRIMARY KEY,
+    source_type TEXT NOT NULL,          -- session|tool_result|ward_file|document|user_input
+    source_ref TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    session_id TEXT,
+    agent_id TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending|running|done|failed
+    retry_count INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE(content_hash, source_type)
+);
+CREATE INDEX idx_episodes_status ON kg_episodes(status);
+CREATE INDEX idx_episodes_source_ref ON kg_episodes(source_ref);
+CREATE INDEX idx_episodes_session ON kg_episodes(session_id);
 ```
 
-`status` ∈ `{pending, running, done, failed}`. Existing rows default to `done`. Enables `GET /api/graph/ingest/:source_id/progress`.
+**`memory_facts`** (full definition, includes Phase 6 additions from day one):
+
+```sql
+CREATE TABLE memory_facts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL,                -- agent|shared|ward
+    category TEXT NOT NULL,             -- correction|strategy|domain|instruction|pattern|user|skill|agent|ward
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.8,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    source_summary TEXT,
+    source_episode_id TEXT,
+    source_ref TEXT,
+    embedding BLOB,
+    ward_id TEXT NOT NULL DEFAULT '__global__',
+    epistemic_class TEXT NOT NULL DEFAULT 'current',
+    contradicted_by TEXT,
+    t_valid_from TEXT,
+    t_valid_to TEXT,
+    superseded_by TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    UNIQUE(agent_id, scope, ward_id, key)
+);
+CREATE INDEX idx_facts_agent_scope ON memory_facts(agent_id, scope);
+CREATE INDEX idx_facts_category ON memory_facts(agent_id, category);
+CREATE INDEX idx_facts_ward ON memory_facts(ward_id);
+CREATE INDEX idx_facts_epistemic ON memory_facts(epistemic_class);
+CREATE VIRTUAL TABLE memory_facts_fts USING fts5(key, content, category, content=memory_facts);
+```
+
+All other tables (`sessions`, `agent_executions`, `messages`, `ward_wiki_articles`, `procedures`, `session_episodes`, `recall_log`, `distillation_runs`, `embedding_cache`, `artifacts`) carry forward unchanged from v21.
 
 ---
 
@@ -517,30 +602,31 @@ Example: user asks "what connects Savarkar to Hindu Mahasabha?"
 
 ---
 
+## Clean-Slate Precondition
+
+Before implementation begins:
+
+1. Stop daemon.
+2. `rm ~/Documents/zbot/data/conversations.db* ~/Documents/zbot/data/knowledge_graph.db*`
+3. All of the above. No partial deletes, no backfills.
+4. Wards on disk (`~/Documents/zbot/wards/`) stay — they're the source of truth for archival knowledge and will be re-ingested as needed.
+
+Pack A's relationship extraction rules (`gateway/gateway-execution/src/indexer/relationship_rules.rs`) carry forward unchanged — they're part of the v22 solution, not a legacy.
+
 ## Roll-Out Phases
 
-Each phase is one PR. Acceptance criteria are binary — merged only when all pass.
-
-### Phase 0 — Clean Slate + Pack A Validation
-
-**Already shipped** (Pack A on `feature/kg-activation-pack-a`). Before phase 1 begins:
-
-- Delete `knowledge_graph.db`, restart daemon, run `POST /api/graph/reindex` against Hindu Mahasabha ward
-- Verify orphan ratio ≤ 30%, relationship count ≥ 200
-- Merge `feature/kg-activation-pack-a` → `main`
+Each phase is one PR. Acceptance criteria are binary — merged only when all pass. No phase depends on historical data; each is validated on a fresh DB.
 
 ### Phase 1 — Schema v22 + Resolver v2 + sqlite-vec
 
 **Deliverables:**
-- New tables: `kg_aliases`, `kg_name_index`, `kg_goals`, `kg_compactions`
-- Schema modifications per this spec
-- One-shot migration including backfill of `normalized_name` and `normalized_hash`
-- `sqlite-vec` wired into `gateway-database` as an extension load; feature-flagged
-- Resolver v2 replacing current 3-stage resolver; self-alias on create, append alias on merge
-- Backfill script: populate `kg_name_index` for existing entities
-- Regression tests: no existing session loses knowledge; alias lookups work; resolver latency < 20 ms p95 on 10k entities
+- `schema.rs` rewritten: schema v22 as the initial schema. Daemon boot creates it if DB missing.
+- `sqlite-vec` wired into `gateway-database` via extension load at connection open.
+- `EntityResolver` v2 (alias-first, ANN second, LLM-verify third) replacing current `resolver.rs`.
+- Every entity create seeds one self-alias row; embedding computed inline (async, non-blocking).
+- Integration test: ingest a synthetic 1000-entity ward, assert resolver p95 < 20 ms.
 
-**Acceptance:** all existing tests still green; one new integration test indexes a synthetic 1000-entity ward and asserts resolver p95 < 20 ms.
+**Acceptance:** fresh DB comes up clean, 1000-entity synthetic ward indexes with <2% duplicate entities and resolver p95 < 20 ms.
 
 ### Phase 2 — Streaming Ingestion
 
@@ -581,12 +667,12 @@ Each phase is one PR. Acceptance criteria are binary — merged only when all pa
 ### Phase 5 — Hardening + Docs
 
 **Deliverables:**
-- Failure-mode tests (worker crashes, LLM timeouts, malformed responses)
-- Migration rollback script (schema v22 → v21)
-- `memory-bank/components/memory-layer/` docs fully refreshed
+- Failure-mode tests (worker crashes, LLM timeouts, malformed responses, SIGKILL mid-extraction)
+- `memory-bank/components/memory-layer/` docs fully refreshed reflecting v22
 - Architecture diagram (SVG) added to Observatory
+- Performance baseline published: cold-boot time, resolver p50/p95/p99, ingestion throughput per provider
 
-**Acceptance:** cold-boot to ready in <10 s with 10k entities; single worker can sustain ingestion for 24h without crash; docs reviewed.
+**Acceptance:** cold-boot to ready in <10 s with 10k entities; single worker sustains ingestion for 24h without crash; docs reviewed.
 
 ---
 
@@ -607,12 +693,11 @@ Each phase is one PR. Acceptance criteria are binary — merged only when all pa
 
 | Risk | Mitigation |
 |---|---|
-| sqlite-vec unavailable or broken on user's platform | Feature-flag; fall back to brute-force cosine with a warning; ship platform matrix in docs |
-| Two-pass extraction doubles LLM cost | Cost is measured and surfaced in Observatory; worker count tunable; local-model path documented |
-| Structured outputs not supported by all providers | Provider capability matrix; fallback to instructor retry pattern; skip extraction if neither works (emit warning) |
-| Sleep-time compactor merges entities incorrectly | All merges write to `kg_compactions` with reason; admin UI shows recent merges with undo button; confidence threshold conservative (0.92) |
-| Migration fails on existing DBs | Schema v22 migration is additive (only ALTERs and new tables, no drops); backfill is idempotent; rollback script reverses added columns |
-| Goal schema bloats | Goals are `archived` after 30 days in terminal state; archival preserves history but excludes from live retrieval |
+| sqlite-vec unavailable on user's platform | Bundle the compiled extension in the daemon release; platform matrix verified in CI (Linux/macOS/Windows x86_64 + arm64) |
+| Two-pass extraction doubles LLM cost | Worker count tunable; local-model path documented; cost surfaced in Observatory |
+| Structured outputs not supported by all providers | Provider capability matrix at boot; fallback to instructor retry pattern (max 3x); skip extraction with visible warning on unsupported providers |
+| Sleep-time compactor merges entities incorrectly | All merges write to `kg_compactions` with reason; admin UI shows recent merges with undo; conservative 0.92 cosine threshold |
+| Goal schema bloats | Goals auto-archive after 30 days in terminal state; archival preserves history, excludes from live retrieval |
 | Resolver latency spikes under load | Metric exported; on p95 > 50 ms, ingestion queue backpressures (producer waits); no silent degradation |
 | Book ingestion overwhelms queue | Per-source rate limit: max 500 pending episodes per source; UI shows backpressure status |
 
