@@ -191,7 +191,6 @@ async fn index_one_file(
         };
         graph
             .store_knowledge(agent_id, knowledge)
-            .await
             .map_err(|e| format!("Graph store failed: {e}"))?;
     }
 

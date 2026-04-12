@@ -513,10 +513,10 @@ impl SessionDistiller {
 
             for ee in &response.entities {
                 // Check if entity already exists (dedup by name, case-insensitive)
-                match graph.find_entity_by_name(agent_id, &ee.name).await {
+                match graph.find_entity_by_name(agent_id, &ee.name) {
                     Ok(Some(existing_id)) => {
                         // Entity already exists — bump mention count and reuse ID
-                        if let Err(e) = graph.bump_entity_mention(&existing_id).await {
+                        if let Err(e) = graph.bump_entity_mention(&existing_id) {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to bump entity mention");
                         }
                         entity_map.insert(ee.name.clone(), existing_id);
@@ -535,7 +535,7 @@ impl SessionDistiller {
                             entities: vec![entity],
                             relationships: vec![],
                         };
-                        if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
+                        if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
                         }
                     }
@@ -573,7 +573,7 @@ impl SessionDistiller {
                     entities: vec![],
                     relationships: vec![relationship],
                 };
-                if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
+                if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
                     tracing::warn!(
                         source = %er.source, target = %er.target,
                         error = %e, "Failed to store relationship"

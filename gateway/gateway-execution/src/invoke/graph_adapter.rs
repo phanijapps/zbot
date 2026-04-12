@@ -39,7 +39,6 @@ impl GraphStorageAccess for GraphStorageAdapter {
         let entities = self
             .storage
             .search_entities(GLOBAL_AGENT_ID, query)
-            .await
             .map_err(|e| format!("graph search failed: {e}"))?;
 
         let results: Vec<EntityInfo> = entities
@@ -100,7 +99,6 @@ impl GraphStorageAccess for GraphStorageAdapter {
         let entity = self
             .storage
             .get_entity_by_name(GLOBAL_AGENT_ID, entity_name)
-            .await
             .map_err(|e| format!("entity lookup failed: {e}"))?;
 
         let Some(entity) = entity else {
@@ -116,7 +114,6 @@ impl GraphStorageAccess for GraphStorageAdapter {
         let neighbors = self
             .storage
             .get_neighbors(GLOBAL_AGENT_ID, &entity.id, dir, limit)
-            .await
             .map_err(|e| format!("neighbor query failed: {e}"))?;
 
         Ok(neighbors
@@ -144,7 +141,6 @@ impl GraphStorageAccess for GraphStorageAdapter {
         let entity = self
             .storage
             .get_entity_by_name(GLOBAL_AGENT_ID, name)
-            .await
             .map_err(|e| format!("entity lookup failed: {e}"))?;
 
         Ok(entity.map(|e| EntityInfo {

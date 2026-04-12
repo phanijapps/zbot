@@ -35,8 +35,12 @@ tracing = "0.1"
 # LLM integration for smart extraction
 zero-app = { path = "../../framework/zero-app" }
 
+# Shared knowledge.db pool (v22 schema)
+gateway-database = { path = "../../gateway/gateway-database" }
+
 [dev-dependencies]
 tempfile = "3"
+gateway-services = { path = "../../gateway/gateway-services" }
 
 [lints]
 workspace = true

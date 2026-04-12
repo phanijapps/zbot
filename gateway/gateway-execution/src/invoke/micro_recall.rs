@@ -258,7 +258,7 @@ async fn handle_ward_entry(
 ) {
     // Try to find the ward entity in the knowledge graph
     if let Some(graph) = &ctx.graph_storage {
-        match graph.get_entity_by_name(&ctx.agent_id, ward_id).await {
+        match graph.get_entity_by_name(&ctx.agent_id, ward_id) {
             Ok(Some(entity)) => {
                 let summary = entity
                     .properties
@@ -313,7 +313,7 @@ async fn handle_entity_mention(
     iteration: u32,
 ) {
     if let Some(graph) = &ctx.graph_storage {
-        match graph.get_entity_by_name(&ctx.agent_id, entity_name).await {
+        match graph.get_entity_by_name(&ctx.agent_id, entity_name) {
             Ok(Some(entity)) => {
                 let summary = entity
                     .properties

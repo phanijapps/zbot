@@ -6,71 +6,85 @@ use crate::error::{GraphError, GraphResult};
 use crate::types::{
     Direction, Entity, EntityType, ExtractedKnowledge, NeighborInfo, Relationship, RelationshipType,
 };
+use gateway_database::KnowledgeDatabase;
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 
-/// SQLite storage for knowledge graph
+/// Convert a `GraphError` into a `rusqlite::Error` so that closures passed to
+/// `KnowledgeDatabase::with_connection` (which require `rusqlite::Result`) can
+/// propagate our higher-level errors. `with_connection` stringifies the result
+/// anyway, so the round-trip fidelity is acceptable.
+fn graph_to_rusqlite(e: GraphError) -> rusqlite::Error {
+    match e {
+        GraphError::Database(db) => db,
+        other => {
+            rusqlite::Error::InvalidColumnType(0, format!("{other:?}"), rusqlite::types::Type::Null)
+        }
+    }
+}
+
+/// SQLite-backed storage for the knowledge graph, sharing the pooled
+/// `KnowledgeDatabase` connection for `knowledge.db` (schema v22).
 pub struct GraphStorage {
-    pub(crate) conn: Arc<Mutex<Connection>>,
+    pub(crate) db: Arc<KnowledgeDatabase>,
 }
 
 impl GraphStorage {
-    /// Create a new graph storage
-    pub fn new(db_path: PathBuf) -> GraphResult<Self> {
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| GraphError::Config(format!("Failed to create directory: {}", e)))?;
-        }
-
-        let conn = Connection::open(&db_path).map_err(GraphError::Database)?;
-
-        // Initialize schema
-        initialize_schema(&conn)?;
-
-        Ok(Self {
-            conn: Arc::new(Mutex::new(conn)),
+    /// Create a new graph storage backed by the shared `KnowledgeDatabase` pool.
+    ///
+    /// Schema v22 is already initialized by `KnowledgeDatabase::new`, so this
+    /// constructor is effectively a no-op wrapper.
+    pub fn new(db: Arc<KnowledgeDatabase>) -> GraphResult<Self> {
+        // Bridge: v22 schema (in gateway-database) doesn't yet carry the
+        // `aliases` TEXT column that the EntityResolver expects on
+        // `kg_entities`. Add it idempotently so store/resolve paths work.
+        // TODO: Fold this column into the v22 schema definition proper.
+        db.with_connection(|conn| {
+            let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN aliases TEXT", []);
+            Ok(())
         })
+        .map_err(GraphError::Other)?;
+        Ok(Self { db })
     }
 
     /// Store extracted knowledge (entities and relationships)
-    pub async fn store_knowledge(
+    pub fn store_knowledge(
         &self,
         agent_id: &str,
         knowledge: ExtractedKnowledge,
     ) -> GraphResult<()> {
-        let conn = self.conn.lock().await;
+        self.db
+            .with_connection(|conn| {
+                // Store entities and build ID mapping (new_id → actual_id)
+                let mut entity_id_map: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                for entity in knowledge.entities {
+                    let original_id = entity.id.clone();
+                    let actual_id =
+                        store_entity(conn, agent_id, entity).map_err(graph_to_rusqlite)?;
+                    entity_id_map.insert(original_id, actual_id);
+                }
 
-        // Store entities and build ID mapping (new_id → actual_id)
-        // When an entity deduplicates, the actual_id is the existing entity's ID
-        let mut entity_id_map: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        for entity in knowledge.entities {
-            let original_id = entity.id.clone();
-            let actual_id = store_entity(&conn, agent_id, entity)?;
-            entity_id_map.insert(original_id, actual_id);
-        }
+                for mut relationship in knowledge.relationships {
+                    if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
+                        relationship.source_entity_id = mapped.clone();
+                    }
+                    if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
+                        relationship.target_entity_id = mapped.clone();
+                    }
+                    store_relationship(conn, agent_id, relationship).map_err(graph_to_rusqlite)?;
+                }
 
-        // Store relationships, remapping entity IDs through the dedup map
-        for mut relationship in knowledge.relationships {
-            if let Some(mapped) = entity_id_map.get(&relationship.source_entity_id) {
-                relationship.source_entity_id = mapped.clone();
-            }
-            if let Some(mapped) = entity_id_map.get(&relationship.target_entity_id) {
-                relationship.target_entity_id = mapped.clone();
-            }
-            store_relationship(&conn, agent_id, relationship)?;
-        }
-
-        Ok(())
+                Ok(())
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Get all entities for an agent (includes __global__ entities)
-    pub async fn get_entities(&self, agent_id: &str) -> GraphResult<Vec<Entity>> {
-        let conn = self.conn.lock().await;
-
+    pub fn get_entities(&self, agent_id: &str) -> GraphResult<Vec<Entity>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Entity>> {
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
              FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'"
@@ -128,11 +142,17 @@ impl GraphStorage {
         }
 
         Ok(entities)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Get all relationships for an agent (includes __global__ relationships)
-    pub async fn get_relationships(&self, agent_id: &str) -> GraphResult<Vec<Relationship>> {
-        let conn = self.conn.lock().await;
+    pub fn get_relationships(&self, agent_id: &str) -> GraphResult<Vec<Relationship>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Relationship>> {
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
@@ -194,11 +214,17 @@ impl GraphStorage {
         }
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Search entities by name (includes __global__ entities)
-    pub async fn search_entities(&self, agent_id: &str, query: &str) -> GraphResult<Vec<Entity>> {
-        let conn = self.conn.lock().await;
+    pub fn search_entities(&self, agent_id: &str, query: &str) -> GraphResult<Vec<Entity>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Entity>> {
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
@@ -260,13 +286,17 @@ impl GraphStorage {
         }
 
         Ok(entities)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Search entities ordered by a caller-provided clause.
     ///
     /// `order_clause` is whitelisted to prevent SQL injection; any value
     /// outside the whitelist falls back to `mention_count DESC`.
-    pub async fn search_entities_order_by(
+    pub fn search_entities_order_by(
         &self,
         agent_id: &str,
         query: &str,
@@ -288,128 +318,147 @@ impl GraphStorage {
             safe_order
         );
 
-        let conn = self.conn.lock().await;
-        let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Entity>> {
+                    let mut stmt = conn.prepare(&sql).map_err(GraphError::Database)?;
 
-        let pattern = format!("%{}%", query);
-        let rows = stmt
-            .query_map(params![agent_id, pattern, limit as i64], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
-                    row.get::<_, Option<String>>(4)?,
-                    row.get::<_, String>(5)?,
-                    row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
-                ))
+                    let pattern = format!("%{}%", query);
+                    let rows = stmt
+                        .query_map(params![agent_id, pattern, limit as i64], |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, Option<String>>(4)?,
+                                row.get::<_, String>(5)?,
+                                row.get::<_, String>(6)?,
+                                row.get::<_, i64>(7)?,
+                            ))
+                        })
+                        .map_err(GraphError::Database)?;
+
+                    let mut entities = Vec::new();
+                    for row in rows {
+                        let (
+                            id,
+                            agent_id,
+                            entity_type_str,
+                            name,
+                            properties_json,
+                            first_seen_at,
+                            last_seen_at,
+                            mention_count,
+                        ) = row?;
+
+                        let entity_type = EntityType::from_str(&entity_type_str);
+                        let properties = if let Some(json) = properties_json {
+                            serde_json::from_str(&json).unwrap_or_default()
+                        } else {
+                            Default::default()
+                        };
+
+                        entities.push(Entity {
+                            id,
+                            agent_id,
+                            entity_type,
+                            name,
+                            properties,
+                            first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
+                                .map(|dt| dt.with_timezone(&chrono::Utc))
+                                .unwrap_or_else(|_| chrono::Utc::now()),
+                            last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
+                                .map(|dt| dt.with_timezone(&chrono::Utc))
+                                .unwrap_or_else(|_| chrono::Utc::now()),
+                            mention_count,
+                        });
+                    }
+
+                    Ok(entities)
+                })()
+                .map_err(graph_to_rusqlite)
             })
-            .map_err(GraphError::Database)?;
-
-        let mut entities = Vec::new();
-        for row in rows {
-            let (
-                id,
-                agent_id,
-                entity_type_str,
-                name,
-                properties_json,
-                first_seen_at,
-                last_seen_at,
-                mention_count,
-            ) = row?;
-
-            let entity_type = EntityType::from_str(&entity_type_str);
-            let properties = if let Some(json) = properties_json {
-                serde_json::from_str(&json).unwrap_or_default()
-            } else {
-                Default::default()
-            };
-
-            entities.push(Entity {
-                id,
-                agent_id,
-                entity_type,
-                name,
-                properties,
-                first_seen_at: chrono::DateTime::parse_from_rfc3339(&first_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                last_seen_at: chrono::DateTime::parse_from_rfc3339(&last_seen_at)
-                    .map(|dt| dt.with_timezone(&chrono::Utc))
-                    .unwrap_or_else(|_| chrono::Utc::now()),
-                mention_count,
-            });
-        }
-
-        Ok(entities)
+            .map_err(GraphError::Other)
     }
 
     /// Count relationships referencing a particular entity (source OR target).
-    pub async fn count_relationships_for(&self, entity_id: &str) -> GraphResult<i64> {
-        let conn = self.conn.lock().await;
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM kg_relationships
+    pub fn count_relationships_for(&self, entity_id: &str) -> GraphResult<i64> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<i64> {
+                    let count: i64 = conn
+                        .query_row(
+                            "SELECT COUNT(*) FROM kg_relationships
                  WHERE source_entity_id = ?1 OR target_entity_id = ?1",
-                params![entity_id],
-                |row| row.get(0),
-            )
-            .map_err(GraphError::Database)?;
-        Ok(count)
+                            params![entity_id],
+                            |row| row.get(0),
+                        )
+                        .map_err(GraphError::Database)?;
+                    Ok(count)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Find an existing entity by agent_id + name (case-insensitive), returning its ID.
-    pub async fn find_entity_by_name(
-        &self,
-        agent_id: &str,
-        name: &str,
-    ) -> GraphResult<Option<String>> {
-        let conn = self.conn.lock().await;
-        find_entity_by_name(&conn, agent_id, name)
+    pub fn find_entity_by_name(&self, agent_id: &str, name: &str) -> GraphResult<Option<String>> {
+        self.db
+            .with_connection(|conn| {
+                find_entity_by_name(conn, agent_id, name).map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Increment mention count and update last_seen for an existing entity.
-    pub async fn bump_entity_mention(&self, entity_id: &str) -> GraphResult<()> {
-        let conn = self.conn.lock().await;
-        bump_entity_mention(&conn, entity_id)
+    pub fn bump_entity_mention(&self, entity_id: &str) -> GraphResult<()> {
+        self.db
+            .with_connection(|conn| bump_entity_mention(conn, entity_id).map_err(graph_to_rusqlite))
+            .map_err(GraphError::Other)
     }
 
     /// Delete all data for an agent
-    pub async fn delete_agent_data(&self, agent_id: &str) -> GraphResult<usize> {
-        let conn = self.conn.lock().await;
+    pub fn delete_agent_data(&self, agent_id: &str) -> GraphResult<usize> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    // Delete relationships
+                    let rel_count = conn
+                        .execute(
+                            "DELETE FROM kg_relationships WHERE agent_id = ?1",
+                            params![agent_id],
+                        )
+                        .map_err(GraphError::Database)?;
 
-        // Delete relationships
-        let rel_count = conn
-            .execute(
-                "DELETE FROM kg_relationships WHERE agent_id = ?1",
-                params![agent_id],
-            )
-            .map_err(GraphError::Database)?;
+                    // Delete entities
+                    let ent_count = conn
+                        .execute(
+                            "DELETE FROM kg_entities WHERE agent_id = ?1",
+                            params![agent_id],
+                        )
+                        .map_err(GraphError::Database)?;
 
-        // Delete entities
-        let ent_count = conn
-            .execute(
-                "DELETE FROM kg_entities WHERE agent_id = ?1",
-                params![agent_id],
-            )
-            .map_err(GraphError::Database)?;
-
-        Ok(rel_count + ent_count)
+                    Ok(rel_count + ent_count)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     // ===== NEW READ METHODS (Phase 1: Graph Repository Layer) =====
 
     /// List entities for an agent with optional type filter and pagination
-    pub async fn list_entities(
+    pub fn list_entities(
         &self,
         agent_id: &str,
         entity_type: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> GraphResult<Vec<Entity>> {
-        let conn = self.conn.lock().await;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Entity>> {
 
         // Build query and params based on whether type filter is provided
         let sql = if entity_type.is_some() {
@@ -490,17 +539,23 @@ impl GraphStorage {
         }
 
         Ok(entities)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// List relationships for an agent with optional type filter and pagination
-    pub async fn list_relationships(
+    pub fn list_relationships(
         &self,
         agent_id: &str,
         relationship_type: Option<&str>,
         limit: usize,
         offset: usize,
     ) -> GraphResult<Vec<Relationship>> {
-        let conn = self.conn.lock().await;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Relationship>> {
 
         // Build query based on whether type filter is provided
         let sql = if relationship_type.is_some() {
@@ -587,15 +642,17 @@ impl GraphStorage {
         }
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Get entity by name (case-insensitive)
-    pub async fn get_entity_by_name(
-        &self,
-        agent_id: &str,
-        name: &str,
-    ) -> GraphResult<Option<Entity>> {
-        let conn = self.conn.lock().await;
+    pub fn get_entity_by_name(&self, agent_id: &str, name: &str) -> GraphResult<Option<Entity>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Option<Entity>> {
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count
@@ -656,17 +713,23 @@ impl GraphStorage {
         } else {
             Ok(None)
         }
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Get neighbors of an entity (1-hop)
-    pub async fn get_neighbors(
+    pub fn get_neighbors(
         &self,
         _agent_id: &str,
         entity_id: &str,
         direction: Direction,
         limit: usize,
     ) -> GraphResult<Vec<NeighborInfo>> {
-        let conn = self.conn.lock().await;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<NeighborInfo>> {
 
         let mut neighbors = Vec::new();
 
@@ -875,13 +938,18 @@ impl GraphStorage {
         }
 
         Ok(neighbors)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Count entities for an agent
-    pub async fn count_entities(&self, agent_id: &str) -> GraphResult<usize> {
-        let conn = self.conn.lock().await;
-
-        let count: i64 = conn
+    pub fn count_entities(&self, agent_id: &str) -> GraphResult<usize> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM kg_entities WHERE agent_id = ?1 OR agent_id = '__global__'",
                 params![agent_id],
@@ -889,47 +957,70 @@ impl GraphStorage {
             )
             .map_err(GraphError::Database)?;
 
-        Ok(count as usize)
+                    Ok(count as usize)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Count relationships for an agent
-    pub async fn count_relationships(&self, agent_id: &str) -> GraphResult<usize> {
-        let conn = self.conn.lock().await;
-
-        let count: i64 = conn.query_row(
+    pub fn count_relationships(&self, agent_id: &str) -> GraphResult<usize> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM kg_relationships WHERE agent_id = ?1 OR agent_id = '__global__'",
             params![agent_id],
             |row| row.get(0),
         ).map_err(GraphError::Database)?;
 
-        Ok(count as usize)
+                    Ok(count as usize)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Count all entities across all agents.
-    pub async fn count_all_entities(&self) -> GraphResult<usize> {
-        let conn = self.conn.lock().await;
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM kg_entities", [], |row| row.get(0))
-            .map_err(GraphError::Database)?;
-        Ok(count as usize)
+    pub fn count_all_entities(&self) -> GraphResult<usize> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    let count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_entities", [], |row| row.get(0))
+                        .map_err(GraphError::Database)?;
+                    Ok(count as usize)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// Count all relationships across all agents.
-    pub async fn count_all_relationships(&self) -> GraphResult<usize> {
-        let conn = self.conn.lock().await;
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM kg_relationships", [], |row| {
-                row.get(0)
+    pub fn count_all_relationships(&self) -> GraphResult<usize> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<usize> {
+                    let count: i64 = conn
+                        .query_row("SELECT COUNT(*) FROM kg_relationships", [], |row| {
+                            row.get(0)
+                        })
+                        .map_err(GraphError::Database)?;
+                    Ok(count as usize)
+                })()
+                .map_err(graph_to_rusqlite)
             })
-            .map_err(GraphError::Database)?;
-        Ok(count as usize)
+            .map_err(GraphError::Other)
     }
 
     /// List all relationships across all agents with pagination.
     ///
     /// Used by the Observatory "All Agents" mode to render edges.
-    pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
-        let conn = self.conn.lock().await;
+    pub fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Relationship>> {
 
         let mut stmt = conn.prepare(
             "SELECT id, agent_id, source_entity_id, target_entity_id, relationship_type, properties, first_seen_at, last_seen_at, mention_count
@@ -993,18 +1084,24 @@ impl GraphStorage {
         }
 
         Ok(relationships)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
 
     /// List entities across all agents with optional filters and pagination.
     ///
     /// Used by the Observatory "All Agents" mode.
-    pub async fn list_all_entities(
+    pub fn list_all_entities(
         &self,
         ward_id: Option<&str>,
         entity_type: Option<&str>,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        let conn = self.conn.lock().await;
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<Entity>> {
 
         // Build dynamic SQL based on filters
         let mut conditions: Vec<String> = Vec::new();
@@ -1095,194 +1192,11 @@ impl GraphStorage {
         }
 
         Ok(entities)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
     }
-}
-
-/// Initialize the knowledge graph database schema
-fn initialize_schema(conn: &Connection) -> GraphResult<()> {
-    // Create entities table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS kg_entities (
-            id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            entity_type TEXT NOT NULL,
-            name TEXT NOT NULL,
-            properties TEXT,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            mention_count INTEGER DEFAULT 1,
-            aliases TEXT,
-            epistemic_class TEXT DEFAULT 'current',
-            source_episode_ids TEXT,
-            valid_from TEXT,
-            valid_until TEXT,
-            confidence REAL DEFAULT 0.8
-        )",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    // Create indexes for entities
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_entities_agent ON kg_entities(agent_id)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_entities_name ON kg_entities(name)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    // Create relationships table
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS kg_relationships (
-            id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            source_entity_id TEXT NOT NULL,
-            target_entity_id TEXT NOT NULL,
-            relationship_type TEXT NOT NULL,
-            properties TEXT,
-            first_seen_at TEXT NOT NULL,
-            last_seen_at TEXT NOT NULL,
-            mention_count INTEGER DEFAULT 1,
-            valid_at TEXT,
-            invalidated_at TEXT,
-            epistemic_class TEXT DEFAULT 'current',
-            source_episode_ids TEXT,
-            confidence REAL DEFAULT 0.8,
-            FOREIGN KEY (source_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
-            FOREIGN KEY (target_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
-        )",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    // Create indexes for relationships
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_relationships_agent ON kg_relationships(agent_id)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_relationships_source ON kg_relationships(source_entity_id)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_relationships_target ON kg_relationships(target_entity_id)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    // Migration: Add mention_count column if it doesn't exist (for databases created before this feature)
-    // Check if mention_count column exists in kg_entities
-    let has_entities_mention_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('kg_entities') WHERE name='mention_count'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if has_entities_mention_count == 0 {
-        tracing::info!("Migrating kg_entities: adding mention_count column");
-        conn.execute(
-            "ALTER TABLE kg_entities ADD COLUMN mention_count INTEGER DEFAULT 1",
-            [],
-        )
-        .map_err(GraphError::Database)?;
-    }
-
-    // Check if mention_count column exists in kg_relationships
-    let has_relationships_mention_count: i64 = conn
-        .query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('kg_relationships') WHERE name='mention_count'",
-            [],
-            |row| row.get(0),
-        )
-        .unwrap_or(0);
-
-    if has_relationships_mention_count == 0 {
-        tracing::info!("Migrating kg_relationships: adding mention_count column");
-        conn.execute(
-            "ALTER TABLE kg_relationships ADD COLUMN mention_count INTEGER DEFAULT 1",
-            [],
-        )
-        .map_err(GraphError::Database)?;
-    }
-
-    // One-time migration: dedup existing relationships before adding unique index
-    // Keep the row with lowest rowid per (source, target, type) triple
-    conn.execute_batch(
-        "
-        DELETE FROM kg_relationships WHERE rowid NOT IN (
-            SELECT MIN(rowid) FROM kg_relationships
-            GROUP BY source_entity_id, target_entity_id, relationship_type
-        );
-    ",
-    )
-    .map_err(GraphError::Database)?;
-
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_kg_rel_unique
-         ON kg_relationships(source_entity_id, target_entity_id, relationship_type)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    // Idempotent migrations: add epistemic/bitemporal/provenance columns.
-    // ALTER TABLE fails silently if the column already exists (re-run safe).
-    let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN aliases TEXT", []);
-    let _ = conn.execute(
-        "ALTER TABLE kg_entities ADD COLUMN epistemic_class TEXT DEFAULT 'current'",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE kg_entities ADD COLUMN source_episode_ids TEXT",
-        [],
-    );
-    let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN valid_from TEXT", []);
-    let _ = conn.execute("ALTER TABLE kg_entities ADD COLUMN valid_until TEXT", []);
-    let _ = conn.execute(
-        "ALTER TABLE kg_entities ADD COLUMN confidence REAL DEFAULT 0.8",
-        [],
-    );
-
-    let _ = conn.execute("ALTER TABLE kg_relationships ADD COLUMN valid_at TEXT", []);
-    let _ = conn.execute(
-        "ALTER TABLE kg_relationships ADD COLUMN invalidated_at TEXT",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE kg_relationships ADD COLUMN epistemic_class TEXT DEFAULT 'current'",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE kg_relationships ADD COLUMN source_episode_ids TEXT",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE kg_relationships ADD COLUMN confidence REAL DEFAULT 0.8",
-        [],
-    );
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_entities_class ON kg_entities(agent_id, epistemic_class)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_rels_valid_at ON kg_relationships(valid_at)",
-        [],
-    )
-    .map_err(GraphError::Database)?;
-
-    Ok(())
 }
 
 /// Normalize entity name for dedup matching.
@@ -1402,11 +1316,20 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
         return Ok(existing_id);
     }
 
-    // New entity — insert with agent_id = '__global__' for cross-agent visibility
+    // New entity — insert with agent_id = '__global__' for cross-agent visibility.
+    // v22 schema requires normalized_name + normalized_hash; derive them here.
     let new_id = entity.id.clone();
+    let norm_name = normalize_entity_name(&entity.name, entity_type_str).to_lowercase();
+    let norm_hash = {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        norm_name.hash(&mut h);
+        format!("{:x}", h.finish())
+    };
     conn.execute(
-        "INSERT INTO kg_entities (id, agent_id, entity_type, name, properties, first_seen_at, last_seen_at, mention_count)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+        "INSERT INTO kg_entities (id, agent_id, entity_type, name, normalized_name, normalized_hash, properties, first_seen_at, last_seen_at, mention_count)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
          ON CONFLICT(id) DO UPDATE SET
             last_seen_at = excluded.last_seen_at,
             mention_count = mention_count + 1,
@@ -1416,6 +1339,8 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
             "__global__",
             entity_type_str,
             entity.name,
+            norm_name,
+            norm_hash,
             properties_json,
             entity.first_seen_at.to_rfc3339(),
             entity.last_seen_at.to_rfc3339(),
@@ -1533,15 +1458,18 @@ mod tests {
     use crate::types::{EntityType, RelationshipType};
     use tempfile::tempdir;
 
-    async fn create_test_storage() -> GraphStorage {
+    fn create_test_storage() -> GraphStorage {
         let dir = tempdir().unwrap();
-        let db_path = dir.keep().join("test.db");
-        GraphStorage::new(db_path).unwrap()
+        let tmp_path = dir.keep();
+        let paths = Arc::new(gateway_services::VaultPaths::new(tmp_path));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
+        GraphStorage::new(db).unwrap()
     }
 
     #[tokio::test]
     async fn test_list_entities_with_pagination() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Store some entities
         let entity1 = Entity::new(
@@ -1556,27 +1484,26 @@ mod tests {
             entities: vec![entity1, entity2, entity3],
             relationships: vec![],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         // List with limit
-        let entities = storage.list_entities("agent1", None, 2, 0).await.unwrap();
+        let entities = storage.list_entities("agent1", None, 2, 0).unwrap();
         assert_eq!(entities.len(), 2);
 
         // List with offset
-        let entities = storage.list_entities("agent1", None, 2, 2).await.unwrap();
+        let entities = storage.list_entities("agent1", None, 2, 2).unwrap();
         assert_eq!(entities.len(), 1);
 
         // List with type filter
         let entities = storage
             .list_entities("agent1", Some("person"), 10, 0)
-            .await
             .unwrap();
         assert_eq!(entities.len(), 2);
     }
 
     #[tokio::test]
     async fn test_list_relationships_with_pagination() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Store entities and relationships
         let entity1 = Entity::new(
@@ -1608,19 +1535,15 @@ mod tests {
             entities: vec![entity1, entity2, entity3],
             relationships: vec![rel1, rel2],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         // List with limit
-        let rels = storage
-            .list_relationships("agent1", None, 1, 0)
-            .await
-            .unwrap();
+        let rels = storage.list_relationships("agent1", None, 1, 0).unwrap();
         assert_eq!(rels.len(), 1);
 
         // List with type filter
         let rels = storage
             .list_relationships("agent1", Some("uses"), 10, 0)
-            .await
             .unwrap();
         assert_eq!(rels.len(), 1);
         assert!(matches!(rels[0].relationship_type, RelationshipType::Uses));
@@ -1628,7 +1551,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_entity_by_name_case_insensitive() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Store entity
         let entity = Entity::new(
@@ -1640,24 +1563,24 @@ mod tests {
             entities: vec![entity],
             relationships: vec![],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         // Search with different case
-        let result = storage.get_entity_by_name("agent1", "alice").await.unwrap();
+        let result = storage.get_entity_by_name("agent1", "alice").unwrap();
         assert!(result.is_some());
         assert_eq!(result.unwrap().name, "Alice");
 
-        let result = storage.get_entity_by_name("agent1", "ALICE").await.unwrap();
+        let result = storage.get_entity_by_name("agent1", "ALICE").unwrap();
         assert!(result.is_some());
 
         // Non-existent entity
-        let result = storage.get_entity_by_name("agent1", "Bob").await.unwrap();
+        let result = storage.get_entity_by_name("agent1", "Bob").unwrap();
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn test_get_neighbors() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Create a small graph: Alice -> uses -> Rust, Bob -> uses -> Rust
         let alice = Entity::new(
@@ -1685,12 +1608,11 @@ mod tests {
             entities: vec![alice.clone(), bob, rust.clone()],
             relationships: vec![alice_uses_rust, bob_uses_rust],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         // Get Alice's outgoing neighbors (Alice -> Rust)
         let neighbors = storage
             .get_neighbors("agent1", &alice.id, Direction::Outgoing, 10)
-            .await
             .unwrap();
         assert_eq!(neighbors.len(), 1);
         assert_eq!(neighbors[0].entity.name, "Rust");
@@ -1699,25 +1621,23 @@ mod tests {
         // Get Rust's incoming neighbors (Alice -> Rust, Bob -> Rust)
         let neighbors = storage
             .get_neighbors("agent1", &rust.id, Direction::Incoming, 10)
-            .await
             .unwrap();
         assert_eq!(neighbors.len(), 2);
 
         // Get both directions
         let neighbors = storage
             .get_neighbors("agent1", &alice.id, Direction::Both, 10)
-            .await
             .unwrap();
         assert_eq!(neighbors.len(), 1); // Only outgoing
     }
 
     #[tokio::test]
     async fn test_count_entities_and_relationships() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Initially empty
-        assert_eq!(storage.count_entities("agent1").await.unwrap(), 0);
-        assert_eq!(storage.count_relationships("agent1").await.unwrap(), 0);
+        assert_eq!(storage.count_entities("agent1").unwrap(), 0);
+        assert_eq!(storage.count_relationships("agent1").unwrap(), 0);
 
         // Store some data
         let entity1 = Entity::new(
@@ -1737,19 +1657,19 @@ mod tests {
             entities: vec![entity1, entity2],
             relationships: vec![rel],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         // Count after storing
-        assert_eq!(storage.count_entities("agent1").await.unwrap(), 2);
-        assert_eq!(storage.count_relationships("agent1").await.unwrap(), 1);
+        assert_eq!(storage.count_entities("agent1").unwrap(), 2);
+        assert_eq!(storage.count_relationships("agent1").unwrap(), 1);
 
         // Different agent also sees __global__ entities
-        assert_eq!(storage.count_entities("agent2").await.unwrap(), 2);
+        assert_eq!(storage.count_entities("agent2").unwrap(), 2);
     }
 
     #[tokio::test]
     async fn test_delete_agent_data() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Store entities and relationships for an agent
         let entity1 = Entity::new(
@@ -1773,28 +1693,25 @@ mod tests {
             entities: vec![entity1, entity2],
             relationships: vec![rel],
         };
-        storage
-            .store_knowledge("agent-del", knowledge)
-            .await
-            .unwrap();
+        storage.store_knowledge("agent-del", knowledge).unwrap();
 
         // Entities are stored as __global__ due to cross-agent dedup, so
         // delete_agent_data("agent-del") won't remove them (they belong to __global__).
         // Verify the entities exist under __global__
-        assert!(storage.count_all_entities().await.unwrap() >= 2);
+        assert!(storage.count_all_entities().unwrap() >= 2);
 
         // Delete with __global__ agent_id to actually remove them
-        let deleted = storage.delete_agent_data("__global__").await.unwrap();
+        let deleted = storage.delete_agent_data("__global__").unwrap();
         assert!(deleted >= 2); // At least 2 entities removed
 
         // Verify clean
-        assert_eq!(storage.count_all_entities().await.unwrap(), 0);
-        assert_eq!(storage.count_all_relationships().await.unwrap(), 0);
+        assert_eq!(storage.count_all_entities().unwrap(), 0);
+        assert_eq!(storage.count_all_relationships().unwrap(), 0);
     }
 
     #[tokio::test]
     async fn test_upsert_entity() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Insert an entity
         let entity = Entity::new(
@@ -1807,15 +1724,11 @@ mod tests {
             entities: vec![entity],
             relationships: vec![],
         };
-        storage
-            .store_knowledge("agent-ups", knowledge)
-            .await
-            .unwrap();
+        storage.store_knowledge("agent-ups", knowledge).unwrap();
 
         // Verify initial mention_count is 1
         let found = storage
             .get_entity_by_name("agent-ups", "UpsertUser")
-            .await
             .unwrap();
         assert!(found.is_some());
         let first = found.unwrap();
@@ -1832,27 +1745,23 @@ mod tests {
             entities: vec![entity2],
             relationships: vec![],
         };
-        storage
-            .store_knowledge("agent-ups", knowledge2)
-            .await
-            .unwrap();
+        storage.store_knowledge("agent-ups", knowledge2).unwrap();
 
         // Verify mention_count was incremented
         let found = storage
             .get_entity_by_name("agent-ups", "UpsertUser")
-            .await
             .unwrap();
         assert!(found.is_some());
         let second = found.unwrap();
         assert_eq!(second.mention_count, 2);
 
         // Verify still only one entity with that name
-        assert_eq!(storage.count_all_entities().await.unwrap(), 1);
+        assert_eq!(storage.count_all_entities().unwrap(), 1);
     }
 
     #[tokio::test]
     async fn test_duplicate_relationship() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         // Create two entities
         let entity1 = Entity::new(
@@ -1881,16 +1790,13 @@ mod tests {
             entities: vec![entity1, entity2],
             relationships: vec![rel1],
         };
-        storage
-            .store_knowledge("agent-dup", knowledge1)
-            .await
-            .unwrap();
+        storage.store_knowledge("agent-dup", knowledge1).unwrap();
 
-        assert_eq!(storage.count_all_relationships().await.unwrap(), 1);
+        assert_eq!(storage.count_all_relationships().unwrap(), 1);
 
         // Insert same relationship again (same source, target, type) — should not error
         // We need to use the actual entity IDs that were stored (they may have been remapped)
-        let entities = storage.get_entities("agent-dup").await.unwrap();
+        let entities = storage.get_entities("agent-dup").unwrap();
         let alice = entities.iter().find(|e| e.name == "DupAlice").unwrap();
         let rust = entities.iter().find(|e| e.name == "DupRust").unwrap();
 
@@ -1906,17 +1812,13 @@ mod tests {
             relationships: vec![rel2],
         };
         // This should not error — the unique index uses ON CONFLICT DO UPDATE
-        storage
-            .store_knowledge("agent-dup", knowledge2)
-            .await
-            .unwrap();
+        storage.store_knowledge("agent-dup", knowledge2).unwrap();
 
         // Still only 1 relationship, but mention_count should have incremented
-        assert_eq!(storage.count_all_relationships().await.unwrap(), 1);
+        assert_eq!(storage.count_all_relationships().unwrap(), 1);
 
         let rels = storage
             .list_relationships("agent-dup", None, 10, 0)
-            .await
             .unwrap();
         assert_eq!(rels.len(), 1);
         assert_eq!(rels[0].mention_count, 2);

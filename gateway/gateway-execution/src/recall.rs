@@ -1305,14 +1305,13 @@ async fn build_graph_section(
     let mut total_len: usize = 0;
 
     for candidate in candidates.iter().take(max_candidates) {
-        let entity = match storage.get_entity_by_name(agent_id, candidate).await {
+        let entity = match storage.get_entity_by_name(agent_id, candidate) {
             Ok(Some(e)) => e,
             _ => continue,
         };
 
         let neighbors = storage
             .get_neighbors(agent_id, &entity.id, Direction::Both, 5)
-            .await
             .unwrap_or_default();
 
         if neighbors.is_empty() {

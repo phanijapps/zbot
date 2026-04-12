@@ -58,7 +58,7 @@ pub async fn extract_and_persist(
         entities: stamped,
         relationships: Vec::new(),
     };
-    if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
+    if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
         tracing::warn!(tool = %tool_name, error = %e, "Failed to persist tool-result entities");
     }
 }

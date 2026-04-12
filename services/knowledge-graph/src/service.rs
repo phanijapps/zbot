@@ -57,11 +57,11 @@ impl GraphService {
     /// Get graph statistics for an agent
     pub async fn get_stats(&self, agent_id: &str) -> GraphResult<GraphStats> {
         // Get basic counts
-        let entity_count = self.storage.count_entities(agent_id).await?;
-        let relationship_count = self.storage.count_relationships(agent_id).await?;
+        let entity_count = self.storage.count_entities(agent_id)?;
+        let relationship_count = self.storage.count_relationships(agent_id)?;
 
         // Get all entities to count by type
-        let entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
+        let entities = self.storage.list_entities(agent_id, None, 10000, 0)?;
         let mut entity_types: HashMap<String, usize> = HashMap::new();
         for entity in &entities {
             *entity_types
@@ -70,10 +70,7 @@ impl GraphService {
         }
 
         // Get all relationships to count by type and find most connected entities
-        let relationships = self
-            .storage
-            .list_relationships(agent_id, None, 10000, 0)
-            .await?;
+        let relationships = self.storage.list_relationships(agent_id, None, 10000, 0)?;
         let mut relationship_types: HashMap<String, usize> = HashMap::new();
         let mut entity_connections: HashMap<String, usize> = HashMap::new();
 
@@ -122,11 +119,7 @@ impl GraphService {
         entity_name: &str,
     ) -> GraphResult<Option<EntityWithConnections>> {
         // Find the entity by name
-        let entity = match self
-            .storage
-            .get_entity_by_name(agent_id, entity_name)
-            .await?
-        {
+        let entity = match self.storage.get_entity_by_name(agent_id, entity_name)? {
             Some(e) => e,
             None => return Ok(None),
         };
@@ -134,8 +127,7 @@ impl GraphService {
         // Get all neighbors
         let neighbors = self
             .storage
-            .get_neighbors(agent_id, &entity.id, Direction::Both, 1000)
-            .await?;
+            .get_neighbors(agent_id, &entity.id, Direction::Both, 1000)?;
 
         // Separate into incoming and outgoing
         let mut outgoing: Vec<(crate::types::Relationship, Entity)> = Vec::new();
@@ -163,7 +155,7 @@ impl GraphService {
         query: &str,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        let mut entities = self.storage.search_entities(agent_id, query).await?;
+        let mut entities = self.storage.search_entities(agent_id, query)?;
         entities.truncate(limit);
         Ok(entities)
     }
@@ -195,7 +187,6 @@ impl GraphService {
     ) -> GraphResult<Vec<Entity>> {
         self.storage
             .search_entities_order_by(agent_id, query, "last_seen_at DESC", limit)
-            .await
     }
 
     async fn search_entities_by_connections(
@@ -204,10 +195,10 @@ impl GraphService {
         query: &str,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        let candidates = self.storage.search_entities(agent_id, query).await?;
+        let candidates = self.storage.search_entities(agent_id, query)?;
         let mut scored: Vec<(Entity, i64)> = Vec::with_capacity(candidates.len());
         for e in candidates {
-            let count = self.storage.count_relationships_for(&e.id).await?;
+            let count = self.storage.count_relationships_for(&e.id)?;
             scored.push((e, count));
         }
         scored.sort_by(|a, b| b.1.cmp(&a.1));
@@ -262,10 +253,9 @@ impl GraphService {
             let mut next_hop: Vec<String> = Vec::new();
 
             for entity_id in &current_hop {
-                let neighbors = self
-                    .storage
-                    .get_neighbors(agent_id, entity_id, Direction::Both, 1000)
-                    .await?;
+                let neighbors =
+                    self.storage
+                        .get_neighbors(agent_id, entity_id, Direction::Both, 1000)?;
                 collect_neighbors(
                     neighbors,
                     &mut visited_entities,
@@ -280,7 +270,7 @@ impl GraphService {
         }
 
         // Get the center entity itself
-        let center_entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
+        let center_entities = self.storage.list_entities(agent_id, None, 10000, 0)?;
         if let Some(center) = center_entities
             .into_iter()
             .find(|e| e.id == center_entity_id)
@@ -303,7 +293,7 @@ impl GraphService {
         agent_id: &str,
         entity_id: &str,
     ) -> GraphResult<Option<Entity>> {
-        let entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
+        let entities = self.storage.list_entities(agent_id, None, 10000, 0)?;
         Ok(entities.into_iter().find(|e| e.id == entity_id))
     }
 
@@ -317,7 +307,6 @@ impl GraphService {
     ) -> GraphResult<Vec<Entity>> {
         self.storage
             .list_entities(agent_id, entity_type, limit, offset)
-            .await
     }
 
     /// List relationships for an agent with optional filters
@@ -330,7 +319,6 @@ impl GraphService {
     ) -> GraphResult<Vec<crate::types::Relationship>> {
         self.storage
             .list_relationships(agent_id, relationship_type, limit, offset)
-            .await
     }
 
     /// Get neighbors of an entity (1-hop)
@@ -343,17 +331,16 @@ impl GraphService {
     ) -> GraphResult<Vec<crate::types::NeighborInfo>> {
         self.storage
             .get_neighbors(agent_id, entity_id, direction, limit)
-            .await
     }
 
     /// Count all entities across all agents.
     pub async fn count_all_entities(&self) -> GraphResult<usize> {
-        self.storage.count_all_entities().await
+        self.storage.count_all_entities()
     }
 
     /// Count all relationships across all agents.
     pub async fn count_all_relationships(&self) -> GraphResult<usize> {
-        self.storage.count_all_relationships().await
+        self.storage.count_all_relationships()
     }
 
     /// List entities across all agents with optional filters.
@@ -363,14 +350,12 @@ impl GraphService {
         entity_type: Option<&str>,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        self.storage
-            .list_all_entities(ward_id, entity_type, limit)
-            .await
+        self.storage.list_all_entities(ward_id, entity_type, limit)
     }
 
     /// List all relationships across all agents.
     pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
-        self.storage.list_all_relationships(limit).await
+        self.storage.list_all_relationships(limit)
     }
 }
 
@@ -431,8 +416,11 @@ mod tests {
 
     async fn create_test_service() -> GraphService {
         let dir = tempdir().unwrap();
-        let db_path = dir.keep().join("test.db");
-        let storage = Arc::new(GraphStorage::new(db_path).unwrap());
+        let tmp_path = dir.keep();
+        let paths = Arc::new(gateway_services::VaultPaths::new(tmp_path));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let storage = Arc::new(GraphStorage::new(db).unwrap());
         GraphService::new(storage)
     }
 
@@ -471,7 +459,6 @@ mod tests {
         service
             .storage
             .store_knowledge("agent1", knowledge)
-            .await
             .unwrap();
 
         (alice, rust, project)
@@ -633,10 +620,12 @@ mod tests {
         let service = create_test_service().await;
         populate_test_graph(&service).await;
         // Inject a malicious order clause — must fall back to default and succeed.
-        let result = service
-            .storage
-            .search_entities_order_by("agent1", "a", "name; DROP TABLE kg_entities --", 10)
-            .await;
+        let result = service.storage.search_entities_order_by(
+            "agent1",
+            "a",
+            "name; DROP TABLE kg_entities --",
+            10,
+        );
         assert!(result.is_ok(), "injection should fall back, not fail");
         // Graph still intact.
         let stats = service.get_stats("agent1").await.unwrap();
@@ -648,11 +637,7 @@ mod tests {
         let service = create_test_service().await;
         let (_alice, rust, _project) = populate_test_graph(&service).await;
         // Rust is target of Alice->Rust and source of Rust->ProjectX (2 edges total).
-        let count = service
-            .storage
-            .count_relationships_for(&rust.id)
-            .await
-            .unwrap();
+        let count = service.storage.count_relationships_for(&rust.id).unwrap();
         assert_eq!(count, 2);
     }
 
@@ -675,7 +660,6 @@ mod tests {
         service
             .storage
             .store_knowledge("agent1", knowledge)
-            .await
             .unwrap();
 
         let results = service
