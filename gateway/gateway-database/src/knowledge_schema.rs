@@ -150,6 +150,117 @@ CREATE TABLE IF NOT EXISTS kg_compactions (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_compactions_run ON kg_compactions(run_id);
+
+-- ========================================================================
+-- Memory facts — no embedding column; embeddings live in memory_facts_index
+-- ========================================================================
+
+CREATE TABLE IF NOT EXISTS memory_facts (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    category TEXT NOT NULL,
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.8,
+    mention_count INTEGER NOT NULL DEFAULT 1,
+    source_summary TEXT,
+    source_episode_id TEXT,
+    source_ref TEXT,
+    ward_id TEXT NOT NULL DEFAULT '__global__',
+    epistemic_class TEXT NOT NULL DEFAULT 'current',
+    contradicted_by TEXT,
+    t_valid_from TEXT,
+    t_valid_to TEXT,
+    superseded_by TEXT,
+    pinned INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    expires_at TEXT,
+    UNIQUE(agent_id, scope, ward_id, key)
+);
+CREATE INDEX IF NOT EXISTS idx_facts_agent_scope ON memory_facts(agent_id, scope);
+CREATE INDEX IF NOT EXISTS idx_facts_category ON memory_facts(agent_id, category);
+CREATE INDEX IF NOT EXISTS idx_facts_ward ON memory_facts(ward_id);
+CREATE INDEX IF NOT EXISTS idx_facts_epistemic ON memory_facts(epistemic_class);
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(
+    key, content, category, content=memory_facts
+);
+
+CREATE TABLE IF NOT EXISTS memory_facts_archive (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    agent_id TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    category TEXT NOT NULL,
+    key TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL,
+    ward_id TEXT NOT NULL,
+    epistemic_class TEXT NOT NULL,
+    archived_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_facts_archive_agent ON memory_facts_archive(agent_id);
+
+CREATE TABLE IF NOT EXISTS ward_wiki_articles (
+    id TEXT PRIMARY KEY,
+    ward_id TEXT NOT NULL,
+    agent_id TEXT NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags TEXT,
+    source_fact_ids TEXT,
+    version INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE(ward_id, title)
+);
+CREATE INDEX IF NOT EXISTS idx_wiki_ward ON ward_wiki_articles(ward_id);
+
+CREATE TABLE IF NOT EXISTS procedures (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    ward_id TEXT NOT NULL DEFAULT '__global__',
+    name TEXT NOT NULL,
+    description TEXT NOT NULL,
+    trigger_pattern TEXT,
+    steps TEXT NOT NULL,
+    parameters TEXT,
+    success_count INTEGER NOT NULL DEFAULT 1,
+    failure_count INTEGER NOT NULL DEFAULT 0,
+    avg_duration_ms INTEGER,
+    avg_token_cost INTEGER,
+    last_used TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_procedures_agent ON procedures(agent_id);
+CREATE INDEX IF NOT EXISTS idx_procedures_ward ON procedures(ward_id);
+
+CREATE TABLE IF NOT EXISTS session_episodes (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL UNIQUE,
+    agent_id TEXT NOT NULL,
+    ward_id TEXT,
+    task_summary TEXT,
+    outcome TEXT,
+    strategy_used TEXT,
+    key_learnings TEXT,
+    token_cost INTEGER,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_session_episodes_agent ON session_episodes(agent_id);
+CREATE INDEX IF NOT EXISTS idx_session_episodes_ward ON session_episodes(ward_id);
+CREATE INDEX IF NOT EXISTS idx_session_episodes_outcome ON session_episodes(outcome);
+
+CREATE TABLE IF NOT EXISTS embedding_cache (
+    content_hash TEXT NOT NULL,
+    model TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (content_hash, model)
+);
 "#;
 
 #[cfg(test)]
@@ -157,7 +268,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn core_graph_tables_initialize_on_fresh_in_memory_db() {
+    fn all_v22_non_vec_tables_initialize_on_fresh_in_memory_db() {
         let conn = Connection::open_in_memory().expect("open");
         initialize_knowledge_database(&conn).expect("init");
 
@@ -166,6 +277,7 @@ mod tests {
             .expect("version");
         assert_eq!(version, 22);
 
+        // Regular tables.
         for table in [
             "kg_entities",
             "kg_relationships",
@@ -173,6 +285,12 @@ mod tests {
             "kg_episodes",
             "kg_goals",
             "kg_compactions",
+            "memory_facts",
+            "memory_facts_archive",
+            "ward_wiki_articles",
+            "procedures",
+            "session_episodes",
+            "embedding_cache",
         ] {
             let count: i64 = conn
                 .query_row(
@@ -182,6 +300,39 @@ mod tests {
                 )
                 .expect("query");
             assert_eq!(count, 1, "missing table: {table}");
+        }
+
+        // FTS5 virtual table for memory_facts.
+        let fts_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name='memory_facts_fts'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("query fts");
+        assert!(fts_count >= 1, "memory_facts_fts not created");
+
+        // Structural assertion: the base tables carry NO embedding column.
+        for table in [
+            "memory_facts",
+            "ward_wiki_articles",
+            "procedures",
+            "session_episodes",
+        ] {
+            let has_embedding: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('{}') WHERE name='embedding'",
+                        table
+                    ),
+                    [],
+                    |r| r.get(0),
+                )
+                .expect("pragma");
+            assert_eq!(
+                has_embedding, 0,
+                "table {table} must not have embedding BLOB column"
+            );
         }
     }
 }
