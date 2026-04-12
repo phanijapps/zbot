@@ -17,6 +17,9 @@
 //! 5. (Optional) Enrich with knowledge graph context
 //! 6. Format as a "Recalled Memory" system message
 
+pub mod scored_item;
+pub use scored_item::{rrf_merge, ItemKind, Provenance, ScoredItem};
+
 use std::sync::Arc;
 
 use agent_runtime::llm::embedding::EmbeddingClient;
