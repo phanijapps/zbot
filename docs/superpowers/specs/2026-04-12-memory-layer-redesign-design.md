@@ -658,19 +658,24 @@ Each phase is one PR. Acceptance criteria are binary — merged only when all pa
 
 **Acceptance:** fresh DB comes up clean; 1000-entity synthetic ward indexes with <2% duplicate entities; resolver p95 < 20 ms; no hand-written cosine function remains in the crate (grep clean).
 
-### Phase 2 — Streaming Ingestion
+### Phase 2 — Streaming Ingestion (non-blocking everywhere)
 
 **Deliverables:**
 - `Chunker` module with unit tests
-- `IngestionQueue` + 2 workers
+- `IngestionQueue` + N workers (default 2, configurable)
 - Two-pass `Extractor` with structured outputs
-- `POST /api/graph/ingest` endpoint
-- `GET /api/graph/ingest/:source_id/progress` endpoint
+- `POST /api/graph/ingest` endpoint — returns **202 Accepted in <100ms** with `{source_id, episode_count}`; work is enqueued, never blocks the HTTP handler
+- `GET /api/graph/ingest/:source_id/progress` — live status with queue depth
+- **Reindex unified with ingest** — the legacy `POST /api/graph/reindex` (Pack A) is rewritten to enqueue rather than execute synchronously. Same 202 semantics, same progress endpoint.
+- WAL mode enforced at SQLite connection open (`PRAGMA journal_mode=WAL`) so reads stay responsive during heavy ingestion
+- Per-source rate limit: max 500 pending episodes per source; producer gets 429 with `Retry-After` when exceeded
+- Queue-depth backpressure: global queue depth >N → 429 until drained
 - `ingest` agent tool, registered in tool registry
 - Shard edits teaching the tool
 - End-to-end test: a 10-chunk synthetic document indexes to ≥50 entities and ≥80 relationships with no duplicates
+- **Concurrency test:** while a 500-chunk document is mid-ingestion, a parallel session's recall + graph_query calls return in <200 ms p95
 
-**Acceptance:** index `Rise of Modern Indian Nationalism.pdf` in <2 min with gpt-4o-mini; resulting graph has ≥500 entities, ≥800 relationships, orphan ratio <15%.
+**Acceptance:** index `Rise of Modern Indian Nationalism.pdf` in <2 min with gpt-4o-mini, ≥500 entities / ≥800 relationships / orphan ratio <15%; during ingestion, unrelated API calls (stats, recall, graph_query) remain responsive.
 
 ### Phase 3 — Unified Recall + Goal-Oriented Retrieval
 
