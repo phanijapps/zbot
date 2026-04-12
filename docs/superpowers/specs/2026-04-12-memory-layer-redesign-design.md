@@ -152,16 +152,42 @@ CREATE INDEX idx_aliases_entity ON kg_aliases(entity_id);
 
 Every entity gets one self-alias row on creation (name → itself). Merges append loser-side surface forms. A future lookup of "Savarker" short-circuits to the existing entity without running resolver stages.
 
-**`kg_name_index`** — sqlite-vec virtual table for ANN lookup on entity name embeddings
+**Vector indexes (all similarity queries route through sqlite-vec)**
+
+sqlite-vec is the single similarity mechanism for the whole system. Every embedding-based lookup — entity resolution, fact recall, wiki search, procedure matching, episode similarity — goes through a `vec0` virtual table. All hand-rolled cosine math (currently in `resolver.rs` stage 3, `recall.rs`, `wiki_repository.rs`, `procedure_repository.rs`, `episode_repository.rs`) is **deleted in Phase 1** and replaced by `vec0` queries.
 
 ```sql
 CREATE VIRTUAL TABLE kg_name_index USING vec0(
     entity_id TEXT PRIMARY KEY,
     name_embedding FLOAT[384]
 );
+
+CREATE VIRTUAL TABLE memory_facts_index USING vec0(
+    fact_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE wiki_articles_index USING vec0(
+    article_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE procedures_index USING vec0(
+    procedure_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE session_episodes_index USING vec0(
+    episode_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
 ```
 
-One row per entity. Dimension 384 = `bge-small-en-v1.5` or equivalent lightweight embedder. Binary quantization optional at >1M rows.
+Dimension 384 = `bge-small-en-v1.5` across all indexes (one embedder, one dimension). Binary quantization optional at >1M rows per index.
+
+**Consequence:** the `embedding BLOB` column on base tables (`memory_facts.embedding`, `ward_wiki_articles.embedding`, `procedures.embedding`, `session_episodes.embedding`) is **removed** in v22. Embeddings live only in their `vec0` partner table, linked by primary key. This eliminates dual-storage drift and ~40% of the BLOB bloat in SQLite.
+
+**Sync contract:** whenever a row is inserted or updated in a base table, the partner `vec0` row is written in the same transaction. Whenever a row is deleted, a trigger removes the `vec0` row. No orphans possible.
 
 **`kg_goals`** — first-class goals for goal-oriented retrieval
 
@@ -291,6 +317,8 @@ CREATE INDEX idx_episodes_source_ref ON kg_episodes(source_ref);
 CREATE INDEX idx_episodes_session ON kg_episodes(session_id);
 ```
 
+Note: `memory_facts.embedding` is gone in v22; fact embeddings live in `memory_facts_index`. Same for `ward_wiki_articles`, `procedures`, `session_episodes` — embeddings moved to their `vec0` indexes. Base tables only carry primary keys, content, and metadata.
+
 **`memory_facts`** (full definition, includes Phase 6 additions from day one):
 
 ```sql
@@ -307,7 +335,6 @@ CREATE TABLE memory_facts (
     source_summary TEXT,
     source_episode_id TEXT,
     source_ref TEXT,
-    embedding BLOB,
     ward_id TEXT NOT NULL DEFAULT '__global__',
     epistemic_class TEXT NOT NULL DEFAULT 'current',
     contradicted_by TEXT,
@@ -617,16 +644,19 @@ Pack A's relationship extraction rules (`gateway/gateway-execution/src/indexer/r
 
 Each phase is one PR. Acceptance criteria are binary — merged only when all pass. No phase depends on historical data; each is validated on a fresh DB.
 
-### Phase 1 — Schema v22 + Resolver v2 + sqlite-vec
+### Phase 1 — Schema v22 + sqlite-vec everywhere + Resolver v2
 
 **Deliverables:**
 - `schema.rs` rewritten: schema v22 as the initial schema. Daemon boot creates it if DB missing.
-- `sqlite-vec` wired into `gateway-database` via extension load at connection open.
-- `EntityResolver` v2 (alias-first, ANN second, LLM-verify third) replacing current `resolver.rs`.
-- Every entity create seeds one self-alias row; embedding computed inline (async, non-blocking).
-- Integration test: ingest a synthetic 1000-entity ward, assert resolver p95 < 20 ms.
+- `sqlite-vec` wired into `gateway-database` via extension load at connection open. All 5 `vec0` virtual tables created.
+- **All hand-rolled cosine code deleted:** `resolver.rs` stage 3, `recall.rs` hybrid-search vector branch, `wiki_repository.rs` similarity scan, `procedure_repository.rs` embedding scan, `episode_repository.rs` similarity. Replaced by a single `VectorIndex` abstraction that calls `vec0`.
+- `embedding BLOB` columns dropped from `memory_facts`, `ward_wiki_articles`, `procedures`, `session_episodes`. Embeddings live only in `vec0` partner tables.
+- Triggers ensure `vec0` rows are cleaned up when base rows are deleted.
+- `EntityResolver` v2 (alias-first, ANN second, LLM-verify third) replacing current 3-stage resolver.
+- Every entity create seeds one self-alias row and one `kg_name_index` row in the same transaction.
+- Integration test: ingest a synthetic 1000-entity ward, assert resolver p95 < 20 ms and zero duplicate entities.
 
-**Acceptance:** fresh DB comes up clean, 1000-entity synthetic ward indexes with <2% duplicate entities and resolver p95 < 20 ms.
+**Acceptance:** fresh DB comes up clean; 1000-entity synthetic ward indexes with <2% duplicate entities; resolver p95 < 20 ms; no hand-written cosine function remains in the crate (grep clean).
 
 ### Phase 2 — Streaming Ingestion
 
