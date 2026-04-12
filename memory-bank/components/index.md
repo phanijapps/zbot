@@ -36,7 +36,10 @@ Quick reference for all system components. Check this before planning changes.
 
 | Component | Location | Description |
 |-----------|----------|-------------|
-| Memory Layer | [memory-layer/overview.md](memory-layer/overview.md) | The brain: facts, embeddings, knowledge graph, recall, distillation, ward knowledge sync. Stores/retrieves/applies knowledge across sessions. |
+| Memory Layer | [memory-layer/overview.md](memory-layer/overview.md) | The brain: facts, embeddings, knowledge graph, recall, distillation, ward knowledge sync. Six cooperating layers after Phases 1–6. |
+| — Cognitive Layers | [memory-layer/cognitive-layers.md](memory-layer/cognitive-layers.md) | Working memory (Phase 2), Ward wiki (Phase 3), Procedural memory (Phase 4), Intelligent micro-recall (Phase 5). How each layer works and how they compose. |
+| — Knowledge Graph | [memory-layer/knowledge-graph.md](memory-layer/knowledge-graph.md) | Phase 6 architecture: episodes, ward artifact indexer, expanded ontology (13 entity types / 27 relationship types), entity resolver, epistemic classes, MAGMA multi-view queries, real-time tool extraction. |
+| — Data Model | [memory-layer/data-model.md](memory-layer/data-model.md) | Every table, every column, schema version history (v1 → v21), lifecycle events, query patterns. |
 | — Backlog | [memory-layer/backlog.md](memory-layer/backlog.md) | Planned: policies UI, graph query tool, pruning, cross-ward synthesis, dashboard |
 
 ## Adding New Components
