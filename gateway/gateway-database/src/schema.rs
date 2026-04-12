@@ -652,35 +652,7 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
         [],
     )?;
 
-    // =========================================================================
-    // KG CAUSAL EDGES
-    // Causal relationships between knowledge graph entities
-    // =========================================================================
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS kg_causal_edges (
-            id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            cause_entity_id TEXT NOT NULL,
-            effect_entity_id TEXT NOT NULL,
-            relationship TEXT NOT NULL,
-            confidence REAL DEFAULT 0.7,
-            session_id TEXT,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY (cause_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
-            FOREIGN KEY (effect_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
-        )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_causal_cause ON kg_causal_edges(cause_entity_id)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_causal_effect ON kg_causal_edges(effect_entity_id)",
-        [],
-    )?;
+    // kg_causal_edges moved to knowledge.db (see knowledge_schema.rs) in v22
 
     // =========================================================================
     // SCHEMA VERSION

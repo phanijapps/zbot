@@ -151,6 +151,21 @@ CREATE TABLE IF NOT EXISTS kg_compactions (
 );
 CREATE INDEX IF NOT EXISTS idx_compactions_run ON kg_compactions(run_id);
 
+CREATE TABLE IF NOT EXISTS kg_causal_edges (
+    id TEXT PRIMARY KEY,
+    agent_id TEXT NOT NULL,
+    cause_entity_id TEXT NOT NULL,
+    effect_entity_id TEXT NOT NULL,
+    relationship TEXT NOT NULL,
+    confidence REAL DEFAULT 0.7,
+    session_id TEXT,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (cause_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
+    FOREIGN KEY (effect_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_causal_cause ON kg_causal_edges(cause_entity_id);
+CREATE INDEX IF NOT EXISTS idx_causal_effect ON kg_causal_edges(effect_entity_id);
+
 -- ========================================================================
 -- Memory facts — no embedding column; embeddings live in memory_facts_index
 -- ========================================================================
