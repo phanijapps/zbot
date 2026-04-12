@@ -30,6 +30,7 @@ pub mod distillation;
 pub mod events;
 pub mod handle;
 pub mod indexer;
+pub mod ingest;
 pub mod invoke;
 pub mod lifecycle;
 pub mod middleware;
