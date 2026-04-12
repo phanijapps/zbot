@@ -205,6 +205,30 @@ Content hash dedup via `kg_episodes` — unchanged files are skipped on re-runs.
 
 All artifacts → `epistemic_class = archival`, `source_ref = file_path`.
 
+#### Relationship Extraction (Pack A, 2026-04-12)
+
+In addition to entities, the indexer emits relationships from well-known field names. Rules live in `gateway/gateway-execution/src/indexer/relationship_rules.rs`.
+
+| JSON field | Direction | Relationship | Target type |
+|---|---|---|---|
+| `location` (on Event) | forward | `held_at` | Location |
+| `location` (on other) | forward | `located_in` | Location |
+| `organization` | forward | `member_of` | Organization |
+| `role` | forward | `held_role` | Role |
+| `founder` | **reversed** (person → org) | `founder_of` | (source org) |
+| `founded_in` | forward | `located_in` | Location |
+| `participants[]` | **reversed** (person → event) | `participant` (Custom) | (source event) |
+| `date` or `year` | forward | `during` | TimePeriod |
+| `author` | **reversed** (person → doc) | `author_of` | (source doc) |
+| `born_in` | forward | `born_in` | Location |
+| `died_in` | forward | `died_in` | Location |
+
+Target entities are synthesized and run through the same `EntityResolver` cascade as primary entities, so name variants collapse. Relationship writes are idempotent via `UNIQUE(source_entity_id, target_entity_id, relationship_type)` — re-runs bump `mention_count` instead of duplicating rows.
+
+#### Force Re-index (Pack A)
+
+`POST /api/graph/reindex` force-re-indexes every ward, bypassing the `kg_episodes` content-hash dedup. Safe to re-run; entity and relationship writes are idempotent. Returns `{wards_processed, entities_created}`.
+
 ### 3. Tool Result Extractor (Phase 6d)
 
 Real-time, fires after every tool result in a non-blocking `tokio::spawn`:
