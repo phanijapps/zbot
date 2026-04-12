@@ -29,6 +29,7 @@ pub mod delegation;
 pub mod distillation;
 pub mod events;
 pub mod handle;
+pub mod indexer;
 pub mod invoke;
 pub mod lifecycle;
 pub mod middleware;
