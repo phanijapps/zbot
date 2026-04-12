@@ -68,6 +68,28 @@ pub fn procedure_to_item(proc: &Procedure, score: f64) -> ScoredItem {
     }
 }
 
+use knowledge_graph::GraphStorage;
+use std::sync::Arc;
+
+/// Stub: Task 7 wires the real implementation.
+///
+/// Planned behavior: query `kg_name_index` via the existing `SqliteVecIndex`
+/// around `knowledge.db`, fetch the top-K entity rows, format each as
+/// `"Entity: X [type] — connected to A (rel), B (rel)"`, score via
+/// `1.0 - dist/2.0` (cosine from L2-squared distance on normalized vectors).
+///
+/// For Task 5 this returns `Ok(Vec::new())` so the `recall_unified` caller
+/// has something to `await` during the merge pipeline. Replace in Task 7.
+pub async fn graph_ann_to_items(
+    graph: &Arc<GraphStorage>,
+    query_embedding: &[f32],
+    top_k: usize,
+    agent_id: &str,
+) -> Result<Vec<ScoredItem>, String> {
+    let _ = (graph, query_embedding, top_k, agent_id);
+    Ok(Vec::new())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
