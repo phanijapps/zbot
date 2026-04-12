@@ -10,6 +10,8 @@ use agent_runtime::{
 use agent_tools::{
     EditFileTool,
     GlobTool,
+    // Knowledge graph query tool
+    GraphQueryTool,
     GrepTool,
     LoadSkillTool,
     // Root orchestrator tools
@@ -36,7 +38,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext, MemoryFactStore};
 
+use super::graph_adapter::GraphStorageAdapter;
 use crate::config::GatewayFileSystem;
+use knowledge_graph::GraphStorage;
 
 /// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
@@ -64,6 +68,7 @@ pub struct ExecutorBuilder {
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     subagent_non_streaming: bool,
+    graph_storage: Option<Arc<GraphStorage>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     fast_mode: bool,
 }
@@ -81,6 +86,7 @@ impl ExecutorBuilder {
             model_registry: None,
             is_delegated: false,
             subagent_non_streaming: true,
+            graph_storage: None,
             extra_initial_state: None,
             fast_mode: false,
         }
@@ -128,6 +134,12 @@ impl ExecutorBuilder {
     /// Set the model registry for capability lookups and context window resolution.
     pub fn with_model_registry(mut self, registry: Arc<ModelRegistry>) -> Self {
         self.model_registry = Some(registry);
+        self
+    }
+
+    /// Set the knowledge graph storage for the graph_query tool.
+    pub fn with_graph_storage(mut self, storage: Arc<GraphStorage>) -> Self {
+        self.graph_storage = Some(storage);
         self
     }
 
@@ -510,6 +522,12 @@ impl ExecutorBuilder {
             )));
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+
+            // Knowledge graph query (if storage available)
+            if let Some(ref gs) = self.graph_storage {
+                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
+                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            }
         } else {
             // Root agent: orchestrator tools only.
             // Root delegates — it doesn't do specialist work.
@@ -533,6 +551,12 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+
+            // Knowledge graph query (if storage available)
+            if let Some(ref gs) = self.graph_storage {
+                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
+                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            }
 
             // Optional file reading (root may need to review delegation results)
             if self.tool_settings.file_tools {

@@ -19,6 +19,11 @@ impl GraphService {
         Self { storage }
     }
 
+    /// Get a reference to the underlying graph storage.
+    pub fn storage(&self) -> &Arc<GraphStorage> {
+        &self.storage
+    }
+
     /// Get graph statistics for an agent
     pub async fn get_stats(&self, agent_id: &str) -> GraphResult<GraphStats> {
         // Get basic counts

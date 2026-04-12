@@ -67,6 +67,7 @@ pub async fn spawn_delegated_agent(
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session =
@@ -292,6 +293,9 @@ pub async fn spawn_delegated_agent(
         });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
+    }
+    if let Some(gs) = graph_storage {
+        builder = builder.with_graph_storage(gs);
     }
 
     let executor = match builder

@@ -106,6 +106,8 @@ pub struct ExecutionRunner {
             std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
+    /// Knowledge graph storage for the graph_query tool.
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
 }
 
 impl ExecutionRunner {
@@ -198,6 +200,7 @@ impl ExecutionRunner {
             rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            graph_storage: None,
         };
 
         // Spawn delegation handler task
@@ -212,6 +215,11 @@ impl ExecutionRunner {
     /// Set the model capabilities registry.
     pub fn set_model_registry(&mut self, registry: Arc<gateway_services::models::ModelRegistry>) {
         self.model_registry = Some(registry);
+    }
+
+    /// Set the knowledge graph storage for the graph_query tool.
+    pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
+        self.graph_storage = Some(storage);
     }
 
     /// Get or create a shared rate limiter for a provider.
@@ -270,6 +278,7 @@ impl ExecutionRunner {
         let embedding_client = self.embedding_client.clone();
         let memory_recall = self.memory_recall.clone();
         let rate_limiters = self.rate_limiters.clone();
+        let graph_storage_for_delegation = self.graph_storage.clone();
 
         tokio::spawn(async move {
             // Per-session tracking: only one delegation active per session at a time
@@ -313,6 +322,7 @@ impl ExecutionRunner {
                         std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
                     >,
                 >,
+                graph_storage: &Option<Arc<knowledge_graph::GraphStorage>>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -336,6 +346,7 @@ impl ExecutionRunner {
                 let embedding_client = embedding_client.clone();
                 let memory_recall = memory_recall.clone();
                 let rate_limiters = rate_limiters.clone();
+                let graph_storage = graph_storage.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -361,6 +372,7 @@ impl ExecutionRunner {
                         embedding_client,
                         memory_recall,
                         rate_limiters,
+                        graph_storage,
                     )
                     .await;
 
@@ -399,6 +411,7 @@ impl ExecutionRunner {
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
                                 &memory_recall, &rate_limiters,
+                                &graph_storage_for_delegation,
                                 done_tx.clone(),
                             );
                         } else if active_sessions.contains(&session_id) {
@@ -429,6 +442,7 @@ impl ExecutionRunner {
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
                                 &memory_recall, &rate_limiters,
+                                &graph_storage_for_delegation,
                                 done_tx.clone(),
                             );
                         }
@@ -456,6 +470,7 @@ impl ExecutionRunner {
                                     &workspace_cache, &delegation_semaphore,
                                     &memory_repo, &embedding_client,
                                     &memory_recall, &rate_limiters,
+                                    &graph_storage_for_delegation,
                                     done_tx.clone(),
                                 );
                             }
@@ -493,6 +508,7 @@ impl ExecutionRunner {
         let distiller = self.distiller.clone();
         let memory_recall = self.memory_recall.clone();
         let model_registry = self.model_registry.clone();
+        let graph_storage = self.graph_storage.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -540,6 +556,7 @@ impl ExecutionRunner {
                             distiller.clone(),
                             memory_recall.clone(),
                             model_registry.clone(),
+                            graph_storage.clone(),
                         )
                         .await
                         {
@@ -1329,6 +1346,7 @@ impl ExecutionRunner {
             self.embedding_client.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
+            self.graph_storage.clone(),
         )
         .await?;
 
@@ -1553,6 +1571,9 @@ impl ExecutionRunner {
         }
         if let Some(cp) = connector_provider {
             builder = builder.with_connector_provider(cp);
+        }
+        if let Some(ref gs) = self.graph_storage {
+            builder = builder.with_graph_storage(gs.clone());
         }
 
         // Intent analysis for root agent first turns only.
@@ -1897,6 +1918,7 @@ async fn invoke_continuation(
     distiller: Option<Arc<super::distillation::SessionDistiller>>,
     memory_recall: Option<Arc<super::recall::MemoryRecall>>,
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -2033,6 +2055,9 @@ async fn invoke_continuation(
         });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
+    }
+    if let Some(gs) = graph_storage {
+        builder = builder.with_graph_storage(gs);
     }
 
     let mut executor = builder

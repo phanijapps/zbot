@@ -14,8 +14,9 @@ mod tools;
 pub use tools::{
     ApplyPatchTool,
     EditFileTool,
+    // Knowledge graph query types
+    EntityInfo,
     GlobTool,
-    // Knowledge graph query tool
     GraphQueryTool,
     GraphStorageAccess,
     GrepTool,
@@ -27,6 +28,7 @@ pub use tools::{
     MemoryTool,
     // Multimodal vision fallback
     MultimodalAnalyzeTool,
+    NeighborInfo,
     QueryResourceTool,
     ReadTool,
     SetSessionTitleTool,

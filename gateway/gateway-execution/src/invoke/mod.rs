@@ -7,6 +7,7 @@
 
 mod batch_writer;
 mod executor;
+pub mod graph_adapter;
 pub mod setup;
 pub mod stream;
 

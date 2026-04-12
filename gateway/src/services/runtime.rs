@@ -83,7 +83,8 @@ impl RuntimeService {
             None,
             None,
             None,
-            2, // default max_parallel_agents
+            2,    // default max_parallel_agents
+            None, // graph_storage
         )
     }
 
@@ -108,6 +109,7 @@ impl RuntimeService {
         bridge_outbox: Option<Arc<gateway_bridge::OutboxRepository>>,
         embedding_client: Option<Arc<dyn agent_runtime::llm::embedding::EmbeddingClient>>,
         max_parallel_agents: u32,
+        graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
     ) -> Self {
         let mut runner = ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -138,6 +140,10 @@ impl RuntimeService {
             &bundled_models,
             paths.vault_dir(),
         )));
+
+        if let Some(gs) = graph_storage {
+            runner.set_graph_storage(gs);
+        }
 
         Self {
             event_bus,

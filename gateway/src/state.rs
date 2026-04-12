@@ -245,6 +245,10 @@ impl AppState {
         // also needs it so the memory fact store can generate embeddings.
         let runner_embedding_client = embedding_client.clone();
 
+        // Clone graph_storage before it's moved into the distiller — the runner
+        // also needs it for the graph_query tool.
+        let runner_graph_storage = graph_storage.clone();
+
         let episode_repo_ref = episode_repo.clone();
 
         // Create settings service (before distiller & runtime, so we can read execution settings)
@@ -290,6 +294,7 @@ impl AppState {
             Some(bridge_outbox.clone()),
             runner_embedding_client,
             max_parallel_agents,
+            runner_graph_storage,
         ));
 
         // Create hook registry
