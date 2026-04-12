@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 20;
+const SCHEMA_VERSION: i32 = 21;
 
 /// Run migrations for existing databases.
 ///
@@ -310,6 +310,38 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         )?;
     }
 
+    // v20 → v21: Add kg_episodes table and provenance columns on memory_facts
+    if version < 21 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kg_episodes (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                session_id TEXT,
+                agent_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(content_hash, source_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_episodes_session ON kg_episodes(session_id);
+            CREATE INDEX IF NOT EXISTS idx_episodes_source ON kg_episodes(source_type, source_ref);",
+        )?;
+
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN epistemic_class TEXT DEFAULT 'current'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN source_episode_id TEXT",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN source_ref TEXT", []);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_class ON memory_facts(agent_id, epistemic_class)",
+            [],
+        );
+    }
+
     Ok(())
 }
 
@@ -533,6 +565,9 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             valid_from TEXT,
             valid_until TEXT,
             superseded_by TEXT,
+            epistemic_class TEXT DEFAULT 'current',
+            source_episode_id TEXT,
+            source_ref TEXT,
             UNIQUE(agent_id, scope, ward_id, key)
         )",
         [],
@@ -560,6 +595,11 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_facts_temporal ON memory_facts(valid_from, valid_until)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_facts_class ON memory_facts(agent_id, epistemic_class)",
         [],
     )?;
 
@@ -869,6 +909,34 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // KG EPISODES
+    // Episode provenance for knowledge graph extraction
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS kg_episodes (
+            id TEXT PRIMARY KEY,
+            source_type TEXT NOT NULL,
+            source_ref TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            session_id TEXT,
+            agent_id TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(content_hash, source_type)
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_session ON kg_episodes(session_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_episodes_source ON kg_episodes(source_type, source_ref)",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -1003,7 +1071,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 20, "schema version should be 20");
+        assert_eq!(version, 21, "schema version should be 21");
     }
 
     #[test]
