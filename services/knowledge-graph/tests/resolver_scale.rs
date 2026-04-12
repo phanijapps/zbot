@@ -39,13 +39,7 @@ fn make_embedding(seed: u64) -> Vec<f32> {
 fn resolver_p95_under_20ms_at_1000_entities() {
     let tmp = tempfile::tempdir().expect("tempdir");
     let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
-    std::fs::create_dir_all(
-        paths
-            .conversations_db()
-            .parent()
-            .expect("parent"),
-    )
-    .expect("mkdir");
+    std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
     let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
     let storage = GraphStorage::new(db.clone()).expect("storage");
 
