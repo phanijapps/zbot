@@ -33,3 +33,6 @@ pub use procedure_repository::{Procedure, ProcedureRepository};
 pub use recall_log_repository::RecallLogRepository;
 pub use repository::{ConversationRepository, Message};
 pub use wiki_repository::{WardWikiRepository, WikiArticle};
+
+pub mod vector_index;
+pub use vector_index::{SqliteVecIndex, VectorIndex};
