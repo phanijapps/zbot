@@ -276,6 +276,13 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
     created_at TEXT NOT NULL,
     PRIMARY KEY (content_hash, model)
 );
+
+CREATE TABLE IF NOT EXISTS kg_episode_payloads (
+    episode_id TEXT PRIMARY KEY,
+    text TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (episode_id) REFERENCES kg_episodes(id) ON DELETE CASCADE
+);
 "#;
 
 const VEC0_SQL: &str = r#"
@@ -402,6 +409,7 @@ mod tests {
             "procedures",
             "session_episodes",
             "embedding_cache",
+            "kg_episode_payloads",
         ] {
             let count: i64 = conn
                 .query_row(

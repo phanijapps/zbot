@@ -19,9 +19,9 @@ async fn queue_drains_pending_episodes() {
     let repo = Arc::new(KgEpisodeRepository::new(db.clone()));
     let graph = Arc::new(GraphStorage::new(db.clone()).unwrap());
 
-    // Enqueue 5 episodes.
+    // Enqueue 5 episodes with payloads.
     for i in 0..5 {
-        let _ = repo
+        let id = repo
             .upsert_pending(
                 "test",
                 &format!("src#{i}"),
@@ -30,6 +30,7 @@ async fn queue_drains_pending_episodes() {
                 "root",
             )
             .unwrap();
+        repo.set_payload(&id, &format!("chunk {i} text")).unwrap();
     }
 
     let extractor = Arc::new(NoopExtractor::new());

@@ -265,6 +265,36 @@ impl KgEpisodeRepository {
         })
     }
 
+    /// Store the raw chunk text for an episode. Called by the producer
+    /// immediately after `upsert_pending`.
+    pub fn set_payload(&self, episode_id: &str, text: &str) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT OR REPLACE INTO kg_episode_payloads (episode_id, text, created_at)
+                 VALUES (?1, ?2, ?3)",
+                rusqlite::params![episode_id, text, now],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Fetch the stored chunk text for an episode. Returns None if absent
+    /// (e.g. synchronous episodes — ward_artifact_indexer doesn't set a payload).
+    pub fn get_payload(&self, episode_id: &str) -> Result<Option<String>, String> {
+        self.db.with_connection(|conn| {
+            match conn.query_row(
+                "SELECT text FROM kg_episode_payloads WHERE episode_id = ?1",
+                rusqlite::params![episode_id],
+                |r| r.get::<_, String>(0),
+            ) {
+                Ok(s) => Ok(Some(s)),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
+
     /// Aggregate status counts for episodes whose source_ref starts with a given prefix.
     pub fn status_counts_for_source(
         &self,
@@ -311,6 +341,13 @@ fn row_to_episode(row: &rusqlite::Row) -> rusqlite::Result<KgEpisode> {
         started_at: row.get(10)?,
         completed_at: row.get(11)?,
     })
+}
+
+#[cfg(test)]
+impl KgEpisodeRepository {
+    pub fn db_for_test(&self) -> &Arc<KnowledgeDatabase> {
+        &self.db
+    }
 }
 
 #[cfg(test)]
@@ -475,5 +512,49 @@ mod tests {
             .upsert_pending("document", "b", "same_hash", None, "root")
             .expect("up2");
         assert_eq!(id1, id2, "same content_hash + source_type should dedup");
+    }
+
+    #[test]
+    fn payload_roundtrip() {
+        let (_tmp, repo) = setup();
+        let id = repo
+            .upsert_pending("document", "src#0", "hash0", None, "root")
+            .unwrap();
+
+        // Initially missing.
+        assert_eq!(repo.get_payload(&id).unwrap(), None);
+
+        // Set and read.
+        repo.set_payload(&id, "the quick brown fox").unwrap();
+        assert_eq!(
+            repo.get_payload(&id).unwrap().as_deref(),
+            Some("the quick brown fox")
+        );
+
+        // Overwrite.
+        repo.set_payload(&id, "updated").unwrap();
+        assert_eq!(repo.get_payload(&id).unwrap().as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn payload_cascade_delete_when_episode_removed() {
+        let (_tmp, repo) = setup();
+        let id = repo
+            .upsert_pending("document", "src#0", "hash0", None, "root")
+            .unwrap();
+        repo.set_payload(&id, "text").unwrap();
+
+        // Delete the episode row directly — trigger cascade via FK ON DELETE CASCADE.
+        repo.db_for_test()
+            .with_connection(|conn| {
+                conn.execute(
+                    "DELETE FROM kg_episodes WHERE id = ?1",
+                    rusqlite::params![id],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+
+        assert_eq!(repo.get_payload(&id).unwrap(), None);
     }
 }

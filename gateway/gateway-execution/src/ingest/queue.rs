@@ -90,12 +90,38 @@ async fn worker_loop(
             }
         };
 
-        // Task 7 adds payload fetch — for T3 skeleton, pass empty chunk.
-        // NoopExtractor ignores the text; LlmExtractor (Task 6) will receive
-        // proper text once Task 7 wires `get_payload`.
-        let chunk_text = "";
         let episode_id = episode.id.clone();
-        let result = extractor.process(&episode, chunk_text, &graph).await;
+        let payload_fetch = {
+            let repo = episode_repo.clone();
+            let id = episode_id.clone();
+            tokio::task::spawn_blocking(move || repo.get_payload(&id)).await
+        };
+        let chunk_text = match payload_fetch {
+            Ok(Ok(Some(text))) => text,
+            Ok(Ok(None)) => {
+                tracing::warn!(
+                    worker_idx,
+                    episode_id = %episode_id,
+                    "episode has no payload — marking failed",
+                );
+                let repo = episode_repo.clone();
+                let id = episode_id.clone();
+                let _ =
+                    tokio::task::spawn_blocking(move || repo.mark_failed(&id, "payload missing"))
+                        .await;
+                continue;
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(worker_idx, error = %e, "get_payload failed");
+                tokio::time::sleep(CLAIM_FAILURE_BACKOFF).await;
+                continue;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "spawn_blocking join on get_payload");
+                continue;
+            }
+        };
+        let result = extractor.process(&episode, &chunk_text, &graph).await;
 
         let finish = match result {
             Ok(()) => {
