@@ -138,46 +138,133 @@ fn rule_founder_reversed(
     });
 }
 fn rule_founded_in(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(target) = non_empty_string(obj.get("founded_in")) else {
+        return;
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: target,
+        target_type: EntityType::Location,
+        relationship_type: RelationshipType::LocatedIn,
+    });
 }
+
 fn rule_participants_reversed(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(arr) = obj.get("participants").and_then(|v| v.as_array()) else {
+        return;
+    };
+    for item in arr {
+        let Some(name) = item.as_str() else {
+            continue;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            continue;
+        }
+        out.push(RelationshipCandidate {
+            source_name: name.to_string(),
+            source_type: EntityType::Person,
+            target_name: source_name.to_string(),
+            target_type: source_type.clone(),
+            relationship_type: RelationshipType::Custom("participant".to_string()),
+        });
+    }
 }
+
 fn rule_date_year_during(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let raw = obj.get("date").or_else(|| obj.get("year"));
+    let Some(raw) = raw else {
+        return;
+    };
+    let label = match raw {
+        Value::String(s) => {
+            let t = s.trim();
+            if t.is_empty() {
+                return;
+            } else {
+                t.to_string()
+            }
+        }
+        Value::Number(n) => n.to_string(),
+        _ => return,
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: label,
+        target_type: EntityType::TimePeriod,
+        relationship_type: RelationshipType::During,
+    });
 }
+
 fn rule_author_reversed(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(author) = non_empty_string(obj.get("author")) else {
+        return;
+    };
+    out.push(RelationshipCandidate {
+        source_name: author,
+        source_type: EntityType::Person,
+        target_name: source_name.to_string(),
+        target_type: source_type,
+        relationship_type: RelationshipType::AuthorOf,
+    });
 }
+
 fn rule_born_in(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(target) = non_empty_string(obj.get("born_in")) else {
+        return;
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: target,
+        target_type: EntityType::Location,
+        relationship_type: RelationshipType::BornIn,
+    });
 }
+
 fn rule_died_in(
-    _s: &str,
-    _st: EntityType,
-    _o: &Map<String, Value>,
-    _out: &mut Vec<RelationshipCandidate>,
+    source_name: &str,
+    source_type: EntityType,
+    obj: &Map<String, Value>,
+    out: &mut Vec<RelationshipCandidate>,
 ) {
+    let Some(target) = non_empty_string(obj.get("died_in")) else {
+        return;
+    };
+    out.push(RelationshipCandidate {
+        source_name: source_name.to_string(),
+        source_type,
+        target_name: target,
+        target_type: EntityType::Location,
+        relationship_type: RelationshipType::DiedIn,
+    });
 }
 
 #[cfg(test)]
@@ -256,5 +343,85 @@ mod tests {
         assert_eq!(r.source_type, EntityType::Person);
         assert_eq!(r.target_name, "Hindu Mahasabha");
         assert_eq!(r.target_type, EntityType::Organization);
+    }
+
+    #[test]
+    fn founded_in_emits_located_in() {
+        let o = obj(json!({"founded_in": "Pune"}));
+        let out = extract("Hindu Mahasabha", EntityType::Organization, &o);
+        assert!(
+            out.iter()
+                .any(|r| r.relationship_type == RelationshipType::LocatedIn
+                    && r.target_name == "Pune")
+        );
+    }
+
+    #[test]
+    fn participants_inverted_emits_one_edge_per_participant() {
+        let o = obj(json!({"participants": ["Alice", "Bob"]}));
+        let out = extract("Ahmedabad Session 1937", EntityType::Event, &o);
+        let count = out
+            .iter()
+            .filter(|r| matches!(&r.relationship_type, RelationshipType::Custom(s) if s == "participant"))
+            .count();
+        assert_eq!(count, 2);
+        let alice = out
+            .iter()
+            .find(|r| r.source_name == "Alice"
+                && matches!(&r.relationship_type, RelationshipType::Custom(s) if s == "participant"))
+            .expect("alice edge");
+        assert_eq!(alice.target_name, "Ahmedabad Session 1937");
+        assert_eq!(alice.source_type, EntityType::Person);
+    }
+
+    #[test]
+    fn date_string_emits_during_time_period() {
+        let o = obj(json!({"date": "1937"}));
+        let out = extract("Session", EntityType::Event, &o);
+        let r = out
+            .iter()
+            .find(|r| r.relationship_type == RelationshipType::During)
+            .expect("during edge");
+        assert_eq!(r.target_name, "1937");
+        assert_eq!(r.target_type, EntityType::TimePeriod);
+    }
+
+    #[test]
+    fn year_integer_emits_during() {
+        let o = obj(json!({"year": 1937}));
+        let out = extract("Session", EntityType::Event, &o);
+        let r = out
+            .iter()
+            .find(|r| r.relationship_type == RelationshipType::During)
+            .expect("during edge");
+        assert_eq!(r.target_name, "1937");
+    }
+
+    #[test]
+    fn author_inverted_emits_author_of() {
+        let o = obj(json!({"author": "V.D. Savarkar"}));
+        let out = extract("Hindutva", EntityType::Document, &o);
+        let r = out
+            .iter()
+            .find(|r| r.relationship_type == RelationshipType::AuthorOf)
+            .expect("author_of edge");
+        assert_eq!(r.source_name, "V.D. Savarkar");
+        assert_eq!(r.source_type, EntityType::Person);
+        assert_eq!(r.target_name, "Hindutva");
+    }
+
+    #[test]
+    fn born_died_emit_location_edges() {
+        let o1 = obj(json!({"born_in": "Bhagur"}));
+        let out1 = extract("V.D. Savarkar", EntityType::Person, &o1);
+        assert!(out1
+            .iter()
+            .any(|r| r.relationship_type == RelationshipType::BornIn && r.target_name == "Bhagur"));
+
+        let o2 = obj(json!({"died_in": "Bombay"}));
+        let out2 = extract("V.D. Savarkar", EntityType::Person, &o2);
+        assert!(out2
+            .iter()
+            .any(|r| r.relationship_type == RelationshipType::DiedIn && r.target_name == "Bombay"));
     }
 }
