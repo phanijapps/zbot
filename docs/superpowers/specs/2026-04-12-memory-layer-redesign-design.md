@@ -126,9 +126,55 @@ AGENT-FACING TOOLS (promoted in prompt shards)
 
 ---
 
-## Schema (v22, clean slate)
+## Schema (v22, clean slate, two DBs)
 
-Both `conversations.db` and `knowledge_graph.db` are deleted before rollout. Schema v22 is the initial schema — no ALTER TABLEs, no backfills, no rollback. On daemon boot, if either DB is missing, the full v22 schema is created. Everything below defines v22 directly.
+**Database split** — `knowledge_graph.db` is retired. v22 introduces a cleaner two-database layout:
+
+### `conversations.db` — ephemeral operational state
+Session lifecycle, execution history, operational queues. Pruned aggressively. Lost on catastrophic failure without losing knowledge.
+
+Tables: `sessions`, `agent_executions`, `messages`, `artifacts`, `execution_logs`, `recall_log`, `distillation_runs`, `bridge_outbox`.
+
+No vector extensions loaded. Plain SQLite.
+
+### `knowledge.db` — long-term memory & graph
+Everything the agent has learned. Backed up, portable, sqlite-vec-enabled.
+
+Tables: `memory_facts`, `memory_facts_archive`, `ward_wiki_articles`, `procedures`, `session_episodes`, `kg_episodes`, `kg_entities`, `kg_relationships`, `kg_aliases`, `kg_goals`, `kg_compactions`, `embedding_cache`, plus all five `vec0` virtual tables.
+
+sqlite-vec extension loaded on every connection.
+
+### Cross-DB references are soft
+
+Any column that references a row in the other DB is a soft reference (plain TEXT column, no FK, no CASCADE):
+
+| Column | References | Semantics |
+|---|---|---|
+| `memory_facts.session_id` | `conversations.sessions.id` | Provenance hint; survives session deletion |
+| `kg_episodes.session_id` | `conversations.sessions.id` | Same |
+| `session_episodes.session_id` | `conversations.sessions.id` | Same |
+
+This is already the pattern today; v22 just formalizes it. A deleted session does not cascade into knowledge — facts and entities keep their provenance as an orphaned session_id, which is fine and searchable.
+
+### In-DB references stay strict
+
+All FK cascades stay within one DB:
+- `kg_relationships.source_entity_id` → `kg_entities.id` (ON DELETE CASCADE)
+- `kg_aliases.entity_id` → `kg_entities.id` (ON DELETE CASCADE)
+- `memory_facts_index.fact_id` → `memory_facts.id` (via trigger)
+- etc.
+
+### Clean-slate rollout
+
+Both files deleted before Phase 1:
+
+```
+rm ~/Documents/zbot/data/conversations.db* ~/Documents/zbot/data/knowledge_graph.db*
+```
+
+On daemon boot, v22 creates `conversations.db` and `knowledge.db` from scratch. No migration. No backfill. Wards on disk unchanged.
+
+Schema v22 is defined directly below for all tables across both DBs.
 
 ### New tables
 
@@ -635,7 +681,7 @@ Before implementation begins:
 
 1. Stop daemon.
 2. `rm ~/Documents/zbot/data/conversations.db* ~/Documents/zbot/data/knowledge_graph.db*`
-3. All of the above. No partial deletes, no backfills.
+3. v22 creates `conversations.db` and `knowledge.db` fresh on next boot. No migration, no backfill.
 4. Wards on disk (`~/Documents/zbot/wards/`) stay — they're the source of truth for archival knowledge and will be re-ingested as needed.
 
 Pack A's relationship extraction rules (`gateway/gateway-execution/src/indexer/relationship_rules.rs`) carry forward unchanged — they're part of the v22 solution, not a legacy.
