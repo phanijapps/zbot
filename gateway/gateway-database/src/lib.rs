@@ -13,6 +13,7 @@ pub mod memory_repository;
 pub mod recall_log_repository;
 pub mod repository;
 mod schema;
+pub mod wiki_repository;
 
 pub use connection::DatabaseManager;
 pub use distillation_repository::{
@@ -23,3 +24,4 @@ pub use memory_fact_store::GatewayMemoryFactStore;
 pub use memory_repository::{MemoryFact, MemoryRepository, ScoredFact};
 pub use recall_log_repository::RecallLogRepository;
 pub use repository::{ConversationRepository, Message};
+pub use wiki_repository::{WardWikiRepository, WikiArticle};
