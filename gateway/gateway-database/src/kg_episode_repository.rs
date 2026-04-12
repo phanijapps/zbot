@@ -37,7 +37,21 @@ pub struct KgEpisode {
     pub content_hash: String,
     pub session_id: Option<String>,
     pub agent_id: String,
+    pub status: String,
+    pub retry_count: u32,
+    pub error: Option<String>,
     pub created_at: String,
+    pub started_at: Option<String>,
+    pub completed_at: Option<String>,
+}
+
+/// Aggregate counts of episodes by status, useful for progress reporting.
+#[derive(Debug, Default, Clone)]
+pub struct StatusCounts {
+    pub pending: u64,
+    pub running: u64,
+    pub done: u64,
+    pub failed: u64,
 }
 
 pub struct KgEpisodeRepository {
@@ -55,8 +69,9 @@ impl KgEpisodeRepository {
         self.db.with_connection(|conn| {
             let changed = conn.execute(
                 "INSERT OR IGNORE INTO kg_episodes \
-                 (id, source_type, source_ref, content_hash, session_id, agent_id, created_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                 (id, source_type, source_ref, content_hash, session_id, agent_id, \
+                  status, retry_count, error, created_at, started_at, completed_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
                 params![
                     ep.id,
                     ep.source_type,
@@ -64,7 +79,12 @@ impl KgEpisodeRepository {
                     ep.content_hash,
                     ep.session_id,
                     ep.agent_id,
+                    ep.status,
+                    ep.retry_count as i64,
+                    ep.error,
                     ep.created_at,
+                    ep.started_at,
+                    ep.completed_at,
                 ],
             )?;
             Ok(changed > 0)
@@ -80,11 +100,12 @@ impl KgEpisodeRepository {
     ) -> Result<Option<KgEpisode>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id, created_at \
+                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id, \
+                        status, retry_count, error, created_at, started_at, completed_at \
                  FROM kg_episodes WHERE content_hash = ?1 AND source_type = ?2",
             )?;
             let result = stmt
-                .query_row(params![content_hash, source_type], Self::row_to_episode)
+                .query_row(params![content_hash, source_type], row_to_episode)
                 .optional()?;
             Ok(result)
         })
@@ -94,11 +115,12 @@ impl KgEpisodeRepository {
     pub fn list_by_session(&self, session_id: &str) -> Result<Vec<KgEpisode>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id, created_at \
+                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id, \
+                        status, retry_count, error, created_at, started_at, completed_at \
                  FROM kg_episodes WHERE session_id = ?1 ORDER BY created_at",
             )?;
             let rows = stmt
-                .query_map(params![session_id], Self::row_to_episode)?
+                .query_map(params![session_id], row_to_episode)?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
         })
@@ -108,27 +130,187 @@ impl KgEpisodeRepository {
     pub fn get(&self, id: &str) -> Result<Option<KgEpisode>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id, created_at \
+                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id, \
+                        status, retry_count, error, created_at, started_at, completed_at \
                  FROM kg_episodes WHERE id = ?1",
             )?;
-            let result = stmt
-                .query_row(params![id], Self::row_to_episode)
-                .optional()?;
+            let result = stmt.query_row(params![id], row_to_episode).optional()?;
             Ok(result)
         })
     }
 
-    fn row_to_episode(row: &rusqlite::Row) -> rusqlite::Result<KgEpisode> {
-        Ok(KgEpisode {
-            id: row.get(0)?,
-            source_type: row.get(1)?,
-            source_ref: row.get(2)?,
-            content_hash: row.get(3)?,
-            session_id: row.get(4)?,
-            agent_id: row.get(5)?,
-            created_at: row.get(6)?,
+    /// Insert a new episode with status='pending', deduplicating by (content_hash, source_type).
+    /// Returns the episode ID — either the newly created one or the existing duplicate's ID.
+    pub fn upsert_pending(
+        &self,
+        source_type: &str,
+        source_ref: &str,
+        content_hash: &str,
+        session_id: Option<&str>,
+        agent_id: &str,
+    ) -> Result<String, String> {
+        let id = format!("ep-{}", uuid::Uuid::new_v4());
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.with_connection(|conn| {
+            let changed = conn.execute(
+                "INSERT OR IGNORE INTO kg_episodes (
+                     id, source_type, source_ref, content_hash, session_id, agent_id,
+                     status, retry_count, created_at
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending', 0, ?7)",
+                params![
+                    id,
+                    source_type,
+                    source_ref,
+                    content_hash,
+                    session_id,
+                    agent_id,
+                    now
+                ],
+            )?;
+            if changed == 0 {
+                // Duplicate content hash — return existing id.
+                let existing: String = conn.query_row(
+                    "SELECT id FROM kg_episodes WHERE content_hash = ?1 AND source_type = ?2",
+                    params![content_hash, source_type],
+                    |r| r.get(0),
+                )?;
+                Ok(existing)
+            } else {
+                Ok(id)
+            }
         })
     }
+
+    /// Atomically claim the next pending episode. Marks it `running` and stamps `started_at`.
+    pub fn claim_next_pending(&self) -> Result<Option<KgEpisode>, String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let mut row: Option<KgEpisode> = match tx.query_row(
+                "SELECT id, source_type, source_ref, content_hash, session_id, agent_id,
+                        status, retry_count, error, created_at, started_at, completed_at
+                 FROM kg_episodes
+                 WHERE status = 'pending'
+                 ORDER BY created_at ASC
+                 LIMIT 1",
+                [],
+                row_to_episode,
+            ) {
+                Ok(e) => Some(e),
+                Err(rusqlite::Error::QueryReturnedNoRows) => None,
+                Err(e) => return Err(e),
+            };
+            if let Some(ref mut ep) = row {
+                tx.execute(
+                    "UPDATE kg_episodes SET status = 'running', started_at = ?1 WHERE id = ?2",
+                    params![now, ep.id],
+                )?;
+                tx.commit()?;
+                ep.status = "running".to_string();
+                ep.started_at = Some(now);
+            }
+            Ok(row)
+        })
+    }
+
+    /// Mark an episode as successfully completed.
+    pub fn mark_done(&self, episode_id: &str) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE kg_episodes SET status = 'done', completed_at = ?1 WHERE id = ?2",
+                params![now, episode_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Mark an episode as failed, record the error message, and increment retry_count.
+    pub fn mark_failed(&self, episode_id: &str, error: &str) -> Result<(), String> {
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "UPDATE kg_episodes
+                 SET status = 'failed', error = ?1, completed_at = ?2,
+                     retry_count = retry_count + 1
+                 WHERE id = ?3",
+                params![error, now, episode_id],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Reset a failed episode back to pending if retry_count < max_retries.
+    /// Returns true if the retry was scheduled, false if the episode has exhausted retries
+    /// or does not exist.
+    pub fn retry_if_eligible(&self, episode_id: &str, max_retries: u32) -> Result<bool, String> {
+        self.db.with_connection(|conn| {
+            let retry_count: u32 = match conn.query_row(
+                "SELECT retry_count FROM kg_episodes WHERE id = ?1",
+                params![episode_id],
+                |r| r.get::<_, i64>(0),
+            ) {
+                Ok(n) => n.max(0) as u32,
+                Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(false),
+                Err(e) => return Err(e),
+            };
+            if retry_count >= max_retries {
+                return Ok(false);
+            }
+            conn.execute(
+                "UPDATE kg_episodes SET status = 'pending', error = NULL WHERE id = ?1",
+                params![episode_id],
+            )?;
+            Ok(true)
+        })
+    }
+
+    /// Aggregate status counts for episodes whose source_ref starts with a given prefix.
+    pub fn status_counts_for_source(
+        &self,
+        source_ref_prefix: &str,
+    ) -> Result<StatusCounts, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT status, COUNT(*) FROM kg_episodes
+                 WHERE source_ref LIKE ?1 || '%'
+                 GROUP BY status",
+            )?;
+            let rows = stmt.query_map(params![source_ref_prefix], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?;
+            let mut counts = StatusCounts::default();
+            for row in rows {
+                let (s, n) = row?;
+                let n = n.max(0) as u64;
+                match s.as_str() {
+                    "pending" => counts.pending = n,
+                    "running" => counts.running = n,
+                    "done" => counts.done = n,
+                    "failed" => counts.failed = n,
+                    _ => {}
+                }
+            }
+            Ok(counts)
+        })
+    }
+}
+
+fn row_to_episode(row: &rusqlite::Row) -> rusqlite::Result<KgEpisode> {
+    Ok(KgEpisode {
+        id: row.get(0)?,
+        source_type: row.get(1)?,
+        source_ref: row.get(2)?,
+        content_hash: row.get(3)?,
+        session_id: row.get(4)?,
+        agent_id: row.get(5)?,
+        status: row.get(6)?,
+        retry_count: row.get::<_, i64>(7)? as u32,
+        error: row.get(8)?,
+        created_at: row.get(9)?,
+        started_at: row.get(10)?,
+        completed_at: row.get(11)?,
+    })
 }
 
 #[cfg(test)]
@@ -154,7 +336,12 @@ mod tests {
             content_hash: "abc123".into(),
             session_id: Some("sess-1".into()),
             agent_id: "root".into(),
+            status: "pending".into(),
+            retry_count: 0,
+            error: None,
             created_at: "2026-04-12T00:00:00Z".into(),
+            started_at: None,
+            completed_at: None,
         }
     }
 
@@ -228,5 +415,65 @@ mod tests {
         assert_eq!(EpisodeSource::Session.as_str(), "session");
         assert_eq!(EpisodeSource::Distillation.as_str(), "distillation");
         assert_eq!(EpisodeSource::UserInput.as_str(), "user_input");
+    }
+
+    #[test]
+    fn pending_claim_done_happy_path() {
+        let (_tmp, repo) = setup();
+
+        let id = repo
+            .upsert_pending("document", "src#chunk-0", "hash0", None, "root")
+            .expect("upsert");
+
+        let claimed = repo.claim_next_pending().expect("claim").expect("some");
+        assert_eq!(claimed.id, id);
+        assert_eq!(claimed.status, "running");
+
+        // Second claim returns None — only one pending.
+        let second = repo.claim_next_pending().expect("claim2");
+        assert!(second.is_none());
+
+        repo.mark_done(&id).expect("done");
+        let counts = repo.status_counts_for_source("src").expect("counts");
+        assert_eq!(counts.pending, 0);
+        assert_eq!(counts.running, 0);
+        assert_eq!(counts.done, 1);
+        assert_eq!(counts.failed, 0);
+    }
+
+    #[test]
+    fn mark_failed_increments_retry_count() {
+        let (_tmp, repo) = setup();
+
+        let id = repo
+            .upsert_pending("document", "src#chunk-1", "hash1", None, "root")
+            .expect("upsert");
+        let _ = repo.claim_next_pending().expect("claim");
+        repo.mark_failed(&id, "test error").expect("fail");
+
+        // retry_if_eligible with max=3 → should succeed; status back to pending.
+        let retried = repo.retry_if_eligible(&id, 3).expect("retry");
+        assert!(retried);
+
+        // Claim it again and fail; retry_count should be 1 now.
+        let _ = repo.claim_next_pending().expect("claim2");
+        repo.mark_failed(&id, "test error 2").expect("fail2");
+
+        // With max=2, retry_count=2 is NOT < 2, so no retry.
+        let retried2 = repo.retry_if_eligible(&id, 2).expect("retry2");
+        assert!(!retried2);
+    }
+
+    #[test]
+    fn upsert_pending_deduplicates_by_content_hash() {
+        let (_tmp, repo) = setup();
+
+        let id1 = repo
+            .upsert_pending("document", "a", "same_hash", None, "root")
+            .expect("up1");
+        let id2 = repo
+            .upsert_pending("document", "b", "same_hash", None, "root")
+            .expect("up2");
+        assert_eq!(id1, id2, "same content_hash + source_type should dedup");
     }
 }
