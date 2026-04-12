@@ -369,6 +369,9 @@ pub async fn create_memory_fact(
         valid_until: None,
         superseded_by: None,
         pinned: request.pinned,
+        epistemic_class: None,
+        source_episode_id: None,
+        source_ref: None,
     };
 
     memory_repo.upsert_memory_fact(&fact).map_err(|e| {

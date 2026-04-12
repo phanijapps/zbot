@@ -706,6 +706,9 @@ impl AppState {
                 valid_until: None,
                 superseded_by: None,
                 pinned,
+                epistemic_class: None,
+                source_episode_id: None,
+                source_ref: None,
             };
 
             if memory_repo.upsert_memory_fact(&fact).is_ok() {

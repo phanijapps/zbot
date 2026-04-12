@@ -128,6 +128,9 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             valid_until: None,
             superseded_by: None,
             pinned: false,
+            epistemic_class: None,
+            source_episode_id: None,
+            source_ref: None,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;

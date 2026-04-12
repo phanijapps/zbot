@@ -461,6 +461,9 @@ impl SessionDistiller {
                 valid_until: None,
                 superseded_by: None,
                 pinned: false,
+                epistemic_class: None,
+                source_episode_id: None,
+                source_ref: None,
             };
 
             // Supersede the old fact if content differs
@@ -1200,6 +1203,9 @@ impl SessionDistiller {
             valid_until: None,
             superseded_by: None,
             pinned: false,
+            epistemic_class: None,
+            source_episode_id: None,
+            source_ref: None,
         };
 
         // Supersede old strategy if content differs
@@ -1331,6 +1337,9 @@ impl SessionDistiller {
             valid_until: None,
             superseded_by: None,
             pinned: false,
+            epistemic_class: None,
+            source_episode_id: None,
+            source_ref: None,
         };
 
         // Supersede old correction if content differs
