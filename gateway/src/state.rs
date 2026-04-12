@@ -23,8 +23,8 @@ use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
 use gateway_database::{
-    DistillationRepository, EpisodeRepository, KgEpisodeRepository, MemoryRepository,
-    ProcedureRepository, RecallLogRepository, WardWikiRepository,
+    DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
+    MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
 use knowledge_graph::{GraphService, GraphStorage, SqliteGraphTraversal};
 use std::collections::HashMap;
@@ -60,6 +60,9 @@ pub struct AppState {
 
     /// Conversation repository for message persistence.
     pub conversations: Arc<ConversationRepository>,
+
+    /// Knowledge database — memory facts, graph, vec0 indexes.
+    pub knowledge_db: Arc<KnowledgeDatabase>,
 
     /// Settings service for application configuration.
     pub settings: Arc<SettingsService>,
@@ -156,6 +159,11 @@ impl AppState {
                 .expect("Failed to initialize conversation database"),
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
+
+        // Initialize knowledge database (memory facts, graph, vec0 indexes)
+        let knowledge_db = Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        );
 
         // Create log service for execution tracing
         let log_service = Arc::new(LogService::new(db_manager.clone()));
@@ -340,6 +348,7 @@ impl AppState {
             hook_registry: Some(hook_registry),
             delegation_registry,
             conversations: conversation_repo,
+            knowledge_db,
             settings,
             log_service,
             state_service,
@@ -382,6 +391,9 @@ impl AppState {
         let memory_repo = Arc::new(MemoryRepository::new(Arc::new(
             DatabaseManager::new(paths.clone()).expect("Failed to initialize database for memory"),
         )));
+        let knowledge_db = Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        );
 
         // Create connector registry
         let connector_service = ConnectorService::new(paths.clone());
@@ -408,6 +420,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations: conversation_repo,
+            knowledge_db,
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -450,6 +463,9 @@ impl AppState {
         let db =
             Arc::new(DatabaseManager::new(paths.clone()).expect("Failed to initialize database"));
         let memory_repo = Arc::new(MemoryRepository::new(db));
+        let knowledge_db = Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        );
 
         // Create bridge registry and outbox
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
@@ -479,6 +495,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations,
+            knowledge_db,
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
