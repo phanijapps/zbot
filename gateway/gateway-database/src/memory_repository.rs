@@ -60,6 +60,12 @@ pub struct MemoryFact {
     pub created_at: String,
     pub updated_at: String,
     pub expires_at: Option<String>,
+    /// ISO-8601 timestamp from which this fact is valid.
+    pub valid_from: Option<String>,
+    /// ISO-8601 timestamp after which this fact is no longer current (superseded).
+    pub valid_until: Option<String>,
+    /// Key of the newer fact that replaced this one.
+    pub superseded_by: Option<String>,
     /// Pinned facts can't be overwritten by distillation. User-authored facts are pinned.
     #[serde(default)]
     pub pinned: bool,
@@ -100,8 +106,8 @@ impl MemoryRepository {
 
         self.db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, pinned)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+                "INSERT INTO memory_facts (id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by, pinned)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)
                  ON CONFLICT(agent_id, scope, ward_id, key) DO UPDATE SET
                     content = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.content ELSE excluded.content END,
                     confidence = CASE WHEN memory_facts.pinned = 1 THEN memory_facts.confidence ELSE MAX(memory_facts.confidence, excluded.confidence) END,
@@ -127,6 +133,9 @@ impl MemoryRepository {
                     fact.created_at,
                     fact.updated_at,
                     fact.expires_at,
+                    fact.valid_from,
+                    fact.valid_until,
+                    fact.superseded_by,
                     fact.pinned as i32,
                 ],
             )?;
@@ -144,7 +153,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(s) = scope {
                 (
-                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                      FROM memory_facts
                      WHERE agent_id = ?1 AND scope = ?2
                      ORDER BY updated_at DESC
@@ -157,7 +166,7 @@ impl MemoryRepository {
                 )
             } else {
                 (
-                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                    "SELECT id, session_id, agent_id, scope, category, key, content, confidence, mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                      FROM memory_facts
                      WHERE agent_id = ?1
                      ORDER BY updated_at DESC
@@ -189,7 +198,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                  FROM memory_facts
                  WHERE id = ?1"
             )?;
@@ -218,7 +227,7 @@ impl MemoryRepository {
                 match (category, scope) {
                     (Some(cat), Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2 AND scope = ?3
                          ORDER BY updated_at DESC
@@ -233,7 +242,7 @@ impl MemoryRepository {
                     ),
                     (Some(cat), None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2
                          ORDER BY updated_at DESC
@@ -247,7 +256,7 @@ impl MemoryRepository {
                     ),
                     (None, Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1 AND scope = ?2
                          ORDER BY updated_at DESC
@@ -261,7 +270,7 @@ impl MemoryRepository {
                     ),
                     (None, None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1
                          ORDER BY updated_at DESC
@@ -383,7 +392,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.valid_from, mf.valid_until, mf.superseded_by, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -400,7 +409,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.valid_from, mf.valid_until, mf.superseded_by, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -418,7 +427,7 @@ impl MemoryRepository {
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
             let rows = stmt.query_map(param_refs.as_slice(), |row| {
                 let fact = row_to_memory_fact(row)?;
-                let bm25: f64 = row.get(17)?;
+                let bm25: f64 = row.get(20)?;
                 Ok(ScoredFact { fact, score: -bm25 })
             })?;
 
@@ -449,7 +458,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.valid_from, mf.valid_until, mf.superseded_by, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -468,7 +477,7 @@ impl MemoryRepository {
                 (
                     "SELECT mf.id, mf.session_id, mf.agent_id, mf.scope, mf.category, mf.key,
                             mf.content, mf.confidence, mf.mention_count, mf.source_summary,
-                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.pinned,
+                            mf.embedding, mf.ward_id, mf.contradicted_by, mf.created_at, mf.updated_at, mf.expires_at, mf.valid_from, mf.valid_until, mf.superseded_by, mf.pinned,
                             rank
                      FROM memory_facts_fts fts
                      JOIN memory_facts mf ON mf.rowid = fts.rowid
@@ -487,7 +496,7 @@ impl MemoryRepository {
             let param_refs: Vec<&dyn rusqlite::types::ToSql> = params_vec.iter().map(|p| p.as_ref()).collect();
             let rows = stmt.query_map(param_refs.as_slice(), |row| {
                 let fact = row_to_memory_fact(row)?;
-                let rank: f64 = row.get(16)?;
+                let rank: f64 = row.get(20)?;
                 // FTS5 rank is negative (lower = better). Normalize to 0..1 range.
                 let bm25_score = (-rank).min(30.0) / 30.0;
                 Ok(ScoredFact {
@@ -612,7 +621,7 @@ impl MemoryRepository {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) = if let Some(w) = ward_id {
                 (
                     "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                            mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                            mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                      FROM memory_facts
                      WHERE agent_id = ?1 AND embedding IS NOT NULL
                        AND (ward_id = '__global__' OR ward_id = ?2)".to_string(),
@@ -624,7 +633,7 @@ impl MemoryRepository {
             } else {
                 (
                     "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                            mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                            mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                      FROM memory_facts
                      WHERE agent_id = ?1 AND embedding IS NOT NULL".to_string(),
                     vec![
@@ -723,7 +732,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                  FROM memory_facts
                  WHERE agent_id = ?1 AND confidence >= ?2
                  AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -752,7 +761,7 @@ impl MemoryRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                        mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                  FROM memory_facts
                  WHERE agent_id = ?1 AND category = ?2
                    AND (expires_at IS NULL OR expires_at > datetime('now'))
@@ -794,7 +803,7 @@ impl MemoryRepository {
                 match (agent_id, category, scope) {
                     (Some(aid), Some(cat), Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2 AND scope = ?3
                          ORDER BY updated_at DESC
@@ -809,7 +818,7 @@ impl MemoryRepository {
                     ),
                     (Some(aid), Some(cat), None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1 AND category = ?2
                          ORDER BY updated_at DESC
@@ -823,7 +832,7 @@ impl MemoryRepository {
                     ),
                     (Some(aid), None, Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1 AND scope = ?2
                          ORDER BY updated_at DESC
@@ -837,7 +846,7 @@ impl MemoryRepository {
                     ),
                     (Some(aid), None, None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE agent_id = ?1
                          ORDER BY updated_at DESC
@@ -850,7 +859,7 @@ impl MemoryRepository {
                     ),
                     (None, Some(cat), Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE category = ?1 AND scope = ?2
                          ORDER BY updated_at DESC
@@ -864,7 +873,7 @@ impl MemoryRepository {
                     ),
                     (None, Some(cat), None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE category = ?1
                          ORDER BY updated_at DESC
@@ -877,7 +886,7 @@ impl MemoryRepository {
                     ),
                     (None, None, Some(scp)) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          WHERE scope = ?1
                          ORDER BY updated_at DESC
@@ -890,7 +899,7 @@ impl MemoryRepository {
                     ),
                     (None, None, None) => (
                         "SELECT id, session_id, agent_id, scope, category, key, content, confidence,
-                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at
+                                mention_count, source_summary, embedding, ward_id, contradicted_by, created_at, updated_at, expires_at, valid_from, valid_until, superseded_by
                          FROM memory_facts
                          ORDER BY updated_at DESC
                          LIMIT ?1 OFFSET ?2".to_string(),
@@ -952,7 +961,10 @@ fn row_to_memory_fact(row: &rusqlite::Row) -> Result<MemoryFact, rusqlite::Error
         created_at: row.get(13)?,
         updated_at: row.get(14)?,
         expires_at: row.get(15)?,
-        pinned: row.get::<_, i32>(16).unwrap_or(0) != 0,
+        valid_from: row.get(16).unwrap_or(None),
+        valid_until: row.get(17).unwrap_or(None),
+        superseded_by: row.get(18).unwrap_or(None),
+        pinned: row.get::<_, i32>(19).unwrap_or(0) != 0,
     })
 }
 
@@ -1031,6 +1043,9 @@ mod tests {
             created_at: chrono::Utc::now().to_rfc3339(),
             updated_at: chrono::Utc::now().to_rfc3339(),
             expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
         }
     }

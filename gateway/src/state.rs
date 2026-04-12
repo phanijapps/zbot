@@ -681,6 +681,9 @@ impl AppState {
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned,
             };
 

@@ -365,6 +365,9 @@ pub async fn create_memory_fact(
         created_at: now.clone(),
         updated_at: now,
         expires_at: None,
+        valid_from: None,
+        valid_until: None,
+        superseded_by: None,
         pinned: request.pinned,
     };
 

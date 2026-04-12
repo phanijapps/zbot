@@ -124,6 +124,9 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
         };
 

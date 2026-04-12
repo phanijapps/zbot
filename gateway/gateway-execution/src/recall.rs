@@ -259,6 +259,13 @@ impl MemoryRecall {
             }
         }
 
+        // 9. Penalize superseded facts — prefer current over outdated
+        for sf in &mut results {
+            if sf.fact.valid_until.is_some() {
+                sf.score *= 0.3;
+            }
+        }
+
         // Sort by score descending and take top-K
         results.sort_by(|a, b| {
             b.score
@@ -1145,6 +1152,9 @@ mod tests {
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
                     pinned: false,
                 },
                 score: 0.85,
@@ -1167,6 +1177,9 @@ mod tests {
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
                     pinned: false,
                 },
                 score: 0.70,
@@ -1202,6 +1215,9 @@ mod tests {
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
                     pinned: false,
                 },
                 score: 0.85,
@@ -1224,6 +1240,9 @@ mod tests {
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
                     pinned: false,
                 },
                 score: 0.70,
@@ -1264,6 +1283,9 @@ mod tests {
                 created_at: String::new(),
                 updated_at: String::new(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned: false,
             },
             score: 0.85,
@@ -1301,6 +1323,9 @@ mod tests {
                 created_at: String::new(),
                 updated_at: String::new(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned: false,
             },
             score: 0.85,
@@ -1332,6 +1357,9 @@ mod tests {
                 created_at: String::new(),
                 updated_at: String::new(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned: false,
             },
             score: 0.85,
@@ -1371,6 +1399,9 @@ mod tests {
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
                     pinned: false,
                 },
                 score: 1.4,
@@ -1393,6 +1424,9 @@ mod tests {
                     created_at: String::new(),
                     updated_at: String::new(),
                     expires_at: None,
+                    valid_from: None,
+                    valid_until: None,
+                    superseded_by: None,
                     pinned: false,
                 },
                 score: 0.7,
@@ -1453,6 +1487,9 @@ mod tests {
                 created_at: String::new(),
                 updated_at: String::new(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned: false,
             },
             score: 1.0,

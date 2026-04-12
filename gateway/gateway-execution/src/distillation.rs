@@ -407,6 +407,9 @@ impl SessionDistiller {
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned: false,
             };
 
@@ -951,6 +954,9 @@ impl SessionDistiller {
             created_at: now.to_string(),
             updated_at: now.to_string(),
             expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
         };
 
@@ -1046,6 +1052,9 @@ impl SessionDistiller {
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
         };
 
