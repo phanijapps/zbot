@@ -226,6 +226,11 @@ impl WorkingMemory {
         output
     }
 
+    /// Check whether an entity (by name) is already tracked.
+    pub fn has_entity(&self, name: &str) -> bool {
+        self.entities.contains_key(&name.to_lowercase())
+    }
+
     /// Whether working memory has any content worth injecting.
     pub fn is_empty(&self) -> bool {
         self.entities.is_empty()

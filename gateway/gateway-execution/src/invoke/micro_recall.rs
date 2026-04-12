@@ -1,0 +1,624 @@
+//! Micro-Recall — targeted memory lookups triggered by tool results.
+//!
+//! Detects decision-point triggers (delegation, errors, ward entry, entity mentions)
+//! from tool output and executes focused memory/graph lookups, injecting findings
+//! into working memory so the LLM has relevant context at the right moment.
+
+use super::working_memory::WorkingMemory;
+use gateway_database::MemoryRepository;
+use knowledge_graph::storage::GraphStorage;
+use regex::Regex;
+use std::sync::Arc;
+use std::sync::LazyLock;
+use tracing::debug;
+
+/// Regex for extracting entity candidates from text (same pattern as working_memory_middleware).
+/// Matches: "quoted strings", PascalCase words, ALLCAPS (3+ chars).
+static ENTITY_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r#"(?:"([^"]{2,30})"|([A-Z][a-z]+(?:[A-Z][a-z]+)+)|(\b[A-Z]{3,}\b))"#)
+        .unwrap_or_else(|_| Regex::new(".^").expect("fallback regex must compile"))
+});
+
+/// Maximum number of entity triggers per tool result.
+const MAX_ENTITY_TRIGGERS: usize = 3;
+
+// ---------------------------------------------------------------------------
+// Trigger enum
+// ---------------------------------------------------------------------------
+
+/// A detected decision-point that warrants a targeted memory lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MicroRecallTrigger {
+    /// About to delegate to a subagent — recall corrections/procedures for that agent.
+    PreDelegation { agent_id: String },
+    /// A tool returned an error — look for prior corrections or known fixes.
+    ToolError {
+        tool_name: String,
+        error_msg: String,
+    },
+    /// Agent entered a ward (sandbox) — load ward-specific wiki/facts.
+    WardEntry { ward_id: String },
+    /// A new entity was mentioned that isn't already in working memory.
+    EntityMention { entity_name: String },
+}
+
+// ---------------------------------------------------------------------------
+// Context — holds optional repo/storage handles
+// ---------------------------------------------------------------------------
+
+/// Shared context for micro-recall handlers. All fields are optional so
+/// micro-recall degrades gracefully when repos aren't available.
+pub struct MicroRecallContext {
+    pub memory_repo: Option<Arc<MemoryRepository>>,
+    pub graph_storage: Option<Arc<GraphStorage>>,
+    pub agent_id: String,
+}
+
+// ---------------------------------------------------------------------------
+// Trigger detection (sync)
+// ---------------------------------------------------------------------------
+
+/// Detect micro-recall triggers from a tool invocation result.
+///
+/// This is intentionally synchronous — it only inspects the tool name/result
+/// strings and working memory state without doing any I/O.
+pub fn detect_triggers(
+    tool_name: &str,
+    result: &str,
+    error: Option<&str>,
+    wm: &WorkingMemory,
+) -> Vec<MicroRecallTrigger> {
+    let mut triggers = Vec::new();
+
+    // 1. Tool error trigger
+    if let Some(err) = error {
+        triggers.push(MicroRecallTrigger::ToolError {
+            tool_name: tool_name.to_string(),
+            error_msg: truncate_safe(err, 200),
+        });
+        return triggers; // Don't extract entities from error text
+    }
+
+    // 2. Pre-delegation trigger
+    if tool_name == "delegate_to_agent" {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
+            if let Some(agent_id) = value
+                .get("agent_id")
+                .or(value.get("child_agent_id"))
+                .and_then(|v| v.as_str())
+            {
+                triggers.push(MicroRecallTrigger::PreDelegation {
+                    agent_id: agent_id.to_string(),
+                });
+            }
+        }
+    }
+
+    // 3. Ward entry trigger
+    if is_ward_tool(tool_name) {
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(result) {
+            if let Some(ward_id) = value.get("ward_id").and_then(|v| v.as_str()) {
+                triggers.push(MicroRecallTrigger::WardEntry {
+                    ward_id: ward_id.to_string(),
+                });
+            }
+        }
+    }
+
+    // 4. Entity mention triggers (skip for respond tool)
+    if tool_name != "respond" && tool_name != "set_session_title" {
+        let new_entities = extract_new_entities(result, wm);
+        for name in new_entities {
+            triggers.push(MicroRecallTrigger::EntityMention { entity_name: name });
+        }
+    }
+
+    triggers
+}
+
+/// Check if a tool name is ward-related.
+fn is_ward_tool(tool_name: &str) -> bool {
+    tool_name.starts_with("ward_")
+        || tool_name == "enter_ward"
+        || tool_name == "switch_ward"
+        || tool_name == "create_ward"
+}
+
+// ---------------------------------------------------------------------------
+// Trigger execution (async)
+// ---------------------------------------------------------------------------
+
+/// Execute a micro-recall trigger, injecting findings into working memory.
+///
+/// Each handler is fail-safe: errors are logged but never propagated.
+pub async fn execute_micro_recall(
+    wm: &mut WorkingMemory,
+    trigger: &MicroRecallTrigger,
+    ctx: &MicroRecallContext,
+    iteration: u32,
+) {
+    match trigger {
+        MicroRecallTrigger::PreDelegation { agent_id } => {
+            handle_pre_delegation(wm, agent_id, ctx, iteration).await;
+        }
+        MicroRecallTrigger::ToolError {
+            tool_name,
+            error_msg,
+        } => {
+            handle_tool_error(wm, tool_name, error_msg, ctx, iteration).await;
+        }
+        MicroRecallTrigger::WardEntry { ward_id } => {
+            handle_ward_entry(wm, ward_id, ctx, iteration).await;
+        }
+        MicroRecallTrigger::EntityMention { entity_name } => {
+            handle_entity_mention(wm, entity_name, ctx, iteration).await;
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handler: PreDelegation
+// ---------------------------------------------------------------------------
+
+/// Look up corrections and procedures relevant to the target agent.
+async fn handle_pre_delegation(
+    wm: &mut WorkingMemory,
+    agent_id: &str,
+    ctx: &MicroRecallContext,
+    iteration: u32,
+) {
+    // Load correction-category facts for the target agent
+    if let Some(repo) = &ctx.memory_repo {
+        match repo.get_facts_by_category(agent_id, "correction", 5) {
+            Ok(facts) => {
+                for fact in facts {
+                    wm.add_correction(&truncate_safe(&fact.content, 150));
+                }
+            }
+            Err(e) => {
+                debug!("micro-recall: pre-delegation correction lookup failed: {e}");
+            }
+        }
+
+        // Also check the current agent's corrections that mention the target
+        match repo.get_facts_by_category(&ctx.agent_id, "correction", 10) {
+            Ok(facts) => {
+                for fact in facts {
+                    if fact.content.contains(agent_id) || fact.key.contains(agent_id) {
+                        wm.add_correction(&truncate_safe(&fact.content, 150));
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("micro-recall: pre-delegation self-correction lookup failed: {e}");
+            }
+        }
+    }
+
+    wm.add_discovery(
+        &format!("Preparing delegation to {agent_id}"),
+        iteration,
+        "micro-recall",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Handler: ToolError
+// ---------------------------------------------------------------------------
+
+/// Look for prior corrections or known fixes related to the error.
+async fn handle_tool_error(
+    wm: &mut WorkingMemory,
+    tool_name: &str,
+    error_msg: &str,
+    ctx: &MicroRecallContext,
+    iteration: u32,
+) {
+    if let Some(repo) = &ctx.memory_repo {
+        // Search for corrections related to this tool
+        match repo.get_facts_by_category(&ctx.agent_id, "correction", 10) {
+            Ok(facts) => {
+                for fact in facts {
+                    if fact.content.contains(tool_name) || fact.key.contains(tool_name) {
+                        wm.add_discovery(
+                            &format!(
+                                "Prior fix for {tool_name}: {}",
+                                truncate_safe(&fact.content, 120)
+                            ),
+                            iteration,
+                            "micro-recall",
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                debug!("micro-recall: tool-error correction lookup failed: {e}");
+            }
+        }
+    }
+
+    // Always record the error itself
+    wm.add_discovery(
+        &format!("{tool_name} error: {}", truncate_safe(error_msg, 150)),
+        iteration,
+        "micro-recall",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Handler: WardEntry
+// ---------------------------------------------------------------------------
+
+/// Load ward-specific entities from the knowledge graph.
+async fn handle_ward_entry(
+    wm: &mut WorkingMemory,
+    ward_id: &str,
+    ctx: &MicroRecallContext,
+    iteration: u32,
+) {
+    // Try to find the ward entity in the knowledge graph
+    if let Some(graph) = &ctx.graph_storage {
+        match graph.get_entity_by_name(&ctx.agent_id, ward_id).await {
+            Ok(Some(entity)) => {
+                let summary = entity
+                    .properties
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("ward context loaded");
+                wm.add_entity(
+                    &entity.name,
+                    Some(&format!("{:?}", entity.entity_type)),
+                    &truncate_safe(summary, 100),
+                    iteration,
+                );
+            }
+            Ok(None) => {
+                debug!("micro-recall: no graph entity for ward {ward_id}");
+            }
+            Err(e) => {
+                debug!("micro-recall: ward entity lookup failed: {e}");
+            }
+        }
+    }
+
+    // Load ward-scoped memory facts
+    if let Some(repo) = &ctx.memory_repo {
+        match repo.list_memory_facts(&ctx.agent_id, None, Some(ward_id), 5, 0) {
+            Ok(facts) => {
+                for fact in facts {
+                    wm.add_entity(
+                        &fact.key,
+                        Some(&fact.category),
+                        &truncate_safe(&fact.content, 100),
+                        iteration,
+                    );
+                }
+            }
+            Err(e) => {
+                debug!("micro-recall: ward facts lookup failed: {e}");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Handler: EntityMention
+// ---------------------------------------------------------------------------
+
+/// Look up a newly-mentioned entity in the knowledge graph.
+async fn handle_entity_mention(
+    wm: &mut WorkingMemory,
+    entity_name: &str,
+    ctx: &MicroRecallContext,
+    iteration: u32,
+) {
+    if let Some(graph) = &ctx.graph_storage {
+        match graph.get_entity_by_name(&ctx.agent_id, entity_name).await {
+            Ok(Some(entity)) => {
+                let summary = entity
+                    .properties
+                    .get("description")
+                    .and_then(|v| v.as_str())
+                    .map(|s| truncate_safe(s, 100))
+                    .unwrap_or_else(|| {
+                        format!(
+                            "{:?}, seen {} times",
+                            entity.entity_type, entity.mention_count
+                        )
+                    });
+                wm.add_entity(
+                    &entity.name,
+                    Some(&format!("{:?}", entity.entity_type)),
+                    &summary,
+                    iteration,
+                );
+            }
+            Ok(None) => {
+                debug!("micro-recall: entity '{entity_name}' not in graph");
+            }
+            Err(e) => {
+                debug!("micro-recall: entity lookup failed for '{entity_name}': {e}");
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Entity extraction helpers
+// ---------------------------------------------------------------------------
+
+/// Extract entity names from text that are NOT already in working memory.
+/// Capped at [`MAX_ENTITY_TRIGGERS`].
+pub fn extract_new_entities(text: &str, wm: &WorkingMemory) -> Vec<String> {
+    let scan_text = if text.len() > 2000 {
+        &text[..safe_byte_boundary(text, 2000)]
+    } else {
+        text
+    };
+
+    let mut found = Vec::new();
+    for cap in ENTITY_RE.captures_iter(scan_text) {
+        if found.len() >= MAX_ENTITY_TRIGGERS {
+            break;
+        }
+        let name = cap
+            .get(1)
+            .or(cap.get(2))
+            .or(cap.get(3))
+            .map(|m| m.as_str().to_string());
+
+        if let Some(name) = name {
+            if name.len() < 3 || is_common_word(&name) {
+                continue;
+            }
+            if wm.has_entity(&name) {
+                continue;
+            }
+            if !found.contains(&name) {
+                found.push(name);
+            }
+        }
+    }
+    found
+}
+
+/// Check if a word is too common to be a useful entity.
+fn is_common_word(word: &str) -> bool {
+    matches!(
+        word.to_uppercase().as_str(),
+        "THE"
+            | "AND"
+            | "FOR"
+            | "NOT"
+            | "THIS"
+            | "THAT"
+            | "WITH"
+            | "FROM"
+            | "HAVE"
+            | "WILL"
+            | "ARE"
+            | "BUT"
+            | "ALL"
+            | "CAN"
+            | "HAS"
+            | "HER"
+            | "WAS"
+            | "ONE"
+            | "OUR"
+            | "OUT"
+            | "YOU"
+            | "HAD"
+            | "HOT"
+            | "HIS"
+            | "GET"
+            | "LET"
+            | "SAY"
+            | "SHE"
+            | "TOO"
+            | "USE"
+            | "WAY"
+            | "WHO"
+            | "DID"
+            | "ITS"
+            | "SET"
+            | "TRY"
+            | "ASK"
+            | "MEN"
+            | "RUN"
+            | "GOT"
+            | "OLD"
+            | "END"
+            | "NOW"
+            | "PUT"
+            | "BOX"
+            | "ROW"
+            | "COL"
+            | "KEY"
+            | "MAP"
+            | "JSON"
+            | "HTTP"
+            | "URL"
+            | "API"
+            | "CSS"
+            | "HTML"
+            | "NONE"
+            | "NULL"
+            | "TRUE"
+            | "FALSE"
+            | "SELF"
+            | "TODO"
+            | "NOTE"
+            | "INFO"
+            | "WARN"
+            | "DEBUG"
+    )
+}
+
+/// Truncate a string safely at a char boundary, appending "..." if truncated.
+pub fn truncate_safe(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        return s.to_string();
+    }
+    let boundary = safe_byte_boundary(s, max_len);
+    format!("{}...", &s[..boundary])
+}
+
+/// Find the largest valid byte boundary <= target for a UTF-8 string.
+fn safe_byte_boundary(s: &str, target: usize) -> usize {
+    if target >= s.len() {
+        return s.len();
+    }
+    // Walk back from target until we hit a char boundary
+    let mut pos = target;
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ---- detect_triggers tests ----
+
+    #[test]
+    fn test_detect_triggers_tool_error() {
+        let wm = WorkingMemory::new(5000);
+        let triggers = detect_triggers("shell", "", Some("command not found: xyz"), &wm);
+        assert_eq!(triggers.len(), 1);
+        match &triggers[0] {
+            MicroRecallTrigger::ToolError {
+                tool_name,
+                error_msg,
+            } => {
+                assert_eq!(tool_name, "shell");
+                assert!(error_msg.contains("command not found"));
+            }
+            other => panic!("expected ToolError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_detect_triggers_delegation() {
+        let wm = WorkingMemory::new(5000);
+        let result = r#"{"agent_id": "research-agent", "task": "fetch stock data"}"#;
+        let triggers = detect_triggers("delegate_to_agent", result, None, &wm);
+        assert!(triggers
+            .iter()
+            .any(|t| matches!(t, MicroRecallTrigger::PreDelegation { agent_id } if agent_id == "research-agent")));
+    }
+
+    #[test]
+    fn test_detect_triggers_ward_entry() {
+        let wm = WorkingMemory::new(5000);
+        let result = r#"{"ward_id": "stock-analysis", "status": "entered"}"#;
+        let triggers = detect_triggers("enter_ward", result, None, &wm);
+        assert!(triggers
+            .iter()
+            .any(|t| matches!(t, MicroRecallTrigger::WardEntry { ward_id } if ward_id == "stock-analysis")));
+    }
+
+    #[test]
+    fn test_detect_triggers_entity_mention() {
+        let wm = WorkingMemory::new(5000);
+        let result = r#"Analyzing DataFrame from PandaFrame module"#;
+        let triggers = detect_triggers("shell", result, None, &wm);
+        assert!(triggers
+            .iter()
+            .any(|t| matches!(t, MicroRecallTrigger::EntityMention { entity_name } if entity_name == "DataFrame")));
+    }
+
+    #[test]
+    fn test_detect_triggers_no_entity_if_already_in_wm() {
+        let mut wm = WorkingMemory::new(5000);
+        wm.add_entity("DataFrame", Some("class"), "pandas data structure", 1);
+        let result = r#"Analyzing DataFrame from PandaFrame module"#;
+        let triggers = detect_triggers("shell", result, None, &wm);
+        // DataFrame is already tracked, so no EntityMention for it
+        assert!(!triggers
+            .iter()
+            .any(|t| matches!(t, MicroRecallTrigger::EntityMention { entity_name } if entity_name == "DataFrame")));
+    }
+
+    #[test]
+    fn test_detect_triggers_respond_no_entities() {
+        let wm = WorkingMemory::new(5000);
+        let result = r#"Here is your DataFrame analysis for PandaFrame"#;
+        let triggers = detect_triggers("respond", result, None, &wm);
+        assert!(!triggers
+            .iter()
+            .any(|t| matches!(t, MicroRecallTrigger::EntityMention { .. })));
+    }
+
+    // ---- execute_micro_recall tests ----
+
+    #[tokio::test]
+    async fn test_execute_tool_error_adds_discovery() {
+        let mut wm = WorkingMemory::new(5000);
+        let ctx = MicroRecallContext {
+            memory_repo: None,
+            graph_storage: None,
+            agent_id: "root".to_string(),
+        };
+        let trigger = MicroRecallTrigger::ToolError {
+            tool_name: "shell".to_string(),
+            error_msg: "permission denied".to_string(),
+        };
+        execute_micro_recall(&mut wm, &trigger, &ctx, 3).await;
+        let output = wm.format_for_prompt();
+        assert!(output.contains("shell error: permission denied"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_ward_entry_no_repos() {
+        // When repos are None, handler should not panic — just return gracefully
+        let mut wm = WorkingMemory::new(5000);
+        let ctx = MicroRecallContext {
+            memory_repo: None,
+            graph_storage: None,
+            agent_id: "root".to_string(),
+        };
+        let trigger = MicroRecallTrigger::WardEntry {
+            ward_id: "test-ward".to_string(),
+        };
+        execute_micro_recall(&mut wm, &trigger, &ctx, 1).await;
+        // Should not panic; WM may or may not have content (no repos = no data)
+    }
+
+    // ---- extract_new_entities tests ----
+
+    #[test]
+    fn test_extract_new_entities_caps_at_max() {
+        let wm = WorkingMemory::new(5000);
+        // 5 PascalCase entities, only 3 should be returned
+        let text = "Found DataFrame and PandaFrame and MultiIndex and StockData and MarketCap";
+        let entities = extract_new_entities(text, &wm);
+        assert!(entities.len() <= MAX_ENTITY_TRIGGERS);
+    }
+
+    // ---- truncate_safe tests ----
+
+    #[test]
+    fn test_truncate_safe_multibyte() {
+        // "cafe\u{0301}" = "café" — the accent is a combining char at byte 5
+        let s = "caf\u{00e9} latte is great";
+        let result = truncate_safe(s, 5);
+        // Should not panic and should produce valid UTF-8
+        assert!(result.ends_with("..."));
+        // The truncated portion must be valid UTF-8
+        let prefix = result.trim_end_matches("...");
+        assert!(prefix.len() <= 5);
+    }
+
+    #[test]
+    fn test_truncate_safe_ascii() {
+        let s = "hello world";
+        assert_eq!(truncate_safe(s, 5), "hello...");
+        assert_eq!(truncate_safe(s, 50), "hello world");
+    }
+}
