@@ -970,6 +970,11 @@ impl ExecutionRunner {
             // Track current tool name for working memory middleware
             let mut current_tool_name = String::new();
 
+            // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
+            let kg_episode_repo_inner = kg_episode_repo.clone();
+            let graph_storage_inner = graph_storage.clone();
+            let agent_id_inner = agent_id.clone();
+
             // Collect micro-recall triggers during stream (sync closure cannot run async)
             let mut pending_recall_triggers: Vec<(
                 super::invoke::micro_recall::MicroRecallTrigger,
@@ -1054,6 +1059,33 @@ impl ExecutionRunner {
                                 error.as_deref(),
                                 handle.current_iteration(),
                             );
+
+                            // Phase 6d: real-time graph extraction from tool output.
+                            // Non-blocking — fires in a background task so the
+                            // execution loop never waits.
+                            if let (Some(ref ep_repo), Some(ref graph)) =
+                                (&kg_episode_repo_inner, &graph_storage_inner)
+                            {
+                                let tool_name_cl = current_tool_name.clone();
+                                let tool_id_cl = tool_id.clone();
+                                let result_cl = result.clone();
+                                let session_id_cl = session_id_inner.clone();
+                                let agent_id_cl = agent_id_inner.clone();
+                                let ep_repo_cl = ep_repo.clone();
+                                let graph_cl = graph.clone();
+                                tokio::spawn(async move {
+                                    crate::tool_result_extractor::extract_and_persist(
+                                        &tool_name_cl,
+                                        &tool_id_cl,
+                                        &result_cl,
+                                        &session_id_cl,
+                                        &agent_id_cl,
+                                        ep_repo_cl.as_ref(),
+                                        &graph_cl,
+                                    )
+                                    .await;
+                                });
+                            }
 
                             // Detect micro-recall triggers (sync) — executed after stream completes
                             let triggers = working_memory_middleware::detect_recall_triggers(
@@ -2301,6 +2333,13 @@ async fn invoke_continuation(
         let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
         let mut turn_text = String::new();
 
+        // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
+        let kg_episode_repo_inner = kg_episode_repo.clone();
+        let graph_storage_inner = graph_storage_for_indexer.clone();
+        let agent_id_inner = agent_id_clone.clone();
+        // Track current tool name so the extractor can dispatch by name.
+        let mut current_tool_name = String::new();
+
         let result = executor
             .execute_stream(&continuation_message, &history, |event| {
                 if handle.is_stop_requested() {
@@ -2318,6 +2357,7 @@ async fn invoke_continuation(
                         ..
                     } => {
                         tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                        current_tool_name = tool_name.clone();
                         turn_tool_calls.push(serde_json::json!({
                             "tool_id": tool_id,
                             "tool_name": tool_name,
@@ -2366,6 +2406,33 @@ async fn invoke_continuation(
                             None,
                             Some(tool_id),
                         );
+
+                        // Phase 6d: real-time graph extraction from tool output.
+                        // Non-blocking — fires in a background task so the
+                        // execution loop never waits.
+                        if let (Some(ref ep_repo), Some(ref graph)) =
+                            (&kg_episode_repo_inner, &graph_storage_inner)
+                        {
+                            let tool_name_cl = current_tool_name.clone();
+                            let tool_id_cl = tool_id.clone();
+                            let result_cl = result.clone();
+                            let session_id_cl = session_id_inner.clone();
+                            let agent_id_cl = agent_id_inner.clone();
+                            let ep_repo_cl = ep_repo.clone();
+                            let graph_cl = graph.clone();
+                            tokio::spawn(async move {
+                                crate::tool_result_extractor::extract_and_persist(
+                                    &tool_name_cl,
+                                    &tool_id_cl,
+                                    &result_cl,
+                                    &session_id_cl,
+                                    &agent_id_cl,
+                                    ep_repo_cl.as_ref(),
+                                    &graph_cl,
+                                )
+                                .await;
+                            });
+                        }
                     }
                     agent_runtime::StreamEvent::Token { content, .. } => {
                         turn_text.push_str(content);
