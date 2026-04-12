@@ -55,6 +55,10 @@ struct ExtractedFact {
     content: String,
     #[serde(default = "default_confidence")]
     confidence: f64,
+    /// Optional epistemic classification (archival|current|convention|procedural).
+    /// Defaults to "current" when omitted by the LLM.
+    #[serde(default)]
+    epistemic_class: Option<String>,
 }
 
 /// An entity extracted by the distillation LLM call.
@@ -461,7 +465,10 @@ impl SessionDistiller {
                 valid_until: None,
                 superseded_by: None,
                 pinned: false,
-                epistemic_class: None,
+                epistemic_class: ef
+                    .epistemic_class
+                    .clone()
+                    .or_else(|| Some("current".to_string())),
                 source_episode_id: None,
                 source_ref: None,
             };
@@ -1203,7 +1210,7 @@ impl SessionDistiller {
             valid_until: None,
             superseded_by: None,
             pinned: false,
-            epistemic_class: None,
+            epistemic_class: Some("procedural".to_string()),
             source_episode_id: None,
             source_ref: None,
         };
@@ -1337,7 +1344,7 @@ impl SessionDistiller {
             valid_until: None,
             superseded_by: None,
             pinned: false,
-            epistemic_class: None,
+            epistemic_class: Some("convention".to_string()),
             source_episode_id: None,
             source_ref: None,
         };
@@ -1870,7 +1877,7 @@ Return a JSON object with EXACTLY these five fields:
 
 {
   "facts": [
-    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0}
+    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0, "epistemic_class": "archival|current|convention|procedural"}
   ],
   "entities": [
     {"name": "entity name", "type": "person|organization|project|tool|concept|file", "properties": {}}
@@ -1934,6 +1941,28 @@ If the session is too short or unclear to assess, omit the episode field.
 - `instruction` — standing orders, workflow rules (e.g., "always use X", "never do Y", "run tests before commit")
 - `correction` — corrections to agent behavior (e.g., "don't suggest X because Y", mistakes and lessons learned)
 - `strategy` — successful approaches for recurring task types (e.g., "for data analysis tasks, delegate to data-analyst subagent")
+
+## Epistemic Classification (REQUIRED per fact)
+
+Every fact has a lifecycle class that determines how it ages:
+
+- `archival` — Historical record of what happened or was stated in a primary source.
+  NEVER DECAYS. Examples: birthdates, historical events, quotes from documents.
+  Choose this when the fact describes something that happened and won't change
+  (only be corrected if it was wrong).
+
+- `current` — Observed state at a point in time that can change.
+  DECAYS when superseded. Examples: stock prices, API states, "current X".
+
+- `convention` — Standing rules, preferences, standing orders.
+  STABLE, replaced only on explicit policy change. Examples: user preferences,
+  coding standards.
+
+- `procedural` — Reusable action sequences reinforced by outcomes.
+  EVOLVES via success/failure counts.
+
+Default when unsure: `archival` if the fact comes from a document/book/URL,
+otherwise `current`.
 
 ## Key Format
 
@@ -2005,7 +2034,7 @@ A high-quality extraction looks like:
   "facts": [
     {"category": "domain", "key": "hindu_mahasabha.savarkar.presidency",
      "content": "V.D. Savarkar served as president of Hindu Mahasabha from 1937 to 1943",
-     "confidence": 0.95}
+     "confidence": 0.95, "epistemic_class": "archival"}
   ],
   "entities": [
     {"name": "V.D. Savarkar", "type": "person", "properties": {"role": "Indian independence activist"}},
