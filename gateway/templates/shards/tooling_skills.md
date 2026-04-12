@@ -91,3 +91,14 @@ Enqueue a document or text for background extraction into the knowledge graph. R
 **Don't use:**
 - For structured JSON data — the ward artifact indexer handles that synchronously.
 - For one-off facts — use `memory(action="save_fact")`.
+
+### goal
+Create, update, and query agent goals. Active goals steer recall — the memory layer boosts items aligned with open goal slots.
+
+- `goal(action="create", title="<short>", description?="<detail>", slots?="[{\"name\":\"tickers\",\"type\":\"list\"}]")` — returns `{id, title, state="active", ...}`.
+- `goal(action="update_state", id=<goal_id>, state="satisfied")` — state ∈ {active, blocked, satisfied, abandoned}.
+- `goal(action="update_slots", id=<goal_id>, filled_slots="{\"tickers\":[\"AAPL\",\"MSFT\"]}")`.
+- `goal(action="list_active")` — inventory of open goals for your agent.
+- `goal(action="get", id=<goal_id>)` — full goal record.
+
+**Use when**: starting a multi-session workflow; tracking slot fills; reporting completion. Open goals auto-boost semantically-aligned recall items.
