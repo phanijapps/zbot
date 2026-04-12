@@ -303,11 +303,17 @@ impl MemoryRecall {
             }
         }
 
-        // 9. Penalize superseded facts — prefer current over outdated
+        // 9. Class-aware supersession penalty.
+        //
+        // Research rationale: archival facts (historical records) retain their
+        // relevance regardless of age and should not decay merely because they
+        // have been superseded — the historical value is precisely their point.
+        // Current facts, by contrast, should decay hard when superseded since
+        // the newer replacement is what callers want. Conventions and
+        // procedural facts are rule/pattern-based and carry no temporal
+        // meaning, so no supersession penalty applies.
         for sf in &mut results {
-            if sf.fact.valid_until.is_some() {
-                sf.score *= 0.3;
-            }
+            apply_class_aware_penalty(sf);
         }
 
         // Sort by score descending and take top-K
@@ -1081,6 +1087,45 @@ pub fn format_prioritized_recall(
 /// - 1.0 for a fact seen just now
 /// - 0.5 for a fact whose age equals the half-life
 /// - Monotonically decreasing toward 0 for very old facts
+///
+/// Apply class-aware penalty to a scored fact based on its epistemic class
+/// and whether it has been superseded (`valid_until` set).
+///
+/// - `archival` → `0.3x` if superseded (corrected), otherwise no penalty.
+///   Archival facts are historical records; their age is not a defect.
+/// - `current` → `0.1x` if superseded (strong decay — prefer the replacement).
+/// - `convention` / `procedural` → no temporal penalty (confidence-based only).
+/// - unknown / null → treat as `current` with a conservative `0.3x` on
+///   supersession to avoid punishing facts we cannot classify.
+fn apply_class_aware_penalty(sf: &mut ScoredFact) {
+    // Null class defaults to empty string so it falls through to the
+    // unknown-class branch (0.3x on supersession) — a conservative default
+    // rather than assuming `current` (which implies 0.1x).
+    let class = sf.fact.epistemic_class.as_deref().unwrap_or("");
+    let is_superseded = sf.fact.valid_until.is_some();
+    match class {
+        "archival" => {
+            if is_superseded {
+                sf.score *= 0.3;
+            }
+        }
+        "current" => {
+            if is_superseded {
+                sf.score *= 0.1;
+            }
+        }
+        "convention" | "procedural" => {
+            // No temporal decay for rule/pattern-based facts.
+        }
+        _ => {
+            // Unknown class — conservative default, same as legacy behavior.
+            if is_superseded {
+                sf.score *= 0.3;
+            }
+        }
+    }
+}
+
 fn temporal_decay(last_seen: chrono::DateTime<chrono::Utc>, half_life_days: f64) -> f64 {
     let age_days = (chrono::Utc::now() - last_seen).num_days().max(0) as f64;
     1.0 / (1.0 + (age_days / half_life_days))
@@ -1856,5 +1901,92 @@ mod tests {
         assert!(names.contains(&"ETF".to_string()));
         // Should skip short segments and common key prefixes
         assert!(!names.contains(&"domain".to_string()));
+    }
+
+    fn make_scored_fact(class: Option<&str>, valid_until: Option<&str>, score: f64) -> ScoredFact {
+        ScoredFact {
+            fact: MemoryFact {
+                id: "fact-test".to_string(),
+                session_id: None,
+                agent_id: "agent-1".to_string(),
+                scope: "agent".to_string(),
+                category: "misc".to_string(),
+                key: "test.key".to_string(),
+                content: "test content".to_string(),
+                confidence: 0.9,
+                mention_count: 1,
+                source_summary: None,
+                embedding: None,
+                ward_id: "__global__".to_string(),
+                contradicted_by: None,
+                created_at: String::new(),
+                updated_at: String::new(),
+                expires_at: None,
+                valid_from: None,
+                valid_until: valid_until.map(|s| s.to_string()),
+                superseded_by: None,
+                pinned: false,
+                epistemic_class: class.map(|s| s.to_string()),
+                source_episode_id: None,
+                source_ref: None,
+            },
+            score,
+        }
+    }
+
+    #[test]
+    fn archival_superseded_gets_mild_penalty() {
+        let mut sf = make_scored_fact(Some("archival"), Some("2026-01-01"), 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn current_superseded_gets_strong_penalty() {
+        let mut sf = make_scored_fact(Some("current"), Some("2026-01-01"), 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 0.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn archival_not_superseded_keeps_score() {
+        let mut sf = make_scored_fact(Some("archival"), None, 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn current_not_superseded_keeps_score() {
+        let mut sf = make_scored_fact(Some("current"), None, 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn convention_never_decays() {
+        let mut sf = make_scored_fact(Some("convention"), Some("2026-01-01"), 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn procedural_never_decays() {
+        let mut sf = make_scored_fact(Some("procedural"), Some("2026-01-01"), 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn unknown_class_treated_as_current() {
+        let mut sf = make_scored_fact(Some("mystery"), Some("2026-01-01"), 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn null_class_treated_as_current() {
+        let mut sf = make_scored_fact(None, Some("2026-01-01"), 1.0);
+        apply_class_aware_penalty(&mut sf);
+        assert!((sf.score - 0.3).abs() < 1e-6);
     }
 }
