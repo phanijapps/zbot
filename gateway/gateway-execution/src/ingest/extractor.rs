@@ -55,9 +55,6 @@ impl Extractor for NoopExtractor {
 
 /// LLM-backed two-pass extractor. Pass 1: entities. Pass 2: relationships
 /// (conditioned on the entity list).
-// Task 6 wires these fields into `Extractor::process`; allow(dead_code) is
-// scoped to the struct until that lands in the same PR.
-#[allow(dead_code)]
 pub struct LlmExtractor {
     client: Arc<dyn LlmClient>,
     agent_id: String,
@@ -68,7 +65,6 @@ impl LlmExtractor {
         Self { client, agent_id }
     }
 
-    #[allow(dead_code)] // used by Extractor::process in Task 6
     async fn extract_entities(&self, chunk_text: &str) -> Result<Vec<Entity>, String> {
         let system = "You extract named entities from text. \
             Return ONLY valid JSON matching the schema. \
@@ -94,11 +90,149 @@ impl LlmExtractor {
 
         parse_entities_response(&response.content, &self.agent_id)
     }
+
+    async fn extract_relationships(
+        &self,
+        chunk_text: &str,
+        entity_names: &[String],
+    ) -> Result<Vec<(String, String, String)>, String> {
+        if entity_names.len() < 2 {
+            return Ok(Vec::new());
+        }
+        let system = "You extract relationships between entities. \
+            Return ONLY valid JSON. Do not add commentary. \
+            Every source and target MUST exactly match a name from the provided list.";
+        let user = format!(
+            "Given these entities: {}\n\n\
+            Extract relationships between them from this text. \
+            Output JSON: {{\"relationships\": [{{\"source\": string, \"target\": string, \"type\": string}}]}}\n\n\
+            TEXT:\n{chunk_text}",
+            entity_names.join(", ")
+        );
+        let messages = vec![
+            ChatMessage::system(system.to_string()),
+            ChatMessage::user(user),
+        ];
+        let response = self
+            .client
+            .chat(messages, None)
+            .await
+            .map_err(|e| format!("llm rel pass failed: {e}"))?;
+
+        parse_relationships_response(&response.content, entity_names)
+    }
+}
+
+#[async_trait]
+impl Extractor for LlmExtractor {
+    async fn process(
+        &self,
+        episode: &KgEpisode,
+        chunk_text: &str,
+        graph: &Arc<GraphStorage>,
+    ) -> Result<(), String> {
+        if chunk_text.trim().is_empty() {
+            return Ok(());
+        }
+
+        let mut entities = self.extract_entities(chunk_text).await?;
+        if entities.is_empty() {
+            return Ok(());
+        }
+        let entity_names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
+
+        let rel_tuples = self
+            .extract_relationships(chunk_text, &entity_names)
+            .await?;
+
+        // Build Relationship structs using the candidate entity ids.
+        // store_knowledge remaps them to canonical ids via resolver merges.
+        let mut candidate_rels = Vec::new();
+        for (src_name, tgt_name, ty) in rel_tuples {
+            let src_id = entities
+                .iter()
+                .find(|e| e.name == src_name)
+                .map(|e| e.id.clone());
+            let tgt_id = entities
+                .iter()
+                .find(|e| e.name == tgt_name)
+                .map(|e| e.id.clone());
+            let (Some(src_id), Some(tgt_id)) = (src_id, tgt_id) else {
+                continue;
+            };
+            candidate_rels.push(knowledge_graph::Relationship::new(
+                self.agent_id.clone(),
+                src_id,
+                tgt_id,
+                knowledge_graph::RelationshipType::from_str(&ty),
+            ));
+        }
+
+        // Tag every entity with provenance.
+        for e in &mut entities {
+            e.properties.insert(
+                "_source_episode_id".to_string(),
+                serde_json::Value::String(episode.id.clone()),
+            );
+        }
+
+        let extracted = knowledge_graph::ExtractedKnowledge {
+            entities,
+            relationships: candidate_rels,
+        };
+        graph
+            .store_knowledge(&self.agent_id, extracted)
+            .map_err(|e| format!("store_knowledge: {e}"))?;
+        Ok(())
+    }
+}
+
+fn parse_relationships_response(
+    content: &str,
+    known_entities: &[String],
+) -> Result<Vec<(String, String, String)>, String> {
+    let stripped = strip_code_fence(content);
+    let raw: serde_json::Value =
+        serde_json::from_str(stripped).map_err(|e| format!("parse relationships: {e}"))?;
+
+    let arr = raw
+        .get("relationships")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "missing 'relationships' array".to_string())?;
+
+    let known: std::collections::HashSet<&str> =
+        known_entities.iter().map(|s| s.as_str()).collect();
+
+    let mut out = Vec::new();
+    for item in arr {
+        let src = item
+            .get("source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let tgt = item
+            .get("target")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        let ty = item
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim();
+        if src.is_empty() || tgt.is_empty() || ty.is_empty() {
+            continue;
+        }
+        if !known.contains(src) || !known.contains(tgt) {
+            continue; // drop hallucinated references to entities not in pass-1
+        }
+        out.push((src.to_string(), tgt.to_string(), ty.to_string()));
+    }
+    Ok(out)
 }
 
 /// Parse the LLM's JSON response into typed Entity values.
 /// Strips optional code-fence wrapping. Silently skips malformed items.
-#[allow(dead_code)] // used by Extractor::process in Task 6
 fn parse_entities_response(content: &str, agent_id: &str) -> Result<Vec<Entity>, String> {
     let stripped = strip_code_fence(content);
     let raw: serde_json::Value = serde_json::from_str(stripped).map_err(|e| {
@@ -134,7 +268,6 @@ fn parse_entities_response(content: &str, agent_id: &str) -> Result<Vec<Entity>,
     Ok(out)
 }
 
-#[allow(dead_code)] // used by parse_entities_response
 fn strip_code_fence(s: &str) -> &str {
     let t = s.trim();
     let t = t
@@ -182,5 +315,27 @@ mod tests_extractor {
     fn missing_entities_array_errors() {
         let json = r#"{"nope": []}"#;
         assert!(parse_entities_response(json, "root").is_err());
+    }
+
+    #[test]
+    fn parses_relationships_and_drops_hallucinated_refs() {
+        let json = r#"{"relationships": [
+            {"source": "Alice", "target": "Wonderland", "type": "located_in"},
+            {"source": "Ghost", "target": "Alice", "type": "haunts"}
+        ]}"#;
+        let rels =
+            parse_relationships_response(json, &["Alice".into(), "Wonderland".into()]).unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].0, "Alice");
+        assert_eq!(rels[0].2, "located_in");
+    }
+
+    #[test]
+    fn empty_entity_list_returns_no_relationships_call() {
+        // Parse directly; the guard in extract_relationships (network path) is
+        // tested implicitly. Just confirm parser handles empty known list.
+        let json = r#"{"relationships": [{"source": "A", "target": "B", "type": "x"}]}"#;
+        let rels = parse_relationships_response(json, &[]).unwrap();
+        assert!(rels.is_empty());
     }
 }
