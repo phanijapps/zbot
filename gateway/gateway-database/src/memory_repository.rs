@@ -1111,13 +1111,15 @@ pub fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// TEMPORARY shim — removed in Task 7 when `memory_fact_store` is migrated to
-/// `VectorIndex`. The real implementation now lives in the vec0 index, which
-/// computes cosine distance natively. Calling this panics to surface any
-/// forgotten caller loudly rather than silently scoring everything 0.0.
-#[doc(hidden)]
-pub fn cosine_similarity(_a: &[f32], _b: &[f32]) -> f64 {
-    panic!("cosine_similarity shim — migrate caller to VectorIndex (Task 7)")
+/// Cosine similarity between two L2-normalised embedding vectors.
+///
+/// For unit-length vectors, cosine similarity equals the dot product and is
+/// equivalent to `1 - L2_sq / 2` (the same formula used by
+/// `search_memory_facts_vector` when converting sqlite-vec distances).
+/// Returns a value in `[-1.0, 1.0]`.
+pub fn cosine_similarity_normalized(a: &[f32], b: &[f32]) -> f64 {
+    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
+    dot as f64
 }
 
 // ============================================================================

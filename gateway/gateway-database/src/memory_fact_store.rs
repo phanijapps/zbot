@@ -128,7 +128,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             valid_until: None,
             superseded_by: None,
             pinned: false,
-            epistemic_class: None,
+            epistemic_class: Some("current".to_string()),
             source_episode_id: None,
             source_ref: None,
         };
@@ -235,7 +235,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                 .into_iter()
                 .filter(|fact| {
                     if let Some(ref fact_emb) = fact.embedding {
-                        let sim = crate::memory_repository::cosine_similarity(qe, fact_emb);
+                        let sim =
+                            crate::memory_repository::cosine_similarity_normalized(qe, fact_emb);
                         sim >= 0.15
                     } else {
                         true
@@ -421,7 +422,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     async fn test_save_and_recall_fact() {
         let store = create_test_store();
 
@@ -448,7 +448,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     async fn test_save_fact_upsert() {
         let store = create_test_store();
 
