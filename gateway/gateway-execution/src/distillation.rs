@@ -26,7 +26,7 @@ use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
 use gateway_database::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
-    MemoryRepository, SessionEpisode,
+    MemoryRepository, SessionEpisode, WardWikiRepository,
 };
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, RelationshipType};
@@ -43,6 +43,7 @@ pub struct SessionDistiller {
     episode_repo: Option<Arc<EpisodeRepository>>,
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
+    pub wiki_repo: Option<Arc<WardWikiRepository>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -186,7 +187,13 @@ impl SessionDistiller {
             episode_repo,
             paths,
             settings_service,
+            wiki_repo: None,
         }
+    }
+
+    /// Set the ward wiki repository for post-distillation wiki compilation.
+    pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
+        self.wiki_repo = Some(repo);
     }
 
     /// Resolve the target provider ID and model for distillation.
@@ -595,6 +602,51 @@ impl SessionDistiller {
             }
         }
 
+        // 9. Compile ward wiki from extracted facts (best-effort)
+        if let (Some(wiki_repo), Some(ref wid)) = (&self.wiki_repo, &ward_id) {
+            if wid != "__global__" && wid != "scratch" {
+                let fact_summaries: Vec<crate::ward_wiki::FactSummary> = response
+                    .facts
+                    .iter()
+                    .map(|f| crate::ward_wiki::FactSummary {
+                        category: f.category.clone(),
+                        key: f.key.clone(),
+                        content: f.content.clone(),
+                    })
+                    .collect();
+
+                if !fact_summaries.is_empty() {
+                    match self.build_llm_client() {
+                        Ok(client) => {
+                            let emb = self.embedding_client.as_deref();
+                            match crate::ward_wiki::compile_ward_wiki(
+                                wid,
+                                agent_id,
+                                &fact_summaries,
+                                wiki_repo,
+                                &*client,
+                                emb,
+                            )
+                            .await
+                            {
+                                Ok(count) => tracing::info!(
+                                    ward = %wid, articles = count,
+                                    "Wiki compilation complete"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    ward = %wid, error = %e,
+                                    "Wiki compilation failed"
+                                ),
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(ward = %wid, error = %e, "Wiki compilation skipped — no LLM client");
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(upserted)
     }
 
@@ -666,6 +718,49 @@ impl SessionDistiller {
                 tracing::warn!(session_id = %session_id, error = %e, "Failed to record distillation error");
             }
         }
+    }
+
+    /// Build an LLM client for wiki compilation using the distillation provider.
+    fn build_llm_client(&self) -> Result<Arc<dyn LlmClient>, String> {
+        let providers = self
+            .provider_service
+            .list()
+            .map_err(|e| format!("Failed to list providers: {e}"))?;
+
+        if providers.is_empty() {
+            return Err("No providers configured".to_string());
+        }
+
+        let (target_provider_id, target_model) = self.resolve_distillation_target();
+
+        // Pick target provider, or default, or first
+        let provider = target_provider_id
+            .as_ref()
+            .and_then(|tid| {
+                providers
+                    .iter()
+                    .find(|p| p.id.as_deref() == Some(tid.as_str()))
+            })
+            .or_else(|| providers.iter().find(|p| p.is_default))
+            .or_else(|| providers.first())
+            .ok_or_else(|| "No suitable provider found".to_string())?;
+
+        let model = target_model.unwrap_or_else(|| provider.default_model().to_string());
+        let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
+
+        let config = LlmConfig::new(
+            provider.base_url.clone(),
+            provider.api_key.clone(),
+            model,
+            provider_id,
+        )
+        .with_temperature(0.3)
+        .with_max_tokens(4096);
+
+        let client =
+            OpenAiClient::new(config).map_err(|e| format!("Failed to create LLM client: {e}"))?;
+
+        Ok(Arc::new(client) as Arc<dyn LlmClient>)
     }
 
     /// Call the LLM to extract facts, entities, and relationships.

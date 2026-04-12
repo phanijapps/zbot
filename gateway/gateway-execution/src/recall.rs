@@ -24,6 +24,7 @@ use agent_runtime::llm::embedding::EmbeddingClient;
 use gateway_database::MemoryFact;
 use gateway_database::{
     EpisodeRepository, MemoryRepository, RecallLogRepository, ScoredFact, SessionEpisode,
+    WardWikiRepository,
 };
 use gateway_services::RecallConfig;
 use knowledge_graph::{
@@ -60,6 +61,7 @@ pub struct MemoryRecall {
     config: Arc<RecallConfig>,
     episode_repo: Option<Arc<EpisodeRepository>>,
     recall_log: Option<Arc<RecallLogRepository>>,
+    wiki_repo: Option<Arc<WardWikiRepository>>,
 }
 
 impl MemoryRecall {
@@ -77,6 +79,7 @@ impl MemoryRecall {
             config,
             episode_repo: None,
             recall_log: None,
+            wiki_repo: None,
         }
     }
 
@@ -100,6 +103,7 @@ impl MemoryRecall {
             config,
             episode_repo: None,
             recall_log: None,
+            wiki_repo: None,
         }
     }
 
@@ -121,6 +125,11 @@ impl MemoryRecall {
     /// Set the recall log repository for tracking recalled facts per session.
     pub fn set_recall_log(&mut self, repo: Arc<RecallLogRepository>) {
         self.recall_log = Some(repo);
+    }
+
+    /// Set the ward wiki repository for wiki-first recall.
+    pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
+        self.wiki_repo = Some(repo);
     }
 
     /// Recall relevant facts for a given agent and user message.
@@ -300,6 +309,35 @@ impl MemoryRecall {
         // 1. Standard fact search with priority scoring
         let mut facts = self.recall(agent_id, user_message, limit, ward_id).await?;
 
+        // 1b. Wiki-first recall: search ward articles before individual facts
+        let mut wiki_context = String::new();
+        if let (Some(ref wiki_repo), Some(wid)) = (&self.wiki_repo, ward_id) {
+            if let Some(query_emb) = self.embed_query(user_message).await {
+                match wiki_repo.search_by_similarity(wid, &query_emb, 3) {
+                    Ok(articles) => {
+                        let mut wiki_tokens = 0usize;
+                        let wiki_budget = 1500usize;
+                        for (article, score) in &articles {
+                            if *score < 0.3 || wiki_tokens >= wiki_budget {
+                                break;
+                            }
+                            let snippet_len = article.content.len().min(500);
+                            wiki_context.push_str(&format!(
+                                "### {} (relevance: {:.0}%)\n{}\n\n",
+                                article.title,
+                                score * 100.0,
+                                &article.content[..snippet_len]
+                            ));
+                            wiki_tokens += snippet_len / 4;
+                        }
+                    }
+                    Err(e) => {
+                        tracing::debug!("Wiki recall search skipped: {}", e);
+                    }
+                }
+            }
+        }
+
         // Build seen_keys from recalled facts so graph expansion doesn't duplicate
         let mut seen_keys: std::collections::HashSet<String> =
             facts.iter().map(|sf| sf.fact.key.clone()).collect();
@@ -471,12 +509,17 @@ impl MemoryRecall {
         }
 
         // 8. Format combined result with token budget
-        let formatted = format_prioritized_recall(
+        let mut formatted = format_prioritized_recall(
             &facts,
             &episodes,
             &graph_context,
             self.config.max_recall_tokens,
         );
+
+        // Prepend wiki articles (ward knowledge base) before fact-based recall
+        if !wiki_context.is_empty() {
+            formatted = format!("## Ward Knowledge Base\n\n{}\n{}", wiki_context, formatted);
+        }
 
         Ok(RecallResult {
             facts,
