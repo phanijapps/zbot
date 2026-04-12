@@ -816,6 +816,101 @@ impl MemoryRecall {
         ))
     }
 
+    /// Unified scored-pool recall: query every configured source (facts, wiki,
+    /// procedures, graph ANN, active goals), adapt each into [`ScoredItem`],
+    /// apply [`intent_boost`] against `active_goals`, then fuse via
+    /// Reciprocal Rank Fusion capped to `budget`.
+    ///
+    /// Missing subsystems (no embedding client, no wiki repo, etc.) are
+    /// silently skipped — the caller gets whatever sources are wired.
+    pub async fn recall_unified(
+        &self,
+        agent_id: &str,
+        query: &str,
+        ward_id: Option<&str>,
+        active_goals: &[GoalLite],
+        budget: usize,
+    ) -> Result<Vec<ScoredItem>, String> {
+        let query_emb = self.embed_query(query).await;
+
+        // 1. Facts via hybrid search.
+        let fact_items: Vec<ScoredItem> = self
+            .memory_repo
+            .search_memory_facts_hybrid(
+                query,
+                query_emb.as_deref(),
+                agent_id,
+                10,
+                self.config.vector_weight,
+                self.config.bm25_weight,
+                ward_id,
+            )
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sf| adapters::fact_to_item(&sf.fact, sf.score))
+            .collect();
+
+        // 2. Wiki articles (ward-scoped).
+        let wiki_items: Vec<ScoredItem> =
+            match (self.wiki_repo.as_ref(), query_emb.as_ref(), ward_id) {
+                (Some(wiki_repo), Some(emb), Some(wid)) => wiki_repo
+                    .search_by_similarity(wid, emb, 5)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(a, s)| adapters::wiki_to_item(&a, s))
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+        // 3. Procedures.
+        let procedure_items: Vec<ScoredItem> =
+            match (self.procedure_repo.as_ref(), query_emb.as_ref()) {
+                (Some(proc_repo), Some(emb)) => proc_repo
+                    .search_by_similarity(emb, agent_id, ward_id, 5)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(p, s)| adapters::procedure_to_item(&p, s))
+                    .collect(),
+                _ => Vec::new(),
+            };
+
+        // 4. Graph ANN over `kg_name_index`.
+        let graph_items: Vec<ScoredItem> = match (self.graph_service.as_ref(), query_emb.as_ref()) {
+            (Some(graph_service), Some(emb)) => {
+                adapters::graph_ann_to_items(graph_service.storage(), emb, 10, agent_id)
+                    .await
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+
+        // 5. Active goals as retrievable items.
+        let goal_items: Vec<ScoredItem> = active_goals
+            .iter()
+            .map(|g| ScoredItem {
+                kind: ItemKind::Goal,
+                id: g.id.clone(),
+                content: format!("Active goal: {}", g.title),
+                score: 1.0,
+                provenance: Provenance {
+                    source: "kg_goals".to_string(),
+                    source_id: g.id.clone(),
+                    session_id: None,
+                    ward_id: ward_id.map(String::from),
+                },
+            })
+            .collect();
+
+        // Intent boost on non-goal lists.
+        let mut all_lists = vec![fact_items, wiki_items, procedure_items, graph_items];
+        for list in &mut all_lists {
+            intent_boost(list, active_goals);
+        }
+        all_lists.push(goal_items);
+
+        Ok(rrf_merge(all_lists, 60.0, budget))
+    }
+
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;

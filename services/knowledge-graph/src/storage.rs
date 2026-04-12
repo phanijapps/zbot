@@ -405,6 +405,74 @@ impl GraphStorage {
             .map_err(GraphError::Other)
     }
 
+    /// ANN search over `kg_name_index` (sqlite-vec virtual table) for the
+    /// nearest entity names to `query_embedding`.
+    ///
+    /// Returns tuples of `(name, entity_type, distance)` where `distance` is
+    /// the L2-squared distance from the vec0 index. For L2-normalized vectors,
+    /// cosine similarity ≈ `1 - distance / 2`. The query embedding MUST be
+    /// L2-normalized by the caller. Results are filtered to the caller's
+    /// agent plus `__global__` and ordered by ascending distance.
+    pub fn search_entities_by_name_embedding(
+        &self,
+        query_embedding: &[f32],
+        top_k: usize,
+        agent_id: &str,
+    ) -> GraphResult<Vec<(String, String, f32)>> {
+        if query_embedding.is_empty() || top_k == 0 {
+            return Ok(Vec::new());
+        }
+        let embedding_json = serde_json::to_string(query_embedding)
+            .map_err(|e| GraphError::Other(format!("serialize query embedding: {e}")))?;
+
+        // vec0 KNN queries require a bare `k = ?` or `LIMIT ?` on the virtual
+        // table itself — extra predicates/joins aren't accepted at prepare
+        // time. Pull top-K by distance, then filter against `kg_entities`.
+        self.db
+            .with_connection(|conn| {
+                (|| -> GraphResult<Vec<(String, String, f32)>> {
+                    let mut ann_stmt = conn
+                        .prepare(
+                            "SELECT entity_id, distance \
+                             FROM kg_name_index \
+                             WHERE name_embedding MATCH ?1 \
+                             ORDER BY distance \
+                             LIMIT ?2",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let hits = ann_stmt
+                        .query_map(params![embedding_json, top_k as i64], |row| {
+                            Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
+                        })
+                        .map_err(GraphError::Database)?;
+
+                    let mut lookup_stmt = conn
+                        .prepare(
+                            "SELECT name, entity_type FROM kg_entities \
+                             WHERE id = ?1 \
+                               AND (agent_id = ?2 OR agent_id = '__global__')",
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let mut out = Vec::new();
+                    for row in hits {
+                        let (entity_id, dist) = row.map_err(GraphError::Database)?;
+                        let mut rows = lookup_stmt
+                            .query(params![entity_id, agent_id])
+                            .map_err(GraphError::Database)?;
+                        if let Some(r) = rows.next().map_err(GraphError::Database)? {
+                            let name: String = r.get(0).map_err(GraphError::Database)?;
+                            let etype: String = r.get(1).map_err(GraphError::Database)?;
+                            out.push((name, etype, dist));
+                        }
+                    }
+                    Ok(out)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
     /// Increment mention count and update last_seen for an existing entity.
     pub fn bump_entity_mention(&self, entity_id: &str) -> GraphResult<()> {
         self.db

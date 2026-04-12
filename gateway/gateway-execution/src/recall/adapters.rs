@@ -71,23 +71,46 @@ pub fn procedure_to_item(proc: &Procedure, score: f64) -> ScoredItem {
 use knowledge_graph::GraphStorage;
 use std::sync::Arc;
 
-/// Stub: Task 7 wires the real implementation.
+/// ANN-query `kg_name_index` for entities whose name embedding is closest to
+/// `query_embedding`, and project each hit as a [`ScoredItem::GraphNode`].
 ///
-/// Planned behavior: query `kg_name_index` via the existing `SqliteVecIndex`
-/// around `knowledge.db`, fetch the top-K entity rows, format each as
-/// `"Entity: X [type] — connected to A (rel), B (rel)"`, score via
-/// `1.0 - dist/2.0` (cosine from L2-squared distance on normalized vectors).
-///
-/// For Task 5 this returns `Ok(Vec::new())` so the `recall_unified` caller
-/// has something to `await` during the merge pipeline. Replace in Task 7.
+/// The returned `ScoredItem::score` is rank-discounted by cosine similarity
+/// so higher-ranked, higher-similarity entities lead — `rrf_merge` re-scores
+/// via rank during fusion, so this per-source score only matters for the
+/// adapter-local order, which we preserve by sorting by `(rank, cosine)`.
 pub async fn graph_ann_to_items(
     graph: &Arc<GraphStorage>,
     query_embedding: &[f32],
     top_k: usize,
     agent_id: &str,
 ) -> Result<Vec<ScoredItem>, String> {
-    let _ = (graph, query_embedding, top_k, agent_id);
-    Ok(Vec::new())
+    if query_embedding.is_empty() || top_k == 0 {
+        return Ok(Vec::new());
+    }
+    let results = graph
+        .search_entities_by_name_embedding(query_embedding, top_k, agent_id)
+        .map_err(|e| format!("graph ANN search failed: {e}"))?;
+
+    let mut out = Vec::with_capacity(results.len());
+    for (idx, (name, entity_type, dist)) in results.into_iter().enumerate() {
+        // L2-squared on normalized vectors → cosine similarity = 1 - dist/2.
+        let cosine = 1.0 - (dist as f64) / 2.0;
+        let rank_one = (idx as f64) + 1.0;
+        let score = (1.0 / rank_one) * cosine;
+        out.push(ScoredItem {
+            kind: ItemKind::GraphNode,
+            id: format!("graph:{name}"),
+            content: format!("Entity: {name} [{entity_type}] (cosine ~ {cosine:.2})"),
+            score,
+            provenance: Provenance {
+                source: "kg_name_index".to_string(),
+                source_id: name,
+                session_id: None,
+                ward_id: None,
+            },
+        });
+    }
+    Ok(out)
 }
 
 #[cfg(test)]
