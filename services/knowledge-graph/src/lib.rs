@@ -8,6 +8,7 @@
 //! - SQLite storage with full-text search
 //! - LLM-powered smart extraction
 
+pub mod causal;
 pub mod error;
 pub mod extractor;
 pub mod service;
@@ -15,6 +16,7 @@ pub mod storage;
 pub mod traversal;
 pub mod types;
 
+pub use causal::{CausalEdge, CausalEdgeStore};
 pub use error::{GraphError, GraphResult};
 pub use extractor::EntityExtractor;
 pub use service::GraphService;
