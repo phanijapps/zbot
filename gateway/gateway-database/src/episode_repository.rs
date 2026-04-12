@@ -1,13 +1,18 @@
-// ============================================================================
-// EPISODE REPOSITORY
-// CRUD and similarity search for the session_episodes table
-// ============================================================================
+//! Repository for session episodes with CRUD and vector search.
+//!
+//! Phase 1b (v22): constructs on `KnowledgeDatabase` and stores embeddings in
+//! the `session_episodes_index` vec0 virtual table through the `VectorIndex` trait.
+//! The `embedding` column on `session_episodes` is gone; callers write normalized
+//! vectors through `insert`, which delegates to the injected `VectorIndex`.
+//! Vectors MUST be L2-normalized by the caller.
+//!
+//! To read an embedding back, use [`EpisodeRepository::get_episode_embedding`].
 
+use crate::vector_index::VectorIndex;
+use crate::KnowledgeDatabase;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-
-use crate::DatabaseManager;
 
 // ============================================================================
 // TYPES
@@ -27,7 +32,12 @@ pub struct SessionEpisode {
     pub strategy_used: Option<String>,
     pub key_learnings: Option<String>,
     pub token_cost: Option<i64>,
-    /// Raw f32 embedding (little-endian). `None` if not yet embedded.
+    /// Raw f32 embedding. Always `None` when loaded from `session_episodes`
+    /// (the column was removed in schema v22). Callers may set this to `Some(v)`
+    /// prior to `insert` to have the vector persisted through the `VectorIndex`
+    /// — vectors MUST be L2-normalized by the caller.
+    ///
+    /// To read an embedding back, use [`EpisodeRepository::get_episode_embedding`].
     #[serde(skip)]
     pub embedding: Option<Vec<f32>>,
     pub created_at: String,
@@ -39,13 +49,16 @@ pub struct SessionEpisode {
 
 /// Repository for session episode operations.
 pub struct EpisodeRepository {
-    db: Arc<DatabaseManager>,
+    db: Arc<KnowledgeDatabase>,
+    vec_index: Arc<dyn VectorIndex>,
 }
 
 impl EpisodeRepository {
     /// Create a new episode repository.
-    pub fn new(db: Arc<DatabaseManager>) -> Self {
-        Self { db }
+    ///
+    /// `vec_index` must wrap the `session_episodes_index` vec0 table (384-dim).
+    pub fn new(db: Arc<KnowledgeDatabase>, vec_index: Arc<dyn VectorIndex>) -> Self {
+        Self { db, vec_index }
     }
 
     // =========================================================================
@@ -53,13 +66,17 @@ impl EpisodeRepository {
     // =========================================================================
 
     /// Insert a new session episode.
+    ///
+    /// If `episode.embedding` is `Some(v)`, the vector is written to
+    /// `session_episodes_index` via the injected `VectorIndex`. **Callers must
+    /// L2-normalize the vector first**.
     pub fn insert(&self, episode: &SessionEpisode) -> Result<(), String> {
-        let embedding_blob = episode.embedding.as_ref().map(|v| f32_vec_to_blob(v));
-
         self.db.with_connection(|conn| {
             conn.execute(
-                "INSERT INTO session_episodes (id, session_id, agent_id, ward_id, task_summary, outcome, strategy_used, key_learnings, token_cost, embedding, created_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                "INSERT INTO session_episodes \
+                 (id, session_id, agent_id, ward_id, task_summary, outcome, \
+                  strategy_used, key_learnings, token_cost, created_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
                 params![
                     episode.id,
                     episode.session_id,
@@ -70,21 +87,26 @@ impl EpisodeRepository {
                     episode.strategy_used,
                     episode.key_learnings,
                     episode.token_cost,
-                    embedding_blob,
                     episode.created_at,
                 ],
             )?;
             Ok(())
-        })
+        })?;
+
+        if let Some(emb) = episode.embedding.as_ref() {
+            self.vec_index.upsert(&episode.id, emb)?;
+        }
+
+        Ok(())
     }
 
     /// Get a session episode by session_id.
     pub fn get_by_session_id(&self, session_id: &str) -> Result<Option<SessionEpisode>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome,
-                        strategy_used, key_learnings, token_cost, embedding, created_at
-                 FROM session_episodes
+                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                        strategy_used, key_learnings, token_cost, created_at \
+                 FROM session_episodes \
                  WHERE session_id = ?1",
             )?;
 
@@ -109,11 +131,11 @@ impl EpisodeRepository {
             let (sql, params_vec): (String, Vec<Box<dyn rusqlite::types::ToSql>>) =
                 if let Some(ward) = ward_id {
                     (
-                        "SELECT id, session_id, agent_id, ward_id, task_summary, outcome,
-                                strategy_used, key_learnings, token_cost, embedding, created_at
-                         FROM session_episodes
-                         WHERE agent_id = ?1 AND ward_id = ?2
-                         ORDER BY created_at DESC
+                        "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                                strategy_used, key_learnings, token_cost, created_at \
+                         FROM session_episodes \
+                         WHERE agent_id = ?1 AND ward_id = ?2 \
+                         ORDER BY created_at DESC \
                          LIMIT ?3"
                             .to_string(),
                         vec![
@@ -124,11 +146,11 @@ impl EpisodeRepository {
                     )
                 } else {
                     (
-                        "SELECT id, session_id, agent_id, ward_id, task_summary, outcome,
-                                strategy_used, key_learnings, token_cost, embedding, created_at
-                         FROM session_episodes
-                         WHERE agent_id = ?1
-                         ORDER BY created_at DESC
+                        "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                                strategy_used, key_learnings, token_cost, created_at \
+                         FROM session_episodes \
+                         WHERE agent_id = ?1 \
+                         ORDER BY created_at DESC \
                          LIMIT ?2"
                             .to_string(),
                         vec![Box::new(agent_id.to_string()), Box::new(limit as i64)],
@@ -151,11 +173,11 @@ impl EpisodeRepository {
     ) -> Result<Vec<SessionEpisode>, String> {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome,
-                        strategy_used, key_learnings, token_cost, embedding, created_at
-                 FROM session_episodes
-                 WHERE agent_id = ?1 AND outcome = 'success'
-                 ORDER BY created_at DESC
+                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                        strategy_used, key_learnings, token_cost, created_at \
+                 FROM session_episodes \
+                 WHERE agent_id = ?1 AND outcome = 'success' \
+                 ORDER BY created_at DESC \
                  LIMIT ?2",
             )?;
 
@@ -168,10 +190,12 @@ impl EpisodeRepository {
     // SIMILARITY SEARCH
     // =========================================================================
 
-    /// Search episodes by vector cosine similarity (brute-force).
+    /// Search episodes by vector similarity for an agent.
     ///
-    /// Loads all embeddings for the agent, computes cosine similarity in Rust,
-    /// and returns the top-K episodes above the given threshold.
+    /// Performs a nearest-neighbor query through `VectorIndex`, then loads the
+    /// matching `session_episodes` rows and filters by agent_id in Rust. The
+    /// returned score is cosine similarity (`1 - L2_sq / 2`), valid because
+    /// stored and query vectors are required to be L2-normalized.
     pub fn search_by_similarity(
         &self,
         agent_id: &str,
@@ -179,33 +203,52 @@ impl EpisodeRepository {
         threshold: f64,
         limit: usize,
     ) -> Result<Vec<(SessionEpisode, f64)>, String> {
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome,
-                        strategy_used, key_learnings, token_cost, embedding, created_at
-                 FROM session_episodes
-                 WHERE agent_id = ?1 AND embedding IS NOT NULL",
-            )?;
+        // Over-fetch so post-filtering by agent still returns `limit` hits.
+        let fetch = limit.saturating_mul(4).max(limit);
+        let nearest = self.vec_index.query_nearest(query_embedding, fetch)?;
+        if nearest.is_empty() {
+            return Ok(Vec::new());
+        }
 
-            let rows = stmt.query_map(params![agent_id], row_to_episode)?;
+        let ids: Vec<String> = nearest.iter().map(|(id, _)| id.clone()).collect();
+        let dist_by_id: std::collections::HashMap<String, f32> =
+            nearest.iter().map(|(id, d)| (id.clone(), *d)).collect();
 
-            let mut scored: Vec<(SessionEpisode, f64)> = rows
-                .filter_map(|r| r.ok())
-                .filter_map(|ep| {
-                    let emb = ep.embedding.as_ref()?;
-                    let sim = cosine_similarity(query_embedding, emb);
-                    if sim >= threshold {
-                        Some((ep, sim))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
+        let placeholders = (0..ids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+             strategy_used, key_learnings, token_cost, created_at \
+             FROM session_episodes WHERE id IN ({placeholders})"
+        );
 
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(limit);
-            Ok(scored)
-        })
+        let episodes: Vec<SessionEpisode> = self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let params_iter = rusqlite::params_from_iter(ids.iter());
+            let rows = stmt.query_map(params_iter, row_to_episode)?;
+            Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+        })?;
+
+        let mut scored: Vec<(SessionEpisode, f64)> = episodes
+            .into_iter()
+            .filter(|ep| ep.agent_id == agent_id)
+            .filter_map(|ep| {
+                let dist = dist_by_id.get(&ep.id).copied().unwrap_or(f32::MAX);
+                // L2 squared on normalized vectors → cosine = 1 - dist/2.
+                let score = 1.0 - (dist as f64) / 2.0;
+                if score >= threshold {
+                    Some((ep, score))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
     }
 
     // =========================================================================
@@ -222,6 +265,30 @@ impl EpisodeRepository {
             Ok(count)
         })
     }
+
+    // =========================================================================
+    // EMBEDDING ACCESS
+    // =========================================================================
+
+    /// Fetch the stored embedding for an episode, if present in `session_episodes_index`.
+    /// Returns `None` if the episode has never been indexed.
+    ///
+    /// `sqlite-vec` stores vectors as `FLOAT[N]` BLOBs (little-endian f32s);
+    /// we decode the raw bytes back to `Vec<f32>`.
+    pub fn get_episode_embedding(&self, episode_id: &str) -> Result<Option<Vec<f32>>, String> {
+        self.db.with_connection(|conn| {
+            let r = conn.query_row(
+                "SELECT embedding FROM session_episodes_index WHERE episode_id = ?1",
+                params![episode_id],
+                |row| row.get::<_, Vec<u8>>(0),
+            );
+            match r {
+                Ok(blob) => Ok(Some(blob_to_f32_vec(&blob))),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
 }
 
 // ============================================================================
@@ -230,9 +297,6 @@ impl EpisodeRepository {
 
 /// Map a database row to a SessionEpisode struct.
 fn row_to_episode(row: &rusqlite::Row) -> Result<SessionEpisode, rusqlite::Error> {
-    let embedding_blob: Option<Vec<u8>> = row.get(9)?;
-    let embedding = embedding_blob.map(|b| blob_to_f32_vec(&b));
-
     Ok(SessionEpisode {
         id: row.get(0)?,
         session_id: row.get(1)?,
@@ -243,14 +307,9 @@ fn row_to_episode(row: &rusqlite::Row) -> Result<SessionEpisode, rusqlite::Error
         strategy_used: row.get(6)?,
         key_learnings: row.get(7)?,
         token_cost: row.get(8)?,
-        embedding,
-        created_at: row.get(10)?,
+        embedding: None,
+        created_at: row.get(9)?,
     })
-}
-
-/// Convert f32 vector to raw bytes (little-endian) for SQLite BLOB storage.
-fn f32_vec_to_blob(vec: &[f32]) -> Vec<u8> {
-    vec.iter().flat_map(|f| f.to_le_bytes()).collect()
 }
 
 /// Convert raw bytes (little-endian) back to f32 vector.
@@ -260,32 +319,6 @@ fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
         .collect()
 }
 
-/// Compute cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-
-    let mut dot = 0.0_f64;
-    let mut norm_a = 0.0_f64;
-    let mut norm_b = 0.0_f64;
-
-    for (x, y) in a.iter().zip(b.iter()) {
-        let x = *x as f64;
-        let y = *y as f64;
-        dot += x * y;
-        norm_a += x * x;
-        norm_b += y * y;
-    }
-
-    let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom == 0.0 {
-        0.0
-    } else {
-        dot / denom
-    }
-}
-
 // ============================================================================
 // TESTS
 // ============================================================================
@@ -293,21 +326,34 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vector_index::SqliteVecIndex;
 
-    fn create_test_db() -> Arc<DatabaseManager> {
-        use gateway_services::VaultPaths;
-        use tempfile::TempDir;
+    fn setup() -> (tempfile::TempDir, EpisodeRepository) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        let db = Arc::new(crate::KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            db.clone(),
+            "session_episodes_index",
+            "episode_id",
+            384,
+        ));
+        let repo = EpisodeRepository::new(db, vec_index);
+        (tmp, repo)
+    }
 
-        let temp_dir = TempDir::new().unwrap();
-        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
-        let _ = temp_dir.keep();
-        let db = DatabaseManager::new(paths).unwrap();
-        Arc::new(db)
+    fn normalized(v: Vec<f32>) -> Vec<f32> {
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm < 1e-9 {
+            v
+        } else {
+            v.into_iter().map(|x| x / norm).collect()
+        }
     }
 
     fn make_episode(agent_id: &str, session_id: &str, outcome: &str) -> SessionEpisode {
         SessionEpisode {
-            id: format!("ep-{}", uuid::Uuid::new_v4()),
+            id: format!("ep-{session_id}"),
             session_id: session_id.to_string(),
             agent_id: agent_id.to_string(),
             ward_id: "__global__".to_string(),
@@ -322,10 +368,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_insert_and_get_by_session() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
 
         let ep = make_episode("agent-1", "sess-001", "success");
         repo.insert(&ep).unwrap();
@@ -339,20 +383,16 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_get_by_session_not_found() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
 
         let found = repo.get_by_session_id("nonexistent").unwrap();
         assert!(found.is_none());
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_get_by_agent() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
 
         repo.insert(&make_episode("agent-1", "sess-001", "success"))
             .unwrap();
@@ -369,10 +409,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_get_by_agent_with_ward_filter() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
 
         let mut ep1 = make_episode("agent-1", "sess-001", "success");
         ep1.ward_id = "finance".to_string();
@@ -396,10 +434,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_get_successful_by_agent() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
 
         repo.insert(&make_episode("agent-1", "sess-001", "success"))
             .unwrap();
@@ -418,10 +454,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_count() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
 
         assert_eq!(repo.count().unwrap(), 0);
 
@@ -434,75 +468,84 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
-    fn test_similarity_search() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+    fn test_similarity_search_finds_match() {
+        let (_tmp, repo) = setup();
 
-        let mut ep1 = make_episode("agent-1", "sess-001", "success");
-        ep1.embedding = Some(vec![1.0, 0.0, 0.0]);
-        repo.insert(&ep1).unwrap();
+        let emb = normalized(
+            (0..384)
+                .map(|i| if i == 0 { 1.0_f32 } else { 0.0_f32 })
+                .collect(),
+        );
+        let mut ep = make_episode("agent-1", "sess-001", "success");
+        ep.embedding = Some(emb.clone());
+        repo.insert(&ep).unwrap();
 
-        let mut ep2 = make_episode("agent-1", "sess-002", "success");
-        ep2.embedding = Some(vec![0.0, 1.0, 0.0]);
-        repo.insert(&ep2).unwrap();
-
-        let mut ep3 = make_episode("agent-1", "sess-003", "failed");
-        ep3.embedding = Some(vec![0.9, 0.1, 0.0]);
-        repo.insert(&ep3).unwrap();
-
-        // Query close to ep1 and ep3
-        let query = vec![0.95, 0.05, 0.0];
-        let results = repo
-            .search_by_similarity("agent-1", &query, 0.5, 10)
-            .unwrap();
-
-        assert!(results.len() >= 2, "Should find at least ep1 and ep3");
-        // First result should be the most similar
-        assert!(results[0].1 > results[1].1);
+        let results = repo.search_by_similarity("agent-1", &emb, 0.5, 10).unwrap();
+        assert_eq!(results.len(), 1);
+        assert!(results[0].1 > 0.99);
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
-    fn test_similarity_search_threshold() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+    fn test_similarity_search_threshold_filters() {
+        let (_tmp, repo) = setup();
+
+        let emb1 = normalized(
+            (0..384)
+                .map(|i| if i == 0 { 1.0_f32 } else { 0.0_f32 })
+                .collect(),
+        );
+        let emb2 = normalized(
+            (0..384)
+                .map(|i| if i == 1 { 1.0_f32 } else { 0.0_f32 })
+                .collect(),
+        );
 
         let mut ep1 = make_episode("agent-1", "sess-001", "success");
-        ep1.embedding = Some(vec![1.0, 0.0, 0.0]);
+        ep1.embedding = Some(emb1.clone());
         repo.insert(&ep1).unwrap();
 
         let mut ep2 = make_episode("agent-1", "sess-002", "success");
-        ep2.embedding = Some(vec![0.0, 1.0, 0.0]);
+        ep2.embedding = Some(emb2.clone());
         repo.insert(&ep2).unwrap();
 
         // High threshold should filter out the orthogonal vector
-        let query = vec![1.0, 0.0, 0.0];
         let results = repo
-            .search_by_similarity("agent-1", &query, 0.99, 10)
+            .search_by_similarity("agent-1", &emb1, 0.99, 10)
             .unwrap();
-
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].0.session_id, "sess-001");
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
-    fn test_embedding_roundtrip() {
-        let db = create_test_db();
-        let repo = EpisodeRepository::new(db);
+    fn test_get_episode_embedding_roundtrip() {
+        let (_tmp, repo) = setup();
 
+        let emb = normalized(
+            (0..384)
+                .map(|i| if i == 0 { 1.0_f32 } else { 0.0_f32 })
+                .collect(),
+        );
         let mut ep = make_episode("agent-1", "sess-001", "success");
-        #[allow(clippy::approx_constant)]
-        let pi_approx = 3.14159_f32;
-        ep.embedding = Some(vec![1.5, -2.5, 0.0, pi_approx]);
+        ep.embedding = Some(emb.clone());
         repo.insert(&ep).unwrap();
 
-        let found = repo.get_by_session_id("sess-001").unwrap().unwrap();
-        let emb = found.embedding.unwrap();
-        assert_eq!(emb.len(), 4);
-        assert!((emb[0] - 1.5).abs() < 0.0001);
-        assert!((emb[1] - (-2.5)).abs() < 0.0001);
-        assert!((emb[3] - pi_approx).abs() < 0.001);
+        let fetched_emb = repo.get_episode_embedding("ep-sess-001").unwrap();
+        assert!(fetched_emb.is_some());
+        let fetched_emb = fetched_emb.unwrap();
+        assert_eq!(fetched_emb.len(), 384);
+        // First dimension should be ~1.0 (normalized unit vector)
+        assert!((fetched_emb[0] - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_embedding_returns_none_when_not_indexed() {
+        let (_tmp, repo) = setup();
+
+        let ep = make_episode("agent-1", "sess-001", "success");
+        repo.insert(&ep).unwrap();
+
+        // No embedding was set, so should return None
+        let fetched = repo.get_episode_embedding("ep-sess-001").unwrap();
+        assert!(fetched.is_none());
     }
 }
