@@ -209,78 +209,51 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
     prev[n]
 }
 
-/// Embedding similarity match — requires candidate_embedding to be provided.
-/// Uses cosine similarity ≥ 0.87 within the same type.
+/// Embedding similarity match — queries `kg_name_index` (sqlite-vec virtual table)
+/// for nearest neighbours, then filters by agent and entity type.
+///
+/// For L2-normalised embeddings, cosine ≥ 0.87 ⇔ L2_sq ≤ 0.26.
 fn embedding_match(
     conn: &Connection,
     agent_id: &str,
     candidate: &Entity,
     candidate_emb: &[f32],
 ) -> Result<Option<String>, String> {
+    if candidate_emb.is_empty() {
+        return Ok(None);
+    }
+    let embedding_json =
+        serde_json::to_string(candidate_emb).map_err(|e| format!("serialize embedding: {e}"))?;
     let type_str = candidate.entity_type.as_str();
+
+    // Cosine ≥ 0.87 on L2-normalised embeddings ⇒ L2_sq ≤ 0.26.
+    const L2_SQ_THRESHOLD: f32 = 0.26;
     let mut stmt = conn
         .prepare(
-            "SELECT id, properties FROM kg_entities \
-             WHERE (agent_id = ?1 OR agent_id = '__global__') AND entity_type = ?2 \
-             AND properties LIKE '%_name_embedding%' \
-             ORDER BY mention_count DESC LIMIT 50",
+            "SELECT i.entity_id, i.distance \
+             FROM kg_name_index i \
+             INNER JOIN kg_entities e ON e.id = i.entity_id \
+             WHERE i.name_embedding MATCH ?1 \
+               AND (e.agent_id = ?2 OR e.agent_id = '__global__') \
+               AND e.entity_type = ?3 \
+             ORDER BY i.distance \
+             LIMIT 5",
         )
         .map_err(|e| format!("prepare failed: {e}"))?;
 
     let rows = stmt
-        .query_map(params![agent_id, type_str], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        .query_map(params![embedding_json, agent_id, type_str], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
         })
         .map_err(|e| format!("query failed: {e}"))?;
 
-    let mut best: Option<(String, f64)> = None;
     for row in rows {
-        let (id, props_json) = row.map_err(|e| format!("row read failed: {e}"))?;
-        let Some(props_str) = props_json else {
-            continue;
-        };
-        let Ok(props) = serde_json::from_str::<serde_json::Value>(&props_str) else {
-            continue;
-        };
-        let Some(emb_arr) = props.get("_name_embedding").and_then(|v| v.as_array()) else {
-            continue;
-        };
-        let existing_emb: Vec<f32> = emb_arr
-            .iter()
-            .filter_map(|v| v.as_f64().map(|f| f as f32))
-            .collect();
-        if existing_emb.len() != candidate_emb.len() {
-            continue;
-        }
-        let sim = cosine_similarity(candidate_emb, &existing_emb);
-        if sim >= 0.87 {
-            match &best {
-                Some((_, prev_sim)) if *prev_sim >= sim => {}
-                _ => best = Some((id, sim)),
-            }
+        let (id, dist) = row.map_err(|e| format!("row read failed: {e}"))?;
+        if dist <= L2_SQ_THRESHOLD {
+            return Ok(Some(id));
         }
     }
-    Ok(best.map(|(id, _)| id))
-}
-
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0_f64;
-    let mut na = 0.0_f64;
-    let mut nb = 0.0_f64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        let (x, y) = (f64::from(*x), f64::from(*y));
-        dot += x * y;
-        na += x * x;
-        nb += y * y;
-    }
-    if na == 0.0 || nb == 0.0 {
-        0.0
-    } else {
-        dot / (na.sqrt() * nb.sqrt())
-    }
+    Ok(None)
 }
 
 /// Add a new alias to an existing entity's alias list (JSON array).
@@ -326,23 +299,6 @@ mod tests {
     #[test]
     fn levenshtein_handles_savarkar_variants() {
         assert_eq!(levenshtein("savarkar", "savarker"), 1);
-    }
-
-    #[test]
-    fn cosine_similarity_identical() {
-        let v = vec![1.0, 2.0, 3.0];
-        assert!((cosine_similarity(&v, &v) - 1.0).abs() < 1e-6);
-    }
-
-    #[test]
-    fn cosine_similarity_orthogonal() {
-        assert!(cosine_similarity(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
-    }
-
-    #[test]
-    fn cosine_similarity_empty_is_zero() {
-        assert_eq!(cosine_similarity(&[], &[]), 0.0);
-        assert_eq!(cosine_similarity(&[1.0], &[]), 0.0);
     }
 
     #[test]
