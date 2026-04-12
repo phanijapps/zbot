@@ -295,6 +295,31 @@ impl KgEpisodeRepository {
         })
     }
 
+    /// Count all episodes currently in pending or running state across all sources.
+    pub fn count_pending_global(&self) -> Result<u64, String> {
+        self.db.with_connection(|conn| {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM kg_episodes WHERE status IN ('pending', 'running')",
+                [],
+                |r| r.get(0),
+            )?;
+            Ok(n.max(0) as u64)
+        })
+    }
+
+    /// Count pending or running episodes whose source_ref starts with the given prefix.
+    pub fn count_pending_for_source(&self, source_ref_prefix: &str) -> Result<u64, String> {
+        self.db.with_connection(|conn| {
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM kg_episodes
+                 WHERE source_ref LIKE ?1 || '%' AND status IN ('pending', 'running')",
+                rusqlite::params![source_ref_prefix],
+                |r| r.get(0),
+            )?;
+            Ok(n.max(0) as u64)
+        })
+    }
+
     /// Aggregate status counts for episodes whose source_ref starts with a given prefix.
     pub fn status_counts_for_source(
         &self,
@@ -534,6 +559,30 @@ mod tests {
         // Overwrite.
         repo.set_payload(&id, "updated").unwrap();
         assert_eq!(repo.get_payload(&id).unwrap().as_deref(), Some("updated"));
+    }
+
+    #[test]
+    fn count_pending_filters_by_status_and_source() {
+        let (_tmp, repo) = setup();
+
+        let _id1 = repo
+            .upsert_pending("document", "book-rise#chunk-0", "h0", None, "root")
+            .unwrap();
+        let id2 = repo
+            .upsert_pending("document", "book-rise#chunk-1", "h1", None, "root")
+            .unwrap();
+        let _id3 = repo
+            .upsert_pending("document", "other-source#chunk-0", "h2", None, "root")
+            .unwrap();
+
+        assert_eq!(repo.count_pending_global().unwrap(), 3);
+        assert_eq!(repo.count_pending_for_source("book-rise").unwrap(), 2);
+        assert_eq!(repo.count_pending_for_source("other-source").unwrap(), 1);
+
+        // Mark one done — count drops.
+        repo.mark_done(&id2).unwrap();
+        assert_eq!(repo.count_pending_global().unwrap(), 2);
+        assert_eq!(repo.count_pending_for_source("book-rise").unwrap(), 1);
     }
 
     #[test]
