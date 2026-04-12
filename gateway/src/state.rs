@@ -186,7 +186,7 @@ impl AppState {
         let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
         let episode_repo = Arc::new(EpisodeRepository::new(db_manager.clone()));
-        let kg_episode_repo = Arc::new(KgEpisodeRepository::new(db_manager.clone()));
+        let kg_episode_repo = Arc::new(KgEpisodeRepository::new(knowledge_db.clone()));
 
         // Initialize knowledge graph service and storage
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =

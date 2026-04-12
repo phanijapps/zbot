@@ -2,7 +2,7 @@
 //! provenance tracking. Facts, entities, and relationships reference
 //! an episode ID so we can always answer "where did this come from?"
 
-use crate::connection::DatabaseManager;
+use crate::KnowledgeDatabase;
 use rusqlite::{params, OptionalExtension};
 use std::sync::Arc;
 
@@ -41,11 +41,11 @@ pub struct KgEpisode {
 }
 
 pub struct KgEpisodeRepository {
-    db: Arc<DatabaseManager>,
+    db: Arc<KnowledgeDatabase>,
 }
 
 impl KgEpisodeRepository {
-    pub fn new(db: Arc<DatabaseManager>) -> Self {
+    pub fn new(db: Arc<KnowledgeDatabase>) -> Self {
         Self { db }
     }
 
@@ -134,14 +134,16 @@ impl KgEpisodeRepository {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gateway_services::VaultPaths;
-    use tempfile::TempDir;
+    use crate::KnowledgeDatabase;
+    use std::sync::Arc;
 
-    fn setup_test_db() -> Arc<DatabaseManager> {
-        let temp_dir = TempDir::new().unwrap();
-        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
-        let _ = temp_dir.keep();
-        Arc::new(DatabaseManager::new(paths).unwrap())
+    fn setup() -> (tempfile::TempDir, KgEpisodeRepository) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let repo = KgEpisodeRepository::new(db);
+        (tmp, repo)
     }
 
     fn sample_episode() -> KgEpisode {
@@ -157,10 +159,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn upsert_and_get_by_id() {
-        let db = setup_test_db();
-        let repo = KgEpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
         let ep = sample_episode();
         let inserted = repo.upsert_episode(&ep).unwrap();
         assert!(inserted);
@@ -170,10 +170,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn duplicate_content_hash_returns_false() {
-        let db = setup_test_db();
-        let repo = KgEpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
         let ep = sample_episode();
         assert!(repo.upsert_episode(&ep).unwrap());
         let ep2 = KgEpisode {
@@ -184,10 +182,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn get_by_content_hash() {
-        let db = setup_test_db();
-        let repo = KgEpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
         let ep = sample_episode();
         repo.upsert_episode(&ep).unwrap();
         let found = repo
@@ -202,10 +198,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn list_by_session_returns_in_order() {
-        let db = setup_test_db();
-        let repo = KgEpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
         for i in 0..3 {
             let ep = KgEpisode {
                 id: format!("ep-{i}"),
@@ -222,15 +216,12 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn get_missing_returns_none() {
-        let db = setup_test_db();
-        let repo = KgEpisodeRepository::new(db);
+        let (_tmp, repo) = setup();
         assert!(repo.get("nonexistent").unwrap().is_none());
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn episode_source_as_str_roundtrip() {
         assert_eq!(EpisodeSource::ToolResult.as_str(), "tool_result");
         assert_eq!(EpisodeSource::WardFile.as_str(), "ward_file");
