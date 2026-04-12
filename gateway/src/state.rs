@@ -104,6 +104,12 @@ pub struct AppState {
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
 
+    /// Streaming ingestion queue (Phase 2) — None when graph is unavailable.
+    pub ingestion_queue: Option<Arc<gateway_execution::ingest::IngestionQueue>>,
+
+    /// Per-source + global backpressure gate for `/api/graph/ingest`.
+    pub ingestion_backpressure: Option<Arc<gateway_execution::ingest::Backpressure>>,
+
     /// Cron scheduler for scheduled agent triggers.
     /// Optional because it requires async initialization with GatewayBus.
     pub cron_scheduler: Option<Arc<CronScheduler>>,
@@ -352,9 +358,36 @@ impl AppState {
             Some(bridge_outbox.clone()),
             runner_embedding_client,
             max_parallel_agents,
-            runner_graph_storage,
+            runner_graph_storage.clone(),
             Some(kg_episode_repo.clone()),
         ));
+
+        // Create streaming ingestion queue + backpressure.
+        // Requires graph_storage — if the graph failed to initialize, we skip.
+        let (ingestion_queue, ingestion_backpressure) = match runner_graph_storage.as_ref().cloned()
+        {
+            Some(gs) => {
+                let extractor = Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
+                    provider_service.clone(),
+                    "root".to_string(),
+                ));
+                let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
+                    2,
+                    kg_episode_repo.clone(),
+                    gs,
+                    extractor,
+                ));
+                let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
+                    gateway_execution::ingest::BackpressureConfig::default(),
+                    kg_episode_repo.clone(),
+                ));
+                (
+                    Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
+                    Some(bp) as Option<Arc<gateway_execution::ingest::Backpressure>>,
+                )
+            }
+            None => (None, None),
+        };
 
         // Create hook registry
         let hook_registry = Arc::new(HookRegistry::new(event_bus.clone()));
@@ -401,6 +434,8 @@ impl AppState {
             episode_repo: Some(episode_repo_ref),
             kg_episode_repo: Some(kg_episode_repo),
             graph_service,
+            ingestion_queue,
+            ingestion_backpressure,
         }
     }
 
@@ -477,6 +512,8 @@ impl AppState {
             episode_repo: None,
             kg_episode_repo: None,
             graph_service: None,
+            ingestion_queue: None,
+            ingestion_backpressure: None,
         }
     }
 
@@ -556,6 +593,8 @@ impl AppState {
             episode_repo: None,
             kg_episode_repo: None,
             graph_service: None,
+            ingestion_queue: None,
+            ingestion_backpressure: None,
         }
     }
 

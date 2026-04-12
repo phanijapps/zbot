@@ -13,6 +13,7 @@ mod events;
 mod gateway_bus;
 mod graph;
 mod health;
+mod ingest;
 mod mcps;
 mod memory;
 mod models;
@@ -239,6 +240,12 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
             get(graph::get_entity_subgraph),
         )
         .route("/api/graph/reindex", post(graph::reindex_all_wards))
+        // Streaming ingestion endpoints
+        .route("/api/graph/ingest", post(ingest::ingest))
+        .route(
+            "/api/graph/ingest/:source_id/progress",
+            get(ingest::progress),
+        )
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
         .route(

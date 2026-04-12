@@ -5,6 +5,7 @@
 use agent_runtime::llm::{ChatMessage, LlmClient};
 use async_trait::async_trait;
 use gateway_database::KgEpisode;
+use gateway_services::ProviderService;
 use knowledge_graph::{Entity, EntityType, GraphStorage};
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -56,16 +57,56 @@ impl Extractor for NoopExtractor {
 /// LLM-backed two-pass extractor. Pass 1: entities. Pass 2: relationships
 /// (conditioned on the entity list).
 pub struct LlmExtractor {
-    client: Arc<dyn LlmClient>,
+    provider_service: Arc<ProviderService>,
     agent_id: String,
 }
 
 impl LlmExtractor {
-    pub fn new(client: Arc<dyn LlmClient>, agent_id: String) -> Self {
-        Self { client, agent_id }
+    pub fn new(provider_service: Arc<ProviderService>, agent_id: String) -> Self {
+        Self {
+            provider_service,
+            agent_id,
+        }
     }
 
-    async fn extract_entities(&self, chunk_text: &str) -> Result<Vec<Entity>, String> {
+    /// Build an LLM client from the current default provider. Mirrors
+    /// `SessionDistiller::build_llm_client` so ingestion picks up provider
+    /// changes without needing a restart.
+    fn build_client(&self) -> Result<Arc<dyn LlmClient>, String> {
+        let providers = self
+            .provider_service
+            .list()
+            .map_err(|e| format!("list providers: {e}"))?;
+        if providers.is_empty() {
+            return Err("No LLM providers configured".to_string());
+        }
+        let provider = providers
+            .iter()
+            .find(|p| p.is_default)
+            .or_else(|| providers.first())
+            .ok_or_else(|| "No suitable provider".to_string())?;
+
+        let model = provider.default_model().to_string();
+        let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
+        let config = agent_runtime::llm::LlmConfig::new(
+            provider.base_url.clone(),
+            provider.api_key.clone(),
+            model,
+            provider_id,
+        )
+        .with_temperature(0.2)
+        .with_max_tokens(4096);
+
+        let client = agent_runtime::llm::openai::OpenAiClient::new(config)
+            .map_err(|e| format!("build client: {e}"))?;
+        Ok(Arc::new(client) as Arc<dyn LlmClient>)
+    }
+
+    async fn extract_entities(
+        &self,
+        client: &Arc<dyn LlmClient>,
+        chunk_text: &str,
+    ) -> Result<Vec<Entity>, String> {
         let system = "You extract named entities from text. \
             Return ONLY valid JSON matching the schema. \
             Do not wrap in code fences. Do not add commentary.";
@@ -82,8 +123,7 @@ impl LlmExtractor {
             ChatMessage::user(user),
         ];
 
-        let response = self
-            .client
+        let response = client
             .chat(messages, None)
             .await
             .map_err(|e| format!("llm entity pass failed: {e}"))?;
@@ -93,6 +133,7 @@ impl LlmExtractor {
 
     async fn extract_relationships(
         &self,
+        client: &Arc<dyn LlmClient>,
         chunk_text: &str,
         entity_names: &[String],
     ) -> Result<Vec<(String, String, String)>, String> {
@@ -113,8 +154,7 @@ impl LlmExtractor {
             ChatMessage::system(system.to_string()),
             ChatMessage::user(user),
         ];
-        let response = self
-            .client
+        let response = client
             .chat(messages, None)
             .await
             .map_err(|e| format!("llm rel pass failed: {e}"))?;
@@ -135,14 +175,16 @@ impl Extractor for LlmExtractor {
             return Ok(());
         }
 
-        let mut entities = self.extract_entities(chunk_text).await?;
+        let client = self.build_client()?;
+
+        let mut entities = self.extract_entities(&client, chunk_text).await?;
         if entities.is_empty() {
             return Ok(());
         }
         let entity_names: Vec<String> = entities.iter().map(|e| e.name.clone()).collect();
 
         let rel_tuples = self
-            .extract_relationships(chunk_text, &entity_names)
+            .extract_relationships(&client, chunk_text, &entity_names)
             .await?;
 
         // Build Relationship structs using the candidate entity ids.

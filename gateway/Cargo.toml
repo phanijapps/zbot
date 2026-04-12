@@ -70,6 +70,7 @@ dirs = "5"
 regex = "1"
 reqwest = { version = "0.12", features = ["json"] }
 rust-embed = { workspace = true }
+sha2 = "0.10"
 
 # Cron scheduling
 tokio-cron-scheduler = "0.13"
