@@ -34,6 +34,7 @@ use crate::middleware::intent_analysis::{
 pub use super::config::ExecutionConfig;
 use super::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use super::handle::ExecutionHandle;
+use super::invoke::micro_recall::MicroRecallContext;
 use super::invoke::working_memory_middleware;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
@@ -891,6 +892,8 @@ impl ExecutionRunner {
         let delegation_registry = self.delegation_registry.clone();
         let handles = self.handles.clone();
         let _skill_service = self.skill_service.clone();
+        let memory_repo = self.memory_repo.clone();
+        let graph_storage = self.graph_storage.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -955,6 +958,12 @@ impl ExecutionRunner {
 
             // Track current tool name for working memory middleware
             let mut current_tool_name = String::new();
+
+            // Collect micro-recall triggers during stream (sync closure cannot run async)
+            let mut pending_recall_triggers: Vec<(
+                super::invoke::micro_recall::MicroRecallTrigger,
+                u32,
+            )> = Vec::new();
 
             // Execute with streaming
             let result = executor
@@ -1034,6 +1043,18 @@ impl ExecutionRunner {
                                 error.as_deref(),
                                 handle.current_iteration(),
                             );
+
+                            // Detect micro-recall triggers (sync) — executed after stream completes
+                            let triggers = working_memory_middleware::detect_recall_triggers(
+                                &working_memory,
+                                &current_tool_name,
+                                result,
+                                error.as_deref(),
+                            );
+                            let iter = handle.current_iteration();
+                            for trigger in triggers {
+                                pending_recall_triggers.push((trigger, iter));
+                            }
                         }
                         agent_runtime::StreamEvent::Token { content, .. } => {
                             turn_text.push_str(content);
@@ -1055,6 +1076,24 @@ impl ExecutionRunner {
                     }
                 })
                 .await;
+
+            // Execute micro-recall triggers collected during the stream
+            if !pending_recall_triggers.is_empty() {
+                let recall_ctx = MicroRecallContext {
+                    memory_repo: memory_repo.clone(),
+                    graph_storage: graph_storage.clone(),
+                    agent_id: agent_id.clone(),
+                };
+                for (trigger, iter) in &pending_recall_triggers {
+                    working_memory_middleware::execute_micro_recall_triggers(
+                        &mut working_memory,
+                        std::slice::from_ref(trigger),
+                        &recall_ctx,
+                        *iter,
+                    )
+                    .await;
+                }
+            }
 
             let accumulated_response = response_acc.into_response();
 

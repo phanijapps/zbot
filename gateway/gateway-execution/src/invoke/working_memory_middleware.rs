@@ -3,6 +3,7 @@
 //! Extracts entities from tool output, records discoveries from errors,
 //! and tracks delegation status changes.
 
+use super::micro_recall::{self, MicroRecallContext, MicroRecallTrigger};
 use super::working_memory::WorkingMemory;
 use regex::Regex;
 use std::sync::LazyLock;
@@ -37,6 +38,34 @@ pub fn process_tool_result(
             // Extract entities from tool output (for shell, read, grep, etc.)
             extract_and_add_entities(wm, result, iteration, tool_name);
         }
+    }
+}
+
+/// Detect micro-recall triggers from a tool result (sync).
+///
+/// Call this inside sync closures where async is unavailable, then execute
+/// the returned triggers later via [`execute_micro_recall_triggers`].
+pub fn detect_recall_triggers(
+    wm: &WorkingMemory,
+    tool_name: &str,
+    result: &str,
+    error: Option<&str>,
+) -> Vec<MicroRecallTrigger> {
+    micro_recall::detect_triggers(tool_name, result, error, wm)
+}
+
+/// Execute previously-collected micro-recall triggers (async).
+///
+/// Designed to run in an async context after a sync closure has accumulated
+/// triggers via [`detect_recall_triggers`].
+pub async fn execute_micro_recall_triggers(
+    wm: &mut WorkingMemory,
+    triggers: &[MicroRecallTrigger],
+    ctx: &MicroRecallContext,
+    iteration: u32,
+) {
+    for trigger in triggers {
+        micro_recall::execute_micro_recall(wm, trigger, ctx, iteration).await;
     }
 }
 
