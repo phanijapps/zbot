@@ -337,6 +337,31 @@ AFTER DELETE ON session_episodes
 BEGIN
     DELETE FROM session_episodes_index WHERE episode_id = OLD.id;
 END;
+
+-- Keep the memory_facts_fts contentless FTS5 index in sync with memory_facts.
+
+CREATE TRIGGER IF NOT EXISTS memory_facts_ai
+AFTER INSERT ON memory_facts
+BEGIN
+    INSERT INTO memory_facts_fts(rowid, key, content, category)
+    VALUES (new.rowid, new.key, new.content, new.category);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_facts_ad
+AFTER DELETE ON memory_facts
+BEGIN
+    INSERT INTO memory_facts_fts(memory_facts_fts, rowid, key, content, category)
+    VALUES ('delete', old.rowid, old.key, old.content, old.category);
+END;
+
+CREATE TRIGGER IF NOT EXISTS memory_facts_au
+AFTER UPDATE ON memory_facts
+BEGIN
+    INSERT INTO memory_facts_fts(memory_facts_fts, rowid, key, content, category)
+    VALUES ('delete', old.rowid, old.key, old.content, old.category);
+    INSERT INTO memory_facts_fts(rowid, key, content, category)
+    VALUES (new.rowid, new.key, new.content, new.category);
+END;
 "#;
 
 /// Initialize vec0 virtual tables and cleanup triggers.

@@ -399,7 +399,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DatabaseManager;
+    use crate::vector_index::{SqliteVecIndex, VectorIndex};
+    use crate::KnowledgeDatabase;
     use tempfile::TempDir;
 
     fn create_test_store() -> GatewayMemoryFactStore {
@@ -408,8 +409,14 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let _ = temp_dir.keep();
-        let db = Arc::new(DatabaseManager::new(paths).unwrap());
-        let repo = Arc::new(MemoryRepository::new(db));
+        let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            db.clone(),
+            "memory_facts_index",
+            "fact_id",
+            384,
+        ));
+        let repo = Arc::new(MemoryRepository::new(db, vec_index));
         GatewayMemoryFactStore::new(repo, None) // No embedding client in tests
     }
 
