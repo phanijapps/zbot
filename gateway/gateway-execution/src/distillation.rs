@@ -853,8 +853,14 @@ impl SessionDistiller {
 
         // Load prompt once (shared across attempts)
         let system = self.load_distillation_prompt();
+
+        // Compute session metrics to help the LLM decide on procedure extraction
+        let metrics = compute_session_metrics(transcript);
         let user = format!(
-            "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, and an episode assessment. Respond with ONLY the JSON object, nothing else.",
+            "## Session Metrics\n\n- Delegations: {}\n- Tool actions: {}\n- Distinct agents involved: {}\n\nProcedure extraction is REQUIRED if delegations >= 2 OR tool actions >= 3.\n\n## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, an episode assessment, AND a reusable procedure. Respond with ONLY the JSON object, nothing else.",
+            metrics.delegations,
+            metrics.tool_actions,
+            metrics.distinct_agents,
             transcript
         );
 
@@ -952,6 +958,23 @@ impl SessionDistiller {
                                 has_procedure = parsed.procedure.is_some(),
                                 "Distillation parsed successfully"
                             );
+
+                            // Diagnostic: if no procedure was extracted, log a preview of the
+                            // raw response so we can see why. Procedure extraction is a major
+                            // feature and silent failures are hard to debug otherwise.
+                            if parsed.procedure.is_none() {
+                                let preview = if content.len() > 1200 {
+                                    &content[..1200]
+                                } else {
+                                    content.as_str()
+                                };
+                                tracing::warn!(
+                                    provider = %provider.name,
+                                    response_preview = %preview,
+                                    "No procedure extracted — LLM did not include procedure field or returned null"
+                                );
+                            }
+
                             return Ok(parsed);
                         }
                         Err(parse_err) => {
@@ -1379,6 +1402,51 @@ fn sanitize_task_type(task_summary: &str) -> String {
         .collect()
 }
 
+/// Session metrics used to inform the LLM about procedure extraction gating.
+struct SessionMetrics {
+    delegations: usize,
+    tool_actions: usize,
+    distinct_agents: usize,
+}
+
+/// Compute basic metrics from a compiled transcript to help the LLM decide
+/// whether a procedure should be extracted.
+fn compute_session_metrics(transcript: &str) -> SessionMetrics {
+    let mut delegations = 0usize;
+    let mut tool_actions = 0usize;
+    let mut agents: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for line in transcript.lines() {
+        let lower = line.to_lowercase();
+
+        // Count delegation markers
+        if lower.contains("delegate_to_agent") || line.contains("## From ") {
+            delegations += 1;
+        }
+
+        // Count explicit tool invocations
+        if line.contains("[called:") {
+            tool_actions += 1;
+        }
+
+        // Track distinct agents mentioned (planner-agent, code-agent, etc.)
+        for word in line.split_whitespace() {
+            if word.ends_with("-agent") || word.ends_with("-agent,") {
+                let clean = word.trim_end_matches(',').trim_matches('"');
+                if clean.len() < 40 {
+                    agents.insert(clean.to_string());
+                }
+            }
+        }
+    }
+
+    SessionMetrics {
+        delegations,
+        tool_actions,
+        distinct_agents: agents.len(),
+    }
+}
+
 /// Build a compact transcript from session messages.
 fn build_transcript(messages: &[gateway_database::Message]) -> String {
     let mut parts = Vec::with_capacity(messages.len());
@@ -1666,11 +1734,11 @@ fn extract_json_from_content(content: &str) -> String {
 /// The distillation prompt sent as a system message.
 /// The default distillation prompt (embedded fallback).
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
-const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, and an episode assessment worth remembering for FUTURE sessions.
+const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, an episode assessment, and a reusable procedure worth remembering for FUTURE sessions.
 
 IMPORTANT: Respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON. Your entire response must be parseable JSON.
 
-Return a JSON object with three arrays and one optional episode object:
+Return a JSON object with EXACTLY these five fields:
 
 {
   "facts": [
@@ -1687,6 +1755,36 @@ Return a JSON object with three arrays and one optional episode object:
     "outcome": "success|partial|failed",
     "strategy_used": "What approach was taken (e.g., 'delegated to data-analyst for technicals')",
     "key_learnings": "What went well or poorly (1-2 sentences)"
+  },
+  "procedure": {
+    "name": "short_snake_case_name",
+    "description": "what this procedure accomplishes (1-2 sentences)",
+    "steps": [
+      {"action": "delegate|shell|ward|respond|write_file", "agent": "agent-id", "task_template": "...", "note": "..."}
+    ],
+    "parameters": ["param1", "param2"],
+    "trigger_pattern": "when to use this procedure (user request patterns)"
+  }
+}
+
+## EXAMPLE procedure (for a multi-step analysis task)
+
+{
+  "procedure": {
+    "name": "build_portfolio_dashboard",
+    "description": "Builds an interactive HTML dashboard for a set of stock tickers with risk analysis.",
+    "steps": [
+      {"action": "ward", "note": "enter portfolio-analysis ward"},
+      {"action": "delegate", "agent": "planner-agent", "task_template": "Plan portfolio risk dashboard for {tickers}"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Create project structure under task/{project_name}"},
+      {"action": "delegate", "agent": "research-agent", "task_template": "Fetch historical prices for {tickers} via yfinance"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Build core analysis functions: correlation, VaR, drawdown"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Generate charts with plotly"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Assemble HTML dashboard"},
+      {"action": "respond", "note": "provide dashboard link"}
+    ],
+    "parameters": ["tickers", "project_name"],
+    "trigger_pattern": "user requests portfolio risk dashboard, stock analysis report, or multi-asset risk assessment"
   }
 }
 
@@ -1739,18 +1837,23 @@ Include `properties` where relevant:
 
 When a session analyzes or works with files in a ward (workspace), include a `domain.{subdomain}.data_available` fact summarizing what data/files are available (e.g., `domain.finance.portfolio_data_available`).
 
-## Procedure Extraction (optional)
+## Procedure Extraction (REQUIRED)
 
-If this session followed a reusable multi-step approach with 2+ steps, extract it:
-{"procedure": {"name": "short_name", "description": "what it does", "steps": [{"action": "ward|delegate|shell|respond", "agent": "agent-id", "task_template": "...", "note": "..."}], "parameters": ["param1"], "trigger_pattern": "when to use"}}
-If too simple or unique, set "procedure": null.
+ALWAYS extract a procedure when the session had 2+ delegations OR 3+ distinct tool actions. Procedures are the most valuable output of this extraction — they let future sessions skip the fumbling and go straight to a proven approach.
+
+- Look at the actual sequence of delegations and tool calls in the transcript.
+- Generalize: replace specific values (ticker names, project names, file paths) with `{parameter}` placeholders.
+- Include ALL significant steps, not just delegations. Ward entry, file writes, and respond calls are all valid steps.
+- Steps should be in execution order.
+- `trigger_pattern`: describe what kinds of user requests would match this procedure (3-5 example phrasings or a pattern description).
+- Set `"procedure": null` ONLY if the session had fewer than 2 tool calls (trivial sessions). A first-time execution is NOT a reason to skip — the WHOLE POINT is to capture it for future reuse.
 
 ## Rules
 
 - Maximum 20 facts, 20 entities, 20 relationships per session.
 - Only extract facts useful in FUTURE sessions. Skip ephemeral details (one-off questions, transient errors, session-specific data).
 - Confidence: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred from context.
-- If nothing worth remembering, return {"facts": [], "entities": [], "relationships": []}.
+- If nothing worth remembering, return empty arrays but STILL try to extract a procedure if the session had multiple steps.
 - Prefer fewer high-quality extractions over many low-value ones.
 
 ## Output Format
