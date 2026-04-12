@@ -98,40 +98,23 @@ fn exact_match(
     let normalized = normalize_name(&candidate.name);
     let type_str = candidate.entity_type.as_str();
 
+    // Stage 1: query kg_aliases by normalized_form, then verify entity
+    // type + agent scope on the join target. Uses idx_aliases_normalized.
     let mut stmt = conn
         .prepare(
-            "SELECT id, name, aliases FROM kg_entities \
-             WHERE (agent_id = ?1 OR agent_id = '__global__') AND entity_type = ?2",
+            "SELECT a.entity_id FROM kg_aliases a \
+             INNER JOIN kg_entities e ON e.id = a.entity_id \
+             WHERE a.normalized_form = ?1 \
+               AND e.entity_type = ?2 \
+               AND (e.agent_id = ?3 OR e.agent_id = '__global__') \
+             LIMIT 1",
         )
         .map_err(|e| format!("prepare failed: {e}"))?;
 
-    let rows = stmt
-        .query_map(params![agent_id, type_str], |row| {
-            let id: String = row.get(0)?;
-            let name: String = row.get(1)?;
-            let aliases: Option<String> = row.get(2)?;
-            Ok((id, name, aliases))
-        })
-        .map_err(|e| format!("query failed: {e}"))?;
-
-    for row in rows {
-        let (id, name, aliases) = row.map_err(|e| format!("row read failed: {e}"))?;
-        if normalize_name(&name) == normalized {
-            return Ok(Some(id));
-        }
-        if let Some(aliases_json) = aliases {
-            if alias_list_contains(&aliases_json, &normalized) {
-                return Ok(Some(id));
-            }
-        }
-    }
-    Ok(None)
-}
-
-fn alias_list_contains(aliases_json: &str, normalized_target: &str) -> bool {
-    serde_json::from_str::<Vec<String>>(aliases_json)
-        .map(|list| list.iter().any(|a| normalize_name(a) == normalized_target))
-        .unwrap_or(false)
+    let row: Option<String> = stmt
+        .query_row(params![normalized, type_str, agent_id], |r| r.get(0))
+        .ok();
+    Ok(row)
 }
 
 /// Fuzzy name match: Levenshtein distance ≤ 3 within the same type.
