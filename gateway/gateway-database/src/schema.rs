@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 19;
+const SCHEMA_VERSION: i32 = 20;
 
 /// Run migrations for existing databases.
 ///
@@ -281,6 +281,32 @@ fn migrate_database(conn: &Connection) -> Result<()> {
                 UNIQUE(ward_id, title)
             );
             CREATE INDEX IF NOT EXISTS idx_wiki_ward ON ward_wiki_articles(ward_id);",
+        )?;
+    }
+
+    // v19 → v20: Add procedures table for learned procedure patterns
+    if version < 20 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS procedures (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                ward_id TEXT DEFAULT '__global__',
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                trigger_pattern TEXT,
+                steps TEXT NOT NULL,
+                parameters TEXT,
+                success_count INTEGER DEFAULT 1,
+                failure_count INTEGER DEFAULT 0,
+                avg_duration_ms INTEGER,
+                avg_token_cost INTEGER,
+                last_used TEXT,
+                embedding BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_procedures_agent ON procedures(agent_id);
+            CREATE INDEX IF NOT EXISTS idx_procedures_ward ON procedures(ward_id);",
         )?;
     }
 
@@ -807,6 +833,42 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // PROCEDURES
+    // Learned procedure patterns with execution statistics
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS procedures (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            ward_id TEXT DEFAULT '__global__',
+            name TEXT NOT NULL,
+            description TEXT NOT NULL,
+            trigger_pattern TEXT,
+            steps TEXT NOT NULL,
+            parameters TEXT,
+            success_count INTEGER DEFAULT 1,
+            failure_count INTEGER DEFAULT 0,
+            avg_duration_ms INTEGER,
+            avg_token_cost INTEGER,
+            last_used TEXT,
+            embedding BLOB,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_procedures_agent ON procedures(agent_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_procedures_ward ON procedures(ward_id)",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -941,7 +1003,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 19, "schema version should be 19");
+        assert_eq!(version, 20, "schema version should be 20");
     }
 
     #[test]
