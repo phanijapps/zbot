@@ -34,10 +34,11 @@ use crate::middleware::intent_analysis::{
 pub use super::config::ExecutionConfig;
 use super::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use super::handle::ExecutionHandle;
+use super::invoke::working_memory_middleware;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator, WorkspaceCache,
+    ToolCallAccumulator, WorkingMemory, WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
@@ -870,7 +871,7 @@ impl ExecutionRunner {
         message: String,
         session_id: String,
         execution_id: String,
-        history: Vec<ChatMessage>,
+        mut history: Vec<ChatMessage>,
         recommended_skills: Vec<String>,
     ) {
         let event_bus = self.event_bus.clone();
@@ -929,6 +930,32 @@ impl ExecutionRunner {
             // Track accumulated text for the current assistant turn
             let mut turn_text = String::new();
 
+            // Initialize working memory and seed from recalled corrections
+            let mut working_memory = WorkingMemory::new(1500);
+            for msg in &history {
+                if msg.role == "system" {
+                    let content = msg.text_content();
+                    if content.contains("Recalled") || content.contains("correction") {
+                        for line in content.lines() {
+                            let trimmed = line.trim().trim_start_matches("- ");
+                            if trimmed.starts_with("[correction]")
+                                || trimmed.starts_with("[pattern]")
+                            {
+                                working_memory.add_correction(trimmed);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Inject working memory into history if it has content
+            if !working_memory.is_empty() {
+                history.push(ChatMessage::system(working_memory.format_for_prompt()));
+            }
+
+            // Track current tool name for working memory middleware
+            let mut current_tool_name = String::new();
+
             // Execute with streaming
             let result = executor
                 .execute_stream(&message, &history, |event| {
@@ -948,6 +975,7 @@ impl ExecutionRunner {
                             ..
                         } => {
                             tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                            current_tool_name = tool_name.clone();
                             // Accumulate tool call for the current assistant message
                             turn_tool_calls.push(serde_json::json!({
                                 "tool_id": tool_id,
@@ -996,6 +1024,15 @@ impl ExecutionRunner {
                                 &tool_content,
                                 None,
                                 Some(tool_id),
+                            );
+
+                            // Update working memory from tool result
+                            working_memory_middleware::process_tool_result(
+                                &mut working_memory,
+                                &current_tool_name,
+                                result,
+                                error.as_deref(),
+                                handle.current_iteration(),
                             );
                         }
                         agent_runtime::StreamEvent::Token { content, .. } => {
