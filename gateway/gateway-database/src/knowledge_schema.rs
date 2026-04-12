@@ -263,6 +263,77 @@ CREATE TABLE IF NOT EXISTS embedding_cache (
 );
 "#;
 
+const VEC0_SQL: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS kg_name_index USING vec0(
+    entity_id TEXT PRIMARY KEY,
+    name_embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_index USING vec0(
+    fact_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS wiki_articles_index USING vec0(
+    article_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS procedures_index USING vec0(
+    procedure_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_episodes_index USING vec0(
+    episode_id TEXT PRIMARY KEY,
+    embedding FLOAT[384]
+);
+"#;
+
+const TRIGGERS_SQL: &str = r#"
+-- Clean up vec0 partner rows when base rows are deleted.
+
+CREATE TRIGGER IF NOT EXISTS trg_entities_delete_vec
+AFTER DELETE ON kg_entities
+BEGIN
+    DELETE FROM kg_name_index WHERE entity_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_facts_delete_vec
+AFTER DELETE ON memory_facts
+BEGIN
+    DELETE FROM memory_facts_index WHERE fact_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_wiki_delete_vec
+AFTER DELETE ON ward_wiki_articles
+BEGIN
+    DELETE FROM wiki_articles_index WHERE article_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_procedures_delete_vec
+AFTER DELETE ON procedures
+BEGIN
+    DELETE FROM procedures_index WHERE procedure_id = OLD.id;
+END;
+
+CREATE TRIGGER IF NOT EXISTS trg_episodes_delete_vec
+AFTER DELETE ON session_episodes
+BEGIN
+    DELETE FROM session_episodes_index WHERE episode_id = OLD.id;
+END;
+"#;
+
+/// Initialize vec0 virtual tables and cleanup triggers.
+///
+/// Call AFTER `load_sqlite_vec()` AND AFTER `initialize_knowledge_database()`.
+/// Triggers reference both vec0 tables and base tables.
+pub fn initialize_vec_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(VEC0_SQL)?;
+    conn.execute_batch(TRIGGERS_SQL)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,5 +405,88 @@ mod tests {
                 "table {table} must not have embedding BLOB column"
             );
         }
+    }
+
+    use crate::sqlite_vec_loader::load_sqlite_vec;
+
+    #[test]
+    fn full_v22_schema_initializes_with_vec_tables_and_triggers() {
+        let conn = Connection::open_in_memory().expect("open");
+        load_sqlite_vec(&conn).expect("load sqlite-vec");
+
+        initialize_knowledge_database(&conn).expect("init base schema");
+        initialize_vec_tables(&conn).expect("init vec tables");
+
+        // All 5 vec0 virtual tables exist.
+        for vt in [
+            "kg_name_index",
+            "memory_facts_index",
+            "wiki_articles_index",
+            "procedures_index",
+            "session_episodes_index",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE name=?1",
+                    rusqlite::params![vt],
+                    |r| r.get(0),
+                )
+                .expect("query");
+            assert!(count >= 1, "missing vec0 table: {vt}");
+        }
+
+        // All 5 triggers exist.
+        for trg in [
+            "trg_entities_delete_vec",
+            "trg_facts_delete_vec",
+            "trg_wiki_delete_vec",
+            "trg_procedures_delete_vec",
+            "trg_episodes_delete_vec",
+        ] {
+            let count: i64 = conn
+                .query_row(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type='trigger' AND name=?1",
+                    rusqlite::params![trg],
+                    |r| r.get(0),
+                )
+                .expect("query");
+            assert_eq!(count, 1, "missing trigger: {trg}");
+        }
+    }
+
+    #[test]
+    fn delete_entity_cascades_to_kg_name_index_via_trigger() {
+        let conn = Connection::open_in_memory().expect("open");
+        load_sqlite_vec(&conn).expect("load");
+        initialize_knowledge_database(&conn).expect("init");
+        initialize_vec_tables(&conn).expect("init vec");
+
+        // Insert entity + its vec row.
+        conn.execute(
+            "INSERT INTO kg_entities(id, agent_id, entity_type, name, normalized_name, normalized_hash, first_seen_at, last_seen_at)
+             VALUES ('e1', 'root', 'person', 'Alice', 'alice', 'h1', datetime('now'), datetime('now'))",
+            [],
+        )
+        .expect("insert entity");
+
+        let vec_json = serde_json::to_string(&vec![0.1_f32; 384]).unwrap();
+        conn.execute(
+            "INSERT INTO kg_name_index(entity_id, name_embedding) VALUES ('e1', ?1)",
+            rusqlite::params![vec_json],
+        )
+        .expect("insert vec row");
+
+        // Delete the entity — trigger must cascade to vec index.
+        conn.execute("DELETE FROM kg_entities WHERE id = 'e1'", [])
+            .expect("delete");
+
+        let vec_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM kg_name_index WHERE entity_id = 'e1'",
+                [],
+                |r| r.get(0),
+            )
+            .expect("count");
+        assert_eq!(vec_count, 0, "vec0 row should be cleaned up by trigger");
     }
 }
