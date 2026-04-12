@@ -61,6 +61,42 @@ pub fn rrf_merge(lists: Vec<Vec<ScoredItem>>, k: f64, budget: usize) -> Vec<Scor
         .collect()
 }
 
+/// Lightweight snapshot of an active goal — enough for intent-boost computation.
+/// Caller builds this from `GoalRepository::list_active`, extracting unfilled
+/// slot names by diffing `slots` ↔ `filled_slots` (JSON parsing happens at
+/// caller site; this struct stays simple).
+#[derive(Debug, Clone)]
+pub struct GoalLite {
+    pub id: String,
+    pub title: String,
+    pub unfilled_slot_names: Vec<String>,
+}
+
+/// Boost items whose content mentions any unfilled-goal slot name.
+/// MemGuide-style: aligned items get a 1.3× multiplier in place.
+///
+/// Matching is case-insensitive substring containment — deliberately naive,
+/// broadly effective. Phase 4 can promote to embedding-based slot alignment
+/// if measurements show false-positive rates matter.
+pub fn intent_boost(items: &mut [ScoredItem], active_goals: &[GoalLite]) {
+    if active_goals.is_empty() {
+        return;
+    }
+    let tokens: Vec<String> = active_goals
+        .iter()
+        .flat_map(|g| g.unfilled_slot_names.iter().map(|s| s.to_lowercase()))
+        .collect();
+    if tokens.is_empty() {
+        return;
+    }
+    for item in items.iter_mut() {
+        let lower = item.content.to_lowercase();
+        if tokens.iter().any(|t| lower.contains(t)) {
+            item.score *= 1.3;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -127,5 +163,44 @@ mod tests {
             .collect();
         let merged = rrf_merge(vec![many], 60.0, 5);
         assert_eq!(merged.len(), 5);
+    }
+
+    #[test]
+    fn intent_boost_multiplies_matching_content() {
+        let mut items = vec![
+            mk("a", ItemKind::Fact, 1.0),       // content = "a"
+            mk("tickers", ItemKind::Fact, 1.0), // content = "tickers"
+        ];
+        let goals = vec![GoalLite {
+            id: "g1".into(),
+            title: "portfolio".into(),
+            unfilled_slot_names: vec!["tickers".into()],
+        }];
+        intent_boost(&mut items, &goals);
+        let a_score = items.iter().find(|i| i.id == "a").unwrap().score;
+        let t_score = items.iter().find(|i| i.id == "tickers").unwrap().score;
+        assert!((a_score - 1.0).abs() < 1e-9, "non-matching score unchanged");
+        assert!((t_score - 1.3).abs() < 1e-9, "matching score × 1.3");
+    }
+
+    #[test]
+    fn intent_boost_no_goals_is_noop() {
+        let mut items = vec![mk("x", ItemKind::Fact, 1.0)];
+        intent_boost(&mut items, &[]);
+        assert_eq!(items[0].score, 1.0);
+    }
+
+    #[test]
+    fn intent_boost_is_case_insensitive() {
+        let mut items = vec![mk("x", ItemKind::Fact, 1.0)];
+        // Force content to contain mixed-case match.
+        items[0].content = "Portfolio of TICKERS".to_string();
+        let goals = vec![GoalLite {
+            id: "g1".into(),
+            title: "t".into(),
+            unfilled_slot_names: vec!["tickers".into()],
+        }];
+        intent_boost(&mut items, &goals);
+        assert!((items[0].score - 1.3).abs() < 1e-9);
     }
 }

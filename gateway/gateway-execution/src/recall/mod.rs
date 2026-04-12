@@ -19,7 +19,7 @@
 
 pub mod adapters;
 pub mod scored_item;
-pub use scored_item::{rrf_merge, ItemKind, Provenance, ScoredItem};
+pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem};
 
 use std::sync::Arc;
 
