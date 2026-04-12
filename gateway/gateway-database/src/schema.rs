@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 17;
+const SCHEMA_VERSION: i32 = 18;
 
 /// Run migrations for existing databases.
 ///
@@ -235,6 +235,34 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         let _ = conn.execute("ALTER TABLE sessions ADD COLUMN mode TEXT", []);
     }
 
+    // v17 → v18: Add temporal columns to memory_facts; add kg_causal_edges table
+    if version < 18 {
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN valid_from TEXT", []);
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN valid_until TEXT", []);
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN superseded_by TEXT", []);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_temporal ON memory_facts(valid_from, valid_until)",
+            [],
+        );
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kg_causal_edges (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                cause_entity_id TEXT NOT NULL,
+                effect_entity_id TEXT NOT NULL,
+                relationship TEXT NOT NULL,
+                confidence REAL DEFAULT 0.7,
+                session_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (cause_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (effect_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_causal_cause ON kg_causal_edges(cause_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_causal_effect ON kg_causal_edges(effect_entity_id);",
+        )?;
+    }
+
     Ok(())
 }
 
@@ -455,6 +483,9 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
             updated_at TEXT NOT NULL DEFAULT (datetime('now')),
             expires_at TEXT,
             pinned INTEGER NOT NULL DEFAULT 0,
+            valid_from TEXT,
+            valid_until TEXT,
+            superseded_by TEXT,
             UNIQUE(agent_id, scope, ward_id, key)
         )",
         [],
@@ -477,6 +508,11 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_memory_facts_ward ON memory_facts(ward_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_facts_temporal ON memory_facts(valid_from, valid_until)",
         [],
     )?;
 
@@ -693,6 +729,36 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
+    // KG CAUSAL EDGES
+    // Causal relationships between knowledge graph entities
+    // =========================================================================
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS kg_causal_edges (
+            id TEXT PRIMARY KEY,
+            agent_id TEXT NOT NULL,
+            cause_entity_id TEXT NOT NULL,
+            effect_entity_id TEXT NOT NULL,
+            relationship TEXT NOT NULL,
+            confidence REAL DEFAULT 0.7,
+            session_id TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (cause_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
+            FOREIGN KEY (effect_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
+        )",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_causal_cause ON kg_causal_edges(cause_entity_id)",
+        [],
+    )?;
+
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_causal_effect ON kg_causal_edges(effect_entity_id)",
+        [],
+    )?;
+
+    // =========================================================================
     // SCHEMA VERSION
     // =========================================================================
     conn.execute(
@@ -827,7 +893,7 @@ mod tests {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 17, "schema version should be 17");
+        assert_eq!(version, 18, "schema version should be 18");
     }
 
     #[test]
