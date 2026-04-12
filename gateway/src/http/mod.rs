@@ -238,6 +238,7 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
             "/api/graph/:agent_id/entities/:entity_id/subgraph",
             get(graph::get_entity_subgraph),
         )
+        .route("/api/graph/reindex", post(graph::reindex_all_wards))
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))
         .route(

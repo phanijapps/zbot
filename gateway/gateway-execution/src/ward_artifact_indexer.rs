@@ -14,6 +14,15 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// Options for ward indexing.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct IndexOptions {
+    /// When true, bypass the content-hash dedup in `kg_episodes` and
+    /// re-process every file. Safe to re-run; relationships upsert via
+    /// UNIQUE(source, target, type) and bump mention_count.
+    pub force_reindex: bool,
+}
+
 /// Entry point: index every structured file in the ward directory.
 ///
 /// Returns the number of entities created. Errors in individual files are
@@ -25,11 +34,31 @@ pub async fn index_ward(
     episode_repo: &KgEpisodeRepository,
     graph: &Arc<GraphStorage>,
 ) -> usize {
+    index_ward_with_options(
+        ward_path,
+        session_id,
+        agent_id,
+        episode_repo,
+        graph,
+        IndexOptions::default(),
+    )
+    .await
+}
+
+/// Index every structured file in the ward directory with explicit options.
+pub async fn index_ward_with_options(
+    ward_path: &Path,
+    session_id: &str,
+    agent_id: &str,
+    episode_repo: &KgEpisodeRepository,
+    graph: &Arc<GraphStorage>,
+    opts: IndexOptions,
+) -> usize {
     let mut created = 0_usize;
     let files = collect_structured_files(ward_path);
 
     for file_path in files {
-        match index_one_file(&file_path, session_id, agent_id, episode_repo, graph).await {
+        match index_one_file(&file_path, session_id, agent_id, episode_repo, graph, opts).await {
             Ok(n) => created += n,
             Err(e) => tracing::warn!(
                 file = ?file_path,
@@ -42,6 +71,7 @@ pub async fn index_ward(
     tracing::info!(
         ward = ?ward_path,
         entities = created,
+        force_reindex = opts.force_reindex,
         "Ward artifact indexing complete"
     );
     created
@@ -97,17 +127,19 @@ async fn index_one_file(
     agent_id: &str,
     episode_repo: &KgEpisodeRepository,
     graph: &Arc<GraphStorage>,
+    opts: IndexOptions,
 ) -> Result<usize, String> {
     let content = std::fs::read_to_string(file_path)
         .map_err(|e| format!("Failed to read {:?}: {e}", file_path))?;
 
     let content_hash = compute_hash(&content);
 
-    // Dedup: skip if we've already indexed this exact content
-    if episode_repo
-        .get_by_content_hash(&content_hash, EpisodeSource::WardFile.as_str())
-        .map_err(|e| format!("Dedup check failed: {e}"))?
-        .is_some()
+    // Dedup: skip if we've already indexed this exact content (unless forced)
+    if !opts.force_reindex
+        && episode_repo
+            .get_by_content_hash(&content_hash, EpisodeSource::WardFile.as_str())
+            .map_err(|e| format!("Dedup check failed: {e}"))?
+            .is_some()
     {
         tracing::debug!(file = ?file_path, "Skipping already-indexed ward file");
         return Ok(0);

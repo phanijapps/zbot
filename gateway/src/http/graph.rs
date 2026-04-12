@@ -750,3 +750,63 @@ pub async fn all_entities(
         )),
     }
 }
+
+/// Response body for the reindex endpoint.
+#[derive(Debug, Serialize)]
+pub struct ReindexResponse {
+    pub wards_processed: usize,
+    pub entities_created: usize,
+}
+
+/// POST /api/graph/reindex — force re-indexing of every ward on disk.
+/// Idempotent: relationships upsert via UNIQUE(source, target, type).
+pub async fn reindex_all_wards(
+    State(state): State<AppState>,
+) -> Result<Json<ReindexResponse>, StatusCode> {
+    use gateway_execution::ward_artifact_indexer::{index_ward_with_options, IndexOptions};
+
+    let episode_repo = state
+        .kg_episode_repo
+        .clone()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let graph_service = state
+        .graph_service
+        .clone()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let graph = graph_service.storage().clone();
+
+    let wards_dir = state.paths.wards_dir();
+    let Ok(read) = std::fs::read_dir(&wards_dir) else {
+        return Ok(Json(ReindexResponse {
+            wards_processed: 0,
+            entities_created: 0,
+        }));
+    };
+
+    let mut total_entities = 0_usize;
+    let mut wards_processed = 0_usize;
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let n = index_ward_with_options(
+            &path,
+            "admin-reindex",
+            "root",
+            &episode_repo,
+            &graph,
+            IndexOptions {
+                force_reindex: true,
+            },
+        )
+        .await;
+        total_entities += n;
+        wards_processed += 1;
+    }
+
+    Ok(Json(ReindexResponse {
+        wards_processed,
+        entities_created: total_entities,
+    }))
+}

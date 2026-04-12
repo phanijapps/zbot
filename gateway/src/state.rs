@@ -94,6 +94,9 @@ pub struct AppState {
     /// Episode repository for accessing session episodes.
     pub episode_repo: Option<Arc<EpisodeRepository>>,
 
+    /// Knowledge graph episode repository (Phase 6a+).
+    pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
+
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
 
@@ -355,6 +358,7 @@ impl AppState {
             distillation_repo: Some(distillation_repo),
             distiller: Some(distiller_ref),
             episode_repo: Some(episode_repo_ref),
+            kg_episode_repo: Some(kg_episode_repo),
             graph_service,
         }
     }
@@ -422,6 +426,7 @@ impl AppState {
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            kg_episode_repo: None,
             graph_service: None,
         }
     }
@@ -492,6 +497,7 @@ impl AppState {
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            kg_episode_repo: None,
             graph_service: None,
         }
     }
