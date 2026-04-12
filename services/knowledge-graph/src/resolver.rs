@@ -129,28 +129,47 @@ fn embedding_match(
 
     // Cosine ≥ 0.87 on L2-normalised embeddings ⇒ L2_sq ≤ 0.26.
     const L2_SQ_THRESHOLD: f32 = 0.26;
+    // vec0 KNN queries require a bare `k = ?` or `LIMIT ?` on the virtual table
+    // itself — JOINs and extra WHERE predicates are not accepted at prepare time.
+    // So we do a two-step: pull the top-K nearest ids from the index, then filter
+    // by agent / entity_type against `kg_entities`.
+    const K: i64 = 10;
     let mut stmt = conn
         .prepare(
-            "SELECT i.entity_id, i.distance \
-             FROM kg_name_index i \
-             INNER JOIN kg_entities e ON e.id = i.entity_id \
-             WHERE i.name_embedding MATCH ?1 \
-               AND (e.agent_id = ?2 OR e.agent_id = '__global__') \
-               AND e.entity_type = ?3 \
-             ORDER BY i.distance \
-             LIMIT 5",
+            "SELECT entity_id, distance \
+             FROM kg_name_index \
+             WHERE name_embedding MATCH ?1 \
+             ORDER BY distance \
+             LIMIT ?2",
         )
         .map_err(|e| format!("prepare failed: {e}"))?;
 
     let rows = stmt
-        .query_map(params![embedding_json, agent_id, type_str], |row| {
+        .query_map(params![embedding_json, K], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, f32>(1)?))
         })
         .map_err(|e| format!("query failed: {e}"))?;
 
+    let mut filter_stmt = conn
+        .prepare(
+            "SELECT 1 FROM kg_entities \
+             WHERE id = ?1 \
+               AND entity_type = ?2 \
+               AND (agent_id = ?3 OR agent_id = '__global__') \
+             LIMIT 1",
+        )
+        .map_err(|e| format!("prepare filter failed: {e}"))?;
+
     for row in rows {
         let (id, dist) = row.map_err(|e| format!("row read failed: {e}"))?;
-        if dist <= L2_SQ_THRESHOLD {
+        if dist > L2_SQ_THRESHOLD {
+            // Rows are ordered by distance asc; once we exceed threshold, stop.
+            break;
+        }
+        let matches: Option<i64> = filter_stmt
+            .query_row(params![id, type_str, agent_id], |r| r.get(0))
+            .ok();
+        if matches.is_some() {
             return Ok(Some(id));
         }
     }
@@ -173,5 +192,4 @@ mod tests {
         assert_eq!(normalize_name("Mrs. Gandhi"), "gandhi");
         assert_eq!(normalize_name("Shri Patel"), "patel");
     }
-
 }

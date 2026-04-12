@@ -292,6 +292,12 @@ pub struct Entity {
     pub last_seen_at: DateTime<Utc>,
     /// Number of times this entity appears
     pub mention_count: i64,
+    /// Optional name embedding used for stage 2 (ANN) resolver.
+    /// When set, this vector is written to `kg_name_index` on store so that
+    /// subsequent resolves can match this entity by semantic similarity even
+    /// if the surface-form alias lookup misses.
+    #[serde(default)]
+    pub name_embedding: Option<Vec<f32>>,
 }
 
 /// Knowledge graph relationship
@@ -332,6 +338,7 @@ impl Entity {
             first_seen_at: now,
             last_seen_at: now,
             mention_count: 1,
+            name_embedding: None,
         }
     }
 

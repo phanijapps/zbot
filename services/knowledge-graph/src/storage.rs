@@ -129,6 +129,7 @@ impl GraphStorage {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 mention_count,
+                name_embedding: None,
             });
         }
 
@@ -273,6 +274,7 @@ impl GraphStorage {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 mention_count,
+                name_embedding: None,
             });
         }
 
@@ -363,6 +365,7 @@ impl GraphStorage {
                                 .map(|dt| dt.with_timezone(&chrono::Utc))
                                 .unwrap_or_else(|_| chrono::Utc::now()),
                             mention_count,
+                            name_embedding: None,
                         });
                     }
 
@@ -526,6 +529,7 @@ impl GraphStorage {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 mention_count,
+                name_embedding: None,
             });
         }
 
@@ -700,6 +704,7 @@ impl GraphStorage {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 mention_count,
+                name_embedding: None,
             }))
         } else {
             Ok(None)
@@ -798,6 +803,7 @@ impl GraphStorage {
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
                     mention_count: e_mentions,
+                    name_embedding: None,
                 };
 
                 let relationship = Relationship {
@@ -900,6 +906,7 @@ impl GraphStorage {
                         .map(|dt| dt.with_timezone(&chrono::Utc))
                         .unwrap_or_else(|_| chrono::Utc::now()),
                     mention_count: e_mentions,
+                    name_embedding: None,
                 };
 
                 let relationship = Relationship {
@@ -1179,6 +1186,7 @@ impl GraphStorage {
                     .map(|dt| dt.with_timezone(&chrono::Utc))
                     .unwrap_or_else(|_| chrono::Utc::now()),
                 mention_count,
+                name_embedding: None,
             });
         }
 
@@ -1218,7 +1226,9 @@ fn resolve_via_resolver(
     agent_id: &str,
     entity: &Entity,
 ) -> GraphResult<Option<String>> {
-    match crate::resolver::resolve(conn, agent_id, entity, None).map_err(GraphError::Other)? {
+    match crate::resolver::resolve(conn, agent_id, entity, entity.name_embedding.as_deref())
+        .map_err(GraphError::Other)?
+    {
         crate::resolver::ResolveOutcome::Merge {
             existing_id,
             reason,
@@ -1369,6 +1379,26 @@ fn store_entity(conn: &Connection, agent_id: &str, entity: Entity) -> GraphResul
         ],
     )
     .map_err(GraphError::Database)?;
+
+    // Populate kg_name_index if the caller provided a name embedding.
+    // vec0 does not support UPSERT; emulate with delete+insert (safe under SQLite's
+    // single-writer pool semantics — any concurrent insert sees the fresh row).
+    if let Some(emb) = entity.name_embedding.as_ref() {
+        if !emb.is_empty() {
+            conn.execute(
+                "DELETE FROM kg_name_index WHERE entity_id = ?1",
+                params![new_id],
+            )
+            .map_err(GraphError::Database)?;
+            let embedding_json = serde_json::to_string(emb)
+                .map_err(|e| GraphError::Other(format!("serialize embedding: {e}")))?;
+            conn.execute(
+                "INSERT INTO kg_name_index (entity_id, name_embedding) VALUES (?1, ?2)",
+                params![new_id, embedding_json],
+            )
+            .map_err(GraphError::Database)?;
+        }
+    }
 
     Ok(new_id)
 }
@@ -1929,6 +1959,81 @@ mod tests {
                 |r| r.get(0),
             )?;
             assert!(e1_alias_count >= 1, "at least one alias row for e1");
+            Ok(())
+        })
+        .unwrap();
+    }
+
+    #[test]
+    fn embedding_stage_merges_similar_name() {
+        let tmp = tempfile::tempdir().unwrap();
+        let paths =
+            std::sync::Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = std::sync::Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let storage = GraphStorage::new(db.clone()).unwrap();
+
+        fn normalized(v: Vec<f32>) -> Vec<f32> {
+            let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+            if n < 1e-9 {
+                v
+            } else {
+                v.into_iter().map(|x| x / n).collect()
+            }
+        }
+
+        let emb1 = normalized((0..384).map(|i| i as f32).collect());
+
+        let mut e1 = Entity::new(
+            "root".to_string(),
+            crate::EntityType::Person,
+            "V.D. Savarkar".to_string(),
+        );
+        e1.id = "e1".to_string();
+        e1.name_embedding = Some(emb1.clone());
+        storage
+            .store_knowledge(
+                "root",
+                ExtractedKnowledge {
+                    entities: vec![e1],
+                    relationships: vec![],
+                },
+            )
+            .unwrap();
+
+        // Candidate: completely different surface form (stage 1 alias miss),
+        // near-identical embedding (stage 2 should merge).
+        let mut emb2 = emb1.clone();
+        emb2[0] *= 0.999;
+        let emb2 = normalized(emb2);
+
+        let mut e2 = Entity::new(
+            "root".to_string(),
+            crate::EntityType::Person,
+            "UniqueString12345".to_string(),
+        );
+        e2.id = "e2".to_string();
+        e2.name_embedding = Some(emb2);
+        storage
+            .store_knowledge(
+                "root",
+                ExtractedKnowledge {
+                    entities: vec![e2],
+                    relationships: vec![],
+                },
+            )
+            .unwrap();
+
+        db.with_connection(|conn| {
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM kg_entities WHERE entity_type = 'person'",
+                [],
+                |r| r.get(0),
+            )?;
+            assert_eq!(
+                count, 1,
+                "embedding stage should merge near-identical vectors"
+            );
             Ok(())
         })
         .unwrap();
