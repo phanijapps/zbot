@@ -2,3 +2,4 @@
 //! Public entry: `IngestionQueue` + HTTP/tool wrappers.
 
 pub mod chunker;
+pub mod extractor;
