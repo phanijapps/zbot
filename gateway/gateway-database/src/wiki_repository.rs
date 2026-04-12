@@ -1,6 +1,15 @@
 //! Repository for ward wiki articles — compiled knowledge per ward.
+//!
+//! Phase 1b (v22): constructs on `KnowledgeDatabase` and stores embeddings in
+//! the `wiki_articles_index` vec0 virtual table through the `VectorIndex` trait.
+//! The `embedding` column on `ward_wiki_articles` is gone; callers write
+//! normalized vectors through `upsert_article`, which delegates to the injected
+//! `VectorIndex`. Vectors MUST be L2-normalized by the caller.
+//!
+//! To read an embedding back, use [`WardWikiRepository::get_article_embedding`].
 
-use crate::connection::DatabaseManager;
+use crate::vector_index::VectorIndex;
+use crate::KnowledgeDatabase;
 use rusqlite::params;
 use std::sync::Arc;
 
@@ -14,6 +23,12 @@ pub struct WikiArticle {
     pub content: String,
     pub tags: Option<String>,
     pub source_fact_ids: Option<String>,
+    /// Raw f32 embedding. Always `None` when loaded from `ward_wiki_articles`
+    /// (the column was removed in schema v22). Callers may set this to `Some(v)`
+    /// prior to `upsert_article` to have the vector persisted through the
+    /// `VectorIndex` — vectors MUST be L2-normalized by the caller.
+    ///
+    /// To read an embedding back, use [`WardWikiRepository::get_article_embedding`].
     pub embedding: Option<Vec<f32>>,
     pub version: i32,
     pub created_at: String,
@@ -22,12 +37,16 @@ pub struct WikiArticle {
 
 /// Repository for ward wiki article CRUD and vector search.
 pub struct WardWikiRepository {
-    db: Arc<DatabaseManager>,
+    db: Arc<KnowledgeDatabase>,
+    vec_index: Arc<dyn VectorIndex>,
 }
 
 impl WardWikiRepository {
-    pub fn new(db: Arc<DatabaseManager>) -> Self {
-        Self { db }
+    /// Create a new wiki repository.
+    ///
+    /// `vec_index` must wrap the `wiki_articles_index` vec0 table (384-dim).
+    pub fn new(db: Arc<KnowledgeDatabase>, vec_index: Arc<dyn VectorIndex>) -> Self {
+        Self { db, vec_index }
     }
 
     /// List all articles for a ward.
@@ -35,7 +54,7 @@ impl WardWikiRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, ward_id, agent_id, title, content, tags, source_fact_ids, \
-                 embedding, version, created_at, updated_at \
+                 version, created_at, updated_at \
                  FROM ward_wiki_articles WHERE ward_id = ?1 ORDER BY title",
             )?;
 
@@ -53,7 +72,7 @@ impl WardWikiRepository {
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
                 "SELECT id, ward_id, agent_id, title, content, tags, source_fact_ids, \
-                 embedding, version, created_at, updated_at \
+                 version, created_at, updated_at \
                  FROM ward_wiki_articles WHERE ward_id = ?1 AND title = ?2",
             )?;
 
@@ -69,23 +88,21 @@ impl WardWikiRepository {
     }
 
     /// Upsert an article (insert or update if title exists for this ward).
+    ///
+    /// If `article.embedding` is `Some(v)`, the vector is written to
+    /// `wiki_articles_index` via the injected `VectorIndex`. **Callers must
+    /// L2-normalize the vector first**.
     pub fn upsert_article(&self, article: &WikiArticle) -> Result<(), String> {
         self.db.with_connection(|conn| {
-            let embedding_bytes = article
-                .embedding
-                .as_ref()
-                .map(|e| e.iter().flat_map(|f| f.to_le_bytes()).collect::<Vec<u8>>());
-
             conn.execute(
                 "INSERT INTO ward_wiki_articles \
                  (id, ward_id, agent_id, title, content, tags, source_fact_ids, \
-                  embedding, version, created_at, updated_at) \
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
+                  version, created_at, updated_at) \
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10) \
                  ON CONFLICT(ward_id, title) DO UPDATE SET \
                  content = excluded.content, \
                  tags = excluded.tags, \
                  source_fact_ids = excluded.source_fact_ids, \
-                 embedding = excluded.embedding, \
                  version = version + 1, \
                  updated_at = excluded.updated_at",
                 params![
@@ -96,46 +113,75 @@ impl WardWikiRepository {
                     article.content,
                     article.tags,
                     article.source_fact_ids,
-                    embedding_bytes,
                     article.version,
                     article.created_at,
                     article.updated_at,
                 ],
             )?;
-
             Ok(())
-        })
+        })?;
+
+        if let Some(emb) = article.embedding.as_ref() {
+            self.vec_index.upsert(&article.id, emb)?;
+        }
+
+        Ok(())
     }
 
     /// Search articles by embedding similarity for a ward.
+    ///
+    /// Performs a nearest-neighbor query through `VectorIndex`, then loads the
+    /// matching `ward_wiki_articles` rows and filters by ward in Rust. The
+    /// returned score is cosine similarity (`1 - L2_sq / 2`), valid because
+    /// stored and query vectors are required to be L2-normalized.
     pub fn search_by_similarity(
         &self,
         ward_id: &str,
         query_embedding: &[f32],
         limit: usize,
     ) -> Result<Vec<(WikiArticle, f64)>, String> {
-        self.db.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT id, ward_id, agent_id, title, content, tags, source_fact_ids, \
-                 embedding, version, created_at, updated_at \
-                 FROM ward_wiki_articles \
-                 WHERE ward_id = ?1 AND embedding IS NOT NULL",
-            )?;
+        // Over-fetch so post-filtering by ward still returns `limit` hits.
+        let fetch = limit.saturating_mul(4).max(limit);
+        let nearest = self.vec_index.query_nearest(query_embedding, fetch)?;
+        if nearest.is_empty() {
+            return Ok(Vec::new());
+        }
 
-            let mut scored: Vec<(WikiArticle, f64)> = stmt
-                .query_map(params![ward_id], |row| Ok(Self::row_to_article(row)))?
-                .filter_map(|r| r.ok())
-                .filter_map(|article| {
-                    let embedding = article.embedding.as_ref()?;
-                    let sim = cosine_similarity(query_embedding, embedding);
-                    Some((article, sim))
-                })
-                .collect();
+        let ids: Vec<String> = nearest.iter().map(|(id, _)| id.clone()).collect();
+        let dist_by_id: std::collections::HashMap<String, f32> =
+            nearest.iter().map(|(id, d)| (id.clone(), *d)).collect();
 
-            scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-            scored.truncate(limit);
-            Ok(scored)
-        })
+        let placeholders = (0..ids.len())
+            .map(|i| format!("?{}", i + 1))
+            .collect::<Vec<_>>()
+            .join(",");
+        let sql = format!(
+            "SELECT id, ward_id, agent_id, title, content, tags, source_fact_ids, \
+             version, created_at, updated_at \
+             FROM ward_wiki_articles WHERE id IN ({placeholders})"
+        );
+
+        let articles: Vec<WikiArticle> = self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(&sql)?;
+            let params_iter = rusqlite::params_from_iter(ids.iter());
+            let rows = stmt.query_map(params_iter, |row| Ok(Self::row_to_article(row)))?;
+            Ok(rows.filter_map(|r| r.ok()).collect::<Vec<_>>())
+        })?;
+
+        let mut scored: Vec<(WikiArticle, f64)> = articles
+            .into_iter()
+            .filter(|a| a.ward_id == ward_id)
+            .map(|a| {
+                let dist = dist_by_id.get(&a.id).copied().unwrap_or(f32::MAX);
+                // L2 squared on normalized vectors → cosine = 1 - dist/2.
+                let score = 1.0 - (dist as f64) / 2.0;
+                (a, score)
+            })
+            .collect();
+
+        scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        Ok(scored)
     }
 
     /// Delete an article.
@@ -161,14 +207,27 @@ impl WardWikiRepository {
         })
     }
 
-    fn row_to_article(row: &rusqlite::Row) -> WikiArticle {
-        let embedding_blob: Option<Vec<u8>> = row.get(7).ok().flatten();
-        let embedding = embedding_blob.map(|blob| {
-            blob.chunks_exact(4)
-                .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
-                .collect()
-        });
+    /// Fetch the stored embedding for an article, if present in `wiki_articles_index`.
+    /// Returns `None` if the article has never been indexed.
+    ///
+    /// `sqlite-vec` stores vectors as `FLOAT[N]` BLOBs (little-endian f32s);
+    /// we decode the raw bytes back to `Vec<f32>`.
+    pub fn get_article_embedding(&self, article_id: &str) -> Result<Option<Vec<f32>>, String> {
+        self.db.with_connection(|conn| {
+            let r = conn.query_row(
+                "SELECT embedding FROM wiki_articles_index WHERE article_id = ?1",
+                params![article_id],
+                |row| row.get::<_, Vec<u8>>(0),
+            );
+            match r {
+                Ok(blob) => Ok(Some(blob_to_f32_vec(&blob))),
+                Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+                Err(e) => Err(e),
+            }
+        })
+    }
 
+    fn row_to_article(row: &rusqlite::Row) -> WikiArticle {
         WikiArticle {
             id: row.get(0).unwrap_or_default(),
             ward_id: row.get(1).unwrap_or_default(),
@@ -177,57 +236,52 @@ impl WardWikiRepository {
             content: row.get(4).unwrap_or_default(),
             tags: row.get(5).ok().flatten(),
             source_fact_ids: row.get(6).ok().flatten(),
-            embedding,
-            version: row.get(8).unwrap_or(1),
-            created_at: row.get(9).unwrap_or_default(),
-            updated_at: row.get(10).unwrap_or_default(),
+            embedding: None,
+            version: row.get(7).unwrap_or(1),
+            created_at: row.get(8).unwrap_or_default(),
+            updated_at: row.get(9).unwrap_or_default(),
         }
     }
 }
 
-/// Cosine similarity between two f32 vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let mut dot = 0.0_f64;
-    let mut norm_a = 0.0_f64;
-    let mut norm_b = 0.0_f64;
-    for (x, y) in a.iter().zip(b.iter()) {
-        let x = *x as f64;
-        let y = *y as f64;
-        dot += x * y;
-        norm_a += x * x;
-        norm_b += y * y;
-    }
-    let denom = norm_a.sqrt() * norm_b.sqrt();
-    if denom == 0.0 {
-        0.0
-    } else {
-        dot / denom
-    }
+fn blob_to_f32_vec(blob: &[u8]) -> Vec<f32> {
+    blob.chunks_exact(4)
+        .map(|chunk| f32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::vector_index::SqliteVecIndex;
+    use gateway_services::VaultPaths;
 
-    fn setup_test_db() -> Arc<DatabaseManager> {
-        use gateway_services::VaultPaths;
-        use tempfile::TempDir;
+    fn setup() -> (tempfile::TempDir, WardWikiRepository) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            db.clone(),
+            "wiki_articles_index",
+            "article_id",
+            384,
+        ));
+        let repo = WardWikiRepository::new(db, vec_index);
+        (tmp, repo)
+    }
 
-        let temp_dir = TempDir::new().unwrap();
-        let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
-        let _ = temp_dir.keep();
-        let db = DatabaseManager::new(paths).unwrap();
-        Arc::new(db)
+    fn normalized(v: Vec<f32>) -> Vec<f32> {
+        let norm: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if norm < 1e-9 {
+            v
+        } else {
+            v.into_iter().map(|x| x / norm).collect()
+        }
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_upsert_and_get_article() {
-        let db = setup_test_db();
-        let repo = WardWikiRepository::new(db);
+        let (_tmp, repo) = setup();
 
         let article = WikiArticle {
             id: "art-1".to_string(),
@@ -254,10 +308,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_upsert_updates_on_conflict() {
-        let db = setup_test_db();
-        let repo = WardWikiRepository::new(db);
+        let (_tmp, repo) = setup();
 
         let article = WikiArticle {
             id: "art-1".to_string(),
@@ -288,10 +340,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_list_articles() {
-        let db = setup_test_db();
-        let repo = WardWikiRepository::new(db);
+        let (_tmp, repo) = setup();
 
         for i in 0..3 {
             let article = WikiArticle {
@@ -315,11 +365,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_search_by_similarity() {
-        let db = setup_test_db();
-        let repo = WardWikiRepository::new(db);
+        let (_tmp, repo) = setup();
 
+        let emb = normalized(
+            (0..384)
+                .map(|i| if i == 0 { 1.0_f32 } else { 0.0_f32 })
+                .collect(),
+        );
         let article = WikiArticle {
             id: "art-1".to_string(),
             ward_id: "w1".to_string(),
@@ -328,24 +381,21 @@ mod tests {
             content: "content".to_string(),
             tags: None,
             source_fact_ids: None,
-            embedding: Some(vec![1.0, 0.0, 0.0]),
+            embedding: Some(emb.clone()),
             version: 1,
             created_at: "2026-04-11".to_string(),
             updated_at: "2026-04-11".to_string(),
         };
         repo.upsert_article(&article).unwrap();
 
-        let query = vec![1.0, 0.0, 0.0]; // identical to article
-        let results = repo.search_by_similarity("w1", &query, 5).unwrap();
+        let results = repo.search_by_similarity("w1", &emb, 5).unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].1 > 0.99); // cosine similarity ~1.0
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_delete_article() {
-        let db = setup_test_db();
-        let repo = WardWikiRepository::new(db);
+        let (_tmp, repo) = setup();
 
         let article = WikiArticle {
             id: "art-1".to_string(),
@@ -367,18 +417,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
-    fn test_cosine_similarity() {
-        assert!((cosine_similarity(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 0.001);
-        assert!((cosine_similarity(&[1.0, 0.0], &[0.0, 1.0])).abs() < 0.001);
-        assert!((cosine_similarity(&[], &[])).abs() < 0.001);
-    }
-
-    #[test]
-    #[ignore = "Phase 1b: repository must migrate to KnowledgeDatabase (tables moved in v22)"]
     fn test_count_articles() {
-        let db = setup_test_db();
-        let repo = WardWikiRepository::new(db);
+        let (_tmp, repo) = setup();
 
         assert_eq!(repo.count_articles("w1").unwrap(), 0);
 
