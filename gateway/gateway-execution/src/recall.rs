@@ -26,7 +26,10 @@ use gateway_database::{
     EpisodeRepository, MemoryRepository, RecallLogRepository, ScoredFact, SessionEpisode,
 };
 use gateway_services::RecallConfig;
-use knowledge_graph::{EntityWithConnections, GraphService, GraphTraversal};
+use knowledge_graph::{
+    Direction, EntityWithConnections, GraphService, GraphStorage, GraphTraversal,
+};
+use regex::Regex;
 
 /// Result of a memory recall operation, optionally including graph context.
 #[derive(Debug, Clone)]
@@ -697,6 +700,52 @@ impl MemoryRecall {
         ))
     }
 
+    /// Recall for delegation with optional knowledge graph enrichment.
+    ///
+    /// Same as `recall_for_delegation` but also looks up entity candidates from
+    /// the task text in the knowledge graph and appends related context.
+    pub async fn recall_for_delegation_with_graph(
+        &self,
+        agent_id: &str,
+        task: &str,
+        ward_id: Option<&str>,
+        limit: usize,
+        graph_storage: Option<&GraphStorage>,
+    ) -> Result<String, String> {
+        let base_context = self
+            .recall_for_delegation(agent_id, task, ward_id, limit)
+            .await?;
+
+        let storage = match graph_storage {
+            Some(s) => s,
+            None => return Ok(base_context),
+        };
+
+        let candidates = extract_entity_candidates(task);
+        if candidates.is_empty() {
+            return Ok(base_context);
+        }
+
+        let graph_section = build_graph_section(storage, agent_id, &candidates).await;
+
+        if graph_section.is_empty() {
+            return Ok(base_context);
+        }
+
+        if base_context.is_empty() {
+            return Ok(format!(
+                "<primed_context>\n{}\n</primed_context>",
+                graph_section
+            ));
+        }
+
+        // Insert graph section before the closing </primed_context> tag
+        Ok(base_context.replace(
+            "</primed_context>",
+            &format!("\n\n{}\n</primed_context>", graph_section),
+        ))
+    }
+
     /// Embed a query string for vector search.
     async fn embed_query(&self, text: &str) -> Option<Vec<f32>> {
         let client = self.embedding_client.as_ref()?;
@@ -1118,6 +1167,127 @@ fn cosine_similarity(a: &[f32], b: &[f32]) -> f64 {
 }
 
 // ============================================================================
+// GRAPH ENRICHMENT HELPERS
+// ============================================================================
+
+/// Build a graph context section by looking up entity candidates in the knowledge graph.
+///
+/// Looks up up to 5 candidates, gets 1-hop neighbors, and formats as markdown.
+/// Caps output at ~2000 characters (~500 tokens).
+async fn build_graph_section(
+    storage: &GraphStorage,
+    agent_id: &str,
+    candidates: &[String],
+) -> String {
+    let max_chars: usize = 2000;
+    let max_candidates: usize = 5;
+    let mut lines: Vec<String> = Vec::new();
+    let mut total_len: usize = 0;
+
+    for candidate in candidates.iter().take(max_candidates) {
+        let entity = match storage.get_entity_by_name(agent_id, candidate).await {
+            Ok(Some(e)) => e,
+            _ => continue,
+        };
+
+        let neighbors = storage
+            .get_neighbors(agent_id, &entity.id, Direction::Both, 5)
+            .await
+            .unwrap_or_default();
+
+        if neighbors.is_empty() {
+            continue;
+        }
+
+        let section = format_graph_context_section(&entity.name, &neighbors);
+        if total_len + section.len() > max_chars {
+            break;
+        }
+        total_len += section.len();
+        lines.push(section);
+    }
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    format!("## Related Knowledge Graph Context\n{}", lines.join("\n"))
+}
+
+// ============================================================================
+// ENTITY CANDIDATE EXTRACTION
+// ============================================================================
+
+/// Extract entity name candidates from text using simple heuristics.
+///
+/// Extracts:
+/// - Quoted strings: `"West Bengal"` → `West Bengal`
+/// - ALLCAPS acronyms (3+ chars): `SPY`, `AAPL` → lowercased
+/// - PascalCase words: `MultiIndex`, `DataFrame` → as-is
+///
+/// Returns a deduplicated vector of candidate names.
+pub fn extract_entity_candidates(text: &str) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+
+    // 1. Quoted strings
+    let quoted_re = Regex::new(r#""([^"]{2,50})""#).unwrap_or_else(|_| return_empty_regex());
+    for cap in quoted_re.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            candidates.push(m.as_str().to_string());
+        }
+    }
+
+    // 2. ALLCAPS acronyms (3+ uppercase letters, standalone word)
+    let allcaps_re = Regex::new(r"\b([A-Z]{3,})\b").unwrap_or_else(|_| return_empty_regex());
+    for cap in allcaps_re.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            candidates.push(m.as_str().to_lowercase());
+        }
+    }
+
+    // 3. PascalCase words (at least two uppercase-lowercase transitions)
+    let pascal_re =
+        Regex::new(r"\b([A-Z][a-z]+(?:[A-Z][a-z]+)+)\b").unwrap_or_else(|_| return_empty_regex());
+    for cap in pascal_re.captures_iter(text) {
+        if let Some(m) = cap.get(1) {
+            candidates.push(m.as_str().to_string());
+        }
+    }
+
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    candidates.retain(|c| seen.insert(c.clone()));
+    candidates
+}
+
+/// Fallback regex that matches nothing (used when regex compilation fails).
+fn return_empty_regex() -> Regex {
+    // Anchored pattern that can never match — safe fallback
+    Regex::new(r"^\b$").expect("fallback regex must compile")
+}
+
+/// Format graph neighbor relationships into a context string.
+fn format_graph_context_section(
+    entity_name: &str,
+    neighbors: &[knowledge_graph::NeighborInfo],
+) -> String {
+    let mut lines = Vec::new();
+    for n in neighbors {
+        let rel_type = n.relationship.relationship_type.as_str();
+        let dir_arrow = match n.direction {
+            Direction::Outgoing => "→",
+            Direction::Incoming => "←",
+            _ => "↔",
+        };
+        lines.push(format!(
+            "  {} {} {} ({})",
+            entity_name, dir_arrow, n.entity.name, rel_type
+        ));
+    }
+    lines.join("\n")
+}
+
+// ============================================================================
 // TESTS
 // ============================================================================
 
@@ -1522,6 +1692,49 @@ mod tests {
         let old = chrono::Utc::now() - chrono::Duration::days(180);
         let decay = temporal_decay(old, 30.0);
         assert!(decay < 0.2); // Very old = very low
+    }
+
+    #[test]
+    fn test_extract_entity_candidates_quoted_strings() {
+        let result = extract_entity_candidates(r#"Look up "West Bengal" and "New York" data"#);
+        assert!(result.contains(&"West Bengal".to_string()));
+        assert!(result.contains(&"New York".to_string()));
+    }
+
+    #[test]
+    fn test_extract_entity_candidates_allcaps_acronyms() {
+        let result = extract_entity_candidates("Check SPY and AAPL prices today");
+        assert!(result.contains(&"spy".to_string()));
+        assert!(result.contains(&"aapl".to_string()));
+    }
+
+    #[test]
+    fn test_extract_entity_candidates_pascal_case() {
+        let result = extract_entity_candidates("Use MultiIndex and DataFrame for analysis");
+        assert!(result.contains(&"MultiIndex".to_string()));
+        assert!(result.contains(&"DataFrame".to_string()));
+    }
+
+    #[test]
+    fn test_extract_entity_candidates_empty_simple_text() {
+        let result = extract_entity_candidates("hello world");
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_extract_entity_candidates_deduplication() {
+        let result = extract_entity_candidates("SPY is SPY, always SPY");
+        let spy_count = result.iter().filter(|c| *c == "spy").count();
+        assert_eq!(spy_count, 1);
+    }
+
+    #[test]
+    fn test_extract_entity_candidates_mixed() {
+        let result =
+            extract_entity_candidates(r#"Analyze "S&P 500" using DataFrame with AAPL data"#);
+        assert!(result.contains(&"S&P 500".to_string()));
+        assert!(result.contains(&"aapl".to_string()));
+        assert!(result.contains(&"DataFrame".to_string()));
     }
 
     #[test]

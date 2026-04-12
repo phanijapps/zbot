@@ -52,6 +52,9 @@ flate2 = "1"
 # Database (direct queries in archiver)
 rusqlite = { version = "0.32", features = ["bundled"] }
 
+# Regex
+regex = { workspace = true }
+
 # Utilities
 uuid = { workspace = true }
 chrono = { workspace = true }

@@ -294,6 +294,7 @@ pub async fn spawn_delegated_agent(
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
+    let graph_storage_for_recall = graph_storage.clone();
     if let Some(gs) = graph_storage {
         builder = builder.with_graph_storage(gs);
     }
@@ -322,17 +323,25 @@ pub async fn spawn_delegated_agent(
     };
 
     // Delegation recall: inject relevant knowledge for the child agent
+    // Uses graph-enriched recall when graph storage is available
     let initial_history = if let Some(recall) = &memory_recall {
         let ward_id = session_ward_id.as_deref();
+        let gs_ref = graph_storage_for_recall.as_deref();
         match recall
-            .recall_for_delegation(&request.child_agent_id, &request.task, ward_id, 8)
+            .recall_for_delegation_with_graph(
+                &request.child_agent_id,
+                &request.task,
+                ward_id,
+                8,
+                gs_ref,
+            )
             .await
         {
             Ok(context) if !context.is_empty() => {
                 tracing::info!(
                     agent = %request.child_agent_id,
                     context_len = context.len(),
-                    "Primed subagent with recalled memory context"
+                    "Primed subagent with recalled memory context (graph-enriched)"
                 );
                 vec![ChatMessage::system(context)]
             }
