@@ -15,6 +15,7 @@ pub mod procedure_repository;
 pub mod recall_log_repository;
 pub mod repository;
 mod schema;
+pub mod sqlite_vec_loader;
 pub mod wiki_repository;
 
 pub use connection::DatabaseManager;
