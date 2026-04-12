@@ -22,6 +22,7 @@ use agent_tools::MemoryStore;
 use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
+use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
 use gateway_database::{
     DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
     MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
@@ -182,10 +183,23 @@ impl AppState {
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
 
-        // Initialize memory evolution services
-        let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
+        // Initialize memory evolution services — repositories that need vector
+        // similarity get a SqliteVecIndex over their vec0 partner table.
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            knowledge_db.clone(),
+            "memory_facts_index",
+            "fact_id",
+            384,
+        ));
+        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
-        let episode_repo = Arc::new(EpisodeRepository::new(db_manager.clone()));
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            knowledge_db.clone(),
+            "session_episodes_index",
+            "episode_id",
+            384,
+        ));
+        let episode_repo = Arc::new(EpisodeRepository::new(knowledge_db.clone(), episode_vec));
         let kg_episode_repo = Arc::new(KgEpisodeRepository::new(knowledge_db.clone()));
 
         // Initialize knowledge graph service and storage
@@ -253,11 +267,26 @@ impl AppState {
         }
 
         // Wire ward wiki repository for wiki-first recall
-        let wiki_repo = Arc::new(WardWikiRepository::new(db_manager.clone()));
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            knowledge_db.clone(),
+            "wiki_articles_index",
+            "article_id",
+            384,
+        ));
+        let wiki_repo = Arc::new(WardWikiRepository::new(knowledge_db.clone(), wiki_vec.clone()));
         memory_recall_inner.set_wiki_repo(wiki_repo);
 
         // Wire procedure repository for procedure recall during intent analysis
-        let procedure_repo = Arc::new(ProcedureRepository::new(db_manager.clone()));
+        let procedure_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            knowledge_db.clone(),
+            "procedures_index",
+            "procedure_id",
+            384,
+        ));
+        let procedure_repo = Arc::new(ProcedureRepository::new(
+            knowledge_db.clone(),
+            procedure_vec,
+        ));
         memory_recall_inner.set_procedure_repo(procedure_repo.clone());
 
         let memory_recall = Arc::new(memory_recall_inner);
@@ -275,7 +304,7 @@ impl AppState {
         // Create settings service (before distiller & runtime, so we can read execution settings)
         let settings = Arc::new(SettingsService::new(paths.clone()));
 
-        let wiki_repo = Arc::new(WardWikiRepository::new(db_manager.clone()));
+        let wiki_repo = Arc::new(WardWikiRepository::new(knowledge_db.clone(), wiki_vec));
 
         let mut distiller_inner = SessionDistiller::new(
             provider_service.clone(),
@@ -388,12 +417,16 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
-        let memory_repo = Arc::new(MemoryRepository::new(Arc::new(
-            DatabaseManager::new(paths.clone()).expect("Failed to initialize database for memory"),
-        )));
         let knowledge_db = Arc::new(
             KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
         );
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            knowledge_db.clone(),
+            "memory_facts_index",
+            "fact_id",
+            384,
+        ));
+        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create connector registry
         let connector_service = ConnectorService::new(paths.clone());
@@ -460,12 +493,16 @@ impl AppState {
         paths: SharedVaultPaths,
     ) -> Self {
         let config_dir = paths.vault_dir().clone();
-        let db =
-            Arc::new(DatabaseManager::new(paths.clone()).expect("Failed to initialize database"));
-        let memory_repo = Arc::new(MemoryRepository::new(db));
         let knowledge_db = Arc::new(
             KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
         );
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
+            knowledge_db.clone(),
+            "memory_facts_index",
+            "fact_id",
+            384,
+        ));
+        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create bridge registry and outbox
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
