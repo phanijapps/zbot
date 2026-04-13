@@ -330,45 +330,27 @@ pub async fn spawn_delegated_agent(
         }
     };
 
-    // Shadow call: exercise unified recall pool in the delegation context
-    // (log-only; legacy recall_for_delegation_with_graph still drives priming).
-    if let Some(recall) = &memory_recall {
-        let ward_id = session_ward_id.as_deref();
-        let unified = recall
-            .recall_unified(&request.child_agent_id, &request.task, ward_id, &[], 10)
-            .await
-            .unwrap_or_default();
-        if !unified.is_empty() {
-            tracing::info!(
-                agent_id = %request.child_agent_id,
-                count = unified.len(),
-                "recall_unified shadow — delegation"
-            );
-        }
-    }
-
-    // Delegation recall: inject relevant knowledge for the child agent
-    // Uses graph-enriched recall when graph storage is available
+    // Delegation recall: prime the subagent with unified scored recall over
+    // facts, wiki, procedures, graph nodes, episodes, and goals.
+    let _ = graph_storage_for_recall; // retained for future wiring
     let initial_history = if let Some(recall) = &memory_recall {
         let ward_id = session_ward_id.as_deref();
-        let gs_ref = graph_storage_for_recall.as_deref();
         match recall
-            .recall_for_delegation_with_graph(
-                &request.child_agent_id,
-                &request.task,
-                ward_id,
-                8,
-                gs_ref,
-            )
+            .recall_unified(&request.child_agent_id, &request.task, ward_id, &[], 10)
             .await
         {
-            Ok(context) if !context.is_empty() => {
-                tracing::info!(
-                    agent = %request.child_agent_id,
-                    context_len = context.len(),
-                    "Primed subagent with recalled memory context (graph-enriched)"
-                );
-                vec![ChatMessage::system(context)]
+            Ok(items) if !items.is_empty() => {
+                let formatted = crate::recall::format_scored_items(&items);
+                if formatted.is_empty() {
+                    Vec::new()
+                } else {
+                    tracing::info!(
+                        agent = %request.child_agent_id,
+                        count = items.len(),
+                        "Primed subagent with unified recalled context"
+                    );
+                    vec![ChatMessage::system(formatted)]
+                }
             }
             Ok(_) => Vec::new(),
             Err(e) => {

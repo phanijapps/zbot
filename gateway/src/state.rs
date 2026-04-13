@@ -27,7 +27,7 @@ use gateway_database::{
     DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
     MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
-use knowledge_graph::{GraphService, GraphStorage, SqliteGraphTraversal};
+use knowledge_graph::{GraphService, GraphStorage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -274,15 +274,6 @@ impl AppState {
         // Wire recall log for tracking recalled facts per session (enables predictive recall)
         let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
         memory_recall_inner.set_recall_log(recall_log);
-
-        // Wire graph traversal engine for graph-driven expansion in recall
-        if let Some(ref gs) = graph_storage {
-            let traversal = Arc::new(SqliteGraphTraversal::new(
-                gs.clone(),
-                recall_config.graph_traversal.hop_decay,
-            ));
-            memory_recall_inner.set_traversal(traversal);
-        }
 
         // Wire ward wiki repository for wiki-first recall
         let wiki_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(

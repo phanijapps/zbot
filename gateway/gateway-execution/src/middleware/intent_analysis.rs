@@ -343,27 +343,28 @@ pub async fn analyze_intent(
 
     tracing::info!("Starting intent analysis for root session");
 
-    // Shadow call: exercise unified recall pool in the intent-analysis context
-    // (log-only; legacy recall_for_intent still drives the actual prompt).
-    if let Some(recall) = memory_recall {
-        let unified: Vec<crate::recall::ScoredItem> = recall
+    // Step 0: Query memory for relevant past context via the unified recall pool.
+    // Intent analysis runs at root level before a specific agent is selected, so
+    // we use "root" as the agent_id. No ward is available at this site yet.
+    let memory_context = if let Some(recall) = memory_recall {
+        match recall
             .recall_unified("root", user_message, None, &[], 10)
             .await
-            .unwrap_or_default();
-        if !unified.is_empty() {
-            tracing::info!(
-                count = unified.len(),
-                "recall_unified shadow — intent analysis"
-            );
+        {
+            Ok(items) if !items.is_empty() => {
+                let formatted = crate::recall::format_scored_items(&items);
+                tracing::info!(
+                    count = items.len(),
+                    "Recalled unified context for intent analysis"
+                );
+                formatted
+            }
+            Ok(_) => String::new(),
+            Err(e) => {
+                tracing::warn!("Intent-analysis unified recall failed: {}", e);
+                String::new()
+            }
         }
-    }
-
-    // Step 0: Query memory for relevant past context (corrections, strategies, episodes)
-    let memory_context = if let Some(recall) = memory_recall {
-        recall
-            .recall_for_intent(user_message, 5)
-            .await
-            .unwrap_or_default()
     } else {
         String::new()
     };

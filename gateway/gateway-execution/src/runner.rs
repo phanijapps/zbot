@@ -758,9 +758,8 @@ impl ExecutionRunner {
         // Skipped in fast mode for speed — chat_protocol instructs the agent to skip recall.
         if !config.is_fast_mode() {
             if let Some(recall) = &self.memory_recall {
-                // Phase 3: unified scored recall runs alongside legacy recall. Failures here
-                // are silently swallowed — the legacy path remains the source of truth.
-                let unified_items: Vec<crate::recall::ScoredItem> = recall
+                let _ = session_id; // retained for future recall-log wiring
+                match recall
                     .recall_unified(
                         &config.agent_id,
                         &message,
@@ -769,67 +768,25 @@ impl ExecutionRunner {
                         10,
                     )
                     .await
-                    .unwrap_or_default();
-                if !unified_items.is_empty() {
-                    tracing::info!(
-                        agent_id = %config.agent_id,
-                        count = unified_items.len(),
-                        "recall_unified returned items"
-                    );
-                }
-                match recall
-                    .recall_with_graph(
-                        &config.agent_id,
-                        &message,
-                        5,
-                        setup.ward_id.as_deref(),
-                        Some(&session_id),
-                    )
-                    .await
                 {
-                    Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
-                        history.insert(0, ChatMessage::system(result.formatted));
+                    Ok(items) if !items.is_empty() => {
+                        let formatted = crate::recall::format_scored_items(&items);
+                        if !formatted.is_empty() {
+                            history.insert(0, ChatMessage::system(formatted));
+                        }
                         tracing::info!(
-                            facts = result.facts.len(),
-                            episodes = result.episodes.len(),
-                            "Recalled memory context for first message"
+                            agent_id = %config.agent_id,
+                            count = items.len(),
+                            "Recalled unified context for first message"
                         );
                     }
                     Ok(_) => {
                         tracing::debug!(
-                            "First-message recall returned empty — no relevant facts/episodes"
+                            "First-message unified recall returned empty — no relevant items"
                         );
                     }
                     Err(e) => {
-                        tracing::warn!(
-                            "First-message graph recall failed: {}, falling back to basic recall",
-                            e
-                        );
-                        // Fallback: try basic recall without graph
-                        match recall
-                            .recall(&config.agent_id, &message, 5, setup.ward_id.as_deref())
-                            .await
-                        {
-                            Ok(facts) if !facts.is_empty() => {
-                                let formatted: Vec<String> = facts
-                                    .iter()
-                                    .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                    .collect();
-                                history.insert(
-                                    0,
-                                    ChatMessage::system(format!(
-                                        "## Recalled Context\n{}",
-                                        formatted.join("\n")
-                                    )),
-                                );
-                                tracing::info!(
-                                    facts = facts.len(),
-                                    "Fallback recall injected facts"
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(e2) => tracing::warn!("Fallback recall also failed: {}", e2),
-                        }
+                        tracing::warn!("First-message unified recall failed: {}", e);
                     }
                 }
             }
@@ -2191,21 +2148,23 @@ async fn invoke_continuation(
 
     if let Some(recall) = &memory_recall {
         match recall
-            .recall_with_graph(
+            .recall_unified(
                 root_agent_id,
                 &continuation_recall_query,
-                5,
                 session_ward_id.as_deref(),
-                Some(session_id),
+                &[],
+                10,
             )
             .await
         {
-            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
-                history.insert(0, ChatMessage::system(result.formatted));
+            Ok(items) if !items.is_empty() => {
+                let formatted = crate::recall::format_scored_items(&items);
+                if !formatted.is_empty() {
+                    history.insert(0, ChatMessage::system(formatted));
+                }
                 tracing::info!(
-                    fact_count = result.facts.len(),
-                    episode_count = result.episodes.len(),
-                    "Recalled facts and episodes for continuation"
+                    item_count = items.len(),
+                    "Recalled unified context for continuation"
                 );
             }
             Ok(_) => {}
