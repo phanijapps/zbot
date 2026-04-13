@@ -244,6 +244,20 @@ Wards may be Python, Go, Rust, TypeScript, Java, prose-only, anything. The plann
 - Size caps belong in the spec's Constraints section (task-appropriate), not hardcoded here.
 - The last step archives the plan and marks the spec complete.
 
+## Plan-size discipline for milestone phases
+
+When the spec corresponds to a milestone phase (its name matches a phase in `specs/milestones.md`), the plan should have **1-3 implementation steps maximum**, plus the final archive step.
+
+The milestone has already done the macro-decomposition. Splitting one milestone phase into 6+ plan steps doubles decomposition and multiplies delegation overhead — each step re-delegates full system context (~100k+ tokens per call).
+
+Rules of thumb:
+- A milestone phase ≈ one natural code-agent delegation. If your plan needs 5+ steps, either:
+  (a) the phase is too large — go back to `milestones.md` and split it into two phases.
+  (b) you're over-splitting — merge adjacent concerns into one delegation.
+- Acceptable step split inside a phase: "write the primitive(s)" → "write the instance wrapper + test" → "archive". Three steps.
+- Project-structure setup (Cargo init, `package.json`, `go mod init`) happens in ONE step alongside first code, not one step per concern.
+- The six-step pattern ("setup → args → fetch → parse → format → test") is exactly the antipattern — those are all one code-agent delegation.
+
 ## Save, don't return
 Do not put the spec or plan content in your response. Write both files to the filesystem:
 ```

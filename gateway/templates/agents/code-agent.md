@@ -91,7 +91,7 @@ Before you respond, walk through every item. If a box can't be checked, do the w
 
 - [ ] **Acceptance criteria**: every AC in `specs/{task}/spec.md` is satisfied. If one isn't, say so explicitly with what's missing.
 - [ ] **AGENTS.md populated**: `cat AGENTS.md | wc -c`. If under ~40 chars (i.e. just the seed heading), populate it with the canonical shape (see "AGENTS.md template" below). Don't write a one-liner — write the full template the first time you touch a fresh ward.
-- [ ] **AGENTS.md instances list**: if AGENTS.md has an "Existing instances" or "Instances" section and you created a new instance directory, append the new entry there. Keep entries one line each: `` `instance-name/` — short description ``.
+- [ ] **AGENTS.md instances / progress list**: if AGENTS.md has an "Existing instances" section and you created a new instance directory, append the new entry. If AGENTS.md has a "Progress" section (single-artifact ward tracking milestones), update the phase checkmarks to mirror `specs/milestones.md`.
 - [ ] **structure.md new directories**: did this task create any new top-level directory in the ward (new instance dir, new primitives dir, new `tmp/`, etc.)? If yes, add it to `memory-bank/structure.md`. If it has a "Layout" section, extend it. If it has an "Instances" section, add the new instance to the list. If neither exists and this is the first time a second instance appears, add an Instances section listing all instance directories.
 - [ ] **core_docs.md primitives**: if you created or changed a primitive, its entry in `memory-bank/core_docs.md` is current (signature + example).
 - [ ] **ward.md conventions**: if you learned a non-obvious convention or gotcha during this task, add it to `memory-bank/ward.md`. Skip if nothing new was learned.
@@ -103,12 +103,14 @@ After the checklist passes, respond with a short summary: what you built, which 
 
 ## AGENTS.md template (canonical shape)
 
-When `AGENTS.md` is just the seed heading, populate it with this structure. Keep it short — every section is one paragraph or a short bullet list. Adapt section names to the domain.
+Two shapes depending on ward type. Pick based on whether the ward has multiple named instance directories (multi-instance) or produces one shared codebase (single-artifact).
+
+### Multi-instance ward (e.g. `stock-analysis` — one instance per ticker)
 
 ```markdown
 # {ward-name}
 
-{One-paragraph purpose: what kinds of tasks this ward handles, what shape they take. Mention the primitives directory name and the instance directory pattern.}
+{One-paragraph purpose: what tasks this ward handles, what shape instances take. Mention the primitives directory name.}
 
 ## Read first
 - `memory-bank/structure.md` — directory layout and instance pattern
@@ -120,5 +122,35 @@ When `AGENTS.md` is just the seed heading, populate it with this structure. Keep
 - `{first-instance}/` — {one-line description}
 ```
 
-Future sessions extend the "Existing instances" list as new instance dirs are added (per the checklist). The "Read first" list is stable — don't reinvent it per session. The purpose paragraph is updated only when the ward's scope materially changes.
+Extend the "Existing instances" list as new instance dirs are added.
+
+### Single-artifact ward (e.g. `repo-analyzer` — one CLI / library / service)
+
+```markdown
+# {ward-name}
+
+{One-paragraph purpose: what the artifact is, what it does.}
+
+## Read first
+- `memory-bank/structure.md` — module layout and conventions
+- `memory-bank/core_docs.md` — exported API (signatures + examples)
+- `memory-bank/ward.md` — conventions and gotchas
+- `specs/milestones.md` — phased progression (if present)
+
+## Progress
+- ✓ Phase 1 — {title}
+- → Phase 2 — {title} (in progress)
+- ☐ Phase 3 — {title}
+- ☐ Phase 4 — {title}
+```
+
+Keep the "Progress" section synced with `specs/milestones.md` checkmarks. `✓` = complete, `→` = in progress, `☐` = pending.
+
+### Which shape to pick
+
+- Ward produces per-invocation outputs with named targets (tickers, topics, experiments) → **multi-instance**.
+- Ward produces one shared codebase that evolves (CLI, library, service, engine) → **single-artifact**.
+- If `specs/milestones.md` exists, it's usually single-artifact — use the Progress section.
+
+The "Read first" list is stable — don't reinvent it per session. The purpose paragraph is updated only when the ward's scope materially changes.
 
