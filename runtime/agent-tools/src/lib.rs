@@ -17,9 +17,16 @@ pub use tools::{
     // Knowledge graph query types
     EntityInfo,
     GlobTool,
+    // Goal tool (agent intent lifecycle)
+    GoalAccess,
+    GoalSummary,
+    GoalTool,
     GraphQueryTool,
     GraphStorageAccess,
     GrepTool,
+    // Ingestion tool (enqueue text for background extraction)
+    IngestTool,
+    IngestionAccess,
     // Composite re-exports
     ListAgentsTool,
     LoadSkillTool,

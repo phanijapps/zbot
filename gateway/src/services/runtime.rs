@@ -86,6 +86,8 @@ impl RuntimeService {
             2,    // default max_parallel_agents
             None, // graph_storage
             None, // kg_episode_repo
+            None, // ingestion_adapter
+            None, // goal_adapter
         )
     }
 
@@ -112,6 +114,8 @@ impl RuntimeService {
         max_parallel_agents: u32,
         graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
         kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+        ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+        goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     ) -> Self {
         let mut runner = ExecutionRunner::with_connector_registry(
             event_bus.clone(),
@@ -149,6 +153,14 @@ impl RuntimeService {
 
         if let Some(repo) = kg_episode_repo {
             runner.set_kg_episode_repo(repo);
+        }
+
+        if let Some(a) = ingestion_adapter {
+            runner.set_ingestion_adapter(a);
+        }
+
+        if let Some(a) = goal_adapter {
+            runner.set_goal_adapter(a);
         }
 
         Self {

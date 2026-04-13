@@ -112,6 +112,10 @@ pub struct ExecutionRunner {
     graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
     /// KG episode repository for ward artifact indexing after distillation.
     kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
 
 impl ExecutionRunner {
@@ -206,6 +210,8 @@ impl ExecutionRunner {
             )),
             graph_storage: None,
             kg_episode_repo: None,
+            ingestion_adapter: None,
+            goal_adapter: None,
         };
 
         // Spawn delegation handler task
@@ -230,6 +236,16 @@ impl ExecutionRunner {
     /// Set the KG episode repository used by post-distillation ward indexing.
     pub fn set_kg_episode_repo(&mut self, repo: Arc<gateway_database::KgEpisodeRepository>) {
         self.kg_episode_repo = Some(repo);
+    }
+
+    /// Set the ingestion adapter so the `ingest` agent tool is registered.
+    pub fn set_ingestion_adapter(&mut self, adapter: Arc<dyn agent_tools::IngestionAccess>) {
+        self.ingestion_adapter = Some(adapter);
+    }
+
+    /// Set the goal adapter so the `goal` agent tool is registered.
+    pub fn set_goal_adapter(&mut self, adapter: Arc<dyn agent_tools::GoalAccess>) {
+        self.goal_adapter = Some(adapter);
     }
 
     /// Get or create a shared rate limiter for a provider.
@@ -289,6 +305,8 @@ impl ExecutionRunner {
         let memory_recall = self.memory_recall.clone();
         let rate_limiters = self.rate_limiters.clone();
         let graph_storage_for_delegation = self.graph_storage.clone();
+        let ingestion_adapter_for_delegation = self.ingestion_adapter.clone();
+        let goal_adapter_for_delegation = self.goal_adapter.clone();
 
         tokio::spawn(async move {
             // Per-session tracking: only one delegation active per session at a time
@@ -333,6 +351,8 @@ impl ExecutionRunner {
                     >,
                 >,
                 graph_storage: &Option<Arc<knowledge_graph::GraphStorage>>,
+                ingestion_adapter: &Option<Arc<dyn agent_tools::IngestionAccess>>,
+                goal_adapter: &Option<Arc<dyn agent_tools::GoalAccess>>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -357,6 +377,8 @@ impl ExecutionRunner {
                 let memory_recall = memory_recall.clone();
                 let rate_limiters = rate_limiters.clone();
                 let graph_storage = graph_storage.clone();
+                let ingestion_adapter = ingestion_adapter.clone();
+                let goal_adapter = goal_adapter.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -383,6 +405,8 @@ impl ExecutionRunner {
                         memory_recall,
                         rate_limiters,
                         graph_storage,
+                        ingestion_adapter,
+                        goal_adapter,
                     )
                     .await;
 
@@ -422,6 +446,8 @@ impl ExecutionRunner {
                                 &memory_repo, &embedding_client,
                                 &memory_recall, &rate_limiters,
                                 &graph_storage_for_delegation,
+                                &ingestion_adapter_for_delegation,
+                                &goal_adapter_for_delegation,
                                 done_tx.clone(),
                             );
                         } else if active_sessions.contains(&session_id) {
@@ -453,6 +479,8 @@ impl ExecutionRunner {
                                 &memory_repo, &embedding_client,
                                 &memory_recall, &rate_limiters,
                                 &graph_storage_for_delegation,
+                                &ingestion_adapter_for_delegation,
+                                &goal_adapter_for_delegation,
                                 done_tx.clone(),
                             );
                         }
@@ -481,6 +509,8 @@ impl ExecutionRunner {
                                     &memory_repo, &embedding_client,
                                     &memory_recall, &rate_limiters,
                                     &graph_storage_for_delegation,
+                                    &ingestion_adapter_for_delegation,
+                                    &goal_adapter_for_delegation,
                                     done_tx.clone(),
                                 );
                             }
@@ -520,6 +550,8 @@ impl ExecutionRunner {
         let model_registry = self.model_registry.clone();
         let graph_storage = self.graph_storage.clone();
         let kg_episode_repo = self.kg_episode_repo.clone();
+        let ingestion_adapter = self.ingestion_adapter.clone();
+        let goal_adapter = self.goal_adapter.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -569,6 +601,8 @@ impl ExecutionRunner {
                             model_registry.clone(),
                             graph_storage.clone(),
                             kg_episode_repo.clone(),
+                            ingestion_adapter.clone(),
+                            goal_adapter.clone(),
                         )
                         .await
                         {
@@ -1498,6 +1532,8 @@ impl ExecutionRunner {
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
             self.graph_storage.clone(),
+            self.ingestion_adapter.clone(),
+            self.goal_adapter.clone(),
         )
         .await?;
 
@@ -1725,6 +1761,12 @@ impl ExecutionRunner {
         }
         if let Some(ref gs) = self.graph_storage {
             builder = builder.with_graph_storage(gs.clone());
+        }
+        if let Some(ref a) = self.ingestion_adapter {
+            builder = builder.with_ingestion_adapter(a.clone());
+        }
+        if let Some(ref a) = self.goal_adapter {
+            builder = builder.with_goal_adapter(a.clone());
         }
 
         // Intent analysis for root agent first turns only.
@@ -2071,6 +2113,8 @@ async fn invoke_continuation(
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
     graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
     kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -2211,6 +2255,12 @@ async fn invoke_continuation(
     let graph_storage_for_indexer = graph_storage.clone();
     if let Some(gs) = graph_storage {
         builder = builder.with_graph_storage(gs);
+    }
+    if let Some(a) = ingestion_adapter {
+        builder = builder.with_ingestion_adapter(a);
+    }
+    if let Some(a) = goal_adapter {
+        builder = builder.with_goal_adapter(a);
     }
 
     let mut executor = builder

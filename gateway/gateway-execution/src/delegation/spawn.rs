@@ -68,6 +68,8 @@ pub async fn spawn_delegated_agent(
         >,
     >,
     graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session =
@@ -297,6 +299,12 @@ pub async fn spawn_delegated_agent(
     let graph_storage_for_recall = graph_storage.clone();
     if let Some(gs) = graph_storage {
         builder = builder.with_graph_storage(gs);
+    }
+    if let Some(a) = ingestion_adapter {
+        builder = builder.with_ingestion_adapter(a);
+    }
+    if let Some(a) = goal_adapter {
+        builder = builder.with_goal_adapter(a);
     }
 
     let executor = match builder

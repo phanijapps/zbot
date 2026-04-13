@@ -350,31 +350,8 @@ impl AppState {
             .unwrap_or(2);
         tracing::info!(max_parallel_agents, "Execution settings loaded");
 
-        // Create runtime with execution runner and connector registry
-        let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
-            event_bus.clone(),
-            agents.clone(),
-            provider_service.clone(),
-            paths.clone(),
-            conversation_repo.clone(),
-            mcp_service.clone(),
-            skills.clone(),
-            log_service.clone(),
-            state_service.clone(),
-            Some(connector_registry.clone()),
-            workspace_cache.clone(),
-            Some(memory_repo.clone()),
-            Some(distiller),
-            Some(memory_recall),
-            Some(bridge_registry.clone()),
-            Some(bridge_outbox.clone()),
-            runner_embedding_client,
-            max_parallel_agents,
-            runner_graph_storage.clone(),
-            Some(kg_episode_repo.clone()),
-        ));
-
-        // Create streaming ingestion queue + backpressure.
+        // Create streaming ingestion queue + backpressure BEFORE the runtime so the
+        // runner can be wired with an IngestionAdapter.
         // Requires graph_storage — if the graph failed to initialize, we skip.
         let (ingestion_queue, ingestion_backpressure) = match runner_graph_storage.as_ref().cloned()
         {
@@ -400,6 +377,47 @@ impl AppState {
             }
             None => (None, None),
         };
+
+        // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
+        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> =
+            ingestion_queue.as_ref().map(|q| {
+                Arc::new(
+                    gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
+                        q.clone(),
+                        kg_episode_repo.clone(),
+                    ),
+                ) as Arc<dyn agent_tools::IngestionAccess>
+            });
+        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = Some(Arc::new(
+            gateway_execution::invoke::goal_adapter::GoalAdapter::new(goal_repo.clone()),
+        )
+            as Arc<dyn agent_tools::GoalAccess>);
+
+        // Create runtime with execution runner and connector registry
+        let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
+            event_bus.clone(),
+            agents.clone(),
+            provider_service.clone(),
+            paths.clone(),
+            conversation_repo.clone(),
+            mcp_service.clone(),
+            skills.clone(),
+            log_service.clone(),
+            state_service.clone(),
+            Some(connector_registry.clone()),
+            workspace_cache.clone(),
+            Some(memory_repo.clone()),
+            Some(distiller),
+            Some(memory_recall),
+            Some(bridge_registry.clone()),
+            Some(bridge_outbox.clone()),
+            runner_embedding_client,
+            max_parallel_agents,
+            runner_graph_storage.clone(),
+            Some(kg_episode_repo.clone()),
+            ingestion_adapter,
+            goal_adapter,
+        ));
 
         // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
         let compaction_repo = Arc::new(gateway_database::CompactionRepository::new(

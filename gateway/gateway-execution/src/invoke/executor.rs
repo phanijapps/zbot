@@ -69,6 +69,8 @@ pub struct ExecutorBuilder {
     is_delegated: bool,
     subagent_non_streaming: bool,
     graph_storage: Option<Arc<GraphStorage>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
     fast_mode: bool,
 }
@@ -87,6 +89,8 @@ impl ExecutorBuilder {
             is_delegated: false,
             subagent_non_streaming: true,
             graph_storage: None,
+            ingestion_adapter: None,
+            goal_adapter: None,
             extra_initial_state: None,
             fast_mode: false,
         }
@@ -140,6 +144,21 @@ impl ExecutorBuilder {
     /// Set the knowledge graph storage for the graph_query tool.
     pub fn with_graph_storage(mut self, storage: Arc<GraphStorage>) -> Self {
         self.graph_storage = Some(storage);
+        self
+    }
+
+    /// Set the ingestion access adapter for the `ingest` tool.
+    pub fn with_ingestion_adapter(
+        mut self,
+        adapter: Arc<dyn agent_tools::IngestionAccess>,
+    ) -> Self {
+        self.ingestion_adapter = Some(adapter);
+        self
+    }
+
+    /// Set the goal access adapter for the `goal` tool.
+    pub fn with_goal_adapter(mut self, adapter: Arc<dyn agent_tools::GoalAccess>) -> Self {
+        self.goal_adapter = Some(adapter);
         self
     }
 
@@ -528,6 +547,16 @@ impl ExecutorBuilder {
                 let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
             }
+
+            // Ingestion (if adapter wired)
+            if let Some(ref a) = self.ingestion_adapter {
+                tool_registry.register(Arc::new(agent_tools::IngestTool::new(a.clone())));
+            }
+
+            // Goal management (if adapter wired)
+            if let Some(ref a) = self.goal_adapter {
+                tool_registry.register(Arc::new(agent_tools::GoalTool::new(a.clone())));
+            }
         } else {
             // Root agent: orchestrator tools only.
             // Root delegates — it doesn't do specialist work.
@@ -556,6 +585,16 @@ impl ExecutorBuilder {
             if let Some(ref gs) = self.graph_storage {
                 let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
                 tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            }
+
+            // Ingestion (if adapter wired)
+            if let Some(ref a) = self.ingestion_adapter {
+                tool_registry.register(Arc::new(agent_tools::IngestTool::new(a.clone())));
+            }
+
+            // Goal management (if adapter wired)
+            if let Some(ref a) = self.goal_adapter {
+                tool_registry.register(Arc::new(agent_tools::GoalTool::new(a.clone())));
             }
 
             // Optional file reading (root may need to review delegation results)
