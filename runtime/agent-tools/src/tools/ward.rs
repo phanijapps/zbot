@@ -67,61 +67,53 @@ impl WardTool {
         std::fs::read_to_string(&agents_md_path).ok()
     }
 
-    /// Create AGENTS.md in a new ward, enriched with intent context if available.
-    fn create_agents_md(&self, ward_dir: &std::path::Path, ward_name: &str, ctx: &dyn ToolContext) {
-        let purpose = ctx
-            .get_state("ward_purpose")
-            .and_then(|v| v.as_str().map(String::from));
-        let structure = ctx.get_state("ward_structure").and_then(|v| {
-            v.as_object().map(|obj| {
-                obj.iter()
-                    .map(|(dir, desc)| format!("- `{}` — {}", dir, desc.as_str().unwrap_or("")))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            })
-        });
-        Self::write_agents_md(
-            ward_dir,
-            ward_name,
-            purpose.as_deref(),
-            structure.as_deref(),
-        );
-    }
-
-    /// Write AGENTS.md with purpose and structure. Testable without ToolContext.
-    fn write_agents_md(
-        ward_dir: &std::path::Path,
-        ward_name: &str,
-        purpose: Option<&str>,
-        structure: Option<&str>,
-    ) {
+    /// Write a minimal AGENTS.md seed for a new ward.
+    ///
+    /// The seed is intentionally just the ward name as an H1 heading — the
+    /// agent curates all other content during sessions. We never overwrite an
+    /// existing AGENTS.md.
+    fn write_agents_md(ward_dir: &std::path::Path, ward_name: &str) {
         let agents_md_path = ward_dir.join(WARD_AGENTS_MD);
         if agents_md_path.exists() {
             return;
         }
 
-        let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-        let default_purpose = format!("Domain workspace for {} projects.", ward_name);
-        let purpose = purpose.unwrap_or(&default_purpose);
-
-        let mut content = format!(
-            "# {name}\n\n## Purpose\n{purpose}\n",
-            name = ward_name,
-            purpose = purpose,
-        );
-
-        if let Some(structure) = structure {
-            content.push_str(&format!("\n## Directory Layout\n{}\n", structure));
-        }
-
-        content.push_str(&format!(
-            "\n## Core Modules\n*(auto-indexed after each session)*\n\n## History\n- {}: Ward created\n",
-            today,
-        ));
+        let content = format!("# {}\n", ward_name);
 
         if let Err(e) = std::fs::write(&agents_md_path, content) {
             tracing::warn!("Failed to create AGENTS.md in ward '{}': {}", ward_name, e);
+        }
+    }
+
+    /// Create the empty memory-bank scaffold (directory + three zero-byte files)
+    /// and an empty `core/` directory. The agent owns the contents.
+    fn scaffold_empty_dirs(ward_dir: &std::path::Path, ward_name: &str) {
+        let memory_bank = ward_dir.join("memory-bank");
+        if let Err(e) = std::fs::create_dir_all(&memory_bank) {
+            tracing::warn!(
+                "Failed to create memory-bank dir in ward '{}': {}",
+                ward_name,
+                e
+            );
+            return;
+        }
+
+        for file in ["ward.md", "structure.md", "core_docs.md"] {
+            let path = memory_bank.join(file);
+            if !path.exists()
+                && let Err(e) = std::fs::write(&path, "")
+            {
+                tracing::warn!(
+                    "Failed to create empty memory-bank/{} in ward '{}': {}",
+                    file,
+                    ward_name,
+                    e
+                );
+            }
+        }
+
+        if let Err(e) = std::fs::create_dir_all(ward_dir.join("core")) {
+            tracing::warn!("Failed to create core/ dir in ward '{}': {}", ward_name, e);
         }
     }
 
@@ -297,11 +289,12 @@ impl Tool for WardTool {
                     })?;
                 }
 
-                // Create ward scaffold for new wards
+                // Create ward scaffold for new wards. The seed is intentionally
+                // minimal — just the AGENTS.md heading and empty memory-bank +
+                // core scaffolds. The agent curates all content itself.
                 if created {
-                    self.create_agents_md(&ward_dir, name, ctx.as_ref());
-                    // Create mandatory directories
-                    let _ = std::fs::create_dir_all(ward_dir.join("memory-bank"));
+                    Self::write_agents_md(&ward_dir, name);
+                    Self::scaffold_empty_dirs(&ward_dir, name);
                     let _ = std::fs::create_dir_all(ward_dir.join("specs"));
                 }
 
@@ -514,42 +507,54 @@ mod tests {
     }
 
     #[test]
-    fn test_create_agents_md() {
+    fn test_write_agents_md_minimal_seed() {
         let ward_dir = TempDir::new().unwrap();
         let ward_path = ward_dir.path().to_path_buf();
 
-        WardTool::write_agents_md(&ward_path, "test-project", None, None);
+        WardTool::write_agents_md(&ward_path, "test-project");
 
         let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();
-        assert!(content.contains("# test-project"));
-        assert!(content.contains("## Purpose"));
-        assert!(content.contains("Domain workspace for test-project"));
-        assert!(content.contains("auto-indexed"));
-        assert!(content.contains("Ward created"));
-        // Should NOT contain hardcoded Python conventions
-        assert!(!content.contains("yfinance"));
-        assert!(!content.contains("pandas"));
+        // Heading is the only non-whitespace content
+        let non_ws_lines: Vec<&str> = content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(non_ws_lines, vec!["# test-project"]);
+        // No opinionated sections
+        assert!(!content.contains("## Purpose"));
+        assert!(!content.contains("## Directory Layout"));
+        assert!(!content.contains("## Core Modules"));
+        assert!(!content.contains("## History"));
     }
 
     #[test]
-    fn test_create_agents_md_with_context() {
+    fn test_ward_create_scaffolds_empty_memory_bank_files() {
         let ward_dir = TempDir::new().unwrap();
         let ward_path = ward_dir.path().to_path_buf();
 
-        WardTool::write_agents_md(
-            &ward_path,
-            "financial-analysis",
-            Some("Comprehensive investment analysis and professional reports"),
-            Some(
-                "- `core/` — Shared data fetching and analysis modules\n- `stocks/` — Per-ticker analysis\n- `output/` — Reports and charts",
-            ),
-        );
+        WardTool::scaffold_empty_dirs(&ward_path, "minimal");
 
-        let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();
-        assert!(content.contains("# financial-analysis"));
-        assert!(content.contains("Comprehensive investment analysis"));
-        assert!(content.contains("Per-ticker analysis"));
-        assert!(content.contains("output/"));
+        for file in ["ward.md", "structure.md", "core_docs.md"] {
+            let path = ward_path.join("memory-bank").join(file);
+            assert!(path.exists(), "memory-bank/{} should exist", file);
+            let meta = std::fs::metadata(&path).unwrap();
+            assert_eq!(meta.len(), 0, "memory-bank/{} should be empty", file);
+        }
+    }
+
+    #[test]
+    fn test_ward_create_scaffolds_empty_core_dir() {
+        let ward_dir = TempDir::new().unwrap();
+        let ward_path = ward_dir.path().to_path_buf();
+
+        WardTool::scaffold_empty_dirs(&ward_path, "minimal");
+
+        let core = ward_path.join("core");
+        assert!(core.exists());
+        assert!(core.is_dir());
+        let entries: Vec<_> = std::fs::read_dir(&core).unwrap().collect();
+        assert_eq!(entries.len(), 0, "core/ should be empty");
     }
 
     #[test]
@@ -573,7 +578,7 @@ mod tests {
         let ward_path = ward_dir.path().to_path_buf();
         std::fs::write(ward_path.join("AGENTS.md"), "# Custom content").unwrap();
 
-        WardTool::write_agents_md(&ward_path, "existing", None, None);
+        WardTool::write_agents_md(&ward_path, "existing");
 
         let content = std::fs::read_to_string(ward_path.join("AGENTS.md")).unwrap();
         assert!(content.contains("# Custom content")); // Not overwritten

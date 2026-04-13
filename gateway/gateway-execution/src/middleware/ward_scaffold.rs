@@ -4,7 +4,7 @@
 //! one or more skills. Scaffolding is best-effort — failures are logged as
 //! warnings and never propagate as errors, so they cannot crash execution.
 
-use gateway_services::skills::{WardAgentsMdConfig, WardSetup};
+use gateway_services::skills::WardSetup;
 use std::path::Path;
 
 // ---------------------------------------------------------------------------
@@ -29,7 +29,7 @@ pub fn scaffold_ward(ward_dir: &Path, ward_name: &str, setups: &[WardSetup]) {
 
     create_directories(ward_dir, &directories);
 
-    write_agents_md_if_absent(ward_dir, ward_name, setups, &directories);
+    write_agents_md_if_absent(ward_dir, ward_name);
 }
 
 // ---------------------------------------------------------------------------
@@ -82,29 +82,20 @@ fn create_directories(ward_dir: &Path, directories: &[String]) {
 // AGENTS.md helpers
 // ---------------------------------------------------------------------------
 
-/// Write `AGENTS.md` under `ward_dir` if it doesn't already exist.
+/// Write a minimal `AGENTS.md` seed (just the ward name as an H1 heading) if
+/// the file doesn't already exist.
 ///
-/// Uses the first `WardSetup` that carries `agents_md` config.  If none do,
-/// no file is written.
-fn write_agents_md_if_absent(
-    ward_dir: &Path,
-    ward_name: &str,
-    setups: &[WardSetup],
-    directories: &[String],
-) {
+/// Skill `agents_md` config (purpose, conventions) is intentionally ignored
+/// here — wards are scaffolded minimally and the agent curates AGENTS.md
+/// itself during sessions.
+fn write_agents_md_if_absent(ward_dir: &Path, ward_name: &str) {
     let agents_md_path = ward_dir.join("AGENTS.md");
 
     if agents_md_path.exists() {
         return;
     }
 
-    let config = setups.iter().find_map(|s| s.agents_md.as_ref());
-
-    let Some(config) = config else {
-        return;
-    };
-
-    let content = generate_agents_md(ward_name, config, directories);
+    let content = format!("# {}\n", ward_name);
 
     if let Err(e) = std::fs::write(&agents_md_path, &content) {
         tracing::warn!(
@@ -113,63 +104,6 @@ fn write_agents_md_if_absent(
             "Failed to write AGENTS.md — skipping"
         );
     }
-}
-
-/// Generate AGENTS.md content for a new ward.
-///
-/// Sections included:
-/// - Title (ward name)
-/// - Purpose
-/// - Directory layout
-/// - Conventions
-/// - Core modules placeholder
-/// - History
-fn generate_agents_md(
-    ward_name: &str,
-    config: &WardAgentsMdConfig,
-    directories: &[String],
-) -> String {
-    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
-
-    let mut out = String::new();
-
-    // Title
-    out.push_str(&format!("# {}\n\n", ward_name));
-
-    // Purpose
-    out.push_str("## Purpose\n\n");
-    out.push_str(&config.purpose);
-    out.push_str("\n\n");
-
-    // Directory layout
-    out.push_str("## Directory Layout\n\n");
-    if directories.is_empty() {
-        out.push_str("_No directories configured._\n\n");
-    } else {
-        for dir in directories {
-            out.push_str(&format!("- `{}/`\n", dir));
-        }
-        out.push('\n');
-    }
-
-    // Conventions
-    if !config.conventions.is_empty() {
-        out.push_str("## Conventions\n\n");
-        for convention in &config.conventions {
-            out.push_str(&format!("- {}\n", convention));
-        }
-        out.push('\n');
-    }
-
-    // Core modules placeholder
-    out.push_str("## Core Modules\n\n");
-    out.push_str("_Document key modules and their responsibilities here._\n\n");
-
-    // History
-    out.push_str("## History\n\n");
-    out.push_str(&format!("- {} — Ward scaffolded\n", date));
-
-    out
 }
 
 // ---------------------------------------------------------------------------
@@ -232,10 +166,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn scaffold_generates_agents_md() {
+    fn scaffold_writes_minimal_agents_md() {
         let dir = tempdir().unwrap();
         let ward_dir = dir.path();
 
+        // Even with a full agents_md config, the seed is just the heading.
         let setup = setup_with_agents_md(
             &["core", "output"],
             "A ward for financial analysis work.",
@@ -248,28 +183,20 @@ mod tests {
         assert!(agents_md_path.exists(), "AGENTS.md should be created");
 
         let content = std::fs::read_to_string(&agents_md_path).unwrap();
+        let non_ws_lines: Vec<&str> = content
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(non_ws_lines, vec!["# financial-analysis"]);
 
-        assert!(content.contains("# financial-analysis"), "title missing");
-        assert!(
-            content.contains("A ward for financial analysis work."),
-            "purpose missing"
-        );
-        assert!(
-            content.contains("Use kebab-case for file names"),
-            "convention missing"
-        );
-        assert!(
-            content.contains("All scripts go in core/"),
-            "convention missing"
-        );
-        assert!(
-            content.contains("`core/`"),
-            "directory layout missing: core"
-        );
-        assert!(
-            content.contains("`output/`"),
-            "directory layout missing: output"
-        );
+        // No opinionated sections are written.
+        assert!(!content.contains("## Purpose"));
+        assert!(!content.contains("## Directory Layout"));
+        assert!(!content.contains("## Conventions"));
+        assert!(!content.contains("## Core Modules"));
+        assert!(!content.contains("## History"));
+        assert!(!content.contains("kebab-case"));
     }
 
     // -----------------------------------------------------------------------
