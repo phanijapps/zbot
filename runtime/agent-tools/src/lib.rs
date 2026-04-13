@@ -29,6 +29,8 @@ pub use tools::{
     IngestionAccess,
     // Composite re-exports
     ListAgentsTool,
+    ListMcpsTool,
+    ListSkillsTool,
     LoadSkillTool,
     MemoryEntry,
     MemoryStore,

@@ -13,6 +13,8 @@ use agent_tools::{
     // Knowledge graph query tool
     GraphQueryTool,
     GrepTool,
+    ListMcpsTool,
+    ListSkillsTool,
     LoadSkillTool,
     // Root orchestrator tools
     MemoryTool,
@@ -531,6 +533,8 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(ListSkillsTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(ListMcpsTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(GrepTool));
             tool_registry.register(Arc::new(WardTool::new(
                 fs_context.clone(),
