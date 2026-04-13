@@ -25,9 +25,20 @@ The shape of the spec and plan is the same for all. What changes is the acceptan
 1. `ward(action='use', name='{ward from task}')` — enter the ward.
 2. Read `AGENTS.md` — understand what's been curated about this ward.
 3. Read whatever is present in `memory-bank/` — `ward.md`, `structure.md`, `core_docs.md`. Any or all may be empty on a fresh ward; that's expected. **Do NOT create, scaffold, or seed these files yourself.** They are agent-curated — executing agents write to them as they work.
-4. Walk `specs/` to see prior specs — both active and archived. An existing `specs/{task}/spec.md` is the source of truth for that task; read it before starting a new one.
+4. **Walk `specs/` before drafting anything new.** List both active and archived specs. Read the spec.md of any prior task whose title, goal, or file outputs look similar to your new task — they are templates, not archaeology.
 5. Use `list_agents` and `list_skills` to see what's available. Don't assume.
-6. If a related spec exists, plan the **delta** — what changes, what stays. Don't re-spec finished work.
+
+## Reuse priority for planning (check in order)
+
+Before drafting a new spec+plan, try these in order. Stop at the first hit:
+
+- **Identical prior task** (same goal, different inputs). If `specs/aapl-valuation-vs-peers/spec.md` exists and the new task is "MSFT valuation vs peers": clone its structure into `specs/msft-valuation-vs-peers/spec.md` + `plan.md`, change the ticker/inputs, keep acceptance shape identical. Response: short confirmation + "cloned from {prior-task}, changed inputs X→Y." This is the common case for warm wards — it should produce a plan in **< 3 tool calls** (read prior, write new spec, write new plan).
+- **Similar prior task, different shape** (e.g. "AAPL analysis" done; new task is "AAPL historical volatility study"). Read the prior spec to see ward conventions and existing primitives in `core_docs.md`, then draft a new spec that **reuses those primitives** and only specs the new work. Acceptance criteria and steps are new; reuse sections are rich.
+- **No prior task.** Full spec+plan from scratch. This is the cold path.
+
+**Do not plan from scratch when a template exists.** A clone + tweak is cheaper for the user, more consistent across runs, and makes the ward's conventions compound. If you catch yourself typing a Goal that starts with the same 8 words as a prior spec's Goal, you're reinventing — stop, clone instead.
+
+If a spec at `specs/{task}/spec.md` already exists and matches the user's current ask exactly (same inputs, same outputs), **do not re-spec it at all** — instead short-circuit: respond with a one-liner confirming the existing spec+plan can be reused as-is, and point the root agent at the existing `plan.md`. No new files.
 
 # Spec-Driven Development
 
