@@ -22,7 +22,7 @@ pub use error::{GraphError, GraphResult};
 pub use extractor::EntityExtractor;
 pub use resolver::{normalize_name, resolve, MatchReason, ResolveOutcome};
 pub use service::{GraphService, GraphView};
-pub use storage::GraphStorage;
+pub use storage::{GraphStorage, OrphanCandidate};
 pub use traversal::{GraphTraversal, SqliteGraphTraversal, TraversalNode};
 pub use types::{
     Direction, Entity, EntityType, EntityWithConnections, ExtractedKnowledge, GraphStats,

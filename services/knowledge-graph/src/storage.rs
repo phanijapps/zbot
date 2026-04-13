@@ -1508,6 +1508,83 @@ impl GraphStorage {
     }
 }
 
+/// Minimal projection of `kg_entities` used by the sleep-time Pruner to
+/// select soft-deletion candidates. See `GraphStorage::list_orphan_old_candidates`.
+#[derive(Debug, Clone)]
+pub struct OrphanCandidate {
+    pub id: String,
+    pub name: String,
+    pub entity_type: String,
+    pub mention_count: i64,
+    pub last_seen_at: String,
+}
+
+impl GraphStorage {
+    /// List entities that are candidates for pruning: non-archival, not yet
+    /// compressed, with no incoming or outgoing relationships, and whose
+    /// `last_seen_at` is older than `min_age_days`.
+    ///
+    /// Ordered by `mention_count ASC, last_seen_at ASC` so the weakest
+    /// entities surface first.
+    pub fn list_orphan_old_candidates(
+        &self,
+        agent_id: &str,
+        min_age_days: i64,
+        limit: usize,
+    ) -> GraphResult<Vec<OrphanCandidate>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let cutoff = chrono::Utc::now() - chrono::Duration::days(min_age_days);
+        let cutoff_str = cutoff.to_rfc3339();
+        let agent = agent_id.to_string();
+        let lim = limit as i64;
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<Vec<OrphanCandidate>> {
+                    let mut stmt = conn
+                        .prepare(
+                            "SELECT e.id, e.name, e.entity_type, e.mention_count, e.last_seen_at \
+                             FROM kg_entities e \
+                             WHERE (e.agent_id = ?1 OR e.agent_id = '__global__') \
+                               AND e.epistemic_class != 'archival' \
+                               AND (e.compressed_into IS NULL OR e.compressed_into = '') \
+                               AND e.last_seen_at < ?2 \
+                               AND NOT EXISTS ( \
+                                 SELECT 1 FROM kg_relationships r \
+                                 WHERE r.source_entity_id = e.id \
+                               ) \
+                               AND NOT EXISTS ( \
+                                 SELECT 1 FROM kg_relationships r \
+                                 WHERE r.target_entity_id = e.id \
+                               ) \
+                             ORDER BY e.mention_count ASC, e.last_seen_at ASC \
+                             LIMIT ?3",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let rows = stmt
+                        .query_map(params![agent, cutoff_str, lim], |r| {
+                            Ok(OrphanCandidate {
+                                id: r.get::<_, String>(0)?,
+                                name: r.get::<_, String>(1)?,
+                                entity_type: r.get::<_, String>(2)?,
+                                mention_count: r.get::<_, i64>(3)?,
+                                last_seen_at: r.get::<_, String>(4)?,
+                            })
+                        })
+                        .map_err(GraphError::Database)?;
+                    let mut out = Vec::new();
+                    for row in rows {
+                        out.push(row.map_err(GraphError::Database)?);
+                    }
+                    Ok(out)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+}
+
 /// Outcome of a `merge_entity_into` call.
 #[derive(Debug, Clone, Default)]
 pub struct MergeResult {
