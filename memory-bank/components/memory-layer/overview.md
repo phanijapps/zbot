@@ -1,208 +1,200 @@
-# Memory Layer — z-Bot's Cognitive System
+# Memory Layer — v22 Overview
 
 ## Purpose
 
-The memory layer stores, retrieves, and applies knowledge across sessions so agents learn from experience, avoid past mistakes, and reuse existing work instead of rediscovering it.
+The memory layer gives every agent long-term, cross-session recall and a
+compact working set of what matters right now. It turns raw transcripts,
+distillations, and ingested documents into structured facts, a typed
+knowledge graph, ward-scoped wikis, reusable procedures, and tracked goals —
+all retrievable through one unified scored API.
 
-Originally a passive fact store, the layer now includes **six cognitive capabilities** (Phases 1–6) that transform z-Bot from a stateless executor into an agent that accumulates knowledge, remembers procedures, and queries its own history.
+## Two-database split
 
-## Design Principles
+Memory is split across two SQLite files so operational churn never drags on
+long-term durability:
 
-1. **Every recalled fact saves tokens** — a fact recalled is a fact the agent doesn't rediscover via tool calls
-2. **Corrections > strategies > domain** — priority ordering ensures rules are followed first
-3. **Accuracy over volume** — 10 verified facts beat 100 hallucinated ones
-4. **Ward-scoped + global** — facts belong to a ward or apply everywhere
-5. **Epistemic honesty** — archival (historical) facts never decay; volatile state does
-6. **Provenance end-to-end** — every entity and relationship traces to its source episode
-7. **Write everywhere, read smart** — distillation, ward artifacts, tool results, and agents all feed memory; recall surfaces only what's relevant
+- **`conversations.db`** — operational state (sessions, agent executions,
+  messages, execution logs, artifacts, bridge outbox, recall log,
+  distillation runs). Pruned aggressively as sessions complete.
+  Schema: `gateway/gateway-database/src/schema.rs:357`.
+- **`knowledge.db`** — long-term memory (facts, KG entities/aliases/
+  relationships, wiki, procedures, session episodes, goals, compactions,
+  ingestion episodes + payloads, embedding cache). `sqlite-vec` loaded;
+  contains all five `vec0` virtual tables. Portable — back it up without
+  touching `conversations.db`.
+  Schema: `gateway/gateway-database/src/knowledge_schema.rs:24`.
 
-## Six Capability Layers
+Both DBs carry schema version 22 (`SCHEMA_VERSION` constants in the same
+files). `knowledge_schema.rs` is applied idempotently on daemon boot: there
+are no migrations, only `CREATE TABLE IF NOT EXISTS`. Routing to
+`KnowledgeDatabase` vs the conversations pool is enforced by the repository
+layer.
 
-z-Bot's memory is not a single system but a stack of cooperating layers, each with distinct responsibilities:
+## Six cognitive layers
 
-| # | Layer | Role | Files |
-|---|-------|------|-------|
-| 0 | **Base memory** | Facts, embeddings, episodes, distillation | `memory_repository.rs`, `recall.rs`, `distillation.rs` |
-| 1 | **Knowledge graph** | Entities, relationships, typed ontology, causal edges | `services/knowledge-graph/`, `graph_query.rs` |
-| 2 | **Working memory** | Live per-iteration context scratchpad | `invoke/working_memory.rs` |
-| 3 | **Ward wiki** | Karpathy-style compiled knowledge per ward | `ward_wiki.rs`, `wiki_repository.rs` |
-| 4 | **Procedural memory** | Reusable multi-step action sequences | `procedure_repository.rs` + distillation extraction |
-| 5 | **Micro-recall** | Targeted lookups at decision points | `invoke/micro_recall.rs` |
-| 6 | **KG evolution** | Episodes, ward artifact indexer, expanded ontology, entity resolver, epistemic classes, multi-view queries, real-time extraction | `kg_episode_repository.rs`, `ward_artifact_indexer.rs`, `resolver.rs`, `tool_result_extractor.rs` |
+### Layer 0 — Facts
+Atomic propositions keyed by `(agent_id, scope, ward_id, key)`. Stored in
+`memory_facts` with an FTS5 shadow (`memory_facts_fts`) kept in sync via
+three triggers, and embeddings in the `memory_facts_index` vec0 table.
+Hybrid recall = BM25 (FTS) + cosine (vec0) merged per configured weights
+(`MemoryRepository::search_memory_facts_hybrid`,
+`gateway/gateway-database/src/memory_repository.rs:634`).
+Contradicted facts are tombstoned via `contradicted_by`/`superseded_by`;
+archival facts are copied to `memory_facts_archive` by
+`MemoryRepository::archive_fact`.
 
-Each layer has its own doc:
-- [`cognitive-layers.md`](cognitive-layers.md) — Layers 2–5 (working memory, wiki, procedures, micro-recall)
-- [`knowledge-graph.md`](knowledge-graph.md) — Layer 1 + Layer 6 (the full graph architecture)
-- [`data-model.md`](data-model.md) — Every table, every column, schema version history
-- [`backlog.md`](backlog.md) — Planned future work
+### Layer 1 — Knowledge graph
+Typed entities (`kg_entities`), directional relationships
+(`kg_relationships`), surface-form aliases (`kg_aliases`), causal edges
+(`kg_causal_edges`), and per-extraction provenance via `kg_episodes` +
+`kg_episode_payloads`. Name embeddings live in `kg_name_index` (vec0).
+The resolver cascade (`services/knowledge-graph/src/resolver.rs:36`)
+dedups on write; the sleep-time compactor collapses near-duplicates on a
+schedule.
 
-## When Each Layer Runs
+### Layer 2 — Ward wiki
+Compiled per-ward articles unique on `(ward_id, title)` with a vec0
+index (`wiki_articles_index`) for similarity search. Written by the
+wiki compiler, queried via `WikiRepository::search_by_similarity`
+(`gateway/gateway-database/src/wiki_repository.rs`).
 
-| Phase | Layers Active | Trigger |
-|-------|---------------|---------|
-| **Session start** | 0, 1, 3 | `recall_with_graph()` — facts + wiki articles + graph context injected as system message |
-| **Intent analysis** | 0, 4 | `recall_for_intent()` + procedure recall — memory context and proven procedures added to intent prompt |
-| **Subagent spawn** | 0, 1 | `recall_for_delegation_with_graph()` — corrections + graph-enriched context for child agent |
-| **Each iteration** | 2 | Working memory renders as system message, updated after every tool result |
-| **Per tool result** | 5, 6 | Micro-recall triggers (error, ward entry, delegation, entity mention) + real-time tool extraction |
-| **Mid-session (every N turns)** | 0 | Mid-session recall hook refreshes working memory |
-| **Session end** | 0, 1, 3, 4, 6 | Distillation extracts facts/entities/relationships/procedures; ward wiki compiles; ward artifact indexer scans structured files |
+### Layer 3 — Procedures
+Reusable multi-step workflows with JSON `steps`, success/failure
+counters, and `avg_duration_ms`/`avg_token_cost` for cost-aware
+selection. Backed by `procedures` + `procedures_index` (vec0),
+`ProcedureRepository::search_by_similarity`.
 
-## Architecture (Current State, Post-Phase 6)
+### Layer 4 — Goals (Phase 3, new in v22)
+Intent lifecycle with slot tracking: `kg_goals(state, slots,
+filled_slots, parent_goal_id)`. Active goals drive intent-boost in
+recall (1.3× multiplier when a recalled item's content contains an
+unfilled slot name). See `GoalRepository::list_active`
+(`gateway/gateway-database/src/goal_repository.rs:116`) and
+`scored_item::intent_boost`
+(`gateway/gateway-execution/src/recall/scored_item.rs:81`).
 
-```
-┌──────────────────────── INGESTION LAYER ─────────────────────────┐
-│                                                                   │
-│  Distillation LLM   ─┐                                            │
-│  Ward Artifact Index ─┤                                           │
-│  Tool Result Extract ─┼─► Episodes ─► Resolver ─► Storage         │
-│  Session Transcript ─┤                                            │
-│  User Corrections   ─┘                                            │
-│                                                                   │
-└──────────────────────────┬────────────────────────────────────────┘
-                           │
-           ┌───────────────┼───────────────┐
-           │               │               │
-┌──────────▼──────┐ ┌─────▼──────────┐ ┌──▼──────────────────┐
-│  memory_facts   │ │  kg_entities   │ │ ward_wiki_articles  │
-│  + embeddings   │ │ kg_relationships│ │ + procedures        │
-│  + temporal cols│ │ + causal edges │ │ + kg_episodes       │
-│  + epistemic    │ │ + bitemporal   │ │                     │
-└──────────┬──────┘ └────────┬───────┘ └──────────┬──────────┘
-           │                 │                    │
-           └────────┬────────┴─────────┬──────────┘
-                    │                  │
-     ┌──────────────▼──────┐  ┌────────▼───────────────┐
-     │   RECALL SERVICE     │  │   QUERY SERVICE         │
-     │  class-aware scoring │  │  MAGMA views:           │
-     │  wiki-first          │  │  - semantic             │
-     │  procedure matching  │  │  - temporal             │
-     │  graph enrichment    │  │  - entity (connections) │
-     │                      │  │  - hybrid (reranked)    │
-     └──────────────┬───────┘  └────────┬────────────────┘
-                    │                   │
-                    └─────────┬─────────┘
-                              │
-                    ┌─────────▼────────┐
-                    │   AGENT CONTEXT  │
-                    │  System message  │
-                    │  Working memory  │
-                    │  Graph tool      │
-                    │  Memory tool     │
-                    └──────────────────┘
-```
+### Layer 5 — Sleep-time maintenance (Phase 4, new in v22)
+Hourly tokio task: `Compactor` → `DecayEngine` → `Pruner`. Runs
+per-agent, emits one `run_id` per cycle, records every merge and prune
+in `kg_compactions`. See `SleepTimeWorker::start`
+(`gateway/gateway-execution/src/sleep/worker.rs:28`).
 
-## Epistemic Classes (Phase 6c)
+## sqlite-vec: one similarity mechanism
 
-Every fact, entity, and relationship carries an `epistemic_class` that determines its lifecycle:
+Every vector search goes through a `vec0` virtual table. No hand-rolled
+cosine loops in the recall path, no BLOB columns duplicating embeddings
+on base rows (see the structural assertion at
+`gateway/gateway-database/src/knowledge_schema.rs:434`). The five vec0
+tables, all 384-dim:
 
-| Class | Behavior | Examples |
-|-------|----------|----------|
-| `archival` | **Never decays with age.** Mild 0.3x penalty only if explicitly corrected. | "Gandhi born 1869", "Savarkar president 1937–38", PDF contents |
-| `current` | Decays sharply (0.1x) when superseded. | "AAPL = $523", "INR/USD = 85.2", "current president" |
-| `convention` | Stable, no temporal decay. Replaced only on explicit policy change. | "Use plotly not matplotlib", user preferences |
-| `procedural` | No temporal decay. Evolves via success/failure counts. | "stock_analysis_report procedure, 87% success" |
+| Table | Partner table |
+|---|---|
+| `kg_name_index` | `kg_entities` |
+| `memory_facts_index` | `memory_facts` |
+| `wiki_articles_index` | `ward_wiki_articles` |
+| `procedures_index` | `procedures` |
+| `session_episodes_index` | `session_episodes` |
 
-This is the user's core insight baked into the system: **historical archives are forever**. They may be corrected later but never become irrelevant.
+Five `AFTER DELETE` triggers
+(`gateway/gateway-database/src/knowledge_schema.rs:315`) keep vec0 in
+lockstep with the base rows.
 
-## Storage Summary
-
-| Store | Location | What |
-|-------|----------|------|
-| `memory_facts` | `conversations.db` | Facts with embeddings, epistemic class, provenance, temporal columns |
-| `embedding_cache` | `conversations.db` | SHA-256 → embedding vector cache |
-| `session_episodes` | `conversations.db` | Session outcomes with strategy and learnings |
-| `recall_log` | `conversations.db` | Which facts were recalled per session (predictive recall) |
-| `distillation_runs` | `conversations.db` | Extraction run tracking |
-| `ward_wiki_articles` | `conversations.db` | Compiled per-ward knowledge (Phase 3) |
-| `procedures` | `conversations.db` | Reusable multi-step action sequences (Phase 4) |
-| `kg_episodes` | `conversations.db` | Provenance records for every extraction (Phase 6a) |
-| `kg_entities` | `knowledge_graph.db` | Typed entities with aliases, epistemic class, bitemporal validity |
-| `kg_relationships` | `knowledge_graph.db` | Directional edges with bitemporal `valid_at`/`invalidated_at` |
-| `kg_causal_edges` | `knowledge_graph.db` | Causal relationships (causes/prevents/requires/enables) |
-| `ward.md`, `core_docs.md`, `structure.md` | `wards/{id}/memory-bank/` | Curated ward markdown artifacts |
-
-Full schema details in [`data-model.md`](data-model.md).
-
-## Recall Scoring Pipeline (Current State)
+## Streaming ingestion pipeline
 
 ```
-base_score = (0.7 × vector_cosine) + (0.3 × BM25_score)
-    × category_weight        (correction: 1.5, strategy: 1.4, user: 1.3, instruction: 1.2, domain: 1.0)
-    × ward_affinity          (1.3x if fact matches current ward)
-    × mention_boost          (1.0 + log2(mention_count))
-    × contradiction_penalty  (0.7x if contradicted)
-    × predictive_boost       (1.3x if recalled in similar past sessions)
-    × class_aware_penalty    (Phase 6c — applies only to superseded facts)
-        - archival: 0.3x if corrected, else no penalty
-        - current: 0.1x if superseded
-        - convention: no penalty
-        - procedural: no penalty
+HTTP POST /api/memory/ingest
+    │
+    ▼
+chunker      (ingest/chunker.rs:37 — paragraph-aware, 1000 tok ±100 overlap)
+    │
+    ▼
+for each chunk:
+    KgEpisodeRepository::upsert_pending   (content_hash dedup)
+    KgEpisodeRepository::set_payload      (full chunk text)
+    IngestionQueue::notify                (wake workers)
+    │
+    ▼                                     <-- HTTP returns 202 here
+queue worker (ingest/queue.rs:64)
+    │
+    ▼
+Extractor::process                        (ingest/extractor.rs:16)
+    pass 1: entities
+    pass 2: relationships (conditioned on entity list)
+    GraphStorage::store_knowledge → resolver cascade
+    │
+    ▼
+KgEpisodeRepository::mark_done | mark_failed
 ```
 
-## User-Managed Memory (Policies, Instructions, About Me)
+Backpressure (`ingest/backpressure.rs:28`) gates both global queue depth
+(default 5000) and per-source pending count (default 500) before
+enqueue. Violations return `Err` → HTTP 429.
 
-Three types of user-managed entries, all stored as regular memory facts with reserved key prefixes:
+## Unified scored recall
 
-| Type | Category | Confidence | Weight | Purpose |
-|------|----------|------------|--------|---------|
-| **Policy** | `correction` | 1.0 | 1.5x | Hard rules agents MUST follow |
-| **Instruction** | `instruction` | 0.9 | 1.2x | Soft preferences that guide behavior |
-| **About Me** | `user` | 0.95 | 1.3x | Personal context for personalization |
+`MemoryRecall::recall_unified`
+(`gateway/gateway-execution/src/recall/mod.rs:826`) pulls from five
+sources, adapts each row into `ScoredItem` (`recall/adapters.rs`), applies
+`intent_boost` against active goals, and fuses the ranked lists via
+Reciprocal Rank Fusion (`k = 60.0`,
+`recall/scored_item.rs:41`):
 
-All user-created entries are **pinned** (protected from distillation overwrite). Keys starting with `policy.`, `instruction.`, or `user.profile` are reserved — distillation skips them.
+1. Facts — `MemoryRepository::search_memory_facts_hybrid` (BM25 + cosine)
+2. Wiki — `WikiRepository::search_by_similarity` (ward-scoped)
+3. Procedures — `ProcedureRepository::search_by_similarity`
+4. Graph — `GraphStorage::search_entities_by_name_embedding` (ANN via
+   `kg_name_index`)
+5. Goals — projected directly from `GoalRepository::list_active`
 
-### Default Seeded Policies (from `gateway/templates/default_policies.json`)
+Missing subsystems are silently skipped — the caller gets whatever
+sources are wired.
 
-8 policies + 2 instructions + 1 about-me seeded on first run:
-- Research first (never rely on training data)
-- Code modularity (files < 3KB, import existing)
-- Web research tools (use skills, not shell curl)
-- Atomic delegation (one file per step)
-- Ward first (enter ward, read docs)
-- Planner discovers agents (call list_agents)
-- Update docs after code (core_docs.md mandatory)
-- Full delegation spec (include goal, input, output, acceptance)
-- Output format preference (interactive HTML, Tailwind)
-- Documentation quality (SDK-level core_docs.md)
-- Default about-me ("I am a private person, just call me Mr Z.")
+## Sleep-time maintenance
 
-## Research Foundation
+`SleepTimeWorker` spawns one background tokio task per agent. Each cycle:
 
-The cognitive capabilities are grounded in recent AI agent memory research:
+1. **Compactor** (`sleep/compactor.rs:57`) — for each of 5 entity types
+   (Person, Organization, Location, Event, Concept), fetches duplicate
+   candidates at cosine ≥ 0.92 and calls
+   `GraphStorage::merge_entity_into` (up to 50 pairs per type).
+   `PairwiseVerifier` trait is defined but not wired in Phase 4.
+2. **DecayEngine** (`sleep/decay.rs:45`) — surfaces orphan entities with
+   no relationships and `last_seen_at` older than `min_age_days` (default
+   30). Archival entities are excluded at the SQL level.
+3. **Pruner** (`sleep/pruner.rs:28`) — calls `GraphStorage::mark_pruned`,
+   which sets `compressed_into = '__pruned__'` and deletes the row from
+   `kg_name_index`. Recall queries filter on `compressed_into IS NULL`.
 
-| Paper | Contribution to z-Bot | Implementation |
-|-------|----------------------|----------------|
-| **Graphiti/Zep** (arXiv:2501.13956) | Episode-based ingestion, bitemporal edges, entity resolution, hybrid search | `kg_episodes`, temporal columns, `EntityResolver` |
-| **MAGMA** (arXiv:2601.03236) | Multi-view queries (semantic/temporal/causal/entity) | `GraphView` enum + `search_entities_view` |
-| **A-MEM** (NeurIPS 2025) | Zettelkasten self-organization, dynamic linking | `EntityResolver::merge_alias` + alias accumulation |
-| **Karpathy's LLM Wiki** | Compile knowledge once, don't re-derive per query | Ward wiki (Phase 3) + Ward artifact indexer (6a) |
-| **MemGPT/Letta** | Virtual context, two-tier memory | Working memory (Phase 2) — live scratchpad + recall for deep context |
-| **CIDOC CRM / Wikidata** | Epistemic status distinction (archival vs current) | `epistemic_class` column on facts, entities, relationships |
+Cycles can be forced via `POST /api/memory/consolidate`
+(`SleepTimeWorker::trigger`, `sleep/worker.rs:73`). One `run_id` per
+cycle is recorded across all merge and prune rows in `kg_compactions`
+for audit.
 
-## Key Files
+## Observability
 
-| File | Purpose |
-|------|---------|
-| `gateway/gateway-database/src/memory_repository.rs` | MemoryFact CRUD + hybrid search |
-| `gateway/gateway-database/src/episode_repository.rs` | Session episodes |
-| `gateway/gateway-database/src/recall_log_repository.rs` | Predictive recall tracking |
-| `gateway/gateway-database/src/wiki_repository.rs` | Ward wiki articles (Phase 3) |
-| `gateway/gateway-database/src/procedure_repository.rs` | Procedures (Phase 4) |
-| `gateway/gateway-database/src/kg_episode_repository.rs` | Episodes for KG provenance (Phase 6a) |
-| `gateway/gateway-execution/src/recall.rs` | MemoryRecall service, class-aware scoring |
-| `gateway/gateway-execution/src/distillation.rs` | LLM-based fact/entity/procedure extraction |
-| `gateway/gateway-execution/src/ward_wiki.rs` | Karpathy-style wiki compilation |
-| `gateway/gateway-execution/src/ward_artifact_indexer.rs` | JSON collection → graph entities (Phase 6a) |
-| `gateway/gateway-execution/src/tool_result_extractor.rs` | Real-time tool output → graph (Phase 6d) |
-| `gateway/gateway-execution/src/invoke/working_memory.rs` | Live context scratchpad (Phase 2) |
-| `gateway/gateway-execution/src/invoke/working_memory_middleware.rs` | Entity extraction from tool results |
-| `gateway/gateway-execution/src/invoke/micro_recall.rs` | Decision-point lookups (Phase 5) |
-| `gateway/gateway-execution/src/ward_sync.rs` | ward.md generation |
-| `gateway/gateway-services/src/recall_config.rs` | RecallConfig with JSON overrides |
-| `services/knowledge-graph/src/storage.rs` | Graph entity/relationship CRUD |
-| `services/knowledge-graph/src/resolver.rs` | Entity resolution cascade (Phase 6b) |
-| `services/knowledge-graph/src/service.rs` | GraphService with multi-view queries (Phase 6d) |
-| `services/knowledge-graph/src/causal.rs` | Causal edges (Phase 1) |
-| `runtime/agent-tools/src/tools/memory.rs` | Agent-facing memory tool |
-| `runtime/agent-tools/src/tools/graph_query.rs` | Agent-facing graph query tool (Phase 1 + 6d) |
+- `GET /api/memory/stats` — counts per fact/entity/relationship/wiki/
+  procedure; last sleep-time run summary.
+- `GET /api/memory/health` — ingestion queue depth, status counts,
+  consolidator liveness.
+- `POST /api/memory/consolidate` — force an immediate sleep-time cycle.
+
+Wired in `gateway/src/http/memory.rs`.
+
+## Performance (baseline)
+
+All three Phase 4 budgets met by ≥1000× margin on a consumer-grade dev
+box. Full numbers in
+`docs/memory-v2-performance-baseline.md`:
+
+- Resolver p95: **2.15 ms** vs 20 ms budget (9.3× under).
+- Reader p95 under ingest load: **140 µs** vs 200 ms budget (1400× under).
+- Sleep-time cycle: well within the hourly interval even under load.
+
+## Further reading
+
+- [`data-model.md`](./data-model.md) — full v22 schema, table by table.
+- [`knowledge-graph.md`](./knowledge-graph.md) — resolver cascade,
+  compactor, pruner, merge semantics.
+- [`backlog.md`](./backlog.md) — known gaps and deferred work.
+- `docs/superpowers/specs/2026-04-12-memory-layer-redesign-design.md` —
+  umbrella design spec (trust the code when the spec diverges).
