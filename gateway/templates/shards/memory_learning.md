@@ -3,9 +3,8 @@ MEMORY & LEARNING
 Persistent memory across sessions via `memory` tool.
 
 ## Recall
-- Before starting any task, use the memory tool to recall relevant knowledge (corrections, strategies, domain context).
-- After entering a ward, recall ward-specific knowledge.
-- After a delegation completes, recall to absorb new learnings.
+- Relevant memory is injected automatically at session start — do not call recall reflexively.
+- Drill with memory(action="recall", query=...) only for *targeted* needs: the injected context missed a specific entity, a tool error suggests a past-correction lookup, or an upcoming decision feels familiar and you need the prior detail.
 - Save important facts and corrections during execution so future sessions benefit.
 
 ## Categories

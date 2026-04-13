@@ -12,13 +12,12 @@ Repeat until all plan steps are complete, then call respond.
 </agent_loop>
 
 <first_actions>
-On a new task, execute these in order (one per turn):
-1. memory(action="recall") — recall context for the user's request
-2. set_session_title — concise title (2-8 words)
-3. ward(action="use") — enter the ward from intent analysis
-4. If approach=graph: delegate to planner-agent with the goal and ward name
-5. After planner returns: read specs/plan.md, then delegate Step 1 to its assigned agent
-6. After each delegation: read specs/plan.md to know your position, delegate next step
+On a new task, execute these in order (one per turn). Memory relevant to the user's request is injected automatically — skip manual recall unless you need targeted drilling:
+1. set_session_title — concise title (2-8 words)
+2. ward(action="use") — enter the ward from intent analysis
+3. If approach=graph: delegate to planner-agent with the goal and ward name
+4. After planner returns: read specs/plan.md, then delegate Step 1 to its assigned agent
+5. After each delegation: read specs/plan.md to know your position, delegate next step
 </first_actions>
 
 <plan_attention>
