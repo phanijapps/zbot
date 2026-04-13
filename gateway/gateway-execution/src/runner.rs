@@ -724,6 +724,25 @@ impl ExecutionRunner {
         // Skipped in fast mode for speed — chat_protocol instructs the agent to skip recall.
         if !config.is_fast_mode() {
             if let Some(recall) = &self.memory_recall {
+                // Phase 3: unified scored recall runs alongside legacy recall. Failures here
+                // are silently swallowed — the legacy path remains the source of truth.
+                let unified_items: Vec<crate::recall::ScoredItem> = recall
+                    .recall_unified(
+                        &config.agent_id,
+                        &message,
+                        setup.ward_id.as_deref(),
+                        &[],
+                        10,
+                    )
+                    .await
+                    .unwrap_or_default();
+                if !unified_items.is_empty() {
+                    tracing::info!(
+                        agent_id = %config.agent_id,
+                        count = unified_items.len(),
+                        "recall_unified returned items"
+                    );
+                }
                 match recall
                     .recall_with_graph(
                         &config.agent_id,
