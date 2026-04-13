@@ -360,6 +360,19 @@ mod tests_extractor {
     }
 
     #[test]
+    fn parse_rejects_malformed_json() {
+        let result = parse_entities_response("not valid json at all", "root");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_empty_entities_array_ok() {
+        let result =
+            parse_entities_response(r#"{"entities": []}"#, "root").expect("valid but empty");
+        assert!(result.is_empty());
+    }
+
+    #[test]
     fn parses_relationships_and_drops_hallucinated_refs() {
         let json = r#"{"relationships": [
             {"source": "Alice", "target": "Wonderland", "type": "located_in"},
