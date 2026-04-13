@@ -32,7 +32,11 @@
 /// z-bot system. Defined once here so all callers (LLM clients, MCP, gateway
 /// connectors, CLI, tools) share the same value. Version tracks this crate's
 /// Cargo.toml.
-pub const USER_AGENT: &str = concat!("Z-bot/", env!("CARGO_PKG_VERSION"));
+pub const USER_AGENT: &str = concat!(
+    "Mozilla/5.0 (compatible; Z-bot/",
+    env!("CARGO_PKG_VERSION"),
+    "; +https://github.com/phanijapps/zbot)"
+);
 
 // ============================================================================
 // PUBLIC API RE-EXPORTS
