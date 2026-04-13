@@ -343,6 +343,21 @@ pub async fn analyze_intent(
 
     tracing::info!("Starting intent analysis for root session");
 
+    // Shadow call: exercise unified recall pool in the intent-analysis context
+    // (log-only; legacy recall_for_intent still drives the actual prompt).
+    if let Some(recall) = memory_recall {
+        let unified: Vec<crate::recall::ScoredItem> = recall
+            .recall_unified("root", user_message, None, &[], 10)
+            .await
+            .unwrap_or_default();
+        if !unified.is_empty() {
+            tracing::info!(
+                count = unified.len(),
+                "recall_unified shadow — intent analysis"
+            );
+        }
+    }
+
     // Step 0: Query memory for relevant past context (corrections, strategies, episodes)
     let memory_context = if let Some(recall) = memory_recall {
         recall

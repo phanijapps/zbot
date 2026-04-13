@@ -330,6 +330,23 @@ pub async fn spawn_delegated_agent(
         }
     };
 
+    // Shadow call: exercise unified recall pool in the delegation context
+    // (log-only; legacy recall_for_delegation_with_graph still drives priming).
+    if let Some(recall) = &memory_recall {
+        let ward_id = session_ward_id.as_deref();
+        let unified = recall
+            .recall_unified(&request.child_agent_id, &request.task, ward_id, &[], 10)
+            .await
+            .unwrap_or_default();
+        if !unified.is_empty() {
+            tracing::info!(
+                agent_id = %request.child_agent_id,
+                count = unified.len(),
+                "recall_unified shadow — delegation"
+            );
+        }
+    }
+
     // Delegation recall: inject relevant knowledge for the child agent
     // Uses graph-enriched recall when graph storage is available
     let initial_history = if let Some(recall) = &memory_recall {
