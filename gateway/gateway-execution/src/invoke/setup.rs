@@ -107,7 +107,7 @@ pub struct AgentLoader<'a> {
     provider_resolver: ProviderResolver<'a>,
     paths: SharedVaultPaths,
     settings: Option<&'a SettingsService>,
-    fast_mode: bool,
+    chat_mode: bool,
 }
 
 impl<'a> AgentLoader<'a> {
@@ -122,7 +122,7 @@ impl<'a> AgentLoader<'a> {
             provider_resolver: ProviderResolver::new(provider_service),
             paths,
             settings: None,
-            fast_mode: false,
+            chat_mode: false,
         }
     }
 
@@ -132,9 +132,12 @@ impl<'a> AgentLoader<'a> {
         self
     }
 
-    /// Enable fast chat mode (lean prompt, no thinking).
-    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
-        self.fast_mode = fast_mode;
+    /// Enable chat mode (lean prompt, higher temperature, skip pipeline).
+    ///
+    /// Memory injection still runs in chat mode — only intent analysis / planning /
+    /// delegation / ward transitions are skipped.
+    pub fn with_chat_mode(mut self, chat_mode: bool) -> Self {
+        self.chat_mode = chat_mode;
         self
     }
 
@@ -200,19 +203,19 @@ impl<'a> AgentLoader<'a> {
                     temperature = orch.temperature,
                     max_tokens = orch.max_tokens,
                     thinking = thinking_enabled,
-                    fast_mode = self.fast_mode,
+                    chat_mode = self.chat_mode,
                     "Creating root agent from orchestrator config"
                 );
 
-                // Fast mode uses a lean prompt; deep mode uses the full system prompt
-                let instructions = if self.fast_mode {
+                // Chat mode uses a lean prompt; research mode uses the full system prompt
+                let instructions = if self.chat_mode {
                     gateway_templates::load_chat_prompt_from_paths(&self.paths)
                 } else {
                     gateway_templates::load_system_prompt_from_paths(&self.paths)
                 };
 
                 // Chat mode: higher temperature for creative, personality-forward responses
-                let temperature = if self.fast_mode {
+                let temperature = if self.chat_mode {
                     1.0
                 } else {
                     orch.temperature

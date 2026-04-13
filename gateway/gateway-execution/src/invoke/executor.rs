@@ -72,7 +72,7 @@ pub struct ExecutorBuilder {
     ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
     goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
-    fast_mode: bool,
+    chat_mode: bool,
 }
 
 impl ExecutorBuilder {
@@ -92,7 +92,7 @@ impl ExecutorBuilder {
             ingestion_adapter: None,
             goal_adapter: None,
             extra_initial_state: None,
-            fast_mode: false,
+            chat_mode: false,
         }
     }
 
@@ -162,9 +162,10 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Enable fast chat mode (disables single_action_mode for multi-tool turns).
-    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
-        self.fast_mode = fast_mode;
+    /// Enable chat mode (disables single_action_mode for multi-tool turns, larger
+    /// middleware keep window, higher compaction warn threshold).
+    pub fn with_chat_mode(mut self, chat_mode: bool) -> Self {
+        self.chat_mode = chat_mode;
         self
     }
 
@@ -427,7 +428,7 @@ impl ExecutorBuilder {
         let middleware_pipeline = {
             let pipeline = MiddlewarePipeline::new();
             let pipeline = if executor_config.context_window_tokens > 0 {
-                let (trigger_pct, keep_results) = if self.fast_mode {
+                let (trigger_pct, keep_results) = if self.chat_mode {
                     (80, 5) // Chat: 80% trigger, keep 5 recent tool results
                 } else {
                     (70, 8) // Deep: 70% trigger, keep 8 recent tool results
@@ -452,13 +453,13 @@ impl ExecutorBuilder {
             Arc::new(pipeline)
         };
 
-        // Root is an orchestrator — enforce single action per turn (except fast chat mode)
-        if !self.is_delegated && !self.fast_mode {
+        // Root is an orchestrator — enforce single action per turn (except chat mode)
+        if !self.is_delegated && !self.chat_mode {
             executor_config.single_action_mode = true;
         }
 
         // Chat mode: nudge at 70% so agent saves facts before 80% middleware prune
-        if self.fast_mode {
+        if self.chat_mode {
             executor_config.compaction_warn_pct = 70;
         }
 

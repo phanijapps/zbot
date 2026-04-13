@@ -114,9 +114,39 @@ pub struct ExecutionConfig {
     pub source: TriggerSource,
     /// Metadata from the request (e.g., plugin context, sender info)
     pub metadata: Option<Value>,
-    /// Execution mode: "fast" skips intent analysis, uses lean prompt, allows multi-tool turns.
-    /// Any other value (including "deep") uses the default behavior.
+    /// Execution mode: "fast"/"chat" skips intent analysis pipeline and uses a lean prompt;
+    /// "deep"/"research" runs the full pipeline (intent analysis, planning, delegation, wards).
+    /// Memory injection runs in BOTH modes — mode only gates the pipeline depth.
+    ///
+    /// Any other value (including "deep"/"research") uses the research behavior.
     pub mode: Option<String>,
+}
+
+/// Session execution mode — split from "fast_mode" to decouple memory injection
+/// from pipeline depth. See [`ExecutionConfig::mode`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionMode {
+    /// Chat mode: skip intent analysis / planning / delegation / ward transitions.
+    /// Memory injection and skills still run. Lean prompt, higher temperature.
+    #[serde(alias = "fast")]
+    Chat,
+    /// Research mode: full pipeline (intent analysis, planning, delegation, wards).
+    /// Full system prompt.
+    #[serde(alias = "deep")]
+    #[default]
+    Research,
+}
+
+impl SessionMode {
+    /// Parse from the legacy string-mode representation used on the wire.
+    /// "fast"/"chat" → Chat; anything else (including None/"deep"/"research") → Research.
+    pub fn from_mode_string(mode: Option<&str>) -> Self {
+        match mode {
+            Some("fast") | Some("chat") => Self::Chat,
+            _ => Self::Research,
+        }
+    }
 }
 
 impl ExecutionConfig {
@@ -194,9 +224,28 @@ impl ExecutionConfig {
         self
     }
 
-    /// Returns true if this execution is in fast chat mode.
+    /// Returns the typed session mode (memory-safe successor to `is_fast_mode`).
+    pub fn session_mode(&self) -> SessionMode {
+        SessionMode::from_mode_string(self.mode.as_deref())
+    }
+
+    /// Returns true if this execution is in chat mode (skip pipeline, keep memory).
+    ///
+    /// Prefer this over `is_fast_mode` — "chat" names the user-facing mode and
+    /// avoids conflating "skip memory" with "skip pipeline".
+    pub fn is_chat_mode(&self) -> bool {
+        matches!(self.session_mode(), SessionMode::Chat)
+    }
+
+    /// Deprecated alias for [`Self::is_chat_mode`]. Kept for migration.
+    ///
+    /// Historically "fast mode" gated BOTH memory injection and the pipeline.
+    /// Memory injection is now unconditional; only pipeline depth is gated.
+    #[deprecated(
+        note = "Use is_chat_mode() — semantics now mean 'skip pipeline', not 'skip memory'"
+    )]
     pub fn is_fast_mode(&self) -> bool {
-        self.mode.as_deref() == Some("fast")
+        self.is_chat_mode()
     }
 }
 
@@ -271,5 +320,65 @@ mod tests {
         assert_eq!(config.thread_id, Some("thread-789".to_string()));
         assert_eq!(config.connector_id, Some("slack".to_string()));
         assert_eq!(config.respond_to, Some(vec!["slack".to_string()]));
+    }
+
+    #[test]
+    fn session_mode_parses_chat_aliases() {
+        assert_eq!(
+            SessionMode::from_mode_string(Some("fast")),
+            SessionMode::Chat
+        );
+        assert_eq!(
+            SessionMode::from_mode_string(Some("chat")),
+            SessionMode::Chat
+        );
+    }
+
+    #[test]
+    fn session_mode_parses_research_aliases() {
+        assert_eq!(
+            SessionMode::from_mode_string(Some("deep")),
+            SessionMode::Research
+        );
+        assert_eq!(
+            SessionMode::from_mode_string(Some("research")),
+            SessionMode::Research
+        );
+        assert_eq!(SessionMode::from_mode_string(None), SessionMode::Research);
+        assert_eq!(
+            SessionMode::from_mode_string(Some("bogus")),
+            SessionMode::Research
+        );
+    }
+
+    #[test]
+    fn session_mode_serde_aliases() {
+        // Wire compat: legacy "fast"/"deep" values must still deserialize.
+        let chat: SessionMode = serde_json::from_str("\"fast\"").unwrap();
+        assert_eq!(chat, SessionMode::Chat);
+        let research: SessionMode = serde_json::from_str("\"deep\"").unwrap();
+        assert_eq!(research, SessionMode::Research);
+        // New canonical values also work.
+        let chat2: SessionMode = serde_json::from_str("\"chat\"").unwrap();
+        assert_eq!(chat2, SessionMode::Chat);
+        let research2: SessionMode = serde_json::from_str("\"research\"").unwrap();
+        assert_eq!(research2, SessionMode::Research);
+    }
+
+    #[test]
+    fn execution_config_is_chat_mode_tracks_mode_string() {
+        let base = ExecutionConfig::new("root".to_string(), "c".to_string(), PathBuf::from("/tmp"));
+        assert!(!base.is_chat_mode());
+        assert_eq!(base.session_mode(), SessionMode::Research);
+
+        let chat = base.clone().with_mode("fast".to_string());
+        assert!(chat.is_chat_mode());
+        assert_eq!(chat.session_mode(), SessionMode::Chat);
+
+        let chat_new = base.clone().with_mode("chat".to_string());
+        assert!(chat_new.is_chat_mode());
+
+        let research = base.with_mode("deep".to_string());
+        assert!(!research.is_chat_mode());
     }
 }

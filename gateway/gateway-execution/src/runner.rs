@@ -733,7 +733,7 @@ impl ExecutionRunner {
             self.paths.clone(),
         )
         .with_settings(&settings_for_loader)
-        .with_fast_mode(config.is_fast_mode());
+        .with_chat_mode(config.is_chat_mode());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -755,51 +755,42 @@ impl ExecutionRunner {
 
         // Graph-powered recall for first message — inject remembered facts, episodes, and
         // entity context before the agent sees the user's message.
-        // Skipped in fast mode for speed — chat_protocol instructs the agent to skip recall.
-        if !config.is_fast_mode() {
-            if let Some(recall) = &self.memory_recall {
-                let _ = session_id; // retained for future recall-log wiring
-                match recall
-                    .recall_unified(
-                        &config.agent_id,
-                        &message,
-                        setup.ward_id.as_deref(),
-                        &[],
-                        10,
-                    )
-                    .await
-                {
-                    Ok(items) if !items.is_empty() => {
-                        let formatted = crate::recall::format_scored_items(&items);
-                        if !formatted.is_empty() {
-                            history.insert(0, ChatMessage::system(formatted));
-                        }
-                        tracing::info!(
-                            agent_id = %config.agent_id,
-                            count = items.len(),
-                            "Recalled unified context for first message"
-                        );
+        // Runs in BOTH chat and research modes (Phase 7): only the pipeline depth is
+        // gated on mode; memory must reach every session. Chat mode uses a smaller budget
+        // to keep latency low.
+        if let Some(recall) = &self.memory_recall {
+            let _ = session_id; // retained for future recall-log wiring
+            let top_k = if config.is_chat_mode() { 5 } else { 10 };
+            match recall
+                .recall_unified(
+                    &config.agent_id,
+                    &message,
+                    setup.ward_id.as_deref(),
+                    &[],
+                    top_k,
+                )
+                .await
+            {
+                Ok(items) if !items.is_empty() => {
+                    let formatted = crate::recall::format_scored_items(&items);
+                    if !formatted.is_empty() {
+                        history.insert(0, ChatMessage::system(formatted));
                     }
-                    Ok(_) => {
-                        tracing::debug!(
-                            "First-message unified recall returned empty — no relevant items"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("First-message unified recall failed: {}", e);
-                    }
+                    tracing::info!(
+                        agent_id = %config.agent_id,
+                        count = items.len(),
+                        "Recalled unified context for first message"
+                    );
+                }
+                Ok(_) => {
+                    tracing::debug!(
+                        "First-message unified recall returned empty — no relevant items"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("First-message unified recall failed: {}", e);
                 }
             }
-        } // end !is_fast_mode recall gate
-
-        // Nudge the agent to use memory.recall tool at session start (visible, agent-driven)
-        // Skipped in fast mode — fast chat starts working immediately.
-        if !config.is_fast_mode() && history.is_empty() {
-            history.push(ChatMessage::system(
-                "Before starting this task, use the memory tool to recall relevant knowledge \
-                 — corrections, past strategies, and domain context."
-                    .to_string(),
-            ));
         }
 
         // Create executor (restore ward_id from existing session if available)
@@ -1706,7 +1697,7 @@ impl ExecutionRunner {
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone())
             .with_rate_limiter(rate_limiter)
-            .with_fast_mode(config.is_fast_mode());
+            .with_chat_mode(config.is_chat_mode());
         if let Some(ref registry) = self.model_registry {
             builder = builder.with_model_registry(registry.clone());
         }
@@ -1736,8 +1727,8 @@ impl ExecutionRunner {
         } else {
             false
         };
-        let is_fast_mode = config.is_fast_mode();
-        if is_root && already_analyzed && !is_fast_mode {
+        let is_chat_mode = config.is_chat_mode();
+        if is_root && already_analyzed && !is_chat_mode {
             // Notify UI that intent analysis was skipped (continuation turn)
             self.event_bus
                 .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
@@ -1747,7 +1738,7 @@ impl ExecutionRunner {
                 .await;
             tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
         }
-        if is_root && !already_analyzed && !is_fast_mode {
+        if is_root && !already_analyzed && !is_chat_mode {
             if let Some(ref fs) = fact_store_for_indexing {
                 // Index resources (fast DB upsert — no LLM call)
                 index_resources(
