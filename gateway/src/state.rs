@@ -424,10 +424,14 @@ impl AppState {
             knowledge_db.clone(),
         ));
         let sleep_time_worker = runner_graph_storage.as_ref().cloned().map(|gs| {
+            let verifier: Option<Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>> =
+                Some(Arc::new(
+                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
+                ));
             let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
                 gs.clone(),
                 compaction_repo.clone(),
-                None,
+                verifier,
             ));
             let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
                 gs.clone(),

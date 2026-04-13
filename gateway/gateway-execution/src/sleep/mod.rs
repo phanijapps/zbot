@@ -8,9 +8,11 @@
 pub mod compactor;
 pub mod decay;
 pub mod pruner;
+pub mod verifier;
 pub mod worker;
 
 pub use compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use decay::{DecayConfig, DecayEngine, PruneCandidate};
 pub use pruner::{PruneStats, Pruner};
+pub use verifier::LlmPairwiseVerifier;
 pub use worker::SleepTimeWorker;
