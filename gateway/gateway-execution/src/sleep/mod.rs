@@ -7,6 +7,7 @@
 
 pub mod compactor;
 pub mod decay;
+pub mod pattern_extractor;
 pub mod pruner;
 pub mod synthesizer;
 pub mod verifier;
@@ -14,6 +15,10 @@ pub mod worker;
 
 pub use compactor::{CompactionStats, Compactor, PairwiseVerifier};
 pub use decay::{DecayConfig, DecayEngine, PruneCandidate};
+pub use pattern_extractor::{
+    LlmPatternExtractor, PatternExtractLlm, PatternExtractor, PatternResponse, PatternStats,
+    PatternStep,
+};
 pub use pruner::{PruneStats, Pruner};
 pub use synthesizer::{
     LlmSynthesizer, SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
