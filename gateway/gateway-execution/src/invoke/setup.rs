@@ -379,14 +379,11 @@ pub fn append_system_context(
         subagent_rules(role)
     };
 
-    // Memory shard only for root agents (subagents don't have memory tool)
-    let memory_shard = if instructions.contains("# RULES") {
-        String::new() // Delegated subagent — no memory tool, no shard needed
-    } else {
-        gateway_templates::Templates::get("shards/memory_learning.md")
-            .map(|f| String::from_utf8_lossy(&f.data).to_string())
-            .unwrap_or_default()
-    };
+    // Memory shard for all agents — subagents are knowledge readers AND writers
+    // (Phase 7: subagents can now save facts they learn during execution).
+    let memory_shard = gateway_templates::Templates::get("shards/memory_learning.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
 
     format!(
         "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}{}",
