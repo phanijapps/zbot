@@ -2,13 +2,43 @@
 //! on the entity list. Concrete LLM-backed impl lands in Tasks 5 and 6.
 //! `NoopExtractor` provides a test-friendly no-op for queue-level tests.
 
+use crate::ingest::json_shape::parse_llm_json;
 use agent_runtime::llm::{ChatMessage, LlmClient};
 use async_trait::async_trait;
 use gateway_database::KgEpisode;
 use gateway_services::ProviderService;
 use knowledge_graph::{Entity, EntityType, GraphStorage};
+use serde::Deserialize;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+#[derive(Debug, Deserialize)]
+struct EntitiesEnvelope {
+    entities: Vec<EntityItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct EntityItem {
+    name: Option<String>,
+    #[serde(rename = "type")]
+    type_str: Option<String>,
+    description: Option<String>,
+    #[allow(dead_code)]
+    aliases: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelationshipsEnvelope {
+    relationships: Vec<RelationshipItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RelationshipItem {
+    source: Option<String>,
+    target: Option<String>,
+    #[serde(rename = "type")]
+    type_str: Option<String>,
+}
 
 /// Processes one episode — runs extraction + writes to graph.
 /// Errors propagate to the worker which marks the episode failed.
@@ -233,35 +263,14 @@ fn parse_relationships_response(
     content: &str,
     known_entities: &[String],
 ) -> Result<Vec<(String, String, String)>, String> {
-    let stripped = strip_code_fence(content);
-    let raw: serde_json::Value =
-        serde_json::from_str(stripped).map_err(|e| format!("parse relationships: {e}"))?;
-
-    let arr = raw
-        .get("relationships")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "missing 'relationships' array".to_string())?;
-
+    let env: RelationshipsEnvelope = parse_llm_json(content)?;
     let known: std::collections::HashSet<&str> =
         known_entities.iter().map(|s| s.as_str()).collect();
-
     let mut out = Vec::new();
-    for item in arr {
-        let src = item
-            .get("source")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-        let tgt = item
-            .get("target")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
-        let ty = item
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .trim();
+    for item in env.relationships {
+        let src = item.source.as_deref().map(str::trim).unwrap_or("");
+        let tgt = item.target.as_deref().map(str::trim).unwrap_or("");
+        let ty = item.type_str.as_deref().map(str::trim).unwrap_or("");
         if src.is_empty() || tgt.is_empty() || ty.is_empty() {
             continue;
         }
@@ -276,48 +285,27 @@ fn parse_relationships_response(
 /// Parse the LLM's JSON response into typed Entity values.
 /// Strips optional code-fence wrapping. Silently skips malformed items.
 fn parse_entities_response(content: &str, agent_id: &str) -> Result<Vec<Entity>, String> {
-    let stripped = strip_code_fence(content);
-    let raw: serde_json::Value = serde_json::from_str(stripped).map_err(|e| {
-        let preview: String = content.chars().take(200).collect();
-        format!("parse entities: {e} (preview: {preview})")
-    })?;
-
-    let arr = raw
-        .get("entities")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "missing 'entities' array in LLM response".to_string())?;
-
+    let env: EntitiesEnvelope = parse_llm_json(content)?;
     let mut out = Vec::new();
-    for item in arr {
-        let name = match item.get("name").and_then(|v| v.as_str()) {
-            Some(s) if !s.trim().is_empty() => s.trim().to_string(),
-            _ => continue,
+    for item in env.entities {
+        let Some(name) = item
+            .name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        else {
+            continue;
         };
-        let type_str = item
-            .get("type")
-            .and_then(|v| v.as_str())
-            .unwrap_or("concept");
-        let ty = EntityType::from_str(type_str);
-        let mut entity = Entity::new(agent_id.to_string(), ty, name);
-        if let Some(desc) = item.get("description").and_then(|v| v.as_str()) {
-            entity.properties.insert(
-                "description".to_string(),
-                serde_json::Value::String(desc.to_string()),
-            );
+        let ty = EntityType::from_str(item.type_str.as_deref().unwrap_or("concept"));
+        let mut entity = Entity::new(agent_id.to_string(), ty, name.to_string());
+        if let Some(desc) = item.description {
+            entity
+                .properties
+                .insert("description".to_string(), serde_json::Value::String(desc));
         }
         out.push(entity);
     }
     Ok(out)
-}
-
-fn strip_code_fence(s: &str) -> &str {
-    let t = s.trim();
-    let t = t
-        .strip_prefix("```json")
-        .or_else(|| t.strip_prefix("```"))
-        .unwrap_or(t)
-        .trim();
-    t.strip_suffix("```").unwrap_or(t).trim()
 }
 
 #[cfg(test)]

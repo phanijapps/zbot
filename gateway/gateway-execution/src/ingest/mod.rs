@@ -4,6 +4,7 @@
 pub mod backpressure;
 pub mod chunker;
 pub mod extractor;
+pub mod json_shape;
 pub mod queue;
 
 pub use backpressure::{Backpressure, BackpressureConfig};
