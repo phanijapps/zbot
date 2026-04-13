@@ -37,10 +37,7 @@ impl HttpMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::builder()
-                .user_agent(zero_core::USER_AGENT)
-                .build()
-                .expect("reqwest client"),
+            client: reqwest::Client::builder().build().expect("reqwest client"),
         }
     }
 

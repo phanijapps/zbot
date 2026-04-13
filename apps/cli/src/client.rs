@@ -167,10 +167,7 @@ impl GatewayClient {
         Self {
             http_url: http_url.to_string(),
             ws_url: ws_url.to_string(),
-            http_client: reqwest::Client::builder()
-                .user_agent(zero_core::USER_AGENT)
-                .build()
-                .expect("reqwest client"),
+            http_client: reqwest::Client::builder().build().expect("reqwest client"),
         }
     }
 

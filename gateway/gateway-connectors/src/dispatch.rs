@@ -135,10 +135,7 @@ async fn dispatch_http(
         "Dispatching HTTP request to connector"
     );
 
-    let client = reqwest::Client::builder()
-        .user_agent(zero_core::USER_AGENT)
-        .build()
-        .expect("reqwest client");
+    let client = reqwest::Client::builder().build().expect("reqwest client");
 
     let mut request = match method.to_uppercase().as_str() {
         "POST" => client.post(callback_url),

@@ -330,7 +330,6 @@ impl ProviderService {
     /// Test a provider connection
     pub async fn test(&self, provider: &Provider) -> ProviderTestResult {
         let client = reqwest::Client::builder()
-            .user_agent(zero_core::USER_AGENT)
             .timeout(std::time::Duration::from_secs(10))
             .build();
 

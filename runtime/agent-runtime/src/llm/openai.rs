@@ -87,7 +87,6 @@ impl OpenAiClient {
     pub fn new(config: LlmConfig) -> Result<Self, LlmError> {
         tracing::debug!("Creating OpenAI client for model: {}", config.model);
         let http_client = reqwest::Client::builder()
-            .user_agent(zero_core::USER_AGENT)
             .tcp_nodelay(true)
             .pool_max_idle_per_host(4)
             .pool_idle_timeout(std::time::Duration::from_secs(90))

@@ -24,10 +24,7 @@ impl OpenAiLlm {
     pub fn new(config: LlmConfig) -> Result<Self> {
         Ok(Self {
             config,
-            client: reqwest::Client::builder()
-                .user_agent(zero_core::USER_AGENT)
-                .build()
-                .expect("reqwest client"),
+            client: reqwest::Client::builder().build().expect("reqwest client"),
         })
     }
 

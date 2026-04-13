@@ -84,7 +84,6 @@ impl WebFetchTool {
     pub fn new() -> Self {
         let client = Client::builder()
             .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS))
-            .user_agent(zero_core::USER_AGENT)
             .build()
             .expect("Failed to create HTTP client");
         Self { client }

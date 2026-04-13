@@ -349,10 +349,7 @@ struct TriggerDistillationResponse {
 }
 
 async fn run_distill_backfill(gateway_url: &str, _concurrency: usize) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent(zero_core::USER_AGENT)
-        .build()
-        .expect("reqwest client");
+    let client = reqwest::Client::builder().build().expect("reqwest client");
 
     // Check if gateway is running
     let health_resp = client
@@ -469,10 +466,7 @@ struct RestoreResponse {
 }
 
 async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent(zero_core::USER_AGENT)
-        .build()
-        .expect("reqwest client");
+    let client = reqwest::Client::builder().build().expect("reqwest client");
 
     let health_resp = client
         .get(format!("{}/api/health", gateway_url))
@@ -525,10 +519,7 @@ async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {
 }
 
 async fn run_session_restore(gateway_url: &str, session_id: &str) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .user_agent(zero_core::USER_AGENT)
-        .build()
-        .expect("reqwest client");
+    let client = reqwest::Client::builder().build().expect("reqwest client");
 
     let health_resp = client
         .get(format!("{}/api/health", gateway_url))
