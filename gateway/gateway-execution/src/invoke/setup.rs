@@ -388,9 +388,16 @@ pub fn append_system_context(
         .map(|f| String::from_utf8_lossy(&f.data).to_string())
         .unwrap_or_default();
 
+    // Ward curation shard — reuse hierarchy + spec-driven development rules.
+    // Subagents are the ones writing files inside wards; they need the curation
+    // policy as much as (or more than) the root agent.
+    let curation_shard = gateway_templates::Templates::get("shards/ward_curation.md")
+        .map(|f| String::from_utf8_lossy(&f.data).to_string())
+        .unwrap_or_default();
+
     format!(
-        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}{}",
-        instructions, os_context, memory_shard, rules
+        "{}\n\n# --- SYSTEM CONTEXT ---\n\n{}\n\n{}\n\n{}{}",
+        instructions, os_context, memory_shard, curation_shard, rules
     )
 }
 
