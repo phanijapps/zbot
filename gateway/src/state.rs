@@ -89,6 +89,9 @@ pub struct AppState {
     /// Memory repository for accessing agent memory facts.
     pub memory_repo: Option<Arc<MemoryRepository>>,
 
+    /// Goal repository — active goals used for intent boost in unified recall.
+    pub goal_repo: Option<Arc<gateway_database::GoalRepository>>,
+
     /// Distillation repository for tracking distillation run outcomes.
     pub distillation_repo: Option<Arc<DistillationRepository>>,
 
@@ -198,6 +201,7 @@ impl AppState {
             384,
         ));
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
+        let goal_repo = Arc::new(gateway_database::GoalRepository::new(knowledge_db.clone()));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
         let episode_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
             knowledge_db.clone(),
@@ -429,6 +433,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            goal_repo: Some(goal_repo),
             distillation_repo: Some(distillation_repo),
             distiller: Some(distiller_ref),
             episode_repo: Some(episode_repo_ref),
@@ -507,6 +512,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            goal_repo: None,
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
@@ -588,6 +594,7 @@ impl AppState {
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            goal_repo: None,
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
