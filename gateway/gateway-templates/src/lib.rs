@@ -23,6 +23,7 @@ const REQUIRED_SHARDS: &[&str] = &[
     "first_turn_protocol",
     "tooling_skills",
     "memory_learning",
+    "ward_curation",
     "planning_autonomy",
 ];
 
@@ -448,5 +449,38 @@ mod tests {
         assert!(shards.contains("TOOLING & SKILLS"));
         assert!(shards.contains("MEMORY & LEARNING"));
         assert!(shards.contains("delegation_rules")); // from planning_autonomy shard
+    }
+
+    #[test]
+    fn test_ward_curation_shard_loaded_for_root() {
+        let dir = TempDir::new().unwrap();
+        let config_dir = dir.path().join("config");
+
+        let prompt = assemble_prompt(&config_dir, dir.path());
+
+        // Root prompt must include the ward curation policy
+        assert!(
+            prompt.contains("Ward Curation"),
+            "ward_curation shard header missing from root prompt"
+        );
+        assert!(
+            prompt.contains("Reuse hierarchy"),
+            "ward_curation shard content missing from root prompt"
+        );
+    }
+
+    #[test]
+    fn test_ward_curation_shard_written_to_disk() {
+        let dir = TempDir::new().unwrap();
+        let config_dir = dir.path().join("config");
+
+        let _ = assemble_prompt(&config_dir, dir.path());
+
+        // The default shard should be written so users can customize it
+        let shard_path = config_dir.join("shards").join("ward_curation.md");
+        assert!(
+            shard_path.exists(),
+            "ward_curation.md should be materialized under config/shards/"
+        );
     }
 }
