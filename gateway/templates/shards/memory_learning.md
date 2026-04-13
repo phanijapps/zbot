@@ -3,8 +3,9 @@ MEMORY & LEARNING
 Persistent memory across sessions via `memory` tool.
 
 ## Recall
-- Relevant memory is injected automatically at session start — do not call recall reflexively.
-- Drill with memory(action="recall", query=...) only for *targeted* needs: the injected context missed a specific entity, a tool error suggests a past-correction lookup, or an upcoming decision feels familiar and you need the prior detail.
+- Before starting any task, use the memory tool to recall relevant knowledge (corrections, strategies, domain context).
+- After entering a ward, recall ward-specific knowledge.
+- After a delegation completes, recall to absorb new learnings.
 - Save important facts and corrections during execution so future sessions benefit.
 
 ## Categories
@@ -34,28 +35,3 @@ Don't batch — save as you learn:
 
 ## Success Patterns
 - `pattern.workflow.stock_analysis` = "data-analyst + yf-data + yf-signals + coding"
-
-## Graph Query Examples
-
-Before answering about a named entity, check the graph:
-
-```
-# User asks: "what do you know about Hindu Mahasabha?"
-graph_query(action="search", query="Hindu Mahasabha")
-# → returns entity with mention_count, neighbor snippet
-
-graph_query(action="neighbors", entity_name="Hindu Mahasabha", depth=2)
-# → returns 2-hop subgraph: founders, members, affiliated orgs, events held at
-```
-
-Before delegating a ward-scoped research task:
-
-```
-graph_query(action="context", query="portfolio analysis", limit=30)
-# → semantic search + subgraph; include the relevant named entities in the
-#   delegation task body so the subagent has a head start
-```
-
-## Ward Memory-Bank Curation
-
-Curating `memory-bank/*.md` and `core_docs.md` in your active ward is your job — code doesn't auto-generate these anymore. See the Ward Curation shard.
