@@ -85,8 +85,10 @@ impl WardTool {
         }
     }
 
-    /// Create the empty memory-bank scaffold (directory + three zero-byte files)
-    /// and an empty `core/` directory. The agent owns the contents.
+    /// Create the empty memory-bank scaffold (directory + three zero-byte files).
+    /// The agent owns the contents. No other directories are pre-created — the
+    /// agent picks language-appropriate names for reusable-primitive locations
+    /// (`core/`, `pkg/`, `lib/`, `src/`, etc.).
     fn scaffold_empty_dirs(ward_dir: &std::path::Path, ward_name: &str) {
         let memory_bank = ward_dir.join("memory-bank");
         if let Err(e) = std::fs::create_dir_all(&memory_bank) {
@@ -110,10 +112,6 @@ impl WardTool {
                     e
                 );
             }
-        }
-
-        if let Err(e) = std::fs::create_dir_all(ward_dir.join("core")) {
-            tracing::warn!("Failed to create core/ dir in ward '{}': {}", ward_name, e);
         }
     }
 
@@ -544,17 +542,20 @@ mod tests {
     }
 
     #[test]
-    fn test_ward_create_scaffolds_empty_core_dir() {
+    fn test_ward_create_does_not_precreate_code_dirs() {
+        // No opinionated directories like core/, pkg/, lib/, src/ are
+        // pre-created — the agent picks names appropriate for the language.
         let ward_dir = TempDir::new().unwrap();
         let ward_path = ward_dir.path().to_path_buf();
 
         WardTool::scaffold_empty_dirs(&ward_path, "minimal");
 
-        let core = ward_path.join("core");
-        assert!(core.exists());
-        assert!(core.is_dir());
-        let entries: Vec<_> = std::fs::read_dir(&core).unwrap().collect();
-        assert_eq!(entries.len(), 0, "core/ should be empty");
+        for opinionated in ["core", "pkg", "lib", "src", "internal"] {
+            assert!(
+                !ward_path.join(opinionated).exists(),
+                "ward scaffold must not pre-create {opinionated}/"
+            );
+        }
     }
 
     #[test]
