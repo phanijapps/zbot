@@ -42,7 +42,6 @@ pub mod session_state;
 pub mod sleep;
 pub mod tool_result_extractor;
 pub mod ward_artifact_indexer;
-pub mod ward_sync;
 pub mod ward_wiki;
 
 // Re-export public types

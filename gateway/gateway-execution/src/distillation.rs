@@ -674,26 +674,12 @@ impl SessionDistiller {
             "Session distillation complete"
         );
 
-        // 8. Sync ward knowledge file (best-effort)
+        // Ward memory-bank/ward.md is curated manually; distillation no longer
+        // writes an auto-generated summary. Facts remain in the memory_facts DB.
         let ward_id = self
             .conversation_repo
             .get_session_ward_id(session_id)
             .unwrap_or(None);
-
-        if let Some(ref wid) = ward_id {
-            if wid != "__global__" && wid != "scratch" {
-                let ward_path = self.paths.wards_dir().join(wid);
-                if ward_path.exists() {
-                    if let Err(e) = crate::ward_sync::generate_ward_knowledge_file(
-                        &ward_path,
-                        wid,
-                        &self.memory_repo,
-                    ) {
-                        tracing::warn!(ward = %wid, error = %e, "Ward file sync failed");
-                    }
-                }
-            }
-        }
 
         // 9. Compile ward wiki from extracted facts (best-effort)
         if let (Some(wiki_repo), Some(ref wid)) = (&self.wiki_repo, &ward_id) {
