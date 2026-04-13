@@ -18,6 +18,7 @@
 //! 6. Format as a "Recalled Memory" system message
 
 pub mod adapters;
+pub mod previous_episodes;
 pub mod scored_item;
 pub use scored_item::{intent_boost, rrf_merge, GoalLite, ItemKind, Provenance, ScoredItem};
 
@@ -884,6 +885,16 @@ impl MemoryRecall {
             _ => Vec::new(),
         };
 
+        // 5a. Previous episodes in this ward (chain continuity).
+        let episode_items: Vec<ScoredItem> = match (self.episode_repo.as_ref(), ward_id) {
+            (Some(ep_repo), Some(wid)) => {
+                previous_episodes::PreviousEpisodesAdapter::new(ep_repo.clone())
+                    .fetch(wid)
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+
         // 5. Active goals as retrievable items.
         let goal_items: Vec<ScoredItem> = active_goals
             .iter()
@@ -902,7 +913,13 @@ impl MemoryRecall {
             .collect();
 
         // Intent boost on non-goal lists.
-        let mut all_lists = vec![fact_items, wiki_items, procedure_items, graph_items];
+        let mut all_lists = vec![
+            fact_items,
+            wiki_items,
+            procedure_items,
+            graph_items,
+            episode_items,
+        ];
         for list in &mut all_lists {
             intent_boost(list, active_goals);
         }

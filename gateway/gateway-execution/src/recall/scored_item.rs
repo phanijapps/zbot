@@ -15,6 +15,7 @@ pub enum ItemKind {
     Procedure,
     GraphNode,
     Goal,
+    Episode,
 }
 
 #[derive(Debug, Clone)]

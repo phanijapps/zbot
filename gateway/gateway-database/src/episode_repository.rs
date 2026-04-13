@@ -186,6 +186,34 @@ impl EpisodeRepository {
         })
     }
 
+    /// Fetch the most recent successful or partial episodes in a ward within the
+    /// last 14 days. Used by the unified recall path to link a new session to
+    /// prior work in the same ward (Memory v2 Phase 6, "episode chain").
+    ///
+    /// Returned rows are ordered newest-first and capped at `limit` (caller
+    /// typically passes 3). Outcomes with `'failed'` or `'crashed'` are
+    /// excluded so we only surface episodes worth building on.
+    pub fn fetch_recent_successful_by_ward(
+        &self,
+        ward_id: &str,
+        limit: usize,
+    ) -> Result<Vec<SessionEpisode>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                        strategy_used, key_learnings, token_cost, created_at \
+                 FROM session_episodes \
+                 WHERE ward_id = ?1 \
+                   AND outcome IN ('success', 'partial') \
+                   AND created_at > datetime('now', '-14 days') \
+                 ORDER BY created_at DESC \
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![ward_id, limit as i64], row_to_episode)?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     // =========================================================================
     // SIMILARITY SEARCH
     // =========================================================================
