@@ -95,7 +95,7 @@ pub struct MemoryFact {
     #[serde(default)]
     pub source_episode_id: Option<String>,
 
-    /// Human-readable pointer to source (e.g., "hindu_mahasabha.pdf:page_42").
+    /// Human-readable pointer to source (e.g., "research_notes.pdf:page_42").
     #[serde(default)]
     pub source_ref: Option<String>,
 }

@@ -2026,26 +2026,26 @@ Include `properties` populated appropriately for the type. Use ISO 8601 for date
 ## Example Extraction (for grounding)
 
 Given this transcript snippet:
-> "V.D. Savarkar was the president of Hindu Mahasabha from 1937 to 1943, during which time the Ahmedabad Session of 1937 was held."
+> "Ada Lovelace served as chief researcher at Acme Research from 1843 to 1852, during which time the Cambridge Symposium of 1843 was held."
 
 A high-quality extraction looks like:
 
 {
   "facts": [
-    {"category": "domain", "key": "hindu_mahasabha.savarkar.presidency",
-     "content": "V.D. Savarkar served as president of Hindu Mahasabha from 1937 to 1943",
+    {"category": "domain", "key": "acme_research.lovelace.tenure",
+     "content": "Ada Lovelace served as chief researcher at Acme Research from 1843 to 1852",
      "confidence": 0.95, "epistemic_class": "archival"}
   ],
   "entities": [
-    {"name": "V.D. Savarkar", "type": "person", "properties": {"role": "Indian independence activist"}},
-    {"name": "Hindu Mahasabha", "type": "organization", "properties": {"type": "political", "founding_date": "1915"}},
-    {"name": "Ahmedabad Session 1937", "type": "event", "properties": {"start_date": "1937", "location": "Ahmedabad"}},
-    {"name": "Ahmedabad", "type": "location", "properties": {"country": "India", "type": "city"}}
+    {"name": "Ada Lovelace", "type": "person", "properties": {"role": "Computing pioneer"}},
+    {"name": "Acme Research", "type": "organization", "properties": {"type": "research_lab", "founding_date": "1830"}},
+    {"name": "Cambridge Symposium 1843", "type": "event", "properties": {"start_date": "1843", "location": "Cambridge"}},
+    {"name": "Cambridge", "type": "location", "properties": {"country": "UK", "type": "city"}}
   ],
   "relationships": [
-    {"source": "V.D. Savarkar", "target": "Hindu Mahasabha", "type": "president_of"},
-    {"source": "Ahmedabad Session 1937", "target": "Ahmedabad", "type": "held_at"},
-    {"source": "Ahmedabad Session 1937", "target": "Hindu Mahasabha", "type": "part_of"}
+    {"source": "Ada Lovelace", "target": "Acme Research", "type": "member_of"},
+    {"source": "Cambridge Symposium 1843", "target": "Cambridge", "type": "held_at"},
+    {"source": "Cambridge Symposium 1843", "target": "Acme Research", "type": "part_of"}
   ]
 }
 

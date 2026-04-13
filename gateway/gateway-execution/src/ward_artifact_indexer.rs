@@ -720,7 +720,7 @@ mod tests {
     #[test]
     fn index_one_file_produces_relationships_for_people_json() {
         let value: Value = serde_json::json!([
-            {"name": "V.D. Savarkar", "organization": "Hindu Mahasabha", "role": "President", "born_in": "Bhagur"}
+            {"name": "Ada Lovelace", "organization": "Acme Research", "role": "Chief Researcher", "born_in": "London"}
         ]);
         let schema = detect_collection_schema(&value);
         assert_eq!(schema, CollectionSchema::NamedObjectArray);

@@ -2318,7 +2318,7 @@ mod tests {
         let mut entity = Entity::new(
             "root".to_string(),
             crate::EntityType::Person,
-            "V.D. Savarkar".to_string(),
+            "A.D. Lovelace".to_string(),
         );
         entity.id = "e1".to_string();
 
@@ -2331,7 +2331,7 @@ mod tests {
         db.with_connection(|conn| {
             let count: i64 = conn.query_row(
                 "SELECT COUNT(*) FROM kg_aliases WHERE normalized_form = ?1",
-                rusqlite::params!["vd savarkar"],
+                rusqlite::params!["ad lovelace"],
                 |r| r.get(0),
             )?;
             assert_eq!(count, 1, "self-alias should be seeded on entity create");
@@ -2352,7 +2352,7 @@ mod tests {
         let mut e1 = Entity::new(
             "root".to_string(),
             crate::EntityType::Person,
-            "V.D. Savarkar".to_string(),
+            "A.D. Lovelace".to_string(),
         );
         e1.id = "e1".to_string();
         storage
@@ -2368,7 +2368,7 @@ mod tests {
         let mut e2 = Entity::new(
             "root".to_string(),
             crate::EntityType::Person,
-            "Vinayak Savarkar".to_string(),
+            "Augusta Lovelace".to_string(),
         );
         e2.id = "e2".to_string();
         storage
@@ -2416,7 +2416,7 @@ mod tests {
         let mut e1 = Entity::new(
             "root".to_string(),
             crate::EntityType::Person,
-            "V.D. Savarkar".to_string(),
+            "A.D. Lovelace".to_string(),
         );
         e1.id = "e1".to_string();
         e1.name_embedding = Some(emb1.clone());

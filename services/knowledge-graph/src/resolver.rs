@@ -1,4 +1,4 @@
-//! EntityResolver — merges entity variants (e.g., "Savarkar" ↔ "V.D. Savarkar")
+//! EntityResolver — merges entity variants (e.g., "Lovelace" ↔ "A. Lovelace")
 //! on write. Runs a cascade of matchers; the first match wins.
 //!
 //! Cascade order (cheapest first):
@@ -182,14 +182,14 @@ mod tests {
 
     #[test]
     fn normalize_name_lowercases_and_trims() {
-        assert_eq!(normalize_name("  Savarkar  "), "savarkar");
-        assert_eq!(normalize_name("V.D. Savarkar"), "vd savarkar");
+        assert_eq!(normalize_name("  Lovelace  "), "lovelace");
+        assert_eq!(normalize_name("A.D. Lovelace"), "ad lovelace");
     }
 
     #[test]
     fn normalize_name_strips_honorifics() {
-        assert_eq!(normalize_name("Dr. Ambedkar"), "ambedkar");
-        assert_eq!(normalize_name("Mrs. Gandhi"), "gandhi");
+        assert_eq!(normalize_name("Dr. Turing"), "turing");
+        assert_eq!(normalize_name("Mrs. Hopper"), "hopper");
         assert_eq!(normalize_name("Shri Patel"), "patel");
     }
 }
