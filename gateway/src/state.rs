@@ -329,7 +329,7 @@ impl AppState {
 
         let mut distiller_inner = SessionDistiller::new(
             provider_service.clone(),
-            embedding_client,
+            embedding_client.clone(),
             conversation_repo.clone(),
             memory_repo.clone(),
             graph_storage,
@@ -339,7 +339,7 @@ impl AppState {
             Some(settings.clone()),
         );
         distiller_inner.set_wiki_repo(wiki_repo);
-        distiller_inner.set_procedure_repo(procedure_repo);
+        distiller_inner.set_procedure_repo(procedure_repo.clone());
         let distiller = Arc::new(distiller_inner);
 
         // Keep a handle for on-demand distillation (backfill, trigger)
@@ -441,10 +441,39 @@ impl AppState {
                 gs,
                 compaction_repo.clone(),
             ));
-            Arc::new(gateway_execution::sleep::SleepTimeWorker::start(
+            // Synthesizer + PatternExtractor — both depend on a default LLM
+            // provider being configured. We construct them unconditionally;
+            // the ops themselves log+skip if provider listing fails at run
+            // time, so a bootless config never aborts the cycle.
+            let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
+                provider_service.clone(),
+            ));
+            let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
+                knowledge_db.clone(),
+                memory_repo.clone(),
+                compaction_repo.clone(),
+                synth_llm,
+                embedding_client.clone(),
+            ));
+            let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
+                provider_service.clone(),
+            ));
+            let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                knowledge_db.clone(),
+                db_manager.clone(),
+                procedure_repo.clone(),
+                compaction_repo.clone(),
+                pattern_llm,
+            ));
+            let ops = gateway_execution::sleep::SleepOps {
+                synthesizer: Some(synthesizer),
+                pattern_extractor: Some(pattern_extractor),
+            };
+            Arc::new(gateway_execution::sleep::SleepTimeWorker::start_with_ops(
                 compactor,
                 decay,
                 pruner,
+                ops,
                 std::time::Duration::from_secs(60 * 60),
                 "root".to_string(),
             ))
