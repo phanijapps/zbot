@@ -788,7 +788,14 @@ impl ExecutionRunner {
                     );
                 }
                 Err(e) => {
+                    // Surface the failure so the agent can drill manually instead
+                    // of assuming memory was silently empty. Empty results (Ok case
+                    // above) stay quiet — only genuine errors are reported.
                     tracing::warn!("First-message unified recall failed: {}", e);
+                    history.insert(
+                        0,
+                        ChatMessage::system(crate::recall::format_recall_failure_message(&e)),
+                    );
                 }
             }
         }

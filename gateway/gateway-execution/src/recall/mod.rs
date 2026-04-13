@@ -412,6 +412,19 @@ impl MemoryRecall {
     }
 }
 
+/// Format the system message surfaced to the agent when the automatic
+/// session-start recall fails with an error.
+///
+/// Phase 7 (T-D): empty recall results stay quiet — only genuine errors
+/// produce a surface message so the agent knows memory retrieval was
+/// attempted and can call `memory(action="recall", ...)` manually.
+pub fn format_recall_failure_message(err: &str) -> String {
+    format!(
+        "[Memory retrieval failed: {}. You can call memory(action=\"recall\", query=...) manually if you need past context.]",
+        err
+    )
+}
+
 /// Format a unified scored-item list as a prompt-ready context block.
 ///
 /// Items are emitted in input order (caller should already have them ranked
@@ -515,6 +528,14 @@ mod tests {
     #[test]
     fn format_scored_items_empty_returns_empty_string() {
         assert!(format_scored_items(&[]).is_empty());
+    }
+
+    #[test]
+    fn format_recall_failure_message_includes_error_and_guidance() {
+        let msg = format_recall_failure_message("database timeout");
+        assert!(msg.contains("database timeout"));
+        assert!(msg.contains("Memory retrieval failed"));
+        assert!(msg.contains("memory(action=\"recall\""));
     }
 
     #[test]
