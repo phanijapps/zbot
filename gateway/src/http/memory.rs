@@ -369,7 +369,7 @@ pub async fn create_memory_fact(
         valid_until: None,
         superseded_by: None,
         pinned: request.pinned,
-        epistemic_class: None,
+        epistemic_class: Some("current".to_string()),
         source_episode_id: None,
         source_ref: None,
     };
