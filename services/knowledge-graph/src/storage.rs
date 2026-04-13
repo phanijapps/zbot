@@ -1508,6 +1508,37 @@ impl GraphStorage {
     }
 }
 
+impl GraphStorage {
+    /// Soft-delete `entity_id`: set `compressed_into = '__pruned__'` and drop
+    /// its `kg_name_index` row so ANN and resolver queries stop seeing it.
+    ///
+    /// Unlike `merge_entity_into`, no relationships are re-pointed — the
+    /// caller (Pruner) only uses this on orphans with zero edges.
+    pub fn mark_pruned(&self, entity_id: &str) -> GraphResult<()> {
+        let id = entity_id.to_string();
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<()> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+                    tx.execute(
+                        "UPDATE kg_entities SET compressed_into = '__pruned__' WHERE id = ?1",
+                        params![id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.execute(
+                        "DELETE FROM kg_name_index WHERE entity_id = ?1",
+                        params![id],
+                    )
+                    .map_err(GraphError::Database)?;
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(())
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+}
+
 /// Minimal projection of `kg_entities` used by the sleep-time Pruner to
 /// select soft-deletion candidates. See `GraphStorage::list_orphan_old_candidates`.
 #[derive(Debug, Clone)]
