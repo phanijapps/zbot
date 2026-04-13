@@ -55,3 +55,7 @@ graph_query(action="context", query="portfolio analysis", limit=30)
 # → semantic search + subgraph; include the relevant named entities in the
 #   delegation task body so the subagent has a head start
 ```
+
+## Ward Memory-Bank Curation
+
+Curating `memory-bank/*.md` and `core_docs.md` in your active ward is your job — code doesn't auto-generate these anymore. See the Ward Curation shard.
