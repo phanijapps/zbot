@@ -401,6 +401,33 @@ impl AppState {
             None => (None, None),
         };
 
+        // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
+        let compaction_repo = Arc::new(gateway_database::CompactionRepository::new(
+            knowledge_db.clone(),
+        ));
+        let sleep_time_worker = runner_graph_storage.as_ref().cloned().map(|gs| {
+            let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
+                gs.clone(),
+                compaction_repo.clone(),
+                None,
+            ));
+            let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
+                gs.clone(),
+                gateway_execution::sleep::DecayConfig::default(),
+            ));
+            let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
+                gs,
+                compaction_repo.clone(),
+            ));
+            Arc::new(gateway_execution::sleep::SleepTimeWorker::start(
+                compactor,
+                decay,
+                pruner,
+                std::time::Duration::from_secs(60 * 60),
+                "root".to_string(),
+            ))
+        });
+
         // Create hook registry
         let hook_registry = Arc::new(HookRegistry::new(event_bus.clone()));
 
@@ -435,8 +462,8 @@ impl AppState {
             bridge_bus: None,     // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             session_archiver: Some(session_archiver),
-            sleep_time_worker: None,
-            compaction_repo: None,
+            sleep_time_worker,
+            compaction_repo: Some(compaction_repo),
             plugin_manager,
             model_registry,
             workspace_cache,
