@@ -29,7 +29,10 @@ impl OpenAiEmbeddingClient {
             api_key,
             model,
             dimensions,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder()
+                .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client"),
         }
     }
 }

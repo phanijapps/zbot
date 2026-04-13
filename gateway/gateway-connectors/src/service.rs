@@ -214,7 +214,10 @@ impl ConnectorService {
         match &connector.transport {
             super::config::ConnectorTransport::Http { callback_url, .. } => {
                 // Try a HEAD or OPTIONS request to test connectivity
-                let client = reqwest::Client::new();
+                let client = reqwest::Client::builder()
+                    .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+                    .build()
+                    .expect("reqwest client");
                 let start = std::time::Instant::now();
 
                 match client

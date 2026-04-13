@@ -135,7 +135,10 @@ async fn dispatch_http(
         "Dispatching HTTP request to connector"
     );
 
-    let client = reqwest::Client::new();
+    let client = reqwest::Client::builder()
+        .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+        .build()
+        .expect("reqwest client");
 
     let mut request = match method.to_uppercase().as_str() {
         "POST" => client.post(callback_url),

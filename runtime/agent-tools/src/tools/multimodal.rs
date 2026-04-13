@@ -184,7 +184,10 @@ impl Tool for MultimodalAnalyzeTool {
         let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
         tracing::info!("multimodal_analyze: calling {} with model {}", url, model);
 
-        let client = reqwest::Client::new();
+        let client = reqwest::Client::builder()
+            .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+            .build()
+            .expect("reqwest client");
         let mut request = client
             .post(&url)
             .header("Content-Type", "application/json")

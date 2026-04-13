@@ -330,6 +330,7 @@ impl ProviderService {
     /// Test a provider connection
     pub async fn test(&self, provider: &Provider) -> ProviderTestResult {
         let client = reqwest::Client::builder()
+            .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
             .timeout(std::time::Duration::from_secs(10))
             .build();
 

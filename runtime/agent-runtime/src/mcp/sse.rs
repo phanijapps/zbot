@@ -37,7 +37,10 @@ impl SseMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client"),
         }
     }
 

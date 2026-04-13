@@ -24,7 +24,10 @@ impl OpenAiLlm {
     pub fn new(config: LlmConfig) -> Result<Self> {
         Ok(Self {
             config,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder()
+                .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+                .build()
+                .expect("reqwest client"),
         })
     }
 
