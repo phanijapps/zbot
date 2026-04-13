@@ -95,6 +95,7 @@ Before you respond, walk through every item. If a box can't be checked, do the w
 - [ ] **structure.md new directories**: did this task create any new top-level directory in the ward (new instance dir, new primitives dir, new `tmp/`, etc.)? If yes, add it to `memory-bank/structure.md`. If it has a "Layout" section, extend it. If it has an "Instances" section, add the new instance to the list. If neither exists and this is the first time a second instance appears, add an Instances section listing all instance directories.
 - [ ] **core_docs.md primitives**: if you created or changed a primitive, its entry in `memory-bank/core_docs.md` is current (signature + example).
 - [ ] **ward.md conventions**: if you learned a non-obvious convention or gotcha during this task, add it to `memory-bank/ward.md`. Skip if nothing new was learned.
+- [ ] **Milestone completion**: if `specs/milestones.md` exists and this task corresponds to a milestone (check your spec's Goal against the milestone's Target), flip that milestone's `[ ]` to `[x]` and append `**Completed:** sess-{id}` to the milestone entry. If acceptance failed, leave it `[ ]` or mark `[>]` with a short note on what's blocked.
 
 The checklist is non-optional. Skipping it means the next session will miss what you knew. If you find yourself about to respond and haven't touched any memory-bank file, ask: did I really learn nothing worth recording? The answer is almost always no — record at minimum the instance name and one decision.
 
@@ -120,3 +121,4 @@ When `AGENTS.md` is just the seed heading, populate it with this structure. Keep
 ```
 
 Future sessions extend the "Existing instances" list as new instance dirs are added (per the checklist). The "Read first" list is stable — don't reinvent it per session. The purpose paragraph is updated only when the ward's scope materially changes.
+

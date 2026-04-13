@@ -160,6 +160,56 @@ A ward has five kinds of locations. All paths in every spec and plan you write M
 
 **Never** write `Output: specs/{task}/foo.py` or `Output: specs/{task}/data/x.json`. If you see yourself doing that, you've placed code inside a metadata directory. Fix the path.
 
+## Progressive and multi-phase goals
+
+Some goals are inherently multi-session: "build a chess engine", "migrate the database to Postgres", "until X", "progressively", "highest possible", "iteratively improve", "milestone", any multi-target language. For these, **do NOT write one giant spec+plan**. Instead:
+
+1. Write `specs/milestones.md` first — an ordered list of phased targets.
+2. Then write `spec.md` + `plan.md` for ONLY the first unchecked milestone.
+3. Future sessions read `specs/milestones.md`, pick the next `[ ]` milestone, plan that one.
+
+### `specs/milestones.md` format
+
+```markdown
+# Milestones: {project-name}
+
+**Goal:** {user's stated goal, verbatim}
+**Type:** progressive | unbounded | multi-phase
+**Current phase:** {N}
+
+---
+
+## [ ] Phase 1 — {short title}
+**Target:** {what this phase delivers}
+**Acceptance:** {testable condition(s)}
+**Depends on:** none
+
+## [ ] Phase 2 — {short title}
+**Target:** ...
+**Acceptance:** ...
+**Depends on:** Phase 1
+
+...
+
+## Stop condition
+{When to halt — e.g., "if a phase fails acceptance after 3 sessions, investigate before proceeding"}
+```
+
+Use `[ ]` for pending, `[>]` for in-progress, `[x]` for complete. Each phase should be a session-sized task (same scope as a normal spec+plan). 5-10 phases is typical; more than 15 means phases are too fine-grained, fewer than 3 means it shouldn't be a milestone project at all.
+
+### When to write `milestones.md`
+- Goal contains: "progressively", "until", "highest possible", "milestone", "phase", "iteratively improve".
+- Scope is obviously multi-session (new project from scratch, large codebase, research program).
+- Acceptance requires multiple measurement rounds (ELO ladder, benchmark progression, coverage targets).
+
+### When NOT to write `milestones.md`
+- Task is scoped to a single deliverable ("analyze AAPL", "write report on X", "fix bug Y").
+- An existing `specs/milestones.md` already covers this project — read it, pick the next `[ ]` phase.
+- User gave a concrete scoped request — don't inflate it into phases.
+
+### If `milestones.md` already exists
+Read it first. Don't rewrite it. Pick the next `[ ]` phase. Your `spec.md`'s **Goal** echoes that phase's **Target**; your Acceptance Criteria echo that phase's **Acceptance**. The delivery agent flips `[ ] → [x]` when the task satisfies the phase.
+
 ## Reuse first
 When assigning steps:
 - Prefer existing skills (global tier).

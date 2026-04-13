@@ -12,6 +12,12 @@ Wards follow **spec-driven development**: every substantive task gets a `specs/{
 
 If a plan's output path begins with `specs/`, it's a mistake — code and data never live inside `specs/`.
 
+**Progressive projects (`specs/milestones.md`):**
+If the ward has `specs/milestones.md`, it's a multi-session project. On ward entry:
+1. Read `specs/milestones.md` first.
+2. The next task = the next `[ ]` milestone. Never skip ahead; never re-plan `[x]` milestones.
+3. When you complete a task that corresponds to a milestone, flip its `[ ]` to `[x]` and append the session id to the milestone entry.
+
 ## Reuse hierarchy (check in this order before writing anything new)
 
 1. **Skills (global).** Search, PDF/image text extraction, URL fetch, markdown rendering, file I/O — capabilities that apply across wards live as skills. Check available skills first. If the capability exists, use it. If it doesn't and the need is general-purpose, propose a new skill rather than copying logic into the ward.
