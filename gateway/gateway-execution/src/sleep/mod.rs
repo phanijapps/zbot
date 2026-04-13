@@ -24,4 +24,4 @@ pub use synthesizer::{
     LlmSynthesizer, SynthesisInput, SynthesisLlm, SynthesisResponse, SynthesisStats, Synthesizer,
 };
 pub use verifier::LlmPairwiseVerifier;
-pub use worker::SleepTimeWorker;
+pub use worker::{SleepOps, SleepTimeWorker};
