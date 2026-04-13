@@ -177,6 +177,9 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route("/api/memory/search", get(memory::search_all_memory_facts))
+        .route("/api/memory/consolidate", post(memory::consolidate))
+        .route("/api/memory/stats", get(memory::stats))
+        .route("/api/memory/health", get(memory::health))
         .route(
             "/api/memory/:agent_id",
             get(memory::list_memory_facts).post(memory::create_memory_fact),

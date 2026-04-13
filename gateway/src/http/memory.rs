@@ -479,3 +479,130 @@ pub async fn list_all_memory_facts(
         total,
     }))
 }
+
+// ============================================================================
+// PHASE 4: CONSOLIDATE / STATS / HEALTH
+// ============================================================================
+
+/// Response for `POST /api/memory/consolidate`.
+#[derive(Debug, Serialize)]
+pub struct ConsolidateResponse {
+    pub status: &'static str,
+}
+
+/// Trigger a sleep-time consolidation cycle.
+///
+/// Returns `503 Service Unavailable` when the worker has not been wired
+/// into `AppState` yet.
+pub async fn consolidate(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<ConsolidateResponse>), (StatusCode, String)> {
+    let worker = state.sleep_time_worker.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "sleep-time worker not initialized".to_string(),
+    ))?;
+    worker.trigger();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ConsolidateResponse {
+            status: "triggered",
+        }),
+    ))
+}
+
+/// Memory subsystem stats response.
+#[derive(Debug, Serialize, Default)]
+pub struct MemoryStats {
+    pub entities: i64,
+    pub relationships: i64,
+    pub facts: i64,
+    pub episodes: i64,
+    pub procedures: i64,
+    pub wiki_articles: i64,
+    pub goals_active: i64,
+    pub db_size_mb: f64,
+}
+
+fn count_row(conn: &rusqlite::Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0)
+}
+
+/// `GET /api/memory/stats` — aggregate counts across memory subsystems.
+pub async fn stats(State(state): State<AppState>) -> Json<MemoryStats> {
+    let mut stats = MemoryStats::default();
+
+    if let Some(graph_service) = state.graph_service.as_ref() {
+        let storage = graph_service.storage();
+        if let Ok(entities) = storage.get_entities("root") {
+            stats.entities = entities.len() as i64;
+        }
+        if let Ok(rels) = storage.get_relationships("root") {
+            stats.relationships = rels.len() as i64;
+        }
+    }
+
+    let _ = state.knowledge_db.with_connection(|conn| {
+        stats.facts = count_row(conn, "SELECT COUNT(*) FROM memory_facts");
+        stats.episodes = count_row(conn, "SELECT COUNT(*) FROM kg_episodes");
+        stats.procedures = count_row(conn, "SELECT COUNT(*) FROM procedures");
+        stats.wiki_articles = count_row(conn, "SELECT COUNT(*) FROM ward_wiki_articles");
+        stats.goals_active =
+            count_row(conn, "SELECT COUNT(*) FROM kg_goals WHERE state = 'active'");
+        Ok(())
+    });
+
+    let knowledge_path = state.paths.knowledge_db();
+    if let Ok(meta) = std::fs::metadata(&knowledge_path) {
+        // Safe: file sizes fit in f64 precision well within petabyte range.
+        stats.db_size_mb = (meta.len() as f64) / (1024.0 * 1024.0);
+    }
+
+    Json(stats)
+}
+
+/// Memory subsystem health response.
+#[derive(Debug, Serialize, Default)]
+pub struct MemoryHealth {
+    pub ingestion_queue_pending: u64,
+    pub ingestion_queue_running: u64,
+    pub failed_episodes_recent: u64,
+    pub last_compaction_run_id: Option<String>,
+    pub last_compaction_merges: u64,
+    pub last_compaction_prunes: u64,
+    pub last_compaction_at: Option<String>,
+}
+
+/// `GET /api/memory/health` — queue depth, recent failures, last compaction.
+pub async fn health(State(state): State<AppState>) -> Json<MemoryHealth> {
+    let mut health = MemoryHealth::default();
+
+    if let Some(repo) = state.kg_episode_repo.as_ref() {
+        if let Ok(n) = repo.count_pending_global() {
+            health.ingestion_queue_pending = n;
+        }
+        let _ = state.knowledge_db.with_connection(|conn| {
+            let failed = count_row(
+                conn,
+                "SELECT COUNT(*) FROM kg_episodes WHERE status = 'failed'",
+            );
+            let running = count_row(
+                conn,
+                "SELECT COUNT(*) FROM kg_episodes WHERE status = 'running'",
+            );
+            health.failed_episodes_recent = failed.max(0) as u64;
+            health.ingestion_queue_running = running.max(0) as u64;
+            Ok(())
+        });
+    }
+
+    if let Some(compaction_repo) = state.compaction_repo.as_ref() {
+        if let Ok(Some(summary)) = compaction_repo.latest_run_summary() {
+            health.last_compaction_run_id = Some(summary.run_id);
+            health.last_compaction_merges = summary.merges;
+            health.last_compaction_prunes = summary.prunes;
+            health.last_compaction_at = Some(summary.latest_at);
+        }
+    }
+
+    Json(health)
+}

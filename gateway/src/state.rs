@@ -123,6 +123,14 @@ pub struct AppState {
     /// Session archiver for offloading old transcripts to compressed files.
     pub session_archiver: Option<Arc<SessionArchiver>>,
 
+    /// Sleep-time worker — triggers graph compaction/consolidation cycles.
+    /// Set by server.start() in Phase 4 Task 10; `None` until then.
+    pub sleep_time_worker: Option<Arc<gateway_execution::sleep::SleepTimeWorker>>,
+
+    /// Compaction repository — read-model for the last compaction run.
+    /// Set by server.start() in Phase 4 Task 10; `None` until then.
+    pub compaction_repo: Option<Arc<gateway_database::CompactionRepository>>,
+
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
 
@@ -427,6 +435,8 @@ impl AppState {
             bridge_bus: None,     // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             session_archiver: Some(session_archiver),
+            sleep_time_worker: None,
+            compaction_repo: None,
             plugin_manager,
             model_registry,
             workspace_cache,
@@ -506,6 +516,8 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             session_archiver: None,
+            sleep_time_worker: None,
+            compaction_repo: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
@@ -588,6 +600,8 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             session_archiver: None,
+            sleep_time_worker: None,
+            compaction_repo: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
