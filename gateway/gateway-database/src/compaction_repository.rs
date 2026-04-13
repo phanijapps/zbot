@@ -85,6 +85,28 @@ impl CompactionRepository {
         })
     }
 
+    /// Record a pattern extraction: a recurring tool-call sequence was
+    /// synthesized into a `procedures` row. `procedure_id` is stored in the
+    /// `entity_id` column for cross-referencing. Returns the generated row ID.
+    pub fn record_pattern(
+        &self,
+        run_id: &str,
+        procedure_id: &str,
+        reason: &str,
+    ) -> Result<String, String> {
+        let id = uuid::Uuid::new_v4().to_string();
+        let now = chrono::Utc::now().to_rfc3339();
+        self.db.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO kg_compactions
+                    (id, run_id, operation, entity_id, reason, created_at)
+                 VALUES (?1, ?2, 'pattern_extract', ?3, ?4, ?5)",
+                params![id, run_id, procedure_id, reason, now],
+            )?;
+            Ok(id.clone())
+        })
+    }
+
     /// Record a prune: `entity_id` was soft-deleted due to decay.
     /// Returns the generated row ID.
     pub fn record_prune(
@@ -270,6 +292,28 @@ mod tests {
         assert_eq!(row.operation, "synthesize");
         assert_eq!(row.entity_id.as_deref(), Some("fact-xyz"));
         assert!(row.reason.as_deref().unwrap().contains("retry backoff"));
+    }
+
+    #[test]
+    fn record_pattern_logs_operation_correctly() {
+        let (_tmp, repo) = setup();
+        let run = "run-pattern";
+
+        let row_id = repo
+            .record_pattern(
+                run,
+                "proc-abc",
+                "pattern 'search_then_read' across 2 sessions",
+            )
+            .unwrap();
+        assert!(!row_id.is_empty());
+
+        let rows = repo.list_run(run).unwrap();
+        assert_eq!(rows.len(), 1);
+        let row = &rows[0];
+        assert_eq!(row.operation, "pattern_extract");
+        assert_eq!(row.entity_id.as_deref(), Some("proc-abc"));
+        assert!(row.reason.as_deref().unwrap().contains("search_then_read"));
     }
 
     #[test]
