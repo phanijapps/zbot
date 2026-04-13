@@ -25,6 +25,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime};
+use tokio::runtime::Handle;
 
 /// Callback invoked when a watched path changes. Must be `Sync` because the
 /// polling fallback invokes it from its loop thread without re-wrapping.
@@ -135,15 +136,19 @@ impl FileWatcher {
         let debounce_ms = self.config.debounce_ms;
         let poll_interval = self.config.poll_interval;
         let force_polling = self.config.force_polling;
+        // Capture the tokio runtime handle at start-time so callbacks that do
+        // tokio::spawn (common pattern for invalidating async caches) have an
+        // ambient reactor when invoked from the plain std::thread watcher loop.
+        let rt_handle = Handle::try_current().ok();
 
         self.thread_handle = Some(std::thread::spawn(move || {
             if force_polling {
                 tracing::info!("FileWatcher: force_polling=true, using polling transport");
-                run_polling(entries, poll_interval, running);
+                run_polling(entries, poll_interval, running, rt_handle);
                 return;
             }
 
-            match try_inotify(&entries, debounce_ms, running.clone()) {
+            match try_inotify(&entries, debounce_ms, running.clone(), rt_handle.clone()) {
                 Ok(()) => {} // inotify ran until stopped
                 Err(e) => {
                     tracing::warn!(
@@ -151,7 +156,7 @@ impl FileWatcher {
                         e,
                         poll_interval
                     );
-                    run_polling(entries, poll_interval, running);
+                    run_polling(entries, poll_interval, running, rt_handle);
                 }
             }
         }));
@@ -200,6 +205,7 @@ fn try_inotify(
     entries: &[WatchEntry],
     debounce_ms: u64,
     running: Arc<AtomicBool>,
+    rt_handle: Option<Handle>,
 ) -> Result<(), String> {
     // Shared sink for debouncer callbacks. We pass (path, entry_index) so the
     // receiver can dispatch to the right callback without a path-prefix scan.
@@ -240,7 +246,7 @@ fn try_inotify(
     while running.load(Ordering::SeqCst) {
         match rx.recv_timeout(Duration::from_millis(200)) {
             Ok(changed_path) => {
-                dispatch_event(entries, &changed_path);
+                dispatch_event(entries, &changed_path, rt_handle.as_ref());
             }
             Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
             Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -255,13 +261,26 @@ fn try_inotify(
     Ok(())
 }
 
-fn dispatch_event(entries: &[WatchEntry], changed_path: &Path) {
+fn dispatch_event(entries: &[WatchEntry], changed_path: &Path, rt_handle: Option<&Handle>) {
     for entry in entries {
         if changed_path.starts_with(&entry.path) {
             tracing::debug!("FileWatcher: {} changed ({:?})", entry.name, changed_path);
-            (entry.callback)(changed_path.to_path_buf());
+            invoke_callback(entry, changed_path.to_path_buf(), rt_handle);
             return;
         }
+    }
+}
+
+/// Invoke the entry's callback with an ambient Tokio runtime if one was
+/// captured at `start()`. Callbacks frequently spawn async work via
+/// `tokio::spawn`; without an entered runtime context that panics.
+fn invoke_callback(entry: &WatchEntry, path: PathBuf, rt_handle: Option<&Handle>) {
+    match rt_handle {
+        Some(h) => {
+            let _guard = h.enter();
+            (entry.callback)(path);
+        }
+        None => (entry.callback)(path),
     }
 }
 
@@ -269,7 +288,12 @@ fn dispatch_event(entries: &[WatchEntry], changed_path: &Path) {
 // polling transport (fallback)
 // ============================================================================
 
-fn run_polling(entries: Vec<WatchEntry>, interval: Duration, running: Arc<AtomicBool>) {
+fn run_polling(
+    entries: Vec<WatchEntry>,
+    interval: Duration,
+    running: Arc<AtomicBool>,
+    rt_handle: Option<Handle>,
+) {
     // Per-entry snapshot of file → mtime. We scan each entry's subtree on
     // each tick and diff against the prior snapshot.
     let mut snapshots: Vec<HashMap<PathBuf, SystemTime>> =
@@ -301,7 +325,7 @@ fn run_polling(entries: Vec<WatchEntry>, interval: Duration, running: Arc<Atomic
                     entry.name,
                     changed_path
                 );
-                (entry.callback)(changed_path);
+                invoke_callback(entry, changed_path, rt_handle.as_ref());
             }
         }
     }
