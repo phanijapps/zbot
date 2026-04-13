@@ -256,7 +256,11 @@ mod tests {
         let run = "run-synth";
 
         let row_id = repo
-            .record_synthesis(run, "fact-xyz", "strategy 'retry backoff' across 3 sessions")
+            .record_synthesis(
+                run,
+                "fact-xyz",
+                "strategy 'retry backoff' across 3 sessions",
+            )
             .unwrap();
         assert!(!row_id.is_empty());
 
