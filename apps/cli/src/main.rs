@@ -350,7 +350,7 @@ struct TriggerDistillationResponse {
 
 async fn run_distill_backfill(gateway_url: &str, _concurrency: usize) -> Result<()> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+        .user_agent(zero_core::USER_AGENT)
         .build()
         .expect("reqwest client");
 
@@ -470,7 +470,7 @@ struct RestoreResponse {
 
 async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+        .user_agent(zero_core::USER_AGENT)
         .build()
         .expect("reqwest client");
 
@@ -526,7 +526,7 @@ async fn run_session_archive(gateway_url: &str, older_than: u32) -> Result<()> {
 
 async fn run_session_restore(gateway_url: &str, session_id: &str) -> Result<()> {
     let client = reqwest::Client::builder()
-        .user_agent(concat!("Z-bot/", env!("CARGO_PKG_VERSION")))
+        .user_agent(zero_core::USER_AGENT)
         .build()
         .expect("reqwest client");
 

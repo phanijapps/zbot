@@ -13,6 +13,7 @@ description = "Config-based services for the AgentZero gateway"
 
 [dependencies]
 # Internal crates (for shared config types)
+zero-core = { path = "../../framework/zero-core" }
 agent-runtime = { path = "../../runtime/agent-runtime" }
 agent-tools = { path = "../../runtime/agent-tools" }
 

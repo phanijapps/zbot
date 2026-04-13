@@ -25,6 +25,16 @@
 //! ```
 
 // ============================================================================
+// HTTP USER-AGENT
+// ============================================================================
+
+/// User-Agent string attached to every outbound HTTP request made by the
+/// z-bot system. Defined once here so all callers (LLM clients, MCP, gateway
+/// connectors, CLI, tools) share the same value. Version tracks this crate's
+/// Cargo.toml.
+pub const USER_AGENT: &str = concat!("Z-bot/", env!("CARGO_PKG_VERSION"));
+
+// ============================================================================
 // PUBLIC API RE-EXPORTS
 // ============================================================================
 
