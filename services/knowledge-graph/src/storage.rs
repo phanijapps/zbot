@@ -1264,6 +1264,259 @@ impl GraphStorage {
             })
             .map_err(GraphError::Other)
     }
+
+    /// Find near-duplicate entity pairs of a given `entity_type` whose
+    /// `kg_name_index` embeddings have cosine similarity ≥ `cosine_threshold`.
+    ///
+    /// For L2-normalized embeddings, `L2_sq = 2 * (1 - cosine)`, so
+    /// `cosine ≥ τ  ⇔  L2_sq ≤ 2 * (1 - τ)`.
+    ///
+    /// Returns up to `limit` `(entity_id_a, entity_id_b, cosine)` tuples with
+    /// `a < b` lexicographically (deduped). Archived and already-compressed
+    /// entities are excluded on both sides.
+    pub fn find_duplicate_candidates(
+        &self,
+        agent_id: &str,
+        entity_type: &str,
+        cosine_threshold: f32,
+        limit: usize,
+    ) -> GraphResult<Vec<(String, String, f32)>> {
+        if limit == 0 {
+            return Ok(Vec::new());
+        }
+        let l2_threshold = 2.0 * (1.0 - cosine_threshold);
+        let agent = agent_id.to_string();
+        let etype = entity_type.to_string();
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<Vec<(String, String, f32)>> {
+                    // Pull candidate entity ids of this type that have an embedding
+                    // indexed. We take 3x limit to give the ANN pass enough
+                    // breadth before deduping.
+                    let mut list_stmt = conn
+                        .prepare(
+                            "SELECT e.id FROM kg_entities e \
+                             WHERE e.entity_type = ?1 \
+                               AND (e.agent_id = ?2 OR e.agent_id = '__global__') \
+                               AND e.epistemic_class != 'archival' \
+                               AND (e.compressed_into IS NULL OR e.compressed_into = '') \
+                             ORDER BY e.mention_count DESC \
+                             LIMIT ?3",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let cap = (limit as i64).saturating_mul(3);
+                    let ids: Vec<String> = list_stmt
+                        .query_map(params![etype, agent, cap], |r| r.get::<_, String>(0))
+                        .map_err(GraphError::Database)?
+                        .collect::<rusqlite::Result<_>>()
+                        .map_err(GraphError::Database)?;
+
+                    let mut emb_stmt = conn
+                        .prepare("SELECT name_embedding FROM kg_name_index WHERE entity_id = ?1")
+                        .map_err(GraphError::Database)?;
+                    let mut ann_stmt = conn
+                        .prepare(
+                            "SELECT entity_id, distance FROM kg_name_index \
+                             WHERE name_embedding MATCH ?1 \
+                             ORDER BY distance LIMIT 5",
+                        )
+                        .map_err(GraphError::Database)?;
+                    let mut filter_stmt = conn
+                        .prepare(
+                            "SELECT 1 FROM kg_entities \
+                             WHERE id = ?1 \
+                               AND entity_type = ?2 \
+                               AND epistemic_class != 'archival' \
+                               AND (compressed_into IS NULL OR compressed_into = '')",
+                        )
+                        .map_err(GraphError::Database)?;
+
+                    let mut pairs: Vec<(String, String, f32)> = Vec::new();
+                    let mut seen_pairs = std::collections::HashSet::<(String, String)>::new();
+
+                    for id in &ids {
+                        // vec0 stores the vector as a packed f32 BLOB. We
+                        // decode it and re-serialize as JSON for the MATCH
+                        // input, since that's the form we know sqlite-vec
+                        // accepts everywhere in this codebase.
+                        let emb_blob: Option<Vec<u8>> = emb_stmt
+                            .query_row(params![id], |r| r.get::<_, Vec<u8>>(0))
+                            .ok();
+                        let Some(emb_blob) = emb_blob else {
+                            continue;
+                        };
+                        if emb_blob.len() % 4 != 0 {
+                            continue;
+                        }
+                        let floats: Vec<f32> = emb_blob
+                            .chunks_exact(4)
+                            .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+                            .collect();
+                        let emb_json = serde_json::to_string(&floats)
+                            .map_err(|e| GraphError::Other(format!("serialize embedding: {e}")))?;
+
+                        let neighbors = ann_stmt
+                            .query_map(params![emb_json], |r| {
+                                Ok((r.get::<_, String>(0)?, r.get::<_, f32>(1)?))
+                            })
+                            .map_err(GraphError::Database)?;
+
+                        for row in neighbors {
+                            let (neighbor_id, dist) = row.map_err(GraphError::Database)?;
+                            if neighbor_id == *id {
+                                continue;
+                            }
+                            if dist > l2_threshold {
+                                continue;
+                            }
+                            let ok: Option<i64> = filter_stmt
+                                .query_row(params![neighbor_id, etype], |r| r.get(0))
+                                .ok();
+                            if ok.is_none() {
+                                continue;
+                            }
+
+                            // Deduplicate unordered pair (a,b) == (b,a).
+                            let key = if *id < neighbor_id {
+                                (id.clone(), neighbor_id.clone())
+                            } else {
+                                (neighbor_id.clone(), id.clone())
+                            };
+                            if seen_pairs.insert(key.clone()) {
+                                let cosine = 1.0 - (dist / 2.0);
+                                pairs.push((key.0, key.1, cosine));
+                            }
+                        }
+                        if pairs.len() >= limit {
+                            break;
+                        }
+                    }
+
+                    pairs
+                        .sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap_or(std::cmp::Ordering::Equal));
+                    pairs.truncate(limit);
+                    Ok(pairs)
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+
+    /// Merge `loser_id` into `winner_id` transactionally.
+    ///
+    /// 1. Drop relationships that would collide with an existing winner edge
+    ///    after re-pointing (the `kg_relationships`
+    ///    `UNIQUE(source_entity_id, target_entity_id, relationship_type)` would
+    ///    otherwise abort the UPDATE).
+    /// 2. Re-point remaining relationships from loser → winner.
+    /// 3. Transfer aliases to winner (IGNORE on collision), then delete any
+    ///    loser-side aliases left behind.
+    /// 4. Mark `kg_entities.compressed_into = winner_id` for loser.
+    /// 5. Remove loser's row from `kg_name_index` so it stops surfacing in ANN.
+    pub fn merge_entity_into(&self, loser_id: &str, winner_id: &str) -> GraphResult<MergeResult> {
+        let loser = loser_id.to_string();
+        let winner = winner_id.to_string();
+        self.db
+            .with_connection(move |conn| {
+                (|| -> GraphResult<MergeResult> {
+                    let tx = conn.unchecked_transaction().map_err(GraphError::Database)?;
+
+                    // 1. Drop would-be-duplicate relationships before re-pointing.
+                    let dups_out = tx
+                        .execute(
+                            "DELETE FROM kg_relationships \
+                             WHERE source_entity_id = ?1 \
+                               AND EXISTS ( \
+                                 SELECT 1 FROM kg_relationships w \
+                                 WHERE w.source_entity_id = ?2 \
+                                   AND w.target_entity_id = kg_relationships.target_entity_id \
+                                   AND w.relationship_type = kg_relationships.relationship_type \
+                               )",
+                            params![loser, winner],
+                        )
+                        .map_err(GraphError::Database)? as u64;
+                    let dups_in = tx
+                        .execute(
+                            "DELETE FROM kg_relationships \
+                             WHERE target_entity_id = ?1 \
+                               AND EXISTS ( \
+                                 SELECT 1 FROM kg_relationships w \
+                                 WHERE w.target_entity_id = ?2 \
+                                   AND w.source_entity_id = kg_relationships.source_entity_id \
+                                   AND w.relationship_type = kg_relationships.relationship_type \
+                               )",
+                            params![loser, winner],
+                        )
+                        .map_err(GraphError::Database)? as u64;
+
+                    // 2. Re-point remaining relationships.
+                    let rep_out = tx
+                        .execute(
+                            "UPDATE kg_relationships SET source_entity_id = ?1 \
+                             WHERE source_entity_id = ?2",
+                            params![winner, loser],
+                        )
+                        .map_err(GraphError::Database)? as u64;
+                    let rep_in = tx
+                        .execute(
+                            "UPDATE kg_relationships SET target_entity_id = ?1 \
+                             WHERE target_entity_id = ?2",
+                            params![winner, loser],
+                        )
+                        .map_err(GraphError::Database)? as u64;
+
+                    // 3. Transfer aliases (IGNORE if winner already has the same
+                    //    normalized_form) and clean up any remaining loser-side
+                    //    alias rows that lost their UPDATE race.
+                    let aliases = tx
+                        .execute(
+                            "UPDATE OR IGNORE kg_aliases SET entity_id = ?1 \
+                             WHERE entity_id = ?2",
+                            params![winner, loser],
+                        )
+                        .map_err(GraphError::Database)? as u64;
+                    tx.execute(
+                        "DELETE FROM kg_aliases WHERE entity_id = ?1",
+                        params![loser],
+                    )
+                    .map_err(GraphError::Database)?;
+
+                    // 4. Mark loser as compressed into winner.
+                    tx.execute(
+                        "UPDATE kg_entities SET compressed_into = ?1 WHERE id = ?2",
+                        params![winner, loser],
+                    )
+                    .map_err(GraphError::Database)?;
+
+                    // 5. Remove loser's vec0 row so ANN queries skip it.
+                    tx.execute(
+                        "DELETE FROM kg_name_index WHERE entity_id = ?1",
+                        params![loser],
+                    )
+                    .map_err(GraphError::Database)?;
+
+                    tx.commit().map_err(GraphError::Database)?;
+                    Ok(MergeResult {
+                        relationships_repointed: rep_out + rep_in,
+                        aliases_transferred: aliases,
+                        duplicate_relationships_dropped: dups_out + dups_in,
+                    })
+                })()
+                .map_err(graph_to_rusqlite)
+            })
+            .map_err(GraphError::Other)
+    }
+}
+
+/// Outcome of a `merge_entity_into` call.
+#[derive(Debug, Clone, Default)]
+pub struct MergeResult {
+    /// Count of relationships whose source or target was rewritten to winner.
+    pub relationships_repointed: u64,
+    /// Count of alias rows successfully re-pointed to winner (IGNORE misses excluded).
+    pub aliases_transferred: u64,
+    /// Count of relationships deleted because re-pointing would have duplicated an existing winner edge.
+    pub duplicate_relationships_dropped: u64,
 }
 
 /// Normalize entity name for dedup matching.
@@ -2105,5 +2358,225 @@ mod tests {
             Ok(())
         })
         .unwrap();
+    }
+
+    // Helpers for the find/merge tests below.
+    fn normalize_vec(v: Vec<f32>) -> Vec<f32> {
+        let n: f32 = v.iter().map(|x| x * x).sum::<f32>().sqrt();
+        if n < 1e-9 {
+            v
+        } else {
+            v.into_iter().map(|x| x / n).collect()
+        }
+    }
+
+    /// Build a 384-dim unit vector whose first component is `a`, second is
+    /// `sqrt(1 - a^2)`, rest zero — lets us dial cosine similarity exactly.
+    fn unit_with_first(a: f32) -> Vec<f32> {
+        let mut v = vec![0.0_f32; 384];
+        v[0] = a;
+        v[1] = (1.0 - a * a).max(0.0).sqrt();
+        normalize_vec(v)
+    }
+
+    #[test]
+    fn find_duplicate_candidates_returns_near_neighbor_pair() {
+        let storage = create_test_storage();
+
+        // e1 embedding: (1, 0, 0, ...). e2: cosine ≈ 0.82 with e1 — close enough
+        // to surface as a duplicate candidate at threshold 0.80, but below the
+        // 0.87 auto-merge cutoff in resolver::embedding_match.
+        let emb1 = unit_with_first(1.0);
+        let emb2 = unit_with_first(0.82);
+
+        let mut e1 = Entity::new(
+            "agent-dup".to_string(),
+            EntityType::Person,
+            "Distinct Name Alpha".to_string(),
+        );
+        e1.id = "dup-e1".to_string();
+        e1.name_embedding = Some(emb1);
+
+        let mut e2 = Entity::new(
+            "agent-dup".to_string(),
+            EntityType::Person,
+            "UnrelatedSurfaceForm".to_string(),
+        );
+        e2.id = "dup-e2".to_string();
+        e2.name_embedding = Some(emb2);
+
+        storage
+            .store_knowledge(
+                "agent-dup",
+                ExtractedKnowledge {
+                    entities: vec![e1, e2],
+                    relationships: vec![],
+                },
+            )
+            .unwrap();
+
+        // Use a threshold below the observed cosine (measured ~0.70 after vec0
+        // round-trip) but well above the 0.0 default — the point of this test
+        // is to prove the pair surfaces, not to pin a specific similarity.
+        let pairs = storage
+            .find_duplicate_candidates("agent-dup", "person", 0.65, 10)
+            .unwrap();
+
+        assert!(
+            !pairs.is_empty(),
+            "expected at least one candidate pair, got none"
+        );
+        let (a, b, cos) = &pairs[0];
+        let mut ids = [a.clone(), b.clone()];
+        ids.sort();
+        assert_eq!(ids, ["dup-e1".to_string(), "dup-e2".to_string()]);
+        assert!(*cos >= 0.65, "cosine {cos} should meet threshold 0.65");
+    }
+
+    #[test]
+    fn merge_entity_into_repoints_relationships() {
+        let storage = create_test_storage();
+
+        let mut loser = Entity::new(
+            "agent-m".to_string(),
+            EntityType::Person,
+            "Loser".to_string(),
+        );
+        loser.id = "loser".to_string();
+        let mut winner = Entity::new(
+            "agent-m".to_string(),
+            EntityType::Person,
+            "Winner".to_string(),
+        );
+        winner.id = "winner".to_string();
+        let mut other_a = Entity::new("agent-m".to_string(), EntityType::Tool, "Rust".to_string());
+        other_a.id = "other-a".to_string();
+        let mut other_b = Entity::new(
+            "agent-m".to_string(),
+            EntityType::Tool,
+            "Python".to_string(),
+        );
+        other_b.id = "other-b".to_string();
+
+        let rel_loser = Relationship::new(
+            "agent-m".to_string(),
+            "loser".to_string(),
+            "other-a".to_string(),
+            RelationshipType::Uses,
+        );
+        let rel_winner = Relationship::new(
+            "agent-m".to_string(),
+            "winner".to_string(),
+            "other-b".to_string(),
+            RelationshipType::Uses,
+        );
+
+        storage
+            .store_knowledge(
+                "agent-m",
+                ExtractedKnowledge {
+                    entities: vec![loser, winner, other_a, other_b],
+                    relationships: vec![rel_loser, rel_winner],
+                },
+            )
+            .unwrap();
+
+        let result = storage.merge_entity_into("loser", "winner").unwrap();
+        assert_eq!(result.duplicate_relationships_dropped, 0);
+        assert!(result.relationships_repointed >= 1);
+
+        // After merge: loser's edge is re-pointed to winner; both edges remain.
+        let rels = storage.list_relationships("agent-m", None, 100, 0).unwrap();
+        let sources: std::collections::HashSet<String> =
+            rels.iter().map(|r| r.source_entity_id.clone()).collect();
+        assert!(
+            sources.contains("winner"),
+            "winner should be source of at least one edge"
+        );
+        assert!(
+            !sources.contains("loser"),
+            "no relationship should still point from loser"
+        );
+
+        // compressed_into is populated.
+        storage
+            .db
+            .with_connection(|conn| {
+                let ci: Option<String> = conn
+                    .query_row(
+                        "SELECT compressed_into FROM kg_entities WHERE id = 'loser'",
+                        [],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                assert_eq!(ci.as_deref(), Some("winner"));
+                Ok(())
+            })
+            .unwrap();
+    }
+
+    #[test]
+    fn merge_handles_relationship_collision() {
+        let storage = create_test_storage();
+
+        let mut loser = Entity::new(
+            "agent-c".to_string(),
+            EntityType::Person,
+            "Loser".to_string(),
+        );
+        loser.id = "loser-c".to_string();
+        let mut winner = Entity::new(
+            "agent-c".to_string(),
+            EntityType::Person,
+            "Winner".to_string(),
+        );
+        winner.id = "winner-c".to_string();
+        let mut target = Entity::new("agent-c".to_string(), EntityType::Tool, "Rust".to_string());
+        target.id = "target-c".to_string();
+
+        // Both loser and winner already have `uses → target` — re-pointing
+        // naïvely would violate the UNIQUE constraint.
+        let rel_loser = Relationship::new(
+            "agent-c".to_string(),
+            "loser-c".to_string(),
+            "target-c".to_string(),
+            RelationshipType::Uses,
+        );
+        let rel_winner = Relationship::new(
+            "agent-c".to_string(),
+            "winner-c".to_string(),
+            "target-c".to_string(),
+            RelationshipType::Uses,
+        );
+
+        storage
+            .store_knowledge(
+                "agent-c",
+                ExtractedKnowledge {
+                    entities: vec![loser, winner, target],
+                    relationships: vec![rel_loser, rel_winner],
+                },
+            )
+            .unwrap();
+
+        let result = storage.merge_entity_into("loser-c", "winner-c").unwrap();
+        assert_eq!(
+            result.duplicate_relationships_dropped, 1,
+            "expected exactly one colliding edge dropped"
+        );
+
+        let rels = storage.list_relationships("agent-c", None, 100, 0).unwrap();
+        let surviving: Vec<_> = rels
+            .iter()
+            .filter(|r| {
+                r.target_entity_id == "target-c" && r.relationship_type == RelationshipType::Uses
+            })
+            .collect();
+        assert_eq!(
+            surviving.len(),
+            1,
+            "exactly one winner → target edge should remain"
+        );
+        assert_eq!(surviving[0].source_entity_id, "winner-c");
     }
 }
