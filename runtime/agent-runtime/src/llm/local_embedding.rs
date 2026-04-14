@@ -32,7 +32,10 @@ pub struct LocalEmbeddingClient {
 
 impl Default for LocalEmbeddingClient {
     fn default() -> Self {
-        Self::with_model(EmbeddingModel::AllMiniLML6V2, 600)
+        // BGE-small-en-v1.5 (384d, ~130MB) — higher MTEB than AllMiniLML6V2
+        // while keeping the same dimension, so no reindex required when
+        // migrating from the old default.
+        Self::with_model(EmbeddingModel::BGESmallENV15, 600)
     }
 }
 
@@ -226,7 +229,7 @@ mod tests {
     fn test_lazy_construction() {
         let client = LocalEmbeddingClient::new();
         assert_eq!(client.dimensions(), 384);
-        assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
+        assert_eq!(client.model_name(), "bge-small-en-v1.5");
         let guard = client.model.lock().unwrap();
         assert!(
             guard.is_none(),
@@ -248,7 +251,7 @@ mod tests {
     fn test_local_embedding_end_to_end() {
         let client = LocalEmbeddingClient::new();
         assert_eq!(client.dimensions(), 384);
-        assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
+        assert_eq!(client.model_name(), "bge-small-en-v1.5");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(client.embed(&["hello world", "test embedding"]));

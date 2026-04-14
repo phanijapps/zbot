@@ -285,6 +285,7 @@ CREATE TABLE IF NOT EXISTS kg_episode_payloads (
 );
 "#;
 
+#[allow(dead_code)] // retained for reference/tests; runtime uses initialize_vec_tables_with_dim
 const VEC0_SQL: &str = r#"
 CREATE VIRTUAL TABLE IF NOT EXISTS kg_name_index USING vec0(
     entity_id TEXT PRIMARY KEY,
@@ -375,9 +376,72 @@ END;
 ///
 /// Call AFTER `load_sqlite_vec()` AND AFTER `initialize_knowledge_database()`.
 /// Triggers reference both vec0 tables and base tables.
+///
+/// Uses the default embedding dimension of 384.
 pub fn initialize_vec_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
-    conn.execute_batch(VEC0_SQL)?;
+    initialize_vec_tables_with_dim(conn, 384)
+}
+
+/// Variant of [`initialize_vec_tables`] that parameterizes the embedding
+/// dimension for the vec0 virtual tables.
+///
+/// Phase 1 of embedding-backend-selection: callers that know the active
+/// embedding dimension (e.g. `EmbeddingService`) pass it here so fresh
+/// installs honor the user's chosen backend dim. Existing installs still
+/// use 384 via [`initialize_vec_tables`].
+///
+/// Note: `CREATE VIRTUAL TABLE IF NOT EXISTS` is a no-op when the table
+/// already exists with a different dim — reindex must drop-and-recreate.
+pub fn initialize_vec_tables_with_dim(
+    conn: &Connection,
+    dim: usize,
+) -> Result<(), rusqlite::Error> {
+    let sql = format!(
+        r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS kg_name_index USING vec0(
+    entity_id TEXT PRIMARY KEY,
+    name_embedding FLOAT[{dim}]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_index USING vec0(
+    fact_id TEXT PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS wiki_articles_index USING vec0(
+    article_id TEXT PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS procedures_index USING vec0(
+    procedure_id TEXT PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS session_episodes_index USING vec0(
+    episode_id TEXT PRIMARY KEY,
+    embedding FLOAT[{dim}]
+);
+"#
+    );
+    conn.execute_batch(&sql)?;
     conn.execute_batch(TRIGGERS_SQL)?;
+    Ok(())
+}
+
+/// Drop any orphan `*__new` reindex tables left behind by a crash. Idempotent.
+///
+/// # Errors
+///
+/// Returns an error if any of the `DROP TABLE` statements fail.
+pub fn cleanup_orphan_reindex_tables(conn: &Connection) -> Result<(), rusqlite::Error> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS memory_facts_index__new;
+         DROP TABLE IF EXISTS kg_name_index__new;
+         DROP TABLE IF EXISTS session_episodes_index__new;
+         DROP TABLE IF EXISTS wiki_articles_index__new;
+         DROP TABLE IF EXISTS procedures_index__new;",
+    )?;
     Ok(())
 }
 
