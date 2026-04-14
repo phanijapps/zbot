@@ -44,6 +44,7 @@ tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 

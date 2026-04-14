@@ -16,7 +16,6 @@ use crate::services::{
     SharedVaultPaths, SkillService, VaultPaths,
 };
 use agent_runtime::llm::EmbeddingClient;
-use agent_runtime::llm::LocalEmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use api_logs::LogService;
@@ -27,6 +26,7 @@ use gateway_database::{
     DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
     MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
+use gateway_services::EmbeddingService;
 use knowledge_graph::{GraphService, GraphStorage};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -134,6 +134,9 @@ pub struct AppState {
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
 
+    /// Embedding service — owns live EmbeddingClient, supports backend swap.
+    pub embedding_service: Arc<EmbeddingService>,
+
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
 
@@ -235,14 +238,32 @@ impl AppState {
                 }
             };
 
-        let embedding_client: Option<Arc<dyn EmbeddingClient>> = {
-            let client = LocalEmbeddingClient::new();
-            tracing::info!(
-                "Local embedding client created (lazy, {}d)",
-                client.dimensions()
-            );
-            Some(Arc::new(client))
+        // EmbeddingService — owns the live EmbeddingClient and supports
+        // hot-swap between internal (fastembed) and Ollama backends.
+        // Phase 1 of embedding-backend-selection: boot succeeds even if the
+        // configured Ollama endpoint is unreachable; consumers continue
+        // holding their Arc<dyn EmbeddingClient> cloned from service.client().
+        let embedding_service = match EmbeddingService::from_config(paths.clone()) {
+            Ok(svc) => Arc::new(svc),
+            Err(e) => {
+                tracing::warn!(
+                    "EmbeddingService init failed ({e}); falling back to internal/384d default"
+                );
+                Arc::new(
+                    EmbeddingService::with_config(paths.clone(), Default::default())
+                        .expect("default EmbeddingService must build"),
+                )
+            }
         };
+        // Best-effort boot-time reindex. Non-fatal.
+        if let Err(e) = embedding_service.ensure_indexed_blocking() {
+            tracing::warn!("EmbeddingService ensure_indexed_blocking failed: {e}");
+        }
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = Some(embedding_service.client());
+        tracing::info!(
+            "Embedding client ready (lazy, {}d)",
+            embedding_service.dimensions()
+        );
 
         // Load recall configuration (compiled defaults merged with optional user overrides)
         let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(
@@ -540,6 +561,7 @@ impl AppState {
             compaction_repo: Some(compaction_repo),
             plugin_manager,
             model_registry,
+            embedding_service,
             workspace_cache,
             paths,
             config_dir,
@@ -620,6 +642,10 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
+            embedding_service: Arc::new(
+                EmbeddingService::with_config(paths.clone(), Default::default())
+                    .expect("default EmbeddingService must build"),
+            ),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
@@ -704,6 +730,10 @@ impl AppState {
             sleep_time_worker: None,
             compaction_repo: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
+            embedding_service: Arc::new(
+                EmbeddingService::with_config(paths.clone(), Default::default())
+                    .expect("default EmbeddingService must build"),
+            ),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,

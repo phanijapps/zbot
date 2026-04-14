@@ -9,6 +9,7 @@ mod chat;
 mod connectors;
 mod conversations;
 mod cron;
+mod embeddings;
 mod events;
 mod gateway_bus;
 mod graph;
@@ -174,6 +175,10 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Setup wizard endpoints
         .route("/api/setup/status", get(setup::get_setup_status))
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
+        // Embedding backend selection (Phase 1)
+        .route("/api/embeddings/health", get(embeddings::get_health))
+        .route("/api/embeddings/models", get(embeddings::list_models))
+        .route("/api/embeddings/configure", post(embeddings::configure))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
         .route("/api/memory/search", get(memory::search_all_memory_facts))

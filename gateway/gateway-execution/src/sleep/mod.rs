@@ -7,6 +7,7 @@
 
 pub mod compactor;
 pub mod decay;
+pub mod embedding_reindex;
 pub mod kg_backfill;
 pub mod orphan_archiver;
 pub mod pattern_extractor;
