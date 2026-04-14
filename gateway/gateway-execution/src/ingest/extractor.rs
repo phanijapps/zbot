@@ -38,6 +38,19 @@ struct RelationshipItem {
     target: Option<String>,
     #[serde(rename = "type")]
     type_str: Option<String>,
+    evidence: Option<String>,
+    weight: Option<f64>,
+}
+
+/// A parsed relationship candidate from the LLM, including optional
+/// evidence + weight. Source/target names still need resolution to entity ids.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RelationshipTriple {
+    pub source: String,
+    pub target: String,
+    pub type_str: String,
+    pub evidence: Option<String>,
+    pub weight: Option<f64>,
 }
 
 /// Processes one episode — runs extraction + writes to graph.
@@ -166,17 +179,20 @@ impl LlmExtractor {
         client: &Arc<dyn LlmClient>,
         chunk_text: &str,
         entity_names: &[String],
-    ) -> Result<Vec<(String, String, String)>, String> {
+    ) -> Result<Vec<RelationshipTriple>, String> {
         if entity_names.len() < 2 {
             return Ok(Vec::new());
         }
         let system = "You extract relationships between entities. \
             Return ONLY valid JSON. Do not add commentary. \
-            Every source and target MUST exactly match a name from the provided list.";
+            Every source and target MUST exactly match a name from the provided list. \
+            For each relationship include a short `evidence` quote (verbatim when possible) \
+            from the text supporting it, and a `weight` between 0.0 and 1.0 \
+            (1.0 = explicitly stated, 0.5 = inferred).";
         let user = format!(
             "Given these entities: {}\n\n\
             Extract relationships between them from this text. \
-            Output JSON: {{\"relationships\": [{{\"source\": string, \"target\": string, \"type\": string}}]}}\n\n\
+            Output JSON: {{\"relationships\": [{{\"source\": string, \"target\": string, \"type\": string, \"evidence\": string, \"weight\": number}}]}}\n\n\
             TEXT:\n{chunk_text}",
             entity_names.join(", ")
         );
@@ -220,24 +236,46 @@ impl Extractor for LlmExtractor {
         // Build Relationship structs using the candidate entity ids.
         // store_knowledge remaps them to canonical ids via resolver merges.
         let mut candidate_rels = Vec::new();
-        for (src_name, tgt_name, ty) in rel_tuples {
+        for triple in rel_tuples {
             let src_id = entities
                 .iter()
-                .find(|e| e.name == src_name)
+                .find(|e| e.name == triple.source)
                 .map(|e| e.id.clone());
             let tgt_id = entities
                 .iter()
-                .find(|e| e.name == tgt_name)
+                .find(|e| e.name == triple.target)
                 .map(|e| e.id.clone());
             let (Some(src_id), Some(tgt_id)) = (src_id, tgt_id) else {
                 continue;
             };
-            candidate_rels.push(knowledge_graph::Relationship::new(
+            let mut rel = knowledge_graph::Relationship::new(
                 self.agent_id.clone(),
                 src_id,
                 tgt_id,
-                knowledge_graph::RelationshipType::from_str(&ty),
-            ));
+                knowledge_graph::RelationshipType::from_str(&triple.type_str),
+            );
+            if let Some(ev) = triple.evidence {
+                let trimmed = ev.trim();
+                if !trimmed.is_empty() {
+                    rel.properties.insert(
+                        "evidence".to_string(),
+                        serde_json::Value::String(trimmed.to_string()),
+                    );
+                }
+            }
+            if let Some(w) = triple.weight {
+                rel.properties
+                    .insert("weight".to_string(), serde_json::json!(w));
+            }
+            rel.properties.insert(
+                "extracted_by".to_string(),
+                serde_json::Value::String("ingest-llm-extractor".to_string()),
+            );
+            rel.properties.insert(
+                "source_episode_id".to_string(),
+                serde_json::Value::String(episode.id.clone()),
+            );
+            candidate_rels.push(rel);
         }
 
         // Tag every entity with provenance.
@@ -262,7 +300,7 @@ impl Extractor for LlmExtractor {
 fn parse_relationships_response(
     content: &str,
     known_entities: &[String],
-) -> Result<Vec<(String, String, String)>, String> {
+) -> Result<Vec<RelationshipTriple>, String> {
     let env: RelationshipsEnvelope = parse_llm_json(content)?;
     let known: std::collections::HashSet<&str> =
         known_entities.iter().map(|s| s.as_str()).collect();
@@ -277,7 +315,20 @@ fn parse_relationships_response(
         if !known.contains(src) || !known.contains(tgt) {
             continue; // drop hallucinated references to entities not in pass-1
         }
-        out.push((src.to_string(), tgt.to_string(), ty.to_string()));
+        let evidence = item
+            .evidence
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let weight = item.weight.map(|w| w.clamp(0.0, 1.0));
+        out.push(RelationshipTriple {
+            source: src.to_string(),
+            target: tgt.to_string(),
+            type_str: ty.to_string(),
+            evidence,
+            weight,
+        });
     }
     Ok(out)
 }
@@ -369,8 +420,46 @@ mod tests_extractor {
         let rels =
             parse_relationships_response(json, &["Alice".into(), "Wonderland".into()]).unwrap();
         assert_eq!(rels.len(), 1);
-        assert_eq!(rels[0].0, "Alice");
-        assert_eq!(rels[0].2, "located_in");
+        assert_eq!(rels[0].source, "Alice");
+        assert_eq!(rels[0].type_str, "located_in");
+        assert!(rels[0].evidence.is_none());
+        assert!(rels[0].weight.is_none());
+    }
+
+    #[test]
+    fn parses_relationships_with_evidence_and_weight() {
+        let json = r#"{"relationships": [
+            {"source": "Alice", "target": "Wonderland", "type": "located_in",
+             "evidence": "Alice fell down the rabbit hole into Wonderland.", "weight": 0.95}
+        ]}"#;
+        let rels =
+            parse_relationships_response(json, &["Alice".into(), "Wonderland".into()]).unwrap();
+        assert_eq!(rels.len(), 1);
+        assert_eq!(
+            rels[0].evidence.as_deref(),
+            Some("Alice fell down the rabbit hole into Wonderland.")
+        );
+        assert_eq!(rels[0].weight, Some(0.95));
+    }
+
+    #[test]
+    fn clamps_out_of_range_weight() {
+        let json = r#"{"relationships": [
+            {"source": "A", "target": "B", "type": "uses", "weight": 2.5},
+            {"source": "A", "target": "B", "type": "uses", "weight": -0.3}
+        ]}"#;
+        let rels = parse_relationships_response(json, &["A".into(), "B".into()]).unwrap();
+        assert_eq!(rels[0].weight, Some(1.0));
+        assert_eq!(rels[1].weight, Some(0.0));
+    }
+
+    #[test]
+    fn blank_evidence_becomes_none() {
+        let json = r#"{"relationships": [
+            {"source": "A", "target": "B", "type": "uses", "evidence": "   "}
+        ]}"#;
+        let rels = parse_relationships_response(json, &["A".into(), "B".into()]).unwrap();
+        assert!(rels[0].evidence.is_none());
     }
 
     #[test]
