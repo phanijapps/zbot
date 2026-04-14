@@ -63,6 +63,13 @@ export type {
   UpdateCronJobRequest,
   CronTriggerResult,
   SetupStatus,
+  // Embedding backend types
+  EmbeddingsBackend,
+  EmbeddingsStatus,
+  EmbeddingsHealth,
+  CuratedModel,
+  EmbeddingConfig,
+  ConfigureProgressEvent,
 } from "./types";
 
 export { getProviderDefaultModel } from "./types";

@@ -1073,3 +1073,42 @@ export interface GraphNeighborOptions {
 export interface GraphSubgraphOptions {
   max_hops?: number;
 }
+
+// ============================================================================
+// Embedding Backend Types
+// ============================================================================
+
+export type EmbeddingsBackend = "internal" | "ollama";
+
+export type EmbeddingsStatus =
+  | "ready"
+  | "ollama_unreachable"
+  | "model_missing"
+  | "misconfigured";
+
+export interface EmbeddingsHealth {
+  backend: EmbeddingsBackend;
+  model?: string;
+  dim: number;
+  status: EmbeddingsStatus;
+  indexed_count: number;
+}
+
+export interface CuratedModel {
+  tag: string;
+  dim: number;
+  size_mb: number;
+  mteb: number;
+}
+
+export interface EmbeddingConfig {
+  backend: EmbeddingsBackend;
+  dimensions: number;
+  ollama?: { base_url: string; model: string };
+}
+
+export type ConfigureProgressEvent =
+  | { kind: "pulling"; mb_done: number; mb_total: number }
+  | { kind: "reindexing"; table: string; current: number; total: number }
+  | { kind: "ready"; backend: string; model?: string; dim: number }
+  | { kind: "error"; reason: string; rollback?: string };

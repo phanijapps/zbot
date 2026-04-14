@@ -74,6 +74,10 @@ import type {
   SetupStatus,
   SessionState,
   Artifact,
+  EmbeddingsHealth,
+  CuratedModel,
+  EmbeddingConfig,
+  ConfigureProgressEvent,
 } from "./types";
 
 // ============================================================================
@@ -479,4 +483,24 @@ export interface Transport {
 
   /** Get the URL to fetch artifact content */
   getArtifactContentUrl(artifactId: string): string;
+
+  // =========================================================================
+  // Embedding Backend Operations
+  // =========================================================================
+
+  /** Get current embedding backend health + indexed count */
+  getEmbeddingsHealth(): Promise<TransportResult<EmbeddingsHealth>>;
+
+  /** Fetch curated Ollama embedding model list */
+  getEmbeddingsModels(): Promise<TransportResult<CuratedModel[]>>;
+
+  /**
+   * Configure (switch) embedding backend. Streams SSE progress events
+   * via `onProgress`. Resolves with the final health snapshot on success.
+   */
+  configureEmbeddings(
+    config: EmbeddingConfig,
+    onProgress: (event: ConfigureProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<TransportResult<EmbeddingsHealth>>;
 }

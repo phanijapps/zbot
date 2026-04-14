@@ -20,6 +20,7 @@ import {
 } from "@/services/transport";
 import { TabBar, TabPanel } from "@/components/TabBar";
 import { HelpBox } from "@/components/HelpBox";
+import { EmbeddingsCard } from "./EmbeddingsCard";
 import { ProvidersEmptyState } from "./ProvidersEmptyState";
 import { ProvidersGrid } from "./ProvidersGrid";
 import { ProviderSlideover } from "./ProviderSlideover";
@@ -877,6 +878,9 @@ export function WebSettingsPanel() {
                     Re-run Setup Wizard
                   </button>
                 </div>
+
+                {/* ── Embeddings Card ── */}
+                <EmbeddingsCard />
               </div>
             </>
           ) : null}
