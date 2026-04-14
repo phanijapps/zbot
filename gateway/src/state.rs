@@ -414,6 +414,33 @@ impl AppState {
         let compaction_repo = Arc::new(gateway_database::CompactionRepository::new(
             knowledge_db.clone(),
         ));
+
+        // One-shot backfill: populate legacy kg_entities / kg_relationships
+        // rows with the richer metadata introduced in commits b816702,
+        // 1bc21f6, 5bf3013. Marker row in kg_compactions gates this so
+        // subsequent daemon starts are a no-op. Non-fatal on failure —
+        // a backfill bug must never prevent the daemon from booting.
+        {
+            let backfiller = gateway_execution::sleep::KgBackfiller::new(knowledge_db.clone());
+            match backfiller.run_once_blocking() {
+                Ok(stats) if stats.already_done => {
+                    tracing::debug!("kg_backfill: marker present, skipping");
+                }
+                Ok(stats) => {
+                    tracing::info!(
+                        entities_scanned = stats.entities_scanned,
+                        entities_updated = stats.entities_updated,
+                        relationships_scanned = stats.relationships_scanned,
+                        relationships_updated = stats.relationships_updated,
+                        "kg_backfill: completed",
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "kg_backfill: failed (non-fatal)");
+                }
+            }
+        }
+
         let sleep_time_worker = runner_graph_storage.as_ref().cloned().map(|gs| {
             let verifier: Option<Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>> =
                 Some(Arc::new(
