@@ -28,6 +28,7 @@ use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use crate::ollama_client::OllamaClient;
 use crate::paths::SharedVaultPaths;
 
 // ============================================================================
@@ -402,7 +403,7 @@ impl EmbeddingService {
             .await
             .map_err(|e| format!("semaphore closed: {e}"))?;
 
-        // Validation.
+        // Validation + Ollama reachability / pull.
         if let EmbeddingBackend::Ollama = new.backend {
             let ollama = new
                 .ollama
@@ -414,6 +415,43 @@ impl EmbeddingService {
                 self.set_health(h.clone());
                 on_progress(h);
                 return Err(reason);
+            }
+
+            let client = OllamaClient::new(ollama.base_url.clone());
+            // Probe reachability.
+            if let Err(e) = client.ping().await {
+                self.set_health(Health::OllamaUnreachable);
+                on_progress(Health::OllamaUnreachable);
+                return Err(format!("ollama unreachable: {e}"));
+            }
+            // Pull if missing.
+            let tags = client.list_models().await.unwrap_or_default();
+            let have_model = tags
+                .iter()
+                .any(|t| t == &ollama.model || t.starts_with(&format!("{}:", ollama.model)));
+            if !have_model {
+                // Emit an initial Pulling(0,0) so subscribers see the transition.
+                self.set_health(Health::Pulling {
+                    mb_done: 0,
+                    mb_total: 0,
+                });
+                on_progress(Health::Pulling {
+                    mb_done: 0,
+                    mb_total: 0,
+                });
+                let on_pg = |done: u64, total: u64| {
+                    on_progress(Health::Pulling {
+                        mb_done: done / (1024 * 1024),
+                        mb_total: total / (1024 * 1024),
+                    });
+                };
+                if let Err(e) = client.pull_model(&ollama.model, on_pg).await {
+                    let reason = format!("ollama pull failed: {e}");
+                    let h = Health::Misconfigured(reason.clone());
+                    self.set_health(h.clone());
+                    on_progress(h);
+                    return Err(reason);
+                }
             }
         }
 
@@ -618,8 +656,35 @@ mod tests {
         assert!(Marker::parse("").is_none());
     }
 
+    /// Spin up a MockServer that responds to `/api/tags` with the given models
+    /// (so `pull` is not triggered) and `/api/pull` with an immediate success
+    /// line for safety. Returns the server and its base_url.
+    async fn mock_ollama_with_models(models: &[&str]) -> httpmock::MockServer {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let entries: Vec<_> = models
+            .iter()
+            .map(|m| serde_json::json!({ "name": m }))
+            .collect();
+        let body = serde_json::json!({ "models": entries });
+        server
+            .mock_async(move |when, then| {
+                when.method(GET).path("/api/tags");
+                then.status(200).json_body(body);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/pull");
+                then.status(200).body("{\"status\":\"success\"}\n");
+            })
+            .await;
+        server
+    }
+
     #[tokio::test]
     async fn reconfigure_internal_to_same_dim_ollama_does_not_need_reindex_if_marker_matches() {
+        let server = mock_ollama_with_models(&["snowflake-arctic-embed:s"]).await;
         let (_tmp, paths) = test_paths();
         // Mark as already indexed at 384 under the snowflake:s model.
         let m = Marker {
@@ -635,7 +700,7 @@ mod tests {
             backend: EmbeddingBackend::Ollama,
             dimensions: 384,
             ollama: Some(OllamaConfig {
-                base_url: "http://localhost:11434".into(),
+                base_url: server.base_url(),
                 model: "snowflake-arctic-embed:s".into(),
             }),
         };
@@ -645,13 +710,14 @@ mod tests {
 
     #[tokio::test]
     async fn reconfigure_with_dim_change_triggers_needs_reindex() {
+        let server = mock_ollama_with_models(&["mxbai-embed-large"]).await;
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
         let new = EmbeddingConfig {
             backend: EmbeddingBackend::Ollama,
             dimensions: 1024,
             ollama: Some(OllamaConfig {
-                base_url: "http://localhost:11434".into(),
+                base_url: server.base_url(),
                 model: "mxbai-embed-large".into(),
             }),
         };
@@ -751,6 +817,7 @@ mod tests {
 
     #[tokio::test]
     async fn reconfigure_swaps_client_arc() {
+        let server = mock_ollama_with_models(&["bge-large"]).await;
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
         let before = svc.client();
@@ -758,7 +825,7 @@ mod tests {
             backend: EmbeddingBackend::Ollama,
             dimensions: 1024,
             ollama: Some(OllamaConfig {
-                base_url: "http://localhost:11434".into(),
+                base_url: server.base_url(),
                 model: "bge-large".into(),
             }),
         };
@@ -786,6 +853,73 @@ mod tests {
         let m = curated_lookup("nomic-embed-text").unwrap();
         assert_eq!(m.dim, 768);
         assert_eq!(m.size_mb, 274);
+    }
+
+    #[tokio::test]
+    async fn reconfigure_full_round_trip_with_mock_ollama() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        // First /api/tags returns empty (model needs pull).
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/api/tags");
+                then.status(200)
+                    .json_body(serde_json::json!({ "models": [] }));
+            })
+            .await;
+        // /api/pull streams a tiny progress + success line.
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/pull");
+                then.status(200).body(
+                    "{\"status\":\"downloading\",\"completed\":100,\"total\":670}\n\
+                     {\"status\":\"success\"}\n",
+                );
+            })
+            .await;
+
+        let (_tmp, paths) = test_paths();
+        let svc = EmbeddingService::from_config(paths.clone()).unwrap();
+
+        let new = EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: 1024,
+            ollama: Some(OllamaConfig {
+                base_url: server.base_url(),
+                model: "mxbai-embed-large".into(),
+            }),
+        };
+
+        let events = std::sync::Mutex::new(Vec::<Health>::new());
+        svc.reconfigure(new.clone(), |h| events.lock().unwrap().push(h))
+            .await
+            .unwrap();
+
+        let captured = events.into_inner().unwrap();
+        assert!(
+            captured.iter().any(|h| matches!(h, Health::Pulling { .. })),
+            "expected Pulling event in: {captured:?}"
+        );
+        assert!(matches!(svc.health(), Health::Ready));
+        assert_eq!(svc.dimensions(), 1024);
+        assert_eq!(svc.client().dimensions(), 1024);
+    }
+
+    #[tokio::test]
+    async fn reconfigure_ollama_unreachable_returns_error() {
+        let (_tmp, paths) = test_paths();
+        let svc = EmbeddingService::from_config(paths).unwrap();
+        let new = EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: 1024,
+            ollama: Some(OllamaConfig {
+                base_url: "http://127.0.0.1:1".into(),
+                model: "mxbai-embed-large".into(),
+            }),
+        };
+        let err = svc.reconfigure(new, |_| {}).await;
+        assert!(err.is_err());
+        assert!(matches!(svc.health(), Health::OllamaUnreachable));
     }
 
     #[tokio::test]

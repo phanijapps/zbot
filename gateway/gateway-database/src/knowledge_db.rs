@@ -7,7 +7,9 @@ use r2d2_sqlite::SqliteConnectionManager;
 use rusqlite::Connection;
 use std::time::Duration;
 
-use crate::knowledge_schema::{initialize_knowledge_database, initialize_vec_tables};
+use crate::knowledge_schema::{
+    cleanup_orphan_reindex_tables, initialize_knowledge_database, initialize_vec_tables_with_dim,
+};
 use crate::sqlite_vec_loader::load_sqlite_vec;
 
 /// Connection pool for `knowledge.db`.
@@ -46,6 +48,17 @@ impl KnowledgeDatabase {
     /// the v22 schema + vec0 tables. Idempotent — safe to call on an
     /// already-initialized DB.
     pub fn new(paths: SharedVaultPaths) -> Result<Self, String> {
+        // Default constructor reads the active embedding dim from the marker
+        // file if present, falling back to 384. Keeps the widely-used call
+        // sites unchanged while honoring fresh-install user choices.
+        let dim = read_indexed_dim_or_default(&paths, 384);
+        Self::new_with_dim(paths, dim)
+    }
+
+    /// Construct with an explicit sqlite-vec dimension. Used by callers that
+    /// know the active `EmbeddingService` dim (e.g. daemon boot with an
+    /// Ollama-backed 1024d config).
+    pub fn new_with_dim(paths: SharedVaultPaths, dim: usize) -> Result<Self, String> {
         let db_path = paths.knowledge_db();
 
         if let Some(parent) = db_path.parent() {
@@ -69,7 +82,12 @@ impl KnowledgeDatabase {
                 .map_err(|e| format!("Failed to get init connection: {e}"))?;
             initialize_knowledge_database(&conn)
                 .map_err(|e| format!("Failed to init knowledge schema: {e}"))?;
-            initialize_vec_tables(&conn).map_err(|e| format!("Failed to init vec tables: {e}"))?;
+            initialize_vec_tables_with_dim(&conn, dim)
+                .map_err(|e| format!("Failed to init vec tables: {e}"))?;
+            // Boot-time crash recovery: drop any orphan `*__new` reindex
+            // tables left behind by a previous mid-reindex crash.
+            cleanup_orphan_reindex_tables(&conn)
+                .map_err(|e| format!("Failed to cleanup orphan reindex tables: {e}"))?;
         }
 
         tracing::info!("Knowledge database initialized at {:?}", db_path);
@@ -87,5 +105,90 @@ impl KnowledgeDatabase {
             .get()
             .map_err(|e| format!("Failed to get knowledge connection: {e}"))?;
         f(&conn).map_err(|e| format!("Knowledge DB operation failed: {e}"))
+    }
+}
+
+/// Read `dim=<usize>` from `data/.embedding-state` without depending on
+/// `EmbeddingService`. Returns `default` on any IO/parse failure.
+fn read_indexed_dim_or_default(paths: &SharedVaultPaths, default: usize) -> usize {
+    let marker = paths.data_dir().join(".embedding-state");
+    let Ok(text) = std::fs::read_to_string(marker) else {
+        return default;
+    };
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if let Some(rest) = trimmed.strip_prefix("dim=") {
+            if let Ok(n) = rest.trim().parse::<usize>() {
+                return n;
+            }
+        }
+    }
+    default
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gateway_services::VaultPaths;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+
+    #[test]
+    fn new_defaults_to_384_when_no_marker() {
+        let tmp = TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let db = KnowledgeDatabase::new(paths).unwrap();
+        let sql: String = db
+            .with_connection(|c| {
+                c.query_row(
+                    "SELECT sql FROM sqlite_master WHERE name='memory_facts_index'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert!(sql.contains("FLOAT[384]"), "got: {sql}");
+    }
+
+    #[test]
+    fn new_honors_marker_dim() {
+        let tmp = TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        std::fs::write(
+            paths.data_dir().join(".embedding-state"),
+            "backend=ollama\nmodel=mxbai-embed-large\ndim=1024\nindexed_at=x\n",
+        )
+        .unwrap();
+        let db = KnowledgeDatabase::new(paths).unwrap();
+        let sql: String = db
+            .with_connection(|c| {
+                c.query_row(
+                    "SELECT sql FROM sqlite_master WHERE name='memory_facts_index'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert!(sql.contains("FLOAT[1024]"), "got: {sql}");
+    }
+
+    #[test]
+    fn new_with_dim_uses_explicit_dim() {
+        let tmp = TempDir::new().unwrap();
+        let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
+        paths.ensure_dirs_exist().unwrap();
+        let db = KnowledgeDatabase::new_with_dim(paths, 768).unwrap();
+        let sql: String = db
+            .with_connection(|c| {
+                c.query_row(
+                    "SELECT sql FROM sqlite_master WHERE name='kg_name_index'",
+                    [],
+                    |r| r.get(0),
+                )
+            })
+            .unwrap();
+        assert!(sql.contains("FLOAT[768]"), "got: {sql}");
     }
 }

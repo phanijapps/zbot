@@ -28,8 +28,11 @@ tokio = { workspace = true }
 # Logging
 tracing = { workspace = true }
 
-# HTTP client (for provider health checks)
-reqwest = { version = "0.12", features = ["json"] }
+# HTTP client (for provider health checks + Ollama NDJSON stream)
+reqwest = { workspace = true }
+
+# Streams for Ollama pull NDJSON parsing
+futures = { workspace = true }
 
 # Utilities
 uuid = { workspace = true }
