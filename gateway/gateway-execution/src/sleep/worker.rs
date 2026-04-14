@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 
-use crate::sleep::{Compactor, DecayEngine, PatternExtractor, Pruner, Synthesizer};
+use crate::sleep::{Compactor, DecayEngine, OrphanArchiver, PatternExtractor, Pruner, Synthesizer};
 
 /// Bundle of optional sleep-time ops passed to [`SleepTimeWorker::start`].
 /// Using a struct avoids adding more positional parameters as the pipeline
@@ -20,6 +20,7 @@ use crate::sleep::{Compactor, DecayEngine, PatternExtractor, Pruner, Synthesizer
 pub struct SleepOps {
     pub synthesizer: Option<Arc<Synthesizer>>,
     pub pattern_extractor: Option<Arc<PatternExtractor>>,
+    pub orphan_archiver: Option<Arc<OrphanArchiver>>,
 }
 
 /// Background worker that orchestrates the full sleep-time pipeline.
@@ -117,6 +118,9 @@ pub struct CycleStats {
     pub prune_candidates: u64,
     pub pruned: u64,
     pub pruned_failed: u64,
+    pub orphans_scanned: u64,
+    pub orphans_archived: u64,
+    pub orphans_failed: u64,
 }
 
 async fn run_cycle(
@@ -167,6 +171,21 @@ async fn run_cycle(
     stats.pruned = prune_stats.pruned;
     stats.pruned_failed = prune_stats.failed;
 
+    // Orphan archival — runs last so post-decay state is stable. Conservative:
+    // a failure here is logged and does not abort the cycle.
+    if let Some(archiver) = ops.orphan_archiver.as_ref() {
+        match archiver.run_cycle(&run_id).await {
+            Ok(s) => {
+                stats.orphans_scanned = s.scanned as u64;
+                stats.orphans_archived = s.archived as u64;
+                stats.orphans_failed = s.failed as u64;
+            }
+            Err(e) => {
+                tracing::warn!(%run_id, error = %e, "orphan archiver cycle failed");
+            }
+        }
+    }
+
     tracing::info!(
         kind,
         %run_id,
@@ -178,6 +197,9 @@ async fn run_cycle(
         prune_candidates = stats.prune_candidates,
         pruned = stats.pruned,
         pruned_failed = stats.pruned_failed,
+        orphans_scanned = stats.orphans_scanned,
+        orphans_archived = stats.orphans_archived,
+        orphans_failed = stats.orphans_failed,
         "sleep-time cycle done"
     );
     stats
@@ -327,15 +349,23 @@ mod tests {
             h.compaction_repo.clone(),
             Arc::new(RecordingPatternLlm),
         ));
+        let archiver = Arc::new(crate::sleep::OrphanArchiver::new(
+            h.db.clone(),
+            h.compaction_repo.clone(),
+        ));
         let ops = SleepOps {
             synthesizer: Some(synth),
             pattern_extractor: Some(px),
+            orphan_archiver: Some(archiver),
         };
         let stats = run_cycle("test", &c, &d, &p, &ops, "agent-ops").await;
         // Empty DB => no insertions from any op.
         assert_eq!(stats.synthesis_facts_inserted, 0);
         assert_eq!(stats.patterns_inserted, 0);
         assert_eq!(stats.merges_performed, 0);
+        assert_eq!(stats.orphans_scanned, 0);
+        assert_eq!(stats.orphans_archived, 0);
+        assert_eq!(stats.orphans_failed, 0);
     }
 
     /// A synthesizer whose `run_cycle` would fail hard (loading candidates
@@ -389,6 +419,7 @@ mod tests {
         let ops = SleepOps {
             synthesizer: Some(synth),
             pattern_extractor: Some(px),
+            orphan_archiver: None,
         };
         let stats = run_cycle("test", &c, &d, &p, &ops, "agent-err").await;
         // Cycle completed; decay/prune ran (0 candidates in empty DB).

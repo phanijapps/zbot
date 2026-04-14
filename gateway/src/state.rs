@@ -456,9 +456,14 @@ impl AppState {
                 compaction_repo.clone(),
                 pattern_llm,
             ));
+            let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
+                knowledge_db.clone(),
+                compaction_repo.clone(),
+            ));
             let ops = gateway_execution::sleep::SleepOps {
                 synthesizer: Some(synthesizer),
                 pattern_extractor: Some(pattern_extractor),
+                orphan_archiver: Some(orphan_archiver),
             };
             Arc::new(gateway_execution::sleep::SleepTimeWorker::start_with_ops(
                 compactor,
