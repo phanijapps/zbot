@@ -22,10 +22,15 @@ struct EntityItem {
     name: Option<String>,
     #[serde(rename = "type")]
     type_str: Option<String>,
+    summary: Option<String>,
     description: Option<String>,
     #[allow(dead_code)]
     aliases: Option<Vec<String>>,
 }
+
+/// Maximum length for the summary property. LLMs sometimes emit long
+/// descriptions; truncate to keep graph rows compact.
+const SUMMARY_MAX_LEN: usize = 200;
 
 #[derive(Debug, Deserialize)]
 struct RelationshipsEnvelope {
@@ -156,8 +161,13 @@ impl LlmExtractor {
 
         let user = format!(
             "Extract entities from this text. Output JSON: \
-            {{\"entities\": [{{\"name\": string, \"type\": string, \"aliases\": [string], \"description\": string}}]}}\n\n\
+            {{\"entities\": [{{\"name\": string, \"type\": string, \"summary\": string, \"aliases\": [string], \"description\": string}}]}}\n\n\
             Valid types: person, organization, location, event, document, concept, tool, project, file, time_period, role, artifact, ward.\n\n\
+            Field semantics:\n\
+            - `summary` — REQUIRED one-sentence ground-truth description of what this entity IS (not what it does in this text). Max 200 chars. \
+            For \"Microsoft Corporation\" → \"American multinational technology company headquartered in Redmond, Washington\". \
+            For \"Chapter 3\" → \"Third chapter of {{book_name}}\". For a file entity → \"The {{format}} file at {{path}}\".\n\
+            - `description` — free-form context about how the entity appeared in THIS text (optional).\n\n\
             TEXT:\n{chunk_text}"
         );
 
@@ -333,6 +343,14 @@ fn parse_relationships_response(
     Ok(out)
 }
 
+/// Truncate `s` to at most `max` characters (not bytes). Preserves Unicode boundaries.
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s.to_string();
+    }
+    s.chars().take(max).collect()
+}
+
 /// Parse the LLM's JSON response into typed Entity values.
 /// Strips optional code-fence wrapping. Silently skips malformed items.
 fn parse_entities_response(content: &str, agent_id: &str) -> Result<Vec<Entity>, String> {
@@ -347,13 +365,50 @@ fn parse_entities_response(content: &str, agent_id: &str) -> Result<Vec<Entity>,
         else {
             continue;
         };
-        let ty = EntityType::from_str(item.type_str.as_deref().unwrap_or("concept"));
+        let type_str = item.type_str.as_deref().unwrap_or("concept");
+        let ty = EntityType::from_str(type_str);
         let mut entity = Entity::new(agent_id.to_string(), ty, name.to_string());
-        if let Some(desc) = item.description {
-            entity
-                .properties
-                .insert("description".to_string(), serde_json::Value::String(desc));
+
+        let description = item
+            .description
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        if let Some(ref desc) = description {
+            entity.properties.insert(
+                "description".to_string(),
+                serde_json::Value::String(desc.clone()),
+            );
         }
+
+        // Summary is universally required. Prefer the LLM value; fall back
+        // to description; otherwise synthesize from type+name and flag it.
+        let summary = item
+            .summary
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string);
+        let (summary_text, synthesized) = match summary {
+            Some(s) => (s, false),
+            None => match description.clone() {
+                Some(d) => (d, false),
+                None => (format!("{type_str} {name} (auto-summary)"), true),
+            },
+        };
+        let summary_text = truncate_chars(&summary_text, SUMMARY_MAX_LEN);
+        entity.properties.insert(
+            "summary".to_string(),
+            serde_json::Value::String(summary_text),
+        );
+        if synthesized {
+            entity.properties.insert(
+                "summary_synthesized".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+
         out.push(entity);
     }
     Ok(out)
@@ -460,6 +515,91 @@ mod tests_extractor {
         ]}"#;
         let rels = parse_relationships_response(json, &["A".into(), "B".into()]).unwrap();
         assert!(rels[0].evidence.is_none());
+    }
+
+    #[test]
+    fn summary_lands_in_properties_when_provided() {
+        let json = r#"{"entities": [
+            {"name": "Microsoft", "type": "organization",
+             "summary": "American multinational technology company headquartered in Redmond, Washington",
+             "description": "Mentioned as the employer of the user"}
+        ]}"#;
+        let entities = parse_entities_response(json, "root").unwrap();
+        assert_eq!(entities.len(), 1);
+        let summary = entities[0]
+            .properties
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .expect("summary must be set");
+        assert!(summary.contains("Redmond"));
+        // Not synthesized, so flag should be absent.
+        assert!(!entities[0].properties.contains_key("summary_synthesized"));
+    }
+
+    #[test]
+    fn summary_falls_back_to_description_when_omitted() {
+        let json = r#"{"entities": [
+            {"name": "Chapter 3", "type": "document",
+             "description": "Third chapter of the style guide"}
+        ]}"#;
+        let entities = parse_entities_response(json, "root").unwrap();
+        assert_eq!(entities.len(), 1);
+        let summary = entities[0]
+            .properties
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .expect("summary must be synthesized from description");
+        assert_eq!(summary, "Third chapter of the style guide");
+        assert!(!entities[0].properties.contains_key("summary_synthesized"));
+    }
+
+    #[test]
+    fn summary_synthesized_from_type_and_name_when_missing() {
+        let json = r#"{"entities": [{"name": "Widget", "type": "tool"}]}"#;
+        let entities = parse_entities_response(json, "root").unwrap();
+        assert_eq!(entities.len(), 1);
+        let summary = entities[0]
+            .properties
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .expect("summary always present");
+        assert!(!summary.is_empty());
+        assert!(summary.contains("Widget"));
+        assert!(summary.contains("tool"));
+        assert_eq!(
+            entities[0].properties.get("summary_synthesized"),
+            Some(&serde_json::Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn summary_truncated_to_max_length() {
+        let long = "x".repeat(400);
+        let json =
+            format!(r#"{{"entities": [{{"name": "E", "type": "concept", "summary": "{long}"}}]}}"#);
+        let entities = parse_entities_response(&json, "root").unwrap();
+        let summary = entities[0]
+            .properties
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert_eq!(summary.chars().count(), SUMMARY_MAX_LEN);
+    }
+
+    #[test]
+    fn blank_summary_triggers_fallback() {
+        let json = r#"{"entities": [{"name": "E", "type": "concept", "summary": "   "}]}"#;
+        let entities = parse_entities_response(json, "root").unwrap();
+        let summary = entities[0]
+            .properties
+            .get("summary")
+            .and_then(|v| v.as_str())
+            .unwrap();
+        assert!(!summary.trim().is_empty());
+        assert_eq!(
+            entities[0].properties.get("summary_synthesized"),
+            Some(&serde_json::Value::Bool(true))
+        );
     }
 
     #[test]
