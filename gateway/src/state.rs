@@ -756,6 +756,73 @@ impl AppState {
         self
     }
 
+    /// Reconcile the indexed embedding dim against the current client dim.
+    ///
+    /// Runs at boot (from `GatewayServer::start`) and performs three things:
+    ///
+    /// 1. Pre-emptive Ollama ping — surfaces unreachability in `Health`
+    ///    immediately instead of waiting for the periodic health loop.
+    /// 2. If `needs_reindex()`, invokes
+    ///    [`gateway_execution::sleep::embedding_reindex::reindex_all`] against
+    ///    the live knowledge database, then writes the `.embedding-state`
+    ///    marker on success.
+    /// 3. Spawns the periodic health-check loop (60s tick).
+    ///
+    /// All failures are logged — embeddings-based recall degrades to FTS in
+    /// the existing `recall_unified` path if the reindex does not complete.
+    pub async fn reconcile_embeddings_at_boot(&self) {
+        // 1. Preflight.
+        self.embedding_service.preflight().await;
+
+        // 2. Reindex if the marker dim disagrees with the live dim.
+        if self.embedding_service.needs_reindex() {
+            let current_dim = self.embedding_service.dimensions();
+            tracing::info!(
+                dim = current_dim,
+                "Embedding dim/model mismatch vs marker — reindexing at boot"
+            );
+            let client = self.embedding_service.client();
+            let svc = self.embedding_service.clone();
+            let on_progress = move |table: &'static str, current: usize, total: usize| {
+                svc.publish_health(gateway_services::Health::Reindexing {
+                    table: table.to_string(),
+                    current,
+                    total,
+                });
+            };
+            match gateway_execution::sleep::embedding_reindex::reindex_all(
+                &self.knowledge_db,
+                client,
+                current_dim,
+                &on_progress,
+            )
+            .await
+            {
+                Ok(_) => {
+                    if let Err(e) = self.embedding_service.mark_indexed(current_dim) {
+                        tracing::warn!("mark_indexed failed after boot reindex: {e}");
+                    } else {
+                        tracing::info!("Boot reindex complete at dim={current_dim}");
+                    }
+                    self.embedding_service
+                        .publish_health(gateway_services::Health::Ready);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Boot reindex failed: {e} — embeddings will be stale until next reconfigure"
+                    );
+                    // Leave health as-is (preflight already set any Ollama state);
+                    // recall_unified falls back to FTS.
+                }
+            }
+        }
+
+        // 3. Start periodic health loop.
+        let _handle = self.embedding_service.clone().start_health_loop();
+        // JoinHandle intentionally dropped — loop lives for the process
+        // lifetime; daemon shutdown drops the runtime.
+    }
+
     /// Seed default agents and other initial data.
     ///
     /// This should be called after creating the state to set up default subagents

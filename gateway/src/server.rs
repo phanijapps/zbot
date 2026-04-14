@@ -107,6 +107,10 @@ impl GatewayServer {
             self.state.bridge_bus = Some(bus);
         }
 
+        // Reconcile embedding backend: preflight Ollama, reindex on
+        // dim/model mismatch, spawn periodic health loop.
+        self.state.reconcile_embeddings_at_boot().await;
+
         // Seed default agents and other initial data (starts plugins)
         self.state.seed_defaults().await;
 

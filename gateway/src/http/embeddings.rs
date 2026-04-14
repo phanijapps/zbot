@@ -93,28 +93,64 @@ pub async fn configure(
     Json(new): Json<EmbeddingConfig>,
 ) -> Result<Sse<impl Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)> {
     let svc = state.embedding_service.clone();
+    let knowledge_db = state.knowledge_db.clone();
     // Persist the intent first so a daemon restart will honor the selection.
     svc.persist_settings(&new)
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     // Collect progress events into a channel.
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Health>();
-    let tx2 = tx.clone();
+    let tx_cb = tx.clone();
     let cb = move |h: Health| {
-        let _ = tx2.send(h);
+        let _ = tx_cb.send(h);
     };
     let svc_clone = svc.clone();
     let new_clone = new.clone();
     tokio::spawn(async move {
-        let res = svc_clone.reconfigure(new_clone, cb).await;
-        match res {
-            Ok(()) => {
-                let _ = tx.send(Health::Ready);
-            }
-            Err(e) => {
-                let _ = tx.send(Health::Misconfigured(e));
+        // Phase 1: reconfigure (ping + pull + client swap).
+        if let Err(e) = svc_clone.reconfigure(new_clone.clone(), cb).await {
+            let _ = tx.send(Health::Misconfigured(e));
+            return;
+        }
+
+        // Phase 2: reindex if required (dim or model changed).
+        if svc_clone.needs_reindex() {
+            let current_dim = svc_clone.dimensions();
+            let client = svc_clone.client();
+            let tx_reindex = tx.clone();
+            let on_progress = move |table: &'static str, current: usize, total: usize| {
+                let ev = Health::Reindexing {
+                    table: table.to_string(),
+                    current,
+                    total,
+                };
+                // Also publish into service.health so pollers see it.
+                let _ = tx_reindex.send(ev);
+            };
+            match gateway_execution::sleep::embedding_reindex::reindex_all(
+                &knowledge_db,
+                client,
+                current_dim,
+                &on_progress,
+            )
+            .await
+            {
+                Ok(_) => {
+                    if let Err(e) = svc_clone.mark_indexed(current_dim) {
+                        let _ = tx.send(Health::Misconfigured(format!(
+                            "reindex ok but mark_indexed failed: {e}"
+                        )));
+                        return;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx.send(Health::Misconfigured(format!("reindex failed: {e}")));
+                    return;
+                }
             }
         }
+
+        let _ = tx.send(Health::Ready);
     });
 
     let s = async_stream::stream! {

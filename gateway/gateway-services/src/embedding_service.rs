@@ -481,29 +481,123 @@ impl EmbeddingService {
         Ok(())
     }
 
-    /// Synchronous convenience used at boot. Returns immediately if no
-    /// reindex is required. When one is required, the caller (which owns
-    /// the tokio runtime) should call [`Self::ensure_indexed`] asynchronously.
-    ///
-    /// This blocking version is a placeholder — Phase 1 does not execute a
-    /// reindex; it only records the intent. Actual reindex arrives with
-    /// `gateway-execution` wiring in later phases.
+    /// Synchronous convenience used at boot. No-op — the actual reindex
+    /// runs from [`crate::EmbeddingService::reconcile_at_boot_via`] (wired
+    /// in `AppState::reconcile_embeddings_at_boot`), which has access to
+    /// the `KnowledgeDatabase` this crate intentionally does not depend on.
     ///
     /// # Errors
     ///
-    /// Always returns `Ok` for now.
+    /// Always returns `Ok`.
     pub fn ensure_indexed_blocking(&self) -> Result<(), String> {
         Ok(())
     }
 
-    /// Async hook for the reindex pipeline. No-op placeholder; wiring arrives
-    /// in the reindex module.
+    /// Async companion to [`Self::ensure_indexed_blocking`]. Also a no-op —
+    /// reindex is driven from the boot reconciler in `gateway::state` which
+    /// owns the `KnowledgeDatabase` handle.
     ///
     /// # Errors
     ///
-    /// Always returns `Ok` for now.
+    /// Always returns `Ok`.
     pub async fn ensure_indexed(&self) -> Result<(), String> {
         Ok(())
+    }
+
+    /// Snapshot the current config (cheap — clone out of the RwLock).
+    #[must_use]
+    pub fn config_snapshot(&self) -> EmbeddingConfig {
+        self.state.read().config.clone()
+    }
+
+    /// Public health setter so the boot reconciler / HTTP handler can
+    /// stream `Reindexing { .. }` transitions while driving
+    /// `reindex_all` themselves.
+    pub fn publish_health(&self, h: Health) {
+        self.set_health(h);
+    }
+
+    /// Pre-emptive reachability check performed at boot. If the backend
+    /// is Ollama, ping it and set `Health::OllamaUnreachable` on failure so
+    /// the UI (which polls `/api/embeddings/health`) shows the degraded
+    /// state immediately instead of waiting for the periodic loop.
+    pub async fn preflight(&self) {
+        let cfg = self.config_snapshot();
+        if let EmbeddingBackend::Ollama = cfg.backend {
+            let Some(ollama) = cfg.ollama.as_ref() else {
+                self.set_health(Health::Misconfigured(
+                    "ollama backend without ollama config".to_string(),
+                ));
+                return;
+            };
+            let client = OllamaClient::new(ollama.base_url.clone());
+            match client.ping().await {
+                Ok(()) => self.set_health(Health::Ready),
+                Err(e) => {
+                    tracing::warn!(error = %e, "embedding preflight: ollama unreachable");
+                    self.set_health(Health::OllamaUnreachable);
+                }
+            }
+        }
+    }
+
+    /// Spawn a periodic health-check loop. For `Internal` backends this is a
+    /// cheap re-check (no network). For `Ollama`, each tick pings the
+    /// configured URL and updates `Health::Ready` <-> `Health::OllamaUnreachable`
+    /// accordingly. The loop inspects the live config on every iteration, so
+    /// after `reconfigure` swaps backend the loop adapts automatically.
+    pub fn start_health_loop(self: Arc<Self>) -> tokio::task::JoinHandle<()> {
+        self.start_health_loop_with_interval(std::time::Duration::from_secs(60))
+    }
+
+    /// Test-visible variant of [`Self::start_health_loop`] with a custom
+    /// interval. Not exposed in the public prelude but public so integration
+    /// tests can exercise the loop without waiting 60 seconds.
+    pub fn start_health_loop_with_interval(
+        self: Arc<Self>,
+        interval: std::time::Duration,
+    ) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            // Skip the immediate first tick — preflight already ran.
+            ticker.tick().await;
+            loop {
+                ticker.tick().await;
+                let cfg = self.config_snapshot();
+                match cfg.backend {
+                    EmbeddingBackend::Internal => {
+                        // Nothing to probe; ensure health reflects readiness
+                        // (don't stomp on Reindexing/Pulling transitions).
+                        if matches!(self.health(), Health::OllamaUnreachable) {
+                            self.set_health(Health::Ready);
+                        }
+                    }
+                    EmbeddingBackend::Ollama => {
+                        let Some(ollama) = cfg.ollama.as_ref() else {
+                            continue;
+                        };
+                        // Don't override an in-flight Reindexing/Pulling event.
+                        if matches!(
+                            self.health(),
+                            Health::Reindexing { .. } | Health::Pulling { .. }
+                        ) {
+                            continue;
+                        }
+                        let client = OllamaClient::new(ollama.base_url.clone());
+                        match client.ping().await {
+                            Ok(()) => {
+                                if matches!(self.health(), Health::OllamaUnreachable) {
+                                    self.set_health(Health::Ready);
+                                }
+                            }
+                            Err(_) => {
+                                self.set_health(Health::OllamaUnreachable);
+                            }
+                        }
+                    }
+                }
+            }
+        })
     }
 
     /// Internal: mark the current config as fully indexed at `dim` and
@@ -928,5 +1022,107 @@ mod tests {
         let svc = EmbeddingService::from_config(paths).unwrap();
         svc.ensure_indexed_blocking().unwrap();
         svc.ensure_indexed().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn preflight_with_internal_backend_is_noop() {
+        let (_tmp, paths) = test_paths();
+        let svc = EmbeddingService::from_config(paths).unwrap();
+        svc.preflight().await;
+        assert!(matches!(svc.health(), Health::Ready));
+    }
+
+    #[tokio::test]
+    async fn preflight_with_unreachable_ollama_sets_health_immediately() {
+        let (_tmp, paths) = test_paths();
+        let cfg = EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: 1024,
+            ollama: Some(OllamaConfig {
+                base_url: "http://127.0.0.1:1".into(),
+                model: "mxbai-embed-large".into(),
+            }),
+        };
+        // with_config does not network — builds Ollama client, then preflight pings.
+        let svc = EmbeddingService::with_config(paths, cfg).unwrap();
+        svc.preflight().await;
+        assert!(matches!(svc.health(), Health::OllamaUnreachable));
+    }
+
+    #[tokio::test]
+    async fn health_loop_does_nothing_when_internal_backend() {
+        let (_tmp, paths) = test_paths();
+        let svc = Arc::new(EmbeddingService::from_config(paths).unwrap());
+        let handle = svc
+            .clone()
+            .start_health_loop_with_interval(std::time::Duration::from_millis(50));
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        // Health never left Ready on internal.
+        assert!(matches!(svc.health(), Health::Ready));
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn health_loop_pings_ollama_periodically_when_active() {
+        let server = mock_ollama_with_models(&["mxbai-embed-large"]).await;
+        let (_tmp, paths) = test_paths();
+        let cfg = EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: 1024,
+            ollama: Some(OllamaConfig {
+                base_url: server.base_url(),
+                model: "mxbai-embed-large".into(),
+            }),
+        };
+        let svc = Arc::new(EmbeddingService::with_config(paths, cfg).unwrap());
+        // Seed as unreachable — loop should flip to Ready on successful ping.
+        svc.publish_health(Health::OllamaUnreachable);
+        let handle = svc
+            .clone()
+            .start_health_loop_with_interval(std::time::Duration::from_millis(50));
+        tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+        assert!(
+            matches!(svc.health(), Health::Ready),
+            "expected Ready after healthy ping, got {:?}",
+            svc.health()
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn health_loop_marks_ollama_unreachable_when_down() {
+        let (_tmp, paths) = test_paths();
+        let cfg = EmbeddingConfig {
+            backend: EmbeddingBackend::Ollama,
+            dimensions: 1024,
+            ollama: Some(OllamaConfig {
+                base_url: "http://127.0.0.1:1".into(),
+                model: "mxbai-embed-large".into(),
+            }),
+        };
+        let svc = Arc::new(EmbeddingService::with_config(paths, cfg).unwrap());
+        // Start Ready; loop should discover it's actually unreachable.
+        let handle = svc
+            .clone()
+            .start_health_loop_with_interval(std::time::Duration::from_millis(50));
+        tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+        assert!(
+            matches!(svc.health(), Health::OllamaUnreachable),
+            "expected OllamaUnreachable, got {:?}",
+            svc.health()
+        );
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn config_snapshot_returns_current_config() {
+        let (_tmp, paths) = test_paths();
+        let cfg = EmbeddingConfig {
+            backend: EmbeddingBackend::Internal,
+            dimensions: 384,
+            ollama: None,
+        };
+        let svc = EmbeddingService::with_config(paths, cfg.clone()).unwrap();
+        assert_eq!(svc.config_snapshot(), cfg);
     }
 }
