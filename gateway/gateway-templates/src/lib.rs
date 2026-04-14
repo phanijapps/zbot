@@ -449,5 +449,4 @@ mod tests {
         assert!(shards.contains("MEMORY & LEARNING"));
         assert!(shards.contains("delegation_rules")); // from planning_autonomy shard
     }
-
 }

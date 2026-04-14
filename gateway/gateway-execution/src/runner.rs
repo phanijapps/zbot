@@ -1778,11 +1778,16 @@ impl ExecutionRunner {
                                 agent_runtime::RetryPolicy::default(),
                             );
 
+                            let system_prompt =
+                                crate::middleware::intent_analysis::load_intent_analysis_prompt(
+                                    &self.paths,
+                                );
                             match analyze_intent(
                                 &retrying,
                                 msg,
                                 fs.as_ref(),
                                 self.memory_recall.as_ref().map(|r| r.as_ref()),
+                                &system_prompt,
                             )
                             .await
                             {

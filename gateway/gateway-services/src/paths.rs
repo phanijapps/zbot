@@ -70,6 +70,13 @@ impl VaultPaths {
         self.vault_dir.join("config").join("distillation_prompt.md")
     }
 
+    /// Path to `config/intent_analysis_prompt.md`
+    pub fn intent_analysis_prompt(&self) -> PathBuf {
+        self.vault_dir
+            .join("config")
+            .join("intent_analysis_prompt.md")
+    }
+
     /// Path to the config directory
     pub fn config_dir(&self) -> PathBuf {
         self.vault_dir.join("config")

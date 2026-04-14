@@ -87,7 +87,42 @@ pub struct EdgeCondition {
 // LLM prompt
 // ---------------------------------------------------------------------------
 
-const INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. Given a user request and available resources, determine intent, ward, and execution approach.
+/// Default intent-analysis system prompt. Used when no user override exists
+/// at `config/intent_analysis_prompt.md`. The user can copy this into that
+/// file via `load_intent_analysis_prompt` on first run and then customize it.
+/// Load the intent-analysis system prompt from the vault config directory.
+/// Mirrors the distillation prompt pattern: if `config/intent_analysis_prompt.md`
+/// exists and is non-empty, use it; otherwise materialize the default to disk
+/// so the user can customize it on subsequent runs.
+pub fn load_intent_analysis_prompt(paths: &gateway_services::SharedVaultPaths) -> String {
+    let prompt_path = paths.intent_analysis_prompt();
+    match std::fs::read_to_string(&prompt_path) {
+        Ok(content) if !content.trim().is_empty() => {
+            tracing::info!("Loaded intent analysis prompt from {:?}", prompt_path);
+            content
+        }
+        Ok(_) => {
+            tracing::debug!("Intent analysis prompt file is empty, using default");
+            DEFAULT_INTENT_ANALYSIS_PROMPT.to_string()
+        }
+        Err(_) => {
+            if let Some(parent) = prompt_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            if let Err(e) = std::fs::write(&prompt_path, DEFAULT_INTENT_ANALYSIS_PROMPT) {
+                tracing::debug!("Failed to write default intent analysis prompt: {}", e);
+            } else {
+                tracing::info!(
+                    "Created default intent analysis prompt at {:?}",
+                    prompt_path
+                );
+            }
+            DEFAULT_INTENT_ANALYSIS_PROMPT.to_string()
+        }
+    }
+}
+
+pub const DEFAULT_INTENT_ANALYSIS_PROMPT: &str = r#"You are an intent analyzer. Given a user request and available resources, determine intent, ward, and execution approach.
 
 ## Rules
 - Hidden intents: actionable instructions the user didn't state but expects. Not labels.
@@ -183,15 +218,59 @@ pub fn format_intent_injection(
     // Execution approach
     let es = &analysis.execution_strategy;
     if es.approach == "graph" {
+        // Build a rich delegation task so planner sees the original request,
+        // intent, ward context, hidden requirements, and available resources
+        // — not just the bare goal.
+        let mut planner_task = String::new();
+        planner_task.push_str("Plan this goal.\\n\\n");
+        if let Some(msg) = original_message {
+            planner_task.push_str(&format!("Original request: {}\\n", msg));
+        }
+        planner_task.push_str(&format!("Intent: {}\\n", analysis.primary_intent));
+        planner_task.push_str(&format!(
+            "Ward: {} ({}) — {}",
+            wr.ward_name, wr.action, wr.reason
+        ));
+        if let Some(ref sub) = wr.subdirectory {
+            planner_task.push_str(&format!("; subdirectory: {}", sub));
+        }
+        planner_task.push_str(".\\n");
+        if !analysis.hidden_intents.is_empty() {
+            planner_task.push_str("Hidden requirements:\\n");
+            for h in &analysis.hidden_intents {
+                planner_task.push_str(&format!("- {}\\n", h));
+            }
+        }
+        if !analysis.recommended_skills.is_empty() {
+            planner_task.push_str(&format!(
+                "Recommended skills: {}.\\n",
+                analysis.recommended_skills.join(", ")
+            ));
+        }
+        if !analysis.recommended_agents.is_empty() {
+            let specialists: Vec<String> = analysis
+                .recommended_agents
+                .iter()
+                .filter(|a| a.as_str() != "planner-agent")
+                .cloned()
+                .collect();
+            if !specialists.is_empty() {
+                planner_task.push_str(&format!(
+                    "Recommended specialist agents: {}.\\n",
+                    specialists.join(", ")
+                ));
+            }
+        }
+
         out.push_str(&format!(
             "\n**Approach:** Complex task requiring multi-step execution.\n\
-             \n**First step:** Delegate to `planner-agent`:\n\
+             \n**First step:** Delegate to `planner-agent` with the full intent context:\n\
              ```\n\
-             delegate_to_agent(agent_id=\"planner-agent\", task=\"Plan this goal: {}. Ward: {}.\")\n\
+             delegate_to_agent(agent_id=\"planner-agent\", task=\"{}\")\n\
              ```\n\
-             The planner will read the ward, check existing code, and return a structured execution plan.\n\
+             The planner will read the ward, check existing code and specs, and return a structured execution plan.\n\
              Then execute each step from the plan by delegating to the assigned agent.\n",
-            analysis.primary_intent, wr.ward_name
+            planner_task
         ));
     } else if !es.explanation.is_empty() {
         out.push_str(&format!("\n**Approach:** {}\n", es.explanation));
@@ -331,6 +410,7 @@ pub async fn analyze_intent(
     user_message: &str,
     fact_store: &dyn MemoryFactStore,
     memory_recall: Option<&crate::recall::MemoryRecall>,
+    system_prompt: &str,
 ) -> Result<IntentAnalysis, String> {
     // Fast path: skip LLM for trivial messages
     if is_simple_message(user_message) {
@@ -434,7 +514,7 @@ pub async fn analyze_intent(
     };
 
     let messages = vec![
-        ChatMessage::system(INTENT_ANALYSIS_PROMPT.to_string()),
+        ChatMessage::system(system_prompt.to_string()),
         ChatMessage::user(user_content),
     ];
 
@@ -970,6 +1050,7 @@ mod tests {
             "Tell me about the weather forecast for tomorrow",
             &fact_store,
             None,
+            DEFAULT_INTENT_ANALYSIS_PROMPT,
         )
         .await;
         let analysis = result.expect("should parse simple intent");
@@ -1004,7 +1085,14 @@ mod tests {
         };
 
         let fact_store = MockFactStore;
-        let result = analyze_intent(&mock, "Write code", &fact_store, None).await;
+        let result = analyze_intent(
+            &mock,
+            "Write code",
+            &fact_store,
+            None,
+            DEFAULT_INTENT_ANALYSIS_PROMPT,
+        )
+        .await;
         let analysis = result.expect("should parse graph intent");
         assert_eq!(analysis.primary_intent, "code_generation");
         assert_eq!(analysis.recommended_skills, vec!["code-gen"]);
@@ -1029,6 +1117,7 @@ mod tests {
             "Build me a web scraper for news articles",
             &fact_store,
             None,
+            DEFAULT_INTENT_ANALYSIS_PROMPT,
         )
         .await;
         assert!(result.is_err());
@@ -1065,6 +1154,7 @@ mod tests {
             "Analyze this dataset and create visualizations",
             &fact_store,
             None,
+            DEFAULT_INTENT_ANALYSIS_PROMPT,
         )
         .await;
         let analysis = result.expect("should strip fences and parse");
