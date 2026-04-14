@@ -44,6 +44,17 @@ pub enum EmbeddingBackend {
     Ollama,
 }
 
+impl EmbeddingBackend {
+    /// Stable wire-name for HTTP/UI surfaces. Always one of `"internal"` or
+    /// `"ollama"`. Distinct from the model identifier.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EmbeddingBackend::Internal => "internal",
+            EmbeddingBackend::Ollama => "ollama",
+        }
+    }
+}
+
 /// Ollama connection config (only used when `backend == Ollama`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct OllamaConfig {

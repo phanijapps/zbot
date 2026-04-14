@@ -39,6 +39,7 @@ pub struct HealthResponse {
 pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
     let svc = &state.embedding_service;
     let client = svc.client();
+    let snapshot = svc.config_snapshot();
     let status_str = match svc.health() {
         Health::Ready => "ready".to_string(),
         Health::Reindexing { .. } => "reindexing".to_string(),
@@ -48,13 +49,36 @@ pub async fn get_health(State(state): State<AppState>) -> Json<HealthResponse> {
         Health::Misconfigured(_) => "misconfigured".to_string(),
     };
     Json(HealthResponse {
-        backend: client.model_name().to_string(),
+        backend: snapshot.backend.as_str().to_string(),
         model: Some(client.model_name().to_string()),
         dim: svc.dimensions(),
         status: status_str,
-        indexed_count: 0,
+        indexed_count: count_indexed_rows(&state.knowledge_db),
         needs_reindex: svc.needs_reindex(),
     })
+}
+
+/// Sum of indexed rows across the three sqlite-vec tables. Each
+/// `*_index_rowids` aux table holds one row per indexed item, so this is
+/// a faithful count of what's actually searchable. Returns 0 if any query
+/// fails (e.g., aux tables not yet created on a fresh install).
+fn count_indexed_rows(db: &gateway_database::KnowledgeDatabase) -> usize {
+    const TABLES: &[&str] = &[
+        "memory_facts_index_rowids",
+        "kg_name_index_rowids",
+        "session_episodes_index_rowids",
+    ];
+    db.with_connection(|conn| {
+        let mut total = 0usize;
+        for tbl in TABLES {
+            let n: i64 = conn
+                .query_row(&format!("SELECT count(*) FROM {tbl}"), [], |r| r.get(0))
+                .unwrap_or(0);
+            total = total.saturating_add(n as usize);
+        }
+        Ok(total)
+    })
+    .unwrap_or(0)
 }
 
 // ============================================================================
