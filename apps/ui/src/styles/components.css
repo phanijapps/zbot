@@ -4986,3 +4986,66 @@
   border-radius: var(--radius-full);
   font-family: ui-monospace, "SF Mono", monospace;
 }
+
+/* SearchBar — Command Deck */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+.memory-search {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-3);
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-2) var(--spacing-3);
+}
+.memory-search:focus-within {
+  border-color: var(--color-primary);
+}
+.memory-search__icon {
+  color: var(--color-muted-foreground);
+  font-size: 1rem;
+}
+.memory-search__input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font-size: 0.875rem;
+  color: inherit;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.memory-search__input::placeholder {
+  color: var(--color-muted-foreground);
+}
+.memory-search__mode {
+  display: flex;
+  gap: 0;
+  background: rgba(148, 163, 184, 0.08);
+  border-radius: var(--radius-sm);
+  padding: 0.125rem;
+}
+.memory-search__mode button {
+  background: transparent;
+  border: 0;
+  color: var(--color-muted-foreground);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  padding: 0.25rem 0.5rem;
+  border-radius: calc(var(--radius-sm) - 2px);
+  cursor: pointer;
+  font-family: ui-monospace, "SF Mono", monospace;
+}
+.memory-search__mode button.is-active {
+  background: rgba(14, 165, 233, 0.2);
+  color: var(--color-primary);
+}
