@@ -5049,3 +5049,35 @@
   background: rgba(14, 165, 233, 0.2);
   color: var(--color-primary);
 }
+
+/* Scope Chips — Command Deck */
+.memory-chips {
+  display: flex;
+  gap: var(--spacing-1);
+  flex-wrap: wrap;
+  align-items: center;
+}
+.memory-chips__label {
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+  margin-right: var(--spacing-1);
+}
+.memory-chip {
+  font-size: 0.6875rem;
+  font-family: ui-monospace, "SF Mono", monospace;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-full);
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--color-muted-foreground);
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: background .12s ease, border-color .12s ease, color .12s ease;
+}
+.memory-chip:hover { border-color: var(--color-border); }
+.memory-chip.is-on {
+  background: rgba(14, 165, 233, 0.12);
+  color: var(--color-primary);
+  border-color: rgba(14, 165, 233, 0.35);
+}
