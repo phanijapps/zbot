@@ -35,6 +35,15 @@ pub struct WikiArticle {
     pub updated_at: String,
 }
 
+/// A single wiki hit with provenance of why it matched.
+#[derive(Debug, Clone)]
+pub struct WikiHit {
+    pub article: WikiArticle,
+    pub score: f32,
+    /// Why this hit matched: `"fts"`, `"vec"`, `"hybrid"`, or `"title"`.
+    pub match_source: &'static str,
+}
+
 /// Repository for ward wiki article CRUD and vector search.
 pub struct WardWikiRepository {
     db: Arc<KnowledgeDatabase>,
@@ -225,6 +234,111 @@ impl WardWikiRepository {
                 Err(e) => Err(e),
             }
         })
+    }
+
+    /// Fetch a single article by id.
+    fn get_by_id(&self, id: &str) -> Result<Option<WikiArticle>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, ward_id, agent_id, title, content, tags, source_fact_ids, \
+                 version, created_at, updated_at \
+                 FROM ward_wiki_articles WHERE id = ?1",
+            )?;
+            let mut rows = stmt.query_map(params![id], |row| Ok(Self::row_to_article(row)))?;
+            match rows.next() {
+                Some(Ok(article)) => Ok(Some(article)),
+                Some(Err(e)) => Err(e),
+                None => Ok(None),
+            }
+        })
+    }
+
+    /// Hybrid search: FTS5 over title+content unioned with sqlite-vec nearest
+    /// neighbours, fused via reciprocal-rank combination. `embedding` is optional;
+    /// when `None`, behaves as pure FTS.
+    pub fn search_hybrid(
+        &self,
+        query: &str,
+        ward_id: Option<&str>,
+        embedding: Option<Vec<f32>>,
+        limit: usize,
+    ) -> Result<Vec<WikiHit>, String> {
+        let fts_sql = match ward_id {
+            Some(_) => {
+                "SELECT a.rowid, a.id FROM ward_wiki_articles_fts \
+                 JOIN ward_wiki_articles a ON a.rowid = ward_wiki_articles_fts.rowid \
+                 WHERE ward_wiki_articles_fts MATCH ?1 AND a.ward_id = ?2 LIMIT 50"
+            }
+            None => {
+                "SELECT a.rowid, a.id FROM ward_wiki_articles_fts \
+                 JOIN ward_wiki_articles a ON a.rowid = ward_wiki_articles_fts.rowid \
+                 WHERE ward_wiki_articles_fts MATCH ?1 LIMIT 50"
+            }
+        };
+
+        let sanitized = crate::memory_repository::sanitize_fts_query(query);
+
+        let fts_ids: Vec<String> = self
+            .db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(fts_sql)?;
+                let rows = if let Some(w) = ward_id {
+                    stmt.query_map(rusqlite::params![sanitized, w], |r| r.get::<_, String>(1))?
+                        .collect::<Result<Vec<_>, _>>()?
+                } else {
+                    stmt.query_map(rusqlite::params![sanitized], |r| r.get::<_, String>(1))?
+                        .collect::<Result<Vec<_>, _>>()?
+                };
+                Ok(rows)
+            })
+            .unwrap_or_default();
+
+        let vec_ids: Vec<(String, f32)> = match embedding.as_ref() {
+            Some(emb) => self.vec_index.query_nearest(emb, 50).unwrap_or_default(),
+            None => Vec::new(),
+        };
+
+        // Reciprocal-rank fusion (RRF with k=60).
+        let mut scored: std::collections::HashMap<String, (f32, &'static str)> =
+            std::collections::HashMap::new();
+        for (rank, id) in fts_ids.iter().enumerate() {
+            let s = 1.0 / (60.0 + rank as f32);
+            scored.entry(id.clone()).or_insert((0.0, "fts")).0 += s;
+        }
+        for (rank, (id, _dist)) in vec_ids.iter().enumerate() {
+            let s = 1.0 / (60.0 + rank as f32);
+            let slot = scored.entry(id.clone()).or_insert((0.0, "vec"));
+            slot.0 += s;
+            if slot.1 == "fts" {
+                slot.1 = "hybrid";
+            }
+        }
+
+        let mut ranked: Vec<(String, f32, &'static str)> = scored
+            .into_iter()
+            .map(|(id, (s, src))| (id, s, src))
+            .collect();
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        ranked.truncate(limit);
+
+        let mut out = Vec::new();
+        for (id, score, src) in ranked {
+            if let Some(article) = self.get_by_id(&id)? {
+                if ward_id.is_none_or(|w| article.ward_id == w) {
+                    out.push(WikiHit {
+                        article,
+                        score,
+                        match_source: src,
+                    });
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    #[doc(hidden)]
+    pub fn vec_index_for_tests(&self) -> &std::sync::Arc<dyn crate::vector_index::VectorIndex> {
+        &self.vec_index
     }
 
     fn row_to_article(row: &rusqlite::Row) -> WikiArticle {

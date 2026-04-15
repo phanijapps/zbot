@@ -22,6 +22,13 @@ pub trait VectorIndex: Send + Sync {
     /// Return up to `limit` nearest neighbors as `(id, L2_squared_distance)`.
     /// Callers convert to cosine similarity when needed.
     fn query_nearest(&self, embedding: &[f32], limit: usize) -> Result<Vec<(String, f32)>, String>;
+
+    /// The embedding dimension this index expects. Implementations that don't
+    /// track a dimension return `0`; callers treating `0` as "unknown" should
+    /// fall back to a configured constant.
+    fn dim(&self) -> usize {
+        0
+    }
 }
 
 /// sqlite-vec-backed VectorIndex over a single `vec0` virtual table.
@@ -121,6 +128,10 @@ pub(crate) fn extract_dim_from_ddl(ddl: &str) -> Option<usize> {
 }
 
 impl VectorIndex for SqliteVecIndex {
+    fn dim(&self) -> usize {
+        SqliteVecIndex::dim(self)
+    }
+
     fn upsert(&self, id: &str, embedding: &[f32]) -> Result<(), String> {
         self.check_dim(embedding.len())?;
         let embedding_json =
