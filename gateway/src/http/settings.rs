@@ -418,6 +418,7 @@ mod tests {
             orchestrator: None,
             distillation: None,
             multimodal: None,
+            feature_flags: std::collections::HashMap::new(),
         }
     }
 
