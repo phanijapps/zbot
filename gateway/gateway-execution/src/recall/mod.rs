@@ -153,7 +153,7 @@ impl MemoryRecall {
         let query_embedding = self.embed_query(user_message).await;
 
         // 2. Run hybrid search (FTS5 + vector) using config weights
-        let hybrid_results = self.memory_repo.search_memory_facts_hybrid(
+        let (hybrid_results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             user_message,
             query_embedding.as_deref(),
             agent_id,
@@ -315,6 +315,7 @@ impl MemoryRecall {
                 self.config.bm25_weight,
                 ward_id,
             )
+            .map(|(facts, _sources)| facts)
             .unwrap_or_default()
             .into_iter()
             .map(|sf| adapters::fact_to_item(&sf.fact, sf.score))

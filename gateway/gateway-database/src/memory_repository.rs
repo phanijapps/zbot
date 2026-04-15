@@ -630,7 +630,7 @@ impl MemoryRepository {
     /// 2. Run vector search via `VectorIndex` against `memory_facts_index`
     /// 3. Combine scores: `vector_weight * cos_sim + bm25_weight * bm25_score`
     /// 4. Apply confidence, recency, and mention_count modifiers
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn search_memory_facts_hybrid(
         &self,
         query_text: &str,
@@ -640,7 +640,7 @@ impl MemoryRepository {
         vector_weight: f64,
         bm25_weight: f64,
         ward_id: Option<&str>,
-    ) -> Result<Vec<ScoredFact>, String> {
+    ) -> Result<(Vec<ScoredFact>, Vec<(String, &'static str)>), String> {
         // Step 1: FTS5 keyword results
         let fts_results = self
             .search_memory_facts_fts(query_text, agent_id, 30, ward_id)
@@ -653,30 +653,34 @@ impl MemoryRepository {
             Vec::new()
         };
 
-        // Step 3: Merge results by fact ID
-        let mut score_map: std::collections::HashMap<
-            String,
-            (Option<f64>, Option<f64>, MemoryFact),
-        > = std::collections::HashMap::new();
+        // Step 3: Merge results by fact ID; track which arm(s) matched.
+        // Source classification mirrors WikiRepository::search_hybrid:
+        //   "fts"    — keyword-only match
+        //   "vec"    — vector-only match
+        //   "hybrid" — present in both arms
+        type ScoreSlot = (Option<f64>, Option<f64>, MemoryFact, &'static str);
+        let mut score_map: std::collections::HashMap<String, ScoreSlot> =
+            std::collections::HashMap::new();
 
         for sf in fts_results {
-            score_map.insert(sf.fact.id.clone(), (None, Some(sf.score), sf.fact));
+            score_map.insert(sf.fact.id.clone(), (None, Some(sf.score), sf.fact, "fts"));
         }
 
         for sf in vec_results {
             score_map
                 .entry(sf.fact.id.clone())
-                .and_modify(|(vec_s, _, _)| {
+                .and_modify(|(vec_s, _, _, src)| {
                     *vec_s = Some(sf.score);
+                    *src = "hybrid";
                 })
-                .or_insert((Some(sf.score), None, sf.fact));
+                .or_insert((Some(sf.score), None, sf.fact, "vec"));
         }
 
         // Step 4: Compute final weighted score
         let now = chrono::Utc::now();
-        let mut results: Vec<ScoredFact> = score_map
+        let mut ranked: Vec<(ScoredFact, &'static str)> = score_map
             .into_values()
-            .map(|(vec_score, bm25_score, fact)| {
+            .map(|(vec_score, bm25_score, fact, src)| {
                 let vs = vec_score.unwrap_or(0.0);
                 let bs = bm25_score.unwrap_or(0.0);
 
@@ -696,22 +700,31 @@ impl MemoryRepository {
 
                 let final_score = base_score * conf * recency * mention_boost;
 
-                ScoredFact {
-                    fact,
-                    score: final_score,
-                }
+                (
+                    ScoredFact {
+                        fact,
+                        score: final_score,
+                    },
+                    src,
+                )
             })
             .collect();
 
         // Sort by score descending, take top-K
-        results.sort_by(|a, b| {
-            b.score
-                .partial_cmp(&a.score)
+        ranked.sort_by(|a, b| {
+            b.0.score
+                .partial_cmp(&a.0.score)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        results.truncate(limit);
+        ranked.truncate(limit);
 
-        Ok(results)
+        let sources: Vec<(String, &'static str)> = ranked
+            .iter()
+            .map(|(sf, src)| (sf.fact.id.clone(), *src))
+            .collect();
+        let results: Vec<ScoredFact> = ranked.into_iter().map(|(sf, _)| sf).collect();
+
+        Ok((results, sources))
     }
 
     /// Search memory facts by vector similarity via `memory_facts_index` (vec0).
@@ -1309,13 +1322,15 @@ mod tests {
 
         // Query close to fact1.
         let query = normalized_384(0.9, 0.1, 0.0);
-        let results = repo
+        let (results, sources) = repo
             .search_memory_facts_hybrid("hello", Some(&query), "agent-1", 10, 0.7, 0.3, None)
             .expect("hybrid");
 
         assert!(!results.is_empty(), "Should find at least one result");
         // fact1 should outrank fact2 because the query is closer to it.
         assert_eq!(results[0].fact.id, fact1.id);
+        assert_eq!(sources.len(), results.len());
+        assert!(sources.iter().any(|(id, _)| id == &fact1.id));
 
         // Round-trip check: stored embedding is retrievable.
         let stored = repo

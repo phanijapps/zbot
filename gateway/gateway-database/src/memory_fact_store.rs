@@ -166,7 +166,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // Generate embedding for the query
         let query_embedding = self.embed_text(query).await;
 
-        let results = self.memory_repo.search_memory_facts_hybrid(
+        let (results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
             agent_id,
@@ -208,7 +208,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         let query_embedding = self.embed_text(query).await;
 
         // Fetch more results than needed so we can re-rank
-        let mut results = self.memory_repo.search_memory_facts_hybrid(
+        let (mut results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
             agent_id,
