@@ -1,6 +1,22 @@
+import type { CSSProperties } from "react";
+
 interface Ward {
   id: string;
   count: number;
+}
+
+/**
+ * Hash a ward id to a stable hue in [0, 360). Deterministic per string so the
+ * same ward always gets the same color across sessions. Uses `codePointAt` to
+ * respect the security-patterns rule (prefer codePointAt over charCodeAt).
+ */
+function wardHue(id: string): number {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    const cp = id.codePointAt(i) ?? 0;
+    h = (h * 31 + cp) % 360;
+  }
+  return h;
 }
 
 interface Props {
@@ -22,6 +38,9 @@ function WardButton({ ward, activeId, onSelect, isGlobal }: WardButtonProps) {
   const dotClass = isGlobal
     ? "memory-ward__dot memory-ward__dot--global"
     : "memory-ward__dot";
+  const dotStyle: CSSProperties | undefined = isGlobal
+    ? undefined
+    : ({ "--ward-hue": `${wardHue(ward.id)}` } as CSSProperties);
   return (
     <button
       type="button"
@@ -29,7 +48,7 @@ function WardButton({ ward, activeId, onSelect, isGlobal }: WardButtonProps) {
       aria-current={isActive ? "true" : undefined}
       onClick={() => onSelect(ward.id)}
     >
-      <span className={dotClass} aria-hidden="true" />
+      <span className={dotClass} style={dotStyle} aria-hidden="true" />
       <span className="memory-ward__name">{ward.id}</span>
       <span className="memory-ward__badge">{ward.count}</span>
     </button>

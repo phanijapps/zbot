@@ -4974,7 +4974,9 @@
 }
 .memory-ward__dot {
   width: 0.5rem; height: 0.5rem; border-radius: 50%;
-  background: var(--color-primary);
+  /* --ward-hue set per-ward via inline style; falls back to primary. */
+  background: hsl(var(--ward-hue, 200) 65% 55%);
+  box-shadow: 0 0 6px hsl(var(--ward-hue, 200) 65% 55% / 0.45);
 }
 .memory-ward__dot--global { background: rgb(34, 211, 238); box-shadow: 0 0 8px rgba(34, 211, 238, 0.6); }
 .memory-ward__name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
