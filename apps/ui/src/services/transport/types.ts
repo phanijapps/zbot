@@ -484,6 +484,8 @@ export interface ExecutionSettings {
   distillation?: DistillationConfig;
   /** Default multimodal (vision) model for the multimodal_analyze tool */
   multimodal?: MultimodalConfig;
+  /** Opt-in feature flags (gate beta UI surfaces and experimental behavior) */
+  featureFlags?: Record<string, boolean>;
 }
 
 export interface ExecutionSettingsResponse {
