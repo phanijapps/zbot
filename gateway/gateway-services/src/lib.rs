@@ -31,7 +31,7 @@ pub use agent_registry::AgentRegistry;
 pub use agents::AgentService;
 pub use embedding_service::{
     curated_lookup, CuratedModel, EmbeddingBackend, EmbeddingConfig, EmbeddingService, Health,
-    OllamaConfig, CURATED_MODELS,
+    LiveEmbeddingClient, OllamaConfig, CURATED_MODELS,
 };
 pub use lang_config::{load_all_lang_configs, load_lang_config, LangConfig};
 pub use logging::LogSettings;

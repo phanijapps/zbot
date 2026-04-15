@@ -118,8 +118,8 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
         self.dimensions
     }
 
-    fn model_name(&self) -> &str {
-        &self.model
+    fn model_name(&self) -> String {
+        self.model.clone()
     }
 }
 

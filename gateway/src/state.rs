@@ -205,21 +205,17 @@ impl AppState {
 
         // Initialize memory evolution services — repositories that need vector
         // similarity get a SqliteVecIndex over their vec0 partner table.
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "memory_facts_index",
-            "fact_id",
-            384,
-        ));
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
         let goal_repo = Arc::new(gateway_database::GoalRepository::new(knowledge_db.clone()));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
-        let episode_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "session_episodes_index",
-            "episode_id",
-            384,
-        ));
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("vec index init"),
+        );
         let episode_repo = Arc::new(EpisodeRepository::new(knowledge_db.clone(), episode_vec));
         let kg_episode_repo = Arc::new(KgEpisodeRepository::new(knowledge_db.clone()));
 
@@ -259,7 +255,13 @@ impl AppState {
         if let Err(e) = embedding_service.ensure_indexed_blocking() {
             tracing::warn!("EmbeddingService ensure_indexed_blocking failed: {e}");
         }
-        let embedding_client: Option<Arc<dyn EmbeddingClient>> = Some(embedding_service.client());
+        // Hand downstream (distillation, recall, memory_fact_store, etc.) a
+        // LiveEmbeddingClient wrapper so they follow ArcSwap backend changes
+        // instead of caching the boot-time client (which would still be the
+        // Noop / Unconfigured client after the user later picks Ollama).
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = Some(Arc::new(
+            gateway_services::LiveEmbeddingClient::new(embedding_service.clone()),
+        ));
         tracing::info!(
             "Embedding client ready (lazy, {}d)",
             embedding_service.dimensions()
@@ -297,12 +299,10 @@ impl AppState {
         memory_recall_inner.set_recall_log(recall_log);
 
         // Wire ward wiki repository for wiki-first recall
-        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "wiki_articles_index",
-            "article_id",
-            384,
-        ));
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+                .expect("vec index init"),
+        );
         let wiki_repo = Arc::new(WardWikiRepository::new(
             knowledge_db.clone(),
             wiki_vec.clone(),
@@ -310,12 +310,10 @@ impl AppState {
         memory_recall_inner.set_wiki_repo(wiki_repo);
 
         // Wire procedure repository for procedure recall during intent analysis
-        let procedure_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "procedures_index",
-            "procedure_id",
-            384,
-        ));
+        let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("vec index init"),
+        );
         let procedure_repo = Arc::new(ProcedureRepository::new(
             knowledge_db.clone(),
             procedure_vec,
@@ -596,12 +594,10 @@ impl AppState {
         let knowledge_db = Arc::new(
             KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
         );
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "memory_facts_index",
-            "fact_id",
-            384,
-        ));
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create connector registry
@@ -681,12 +677,10 @@ impl AppState {
         let knowledge_db = Arc::new(
             KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
         );
-        let memory_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "memory_facts_index",
-            "fact_id",
-            384,
-        ));
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
         let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create bridge registry and outbox

@@ -207,8 +207,8 @@ impl EmbeddingClient for LocalEmbeddingClient {
         self.dimensions
     }
 
-    fn model_name(&self) -> &str {
-        &self.model_name
+    fn model_name(&self) -> String {
+        self.model_name.clone()
     }
 }
 

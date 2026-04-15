@@ -22,8 +22,11 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use agent_runtime::llm::{EmbeddingClient, LocalEmbeddingClient, OpenAiEmbeddingClient};
+use agent_runtime::llm::{
+    EmbeddingClient, EmbeddingError, LocalEmbeddingClient, OpenAiEmbeddingClient,
+};
 use arc_swap::ArcSwap;
+use async_trait::async_trait;
 use chrono::Utc;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
@@ -36,19 +39,28 @@ use crate::paths::SharedVaultPaths;
 // ============================================================================
 
 /// Backend selector.
+///
+/// `Unconfigured` is the boot-time default when `settings.json` has no
+/// `embeddings` section. In this state `build_client` returns a no-op
+/// client so the heavy internal BGE ONNX (~130MB) is never lazy-loaded
+/// just because a user hasn't yet chosen a backend. The first
+/// `reconfigure` from the UI flips the state to Internal or Ollama.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum EmbeddingBackend {
     #[default]
+    Unconfigured,
     Internal,
     Ollama,
 }
 
 impl EmbeddingBackend {
-    /// Stable wire-name for HTTP/UI surfaces. Always one of `"internal"` or
-    /// `"ollama"`. Distinct from the model identifier.
+    /// Stable wire-name for HTTP/UI surfaces. Always one of
+    /// `"unconfigured"`, `"internal"`, or `"ollama"`. Distinct from the
+    /// model identifier.
     pub fn as_str(&self) -> &'static str {
         match self {
+            EmbeddingBackend::Unconfigured => "unconfigured",
             EmbeddingBackend::Internal => "internal",
             EmbeddingBackend::Ollama => "ollama",
         }
@@ -86,8 +98,8 @@ fn default_dim() -> usize {
 impl Default for EmbeddingConfig {
     fn default() -> Self {
         Self {
-            backend: EmbeddingBackend::Internal,
-            dimensions: 384,
+            backend: EmbeddingBackend::Unconfigured,
+            dimensions: 0,
             ollama: None,
         }
     }
@@ -220,6 +232,7 @@ impl Marker {
 
     fn render(&self) -> String {
         let backend_str = match self.backend {
+            EmbeddingBackend::Unconfigured => "unconfigured",
             EmbeddingBackend::Internal => "internal",
             EmbeddingBackend::Ollama => "ollama",
         };
@@ -279,6 +292,14 @@ fn read_config_from_settings_json(paths: &SharedVaultPaths) -> EmbeddingConfig {
 /// here — this is a pure construction step).
 fn build_client(cfg: &EmbeddingConfig) -> Result<Arc<dyn EmbeddingClient>, String> {
     match cfg.backend {
+        EmbeddingBackend::Unconfigured => {
+            // No backend chosen yet — return a no-op client so the heavy
+            // internal BGE ONNX is NOT lazy-loaded on first recall just
+            // because the user hasn't picked a backend yet. Embedding
+            // attempts error with a clear message; recall paths treat
+            // `None` embeddings as "skip vector search".
+            Ok(Arc::new(NoopEmbeddingClient))
+        }
         EmbeddingBackend::Internal => {
             // Default internal model is BGE-small (384d, ~130MB) via
             // `LocalEmbeddingClient::default()`.
@@ -576,6 +597,10 @@ impl EmbeddingService {
                 ticker.tick().await;
                 let cfg = self.config_snapshot();
                 match cfg.backend {
+                    EmbeddingBackend::Unconfigured => {
+                        // No backend selected — nothing to probe.
+                        continue;
+                    }
                     EmbeddingBackend::Internal => {
                         // Nothing to probe; ensure health reflects readiness
                         // (don't stomp on Reindexing/Pulling transitions).
@@ -673,12 +698,77 @@ impl EmbeddingService {
 
 fn config_model(cfg: &EmbeddingConfig) -> String {
     match cfg.backend {
+        EmbeddingBackend::Unconfigured => "unconfigured".to_string(),
         EmbeddingBackend::Internal => "bge-small-en-v1.5".to_string(),
         EmbeddingBackend::Ollama => cfg
             .ollama
             .as_ref()
             .map(|o| o.model.clone())
             .unwrap_or_default(),
+    }
+}
+
+// ============================================================================
+// NoopEmbeddingClient
+// Returned by `build_client` when no backend has been configured yet.
+// Keeps the heavy internal BGE ONNX out of memory until the user picks a
+// backend via Settings → Advanced → Embeddings.
+// ============================================================================
+
+struct NoopEmbeddingClient;
+
+#[async_trait]
+impl EmbeddingClient for NoopEmbeddingClient {
+    async fn embed(&self, _texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        Err(EmbeddingError::ConfigError(
+            "embedding backend not configured — choose internal or ollama in Settings → Advanced → Embeddings".to_string(),
+        ))
+    }
+
+    fn dimensions(&self) -> usize {
+        0
+    }
+
+    fn model_name(&self) -> String {
+        "unconfigured".to_string()
+    }
+}
+
+// ============================================================================
+// LiveEmbeddingClient
+// A thin wrapper that re-reads the current `EmbeddingService` client on every
+// call, so downstream consumers can hold an `Arc<dyn EmbeddingClient>` that
+// transparently follows backend swaps (ArcSwap) performed by the UI's
+// "Save & Switch" flow.
+//
+// Without this, distillation/recall/etc. cache the initial (Unconfigured /
+// Internal / Ollama) client at boot and never see later reconfigures —
+// producing confusing "embedding backend not configured" errors even after
+// the user has configured Ollama in Settings.
+// ============================================================================
+
+pub struct LiveEmbeddingClient {
+    service: Arc<EmbeddingService>,
+}
+
+impl LiveEmbeddingClient {
+    pub fn new(service: Arc<EmbeddingService>) -> Self {
+        Self { service }
+    }
+}
+
+#[async_trait]
+impl EmbeddingClient for LiveEmbeddingClient {
+    async fn embed(&self, texts: &[&str]) -> Result<Vec<Vec<f32>>, EmbeddingError> {
+        self.service.client().embed(texts).await
+    }
+
+    fn dimensions(&self) -> usize {
+        self.service.client().dimensions()
+    }
+
+    fn model_name(&self) -> String {
+        self.service.client().model_name()
     }
 }
 
@@ -703,11 +793,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn from_config_with_no_settings_returns_internal_default() {
+    async fn from_config_with_no_settings_returns_unconfigured_noop() {
         let (_tmp, paths) = test_paths();
         let svc = EmbeddingService::from_config(paths).unwrap();
-        assert_eq!(svc.dimensions(), 384);
-        assert_eq!(svc.client().dimensions(), 384);
+        // No backend chosen yet → dim 0, noop client, no BGE ONNX loaded.
+        assert_eq!(svc.dimensions(), 0);
+        assert_eq!(svc.client().model_name(), "unconfigured");
+        // Embedding attempt fails with a clear message instead of silently
+        // loading the internal model.
+        let err = svc.client().embed(&["hi"]).await.unwrap_err();
+        assert!(
+            format!("{err:?}").contains("not configured"),
+            "expected 'not configured' in {err:?}"
+        );
     }
 
     #[tokio::test]
@@ -885,7 +983,14 @@ mod tests {
     #[tokio::test]
     async fn mark_indexed_writes_marker_and_clears_flag() {
         let (_tmp, paths) = test_paths();
-        let svc = EmbeddingService::from_config(paths.clone()).unwrap();
+        // Use an explicit Internal config — `from_config` with no settings
+        // now returns Unconfigured, which wouldn't produce a usable marker.
+        let cfg = EmbeddingConfig {
+            backend: EmbeddingBackend::Internal,
+            dimensions: 384,
+            ollama: None,
+        };
+        let svc = EmbeddingService::with_config(paths.clone(), cfg).unwrap();
         // Force needs_reindex first.
         svc.state.write().needs_reindex = true;
         svc.mark_indexed(384).unwrap();
