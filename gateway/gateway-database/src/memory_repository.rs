@@ -426,11 +426,24 @@ impl MemoryRepository {
     /// Returns one row per non-empty `ward_id`, sorted by `ward_id` ascending.
     /// Used by the command-deck ward navigator (`GET /api/wards`).
     pub fn list_wards(&self) -> Result<Vec<(String, usize)>, String> {
+        // Union ward_ids across all content tables so the command-deck rail
+        // shows wards that hold any content, not just memory_facts. The count
+        // is summed across facts + wiki + procedures + episodes.
         self.db.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT ward_id, COUNT(*) as c
-                 FROM memory_facts
-                 WHERE ward_id IS NOT NULL AND ward_id != ''
+                "SELECT ward_id, SUM(c) AS total FROM (
+                    SELECT ward_id, COUNT(*) AS c FROM memory_facts
+                      WHERE ward_id IS NOT NULL AND ward_id != '' GROUP BY ward_id
+                    UNION ALL
+                    SELECT ward_id, COUNT(*) AS c FROM ward_wiki_articles
+                      WHERE ward_id IS NOT NULL AND ward_id != '' GROUP BY ward_id
+                    UNION ALL
+                    SELECT ward_id, COUNT(*) AS c FROM procedures
+                      WHERE ward_id IS NOT NULL AND ward_id != '' GROUP BY ward_id
+                    UNION ALL
+                    SELECT ward_id, COUNT(*) AS c FROM session_episodes
+                      WHERE ward_id IS NOT NULL AND ward_id != '' GROUP BY ward_id
+                 )
                  GROUP BY ward_id
                  ORDER BY ward_id ASC",
             )?;
