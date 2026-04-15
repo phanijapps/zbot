@@ -299,6 +299,9 @@ pub struct UpdateExecutionSettingsRequest {
     /// Default multimodal (vision) model configuration
     #[serde(default)]
     pub multimodal: Option<gateway_services::MultimodalConfig>,
+    /// Experimental UI feature flags (free-form bag).
+    #[serde(default)]
+    pub feature_flags: std::collections::HashMap<String, bool>,
 }
 
 fn default_max_parallel() -> u32 {
@@ -336,6 +339,7 @@ impl UpdateExecutionSettingsRequest {
             orchestrator: self.orchestrator.unwrap_or_default(),
             distillation: self.distillation.unwrap_or_default(),
             multimodal: self.multimodal.unwrap_or_default(),
+            feature_flags: self.feature_flags,
 
             // Runtime state (preserved from existing settings)
             chat: existing.chat.clone(),
