@@ -61,6 +61,9 @@ import type {
   MemoryFact,
   MemoryFilter,
   MemoryListResponse,
+  WardContent,
+  HybridSearchRequest,
+  HybridSearchResponse,
   // Graph types
   GraphStatsResponse,
   GraphEntityListResponse,
@@ -417,6 +420,12 @@ export interface Transport {
 
   /** Search ALL memory facts across all agents (server-side FTS5) */
   searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>>;
+
+  /** Get full content (facts, wiki, procedures, episodes) for a single ward */
+  getWardContent(wardId: string): Promise<TransportResult<WardContent>>;
+
+  /** Unified hybrid search across memory types (POST /api/memory/search) */
+  searchMemoryHybrid(req: HybridSearchRequest): Promise<TransportResult<HybridSearchResponse>>;
 
   /** Get a single memory fact */
   getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>>;

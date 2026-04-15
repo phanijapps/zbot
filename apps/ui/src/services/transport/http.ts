@@ -71,6 +71,9 @@ import type {
   MemoryFact,
   MemoryFilter,
   MemoryListResponse,
+  WardContent,
+  HybridSearchRequest,
+  HybridSearchResponse,
   // Graph types
   GraphStatsResponse,
   GraphEntityListResponse,
@@ -1417,6 +1420,18 @@ export class HttpTransport implements Transport {
     if (limit) params.set("limit", String(limit));
     if (category) params.set("category", category);
     return this.get(`/api/memory/search?${params.toString()}`);
+  }
+
+  async getWardContent(wardId: string): Promise<TransportResult<WardContent>> {
+    return this.get<WardContent>(
+      `/api/wards/${encodeURIComponent(wardId)}/content`
+    );
+  }
+
+  async searchMemoryHybrid(
+    req: HybridSearchRequest
+  ): Promise<TransportResult<HybridSearchResponse>> {
+    return this.post<HybridSearchResponse>("/api/memory/search", req);
   }
 
   async createMemory(agentId: string, fact: {
