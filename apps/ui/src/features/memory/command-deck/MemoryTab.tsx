@@ -4,6 +4,7 @@ import { ScopeChips, type ContentType } from "./ScopeChips";
 import { WardRail } from "./WardRail";
 import { ContentDeck } from "./ContentDeck";
 import { WriteRail } from "./WriteRail";
+import { SearchResults } from "./SearchResults";
 import { useWards, useWardContent, useHybridSearch, useTimewarp } from "./hooks";
 import { getTransport } from "@/services/transport";
 import type { MemoryCategory } from "@/services/transport/types";
@@ -46,14 +47,12 @@ export function MemoryTab({ agentId }: Props) {
   const [types, setTypes] = useState<ContentType[]>(["facts", "wiki"]);
   const { days, setDays } = useTimewarp();
 
-  // Instantiated but not rendered yet — results UI is a v2 concern.
-  // Keeping the hook active wires it for observability and primes cache.
-  const _search = useHybridSearch(query, {
+  const search = useHybridSearch(query, {
     mode,
     types,
     ward_ids: activeId ? [activeId] : [],
   });
-  void _search;
+  const searching = query.trim().length > 0;
 
   async function saveFact(v: SaveInput) {
     const transport = await getTransport();
@@ -86,7 +85,23 @@ export function MemoryTab({ agentId }: Props) {
           activeId={activeId}
           onSelect={setActiveId}
         />
-        <ContentDeck data={data} timewarpDays={days} />
+        {searching ? (
+          <div className="memory-deck">
+            <header className="memory-deck__head">
+              <div className="memory-deck__crumb">
+                ⌕ Search results {activeId ? `in ${activeId}` : "across all wards"}
+              </div>
+              <div className="memory-deck__summary">
+                Query: <strong>{query}</strong> · mode: {mode}
+              </div>
+            </header>
+            <div className="memory-deck__body">
+              <SearchResults data={search.data} loading={search.loading} />
+            </div>
+          </div>
+        ) : (
+          <ContentDeck data={data} timewarpDays={days} />
+        )}
         <WriteRail
           wardId={activeId}
           counts={

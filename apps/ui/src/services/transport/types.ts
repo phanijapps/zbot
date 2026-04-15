@@ -965,6 +965,8 @@ export interface MemoryFact {
   updated_at: string;
   /** Pinned facts can't be overwritten by distillation. User-authored facts are pinned. */
   pinned?: boolean;
+  /** Ward scope when set (e.g. "literature-library"); facts default to "__global__" when null on the server. */
+  ward_id?: string;
 }
 
 /** Filter options for listing memory facts */

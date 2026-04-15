@@ -5356,3 +5356,22 @@
   font-size: 0.75rem;
   margin-bottom: var(--spacing-1);
 }
+
+/* Search Results — Command Deck */
+.memory-search-results { display: flex; flex-direction: column; gap: var(--spacing-4); }
+.memory-search-results__group { display: flex; flex-direction: column; gap: var(--spacing-2); }
+.memory-search-results__label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-muted-foreground);
+  padding: var(--spacing-2) var(--spacing-2) var(--spacing-1);
+  border-bottom: 1px solid var(--color-border);
+  font-weight: 600;
+}
+.memory-search-results__rows { display: flex; flex-direction: column; gap: var(--spacing-2); }
+.memory-search-results__row strong { display: block; margin-bottom: var(--spacing-1); }
+.memory-search-results__row p { margin: 0; font-size: 0.8125rem; color: var(--color-muted-foreground); }
