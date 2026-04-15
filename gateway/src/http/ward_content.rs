@@ -309,3 +309,32 @@ pub async fn get_ward_content(
         counts,
     }))
 }
+
+/// Response item for `GET /api/wards` — one ward entry.
+#[derive(Debug, Serialize)]
+pub struct WardListItem {
+    pub id: String,
+    pub count: usize,
+}
+
+/// GET /api/wards — list distinct wards with fact counts.
+pub async fn list_wards(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<WardListItem>>, HandlerError> {
+    let memory_repo = state.memory_repo.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorBody {
+            error: "Memory service not available".to_string(),
+        }),
+    ))?;
+
+    let rows = memory_repo
+        .list_wards()
+        .map_err(|e| internal("list wards", e))?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|(id, count)| WardListItem { id, count })
+            .collect(),
+    ))
+}

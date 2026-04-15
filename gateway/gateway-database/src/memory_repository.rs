@@ -421,6 +421,28 @@ impl MemoryRepository {
         })
     }
 
+    /// List distinct wards with their fact counts.
+    ///
+    /// Returns one row per non-empty `ward_id`, sorted by `ward_id` ascending.
+    /// Used by the command-deck ward navigator (`GET /api/wards`).
+    pub fn list_wards(&self) -> Result<Vec<(String, usize)>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT ward_id, COUNT(*) as c
+                 FROM memory_facts
+                 WHERE ward_id IS NOT NULL AND ward_id != ''
+                 GROUP BY ward_id
+                 ORDER BY ward_id ASC",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let id: String = row.get(0)?;
+                let count: i64 = row.get(1)?;
+                Ok((id, count as usize))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Decay confidence of stale facts.
     ///
     /// Facts not updated in `older_than_days` have their confidence multiplied

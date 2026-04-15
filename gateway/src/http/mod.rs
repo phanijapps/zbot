@@ -206,6 +206,8 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
             "/api/memory/:agent_id/facts/:fact_id",
             delete(memory::delete_memory_fact),
         )
+        // Ward listing (Memory Tab Command Deck — Task 9)
+        .route("/api/wards", get(ward_content::list_wards))
         // Ward content aggregator (Memory Tab Command Deck — Task 5)
         .route(
             "/api/wards/:ward_id/content",
