@@ -892,25 +892,25 @@ export function WebSettingsPanel() {
                   </div>
 
                   <label
-                    className={`settings-toggle-option ${execSettings.featureFlags?.memory_tab_command_deck ? "settings-toggle-option--active" : ""}`}
-                    aria-label="Memory Tab — Command Deck (beta)"
+                    className={`settings-toggle-option ${(execSettings.featureFlags?.memory_tab_command_deck ?? true) ? "settings-toggle-option--active" : ""}`}
+                    aria-label="Memory Tab — Command Deck"
                   >
                     <input
                       type="checkbox"
-                      checked={execSettings.featureFlags?.memory_tab_command_deck ?? false}
+                      checked={execSettings.featureFlags?.memory_tab_command_deck ?? true}
                       onChange={() => handleExecChange({
                         featureFlags: {
                           ...execSettings.featureFlags,
-                          memory_tab_command_deck: !execSettings.featureFlags?.memory_tab_command_deck,
+                          memory_tab_command_deck: !(execSettings.featureFlags?.memory_tab_command_deck ?? true),
                         },
                       })}
                       disabled={isSavingExec}
                       className="settings-toggle-option__checkbox"
                     />
                     <div className="flex-1">
-                      <div className="settings-toggle-option__title">Memory Tab — Command Deck (beta)</div>
+                      <div className="settings-toggle-option__title">Memory Tab — Command Deck</div>
                       <div className="settings-toggle-option__description">
-                        New ward-first memory view with hybrid search.
+                        Default. Ward-first memory view with hybrid search. Disable to fall back to the legacy memory panel.
                       </div>
                     </div>
                   </label>

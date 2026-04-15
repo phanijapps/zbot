@@ -1,14 +1,16 @@
 // ============================================================================
 // useFeatureFlag hook
 // Reads feature flags from execution settings (featureFlags map).
-// Defaults to `false` when the flag is absent or settings can't be loaded.
+// Returns `defaultValue` when the flag is absent or settings can't be loaded.
+// Pass `defaultValue=true` for flags that have rolled out — the legacy fallback
+// only kicks in when the user has explicitly opted out.
 // ============================================================================
 
 import { useEffect, useState } from "react";
 import { getTransport } from "@/services/transport";
 
-export function useFeatureFlag(name: string): boolean {
-  const [on, setOn] = useState(false);
+export function useFeatureFlag(name: string, defaultValue = false): boolean {
+  const [on, setOn] = useState(defaultValue);
 
   useEffect(() => {
     let alive = true;
@@ -19,16 +21,17 @@ export function useFeatureFlag(name: string): boolean {
         if (!alive) return;
         if (result.success && result.data) {
           const flags = result.data.featureFlags;
-          setOn(Boolean(flags?.[name]));
+          const explicit = flags?.[name];
+          setOn(explicit === undefined ? defaultValue : explicit);
         }
       } catch {
-        // Leave flag as false on transport failure.
+        // Leave flag at defaultValue on transport failure.
       }
     })();
     return () => {
       alive = false;
     };
-  }, [name]);
+  }, [name, defaultValue]);
 
   return on;
 }
