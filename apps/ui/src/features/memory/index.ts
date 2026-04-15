@@ -4,5 +4,4 @@ export { MemoryTabLegacy } from "./MemoryTabLegacy";
 export { MemoryFactCard } from "./MemoryFactCard";
 export { WebMemoryPanel } from "./WebMemoryPanel";
 export { MemoryPage } from "./MemoryPage";
-export { GraphView } from "./GraphView";
 export { useFeatureFlag } from "./useFeatureFlag";

@@ -7,9 +7,6 @@ import { WriteRail } from "./WriteRail";
 import { useWards, useWardContent, useHybridSearch, useTimewarp } from "./hooks";
 import { getTransport } from "@/services/transport";
 import type { MemoryCategory } from "@/services/transport/types";
-import { Slideover } from "@/components/Slideover";
-import { GraphView } from "../GraphView";
-import { Network } from "lucide-react";
 
 interface Props {
   agentId: string;
@@ -44,7 +41,6 @@ export function MemoryTab({ agentId }: Props) {
 
   const { data, refresh } = useWardContent(activeId || null);
 
-  const [showGraph, setShowGraph] = useState(false);
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [types, setTypes] = useState<ContentType[]>(["facts", "wiki"]);
@@ -90,11 +86,7 @@ export function MemoryTab({ agentId }: Props) {
           activeId={activeId}
           onSelect={setActiveId}
         />
-        <ContentDeck
-          data={data}
-          onOpenGraph={() => setShowGraph(true)}
-          timewarpDays={days}
-        />
+        <ContentDeck data={data} timewarpDays={days} />
         <WriteRail
           wardId={activeId}
           counts={
@@ -105,16 +97,6 @@ export function MemoryTab({ agentId }: Props) {
           }}
         />
       </div>
-      <Slideover
-        open={showGraph}
-        onClose={() => setShowGraph(false)}
-        title="Knowledge Graph"
-        subtitle={activeId ? `Scoped to agent: ${agentId}` : "All entities"}
-        icon={<Network size={18} />}
-        className="memory-graph-slideover"
-      >
-        {showGraph && <GraphView agentId={agentId} />}
-      </Slideover>
     </div>
   );
 }

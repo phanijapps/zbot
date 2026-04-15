@@ -13,11 +13,10 @@ const TAB_LABELS: Record<Tab, string> = {
 
 interface Props {
   data: WardContent | null;
-  onOpenGraph: () => void;
   timewarpDays?: number;
 }
 
-export function ContentDeck({ data, onOpenGraph, timewarpDays }: Props) {
+export function ContentDeck({ data, timewarpDays }: Props) {
   const [tab, setTab] = useState<Tab>("facts");
   if (!data)
     return (
@@ -51,13 +50,15 @@ export function ContentDeck({ data, onOpenGraph, timewarpDays }: Props) {
               <span className="memory-deck__tab-count">{counts[t]}</span>
             </button>
           ))}
-          <button
-            type="button"
+          <a
             className="memory-deck__graph"
-            onClick={onOpenGraph}
+            href="/observatory"
+            target="_blank"
+            rel="noopener noreferrer"
+            title="Open full knowledge graph in Observatory"
           >
             Graph ↗
-          </button>
+          </a>
         </nav>
       </header>
       <div className="memory-deck__body">
