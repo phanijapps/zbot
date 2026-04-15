@@ -5231,3 +5231,30 @@
 }
 .add-drawer__textarea:focus { border-color: var(--color-primary); outline: none; }
 .add-drawer__actions { display: flex; justify-content: flex-end; gap: var(--spacing-2); }
+
+/* MemoryTab shell — Command Deck */
+.memory-tab-deck {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-3);
+  height: 100%;
+  padding: var(--spacing-4);
+  min-height: 0;
+}
+.memory-tab-deck__top {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-2);
+}
+.memory-tab-deck__grid {
+  display: grid;
+  grid-template-columns: 220px 1fr 230px;
+  gap: var(--spacing-3);
+  flex: 1;
+  min-height: 0;
+}
+@media (max-width: 900px) {
+  .memory-tab-deck__grid {
+    grid-template-columns: 1fr;
+  }
+}
