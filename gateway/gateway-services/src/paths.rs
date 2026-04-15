@@ -70,6 +70,13 @@ impl VaultPaths {
         self.vault_dir.join("config").join("distillation_prompt.md")
     }
 
+    /// Path to `config/intent_analysis_prompt.md`
+    pub fn intent_analysis_prompt(&self) -> PathBuf {
+        self.vault_dir
+            .join("config")
+            .join("intent_analysis_prompt.md")
+    }
+
     /// Path to the config directory
     pub fn config_dir(&self) -> PathBuf {
         self.vault_dir.join("config")
@@ -84,9 +91,9 @@ impl VaultPaths {
         self.vault_dir.join("data").join("conversations.db")
     }
 
-    /// Path to `data/knowledge_graph.db`
-    pub fn knowledge_graph_db(&self) -> PathBuf {
-        self.vault_dir.join("data").join("knowledge_graph.db")
+    /// Path to `data/knowledge.db` — long-term memory + graph + vec0 indexes.
+    pub fn knowledge_db(&self) -> PathBuf {
+        self.vault_dir.join("data").join("knowledge.db")
     }
 
     /// Path to the data directory

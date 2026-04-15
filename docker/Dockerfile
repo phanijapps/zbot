@@ -99,7 +99,7 @@ RUN useradd -m -u 1000 -s /bin/bash zbot \
     && mkdir -p /data/zbot /home/zbot/.cache/fastembed \
     && chown -R zbot:zbot /data/zbot /opt/zbot /home/zbot
 
-USER zbot
+USER videogamer
 WORKDIR /home/zbot
 
 # Healthcheck

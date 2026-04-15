@@ -6,7 +6,10 @@ mod agent;
 mod connectors;
 mod execution;
 mod file;
+mod goal;
+mod graph_query;
 pub(crate) mod guards;
+mod ingest;
 mod introspection;
 mod memory;
 mod multimodal;
@@ -35,6 +38,15 @@ pub use execution::UpdatePlanTool;
 pub use execution::WriteFileTool;
 pub use execution::skills::LoadSkillTool;
 pub use file::{EditTool, ReadTool, WriteTool};
+// graph_query types are public API for downstream crates (e.g., pi-mono wiring)
+#[allow(unused_imports)]
+pub use graph_query::{EntityInfo, GraphQueryTool, GraphStorageAccess, NeighborInfo};
+// goal types are public API for downstream crates (gateway wiring)
+#[allow(unused_imports)]
+pub use goal::{GoalAccess, GoalSummary, GoalTool};
+// ingest types are public API for downstream crates (gateway wiring)
+#[allow(unused_imports)]
+pub use ingest::{IngestTool, IngestionAccess};
 pub use introspection::{ListMcpsTool, ListSkillsTool, ListToolsTool};
 pub use memory::{MemoryEntry, MemoryStore, MemoryTool};
 pub use multimodal::MultimodalAnalyzeTool;

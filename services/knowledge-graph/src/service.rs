@@ -8,6 +8,36 @@ use crate::types::{Direction, Entity, EntityWithConnections, GraphStats, Relatio
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+/// Query view selecting how results are ranked.
+///
+/// Inspired by MAGMA-style multi-view queries: different question types
+/// are best served by different ranking strategies.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GraphView {
+    /// Order by mention_count DESC (default).
+    #[default]
+    Semantic,
+    /// Order by last_seen_at DESC (most recent first).
+    Temporal,
+    /// Order by relationship count (most-connected first).
+    Entity,
+    /// Reciprocal-rank-fusion merge of the other three views.
+    Hybrid,
+}
+
+impl GraphView {
+    /// Parse a view name string. Unknown values default to [`GraphView::Semantic`].
+    #[allow(clippy::should_implement_trait)] // infallible parser; std::str::FromStr requires an error type.
+    pub fn from_str(s: &str) -> Self {
+        match s.to_lowercase().as_str() {
+            "temporal" => Self::Temporal,
+            "entity" => Self::Entity,
+            "hybrid" => Self::Hybrid,
+            _ => Self::Semantic,
+        }
+    }
+}
+
 /// Graph service providing high-level operations
 pub struct GraphService {
     storage: Arc<GraphStorage>,
@@ -19,14 +49,19 @@ impl GraphService {
         Self { storage }
     }
 
+    /// Get a reference to the underlying graph storage.
+    pub fn storage(&self) -> &Arc<GraphStorage> {
+        &self.storage
+    }
+
     /// Get graph statistics for an agent
     pub async fn get_stats(&self, agent_id: &str) -> GraphResult<GraphStats> {
         // Get basic counts
-        let entity_count = self.storage.count_entities(agent_id).await?;
-        let relationship_count = self.storage.count_relationships(agent_id).await?;
+        let entity_count = self.storage.count_entities(agent_id)?;
+        let relationship_count = self.storage.count_relationships(agent_id)?;
 
         // Get all entities to count by type
-        let entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
+        let entities = self.storage.list_entities(agent_id, None, 10000, 0)?;
         let mut entity_types: HashMap<String, usize> = HashMap::new();
         for entity in &entities {
             *entity_types
@@ -35,10 +70,7 @@ impl GraphService {
         }
 
         // Get all relationships to count by type and find most connected entities
-        let relationships = self
-            .storage
-            .list_relationships(agent_id, None, 10000, 0)
-            .await?;
+        let relationships = self.storage.list_relationships(agent_id, None, 10000, 0)?;
         let mut relationship_types: HashMap<String, usize> = HashMap::new();
         let mut entity_connections: HashMap<String, usize> = HashMap::new();
 
@@ -87,11 +119,7 @@ impl GraphService {
         entity_name: &str,
     ) -> GraphResult<Option<EntityWithConnections>> {
         // Find the entity by name
-        let entity = match self
-            .storage
-            .get_entity_by_name(agent_id, entity_name)
-            .await?
-        {
+        let entity = match self.storage.get_entity_by_name(agent_id, entity_name)? {
             Some(e) => e,
             None => return Ok(None),
         };
@@ -99,8 +127,7 @@ impl GraphService {
         // Get all neighbors
         let neighbors = self
             .storage
-            .get_neighbors(agent_id, &entity.id, Direction::Both, 1000)
-            .await?;
+            .get_neighbors(agent_id, &entity.id, Direction::Both, 1000)?;
 
         // Separate into incoming and outgoing
         let mut outgoing: Vec<(crate::types::Relationship, Entity)> = Vec::new();
@@ -128,9 +155,78 @@ impl GraphService {
         query: &str,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        let mut entities = self.storage.search_entities(agent_id, query).await?;
+        let mut entities = self.storage.search_entities(agent_id, query)?;
         entities.truncate(limit);
         Ok(entities)
+    }
+
+    /// Search entities through a specific [`GraphView`] lens.
+    pub async fn search_entities_view(
+        &self,
+        agent_id: &str,
+        query: &str,
+        view: GraphView,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        match view {
+            GraphView::Semantic => self.search_entities(agent_id, query, limit).await,
+            GraphView::Temporal => self.search_entities_temporal(agent_id, query, limit).await,
+            GraphView::Entity => {
+                self.search_entities_by_connections(agent_id, query, limit)
+                    .await
+            }
+            GraphView::Hybrid => self.search_entities_hybrid(agent_id, query, limit).await,
+        }
+    }
+
+    async fn search_entities_temporal(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        self.storage
+            .search_entities_order_by(agent_id, query, "last_seen_at DESC", limit)
+    }
+
+    async fn search_entities_by_connections(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        let candidates = self.storage.search_entities(agent_id, query)?;
+        let mut scored: Vec<(Entity, i64)> = Vec::with_capacity(candidates.len());
+        for e in candidates {
+            let count = self.storage.count_relationships_for(&e.id)?;
+            scored.push((e, count));
+        }
+        scored.sort_by(|a, b| b.1.cmp(&a.1));
+        Ok(scored.into_iter().take(limit).map(|(e, _)| e).collect())
+    }
+
+    async fn search_entities_hybrid(
+        &self,
+        agent_id: &str,
+        query: &str,
+        limit: usize,
+    ) -> GraphResult<Vec<Entity>> {
+        let wide = limit.saturating_mul(2).max(10);
+        let semantic = self
+            .search_entities(agent_id, query, wide)
+            .await
+            .unwrap_or_default();
+        let temporal = self
+            .search_entities_temporal(agent_id, query, wide)
+            .await
+            .unwrap_or_default();
+        let by_conn = self
+            .search_entities_by_connections(agent_id, query, wide)
+            .await
+            .unwrap_or_default();
+
+        let merged = merge_by_reciprocal_rank(&[semantic, temporal, by_conn]);
+        Ok(merged.into_iter().take(limit).collect())
     }
 
     /// Get subgraph (entities within N hops of a center entity)
@@ -157,10 +253,9 @@ impl GraphService {
             let mut next_hop: Vec<String> = Vec::new();
 
             for entity_id in &current_hop {
-                let neighbors = self
-                    .storage
-                    .get_neighbors(agent_id, entity_id, Direction::Both, 1000)
-                    .await?;
+                let neighbors =
+                    self.storage
+                        .get_neighbors(agent_id, entity_id, Direction::Both, 1000)?;
                 collect_neighbors(
                     neighbors,
                     &mut visited_entities,
@@ -175,7 +270,7 @@ impl GraphService {
         }
 
         // Get the center entity itself
-        let center_entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
+        let center_entities = self.storage.list_entities(agent_id, None, 10000, 0)?;
         if let Some(center) = center_entities
             .into_iter()
             .find(|e| e.id == center_entity_id)
@@ -198,7 +293,7 @@ impl GraphService {
         agent_id: &str,
         entity_id: &str,
     ) -> GraphResult<Option<Entity>> {
-        let entities = self.storage.list_entities(agent_id, None, 10000, 0).await?;
+        let entities = self.storage.list_entities(agent_id, None, 10000, 0)?;
         Ok(entities.into_iter().find(|e| e.id == entity_id))
     }
 
@@ -212,7 +307,6 @@ impl GraphService {
     ) -> GraphResult<Vec<Entity>> {
         self.storage
             .list_entities(agent_id, entity_type, limit, offset)
-            .await
     }
 
     /// List relationships for an agent with optional filters
@@ -225,7 +319,6 @@ impl GraphService {
     ) -> GraphResult<Vec<crate::types::Relationship>> {
         self.storage
             .list_relationships(agent_id, relationship_type, limit, offset)
-            .await
     }
 
     /// Get neighbors of an entity (1-hop)
@@ -238,17 +331,16 @@ impl GraphService {
     ) -> GraphResult<Vec<crate::types::NeighborInfo>> {
         self.storage
             .get_neighbors(agent_id, entity_id, direction, limit)
-            .await
     }
 
     /// Count all entities across all agents.
     pub async fn count_all_entities(&self) -> GraphResult<usize> {
-        self.storage.count_all_entities().await
+        self.storage.count_all_entities()
     }
 
     /// Count all relationships across all agents.
     pub async fn count_all_relationships(&self) -> GraphResult<usize> {
-        self.storage.count_all_relationships().await
+        self.storage.count_all_relationships()
     }
 
     /// List entities across all agents with optional filters.
@@ -258,15 +350,35 @@ impl GraphService {
         entity_type: Option<&str>,
         limit: usize,
     ) -> GraphResult<Vec<Entity>> {
-        self.storage
-            .list_all_entities(ward_id, entity_type, limit)
-            .await
+        self.storage.list_all_entities(ward_id, entity_type, limit)
     }
 
     /// List all relationships across all agents.
     pub async fn list_all_relationships(&self, limit: usize) -> GraphResult<Vec<Relationship>> {
-        self.storage.list_all_relationships(limit).await
+        self.storage.list_all_relationships(limit)
     }
+}
+
+/// Combine multiple ranked entity lists into one ordering via reciprocal rank fusion.
+///
+/// RRF scores each item as `sum(1 / (k + rank + 1))` across all input lists
+/// (k = 60 is a standard constant). Entities appearing in multiple lists
+/// accumulate score; ties are resolved by original input order.
+fn merge_by_reciprocal_rank(ranked_lists: &[Vec<Entity>]) -> Vec<Entity> {
+    let mut scores: HashMap<String, (f64, Entity)> = HashMap::new();
+    let k = 60.0_f64;
+    for list in ranked_lists {
+        for (rank, entity) in list.iter().enumerate() {
+            let score = 1.0 / (k + rank as f64 + 1.0);
+            scores
+                .entry(entity.id.clone())
+                .and_modify(|(s, _)| *s += score)
+                .or_insert_with(|| (score, entity.clone()));
+        }
+    }
+    let mut out: Vec<(f64, Entity)> = scores.into_values().collect();
+    out.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    out.into_iter().map(|(_, e)| e).collect()
 }
 
 /// Process a list of neighbors into the BFS accumulators.
@@ -304,8 +416,11 @@ mod tests {
 
     async fn create_test_service() -> GraphService {
         let dir = tempdir().unwrap();
-        let db_path = dir.keep().join("test.db");
-        let storage = Arc::new(GraphStorage::new(db_path).unwrap());
+        let tmp_path = dir.keep();
+        let paths = Arc::new(gateway_services::VaultPaths::new(tmp_path));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        let storage = Arc::new(GraphStorage::new(db).unwrap());
         GraphService::new(storage)
     }
 
@@ -344,7 +459,6 @@ mod tests {
         service
             .storage
             .store_knowledge("agent1", knowledge)
-            .await
             .unwrap();
 
         (alice, rust, project)
@@ -456,6 +570,116 @@ mod tests {
             .unwrap();
         assert_eq!(entities.len(), 1);
         assert_eq!(entities[0].name, "Rust");
+    }
+
+    fn mk_entity(name: &str) -> Entity {
+        Entity::new("agent1".to_string(), EntityType::Concept, name.to_string())
+    }
+
+    #[test]
+    fn reciprocal_rank_merges_duplicates() {
+        let x = mk_entity("x");
+        let y = mk_entity("y");
+        // Reuse same ids across lists.
+        let a = vec![x.clone(), y.clone()];
+        let b = vec![y.clone(), x.clone()];
+        let merged = merge_by_reciprocal_rank(&[a, b]);
+        assert_eq!(merged.len(), 2);
+        let names: std::collections::HashSet<_> = merged.iter().map(|e| e.name.clone()).collect();
+        assert!(names.contains("x"));
+        assert!(names.contains("y"));
+    }
+
+    #[test]
+    fn reciprocal_rank_preserves_order() {
+        let a = mk_entity("a");
+        let b = mk_entity("b");
+        let c = mk_entity("c");
+        let list1 = vec![a.clone(), b.clone(), c.clone()];
+        let list2 = vec![a.clone(), b.clone(), c.clone()];
+        let merged = merge_by_reciprocal_rank(&[list1, list2]);
+        assert_eq!(merged[0].name, "a");
+        assert_eq!(merged[1].name, "b");
+        assert_eq!(merged[2].name, "c");
+    }
+
+    #[test]
+    fn graph_view_from_str_roundtrip() {
+        assert_eq!(GraphView::from_str("semantic"), GraphView::Semantic);
+        assert_eq!(GraphView::from_str("temporal"), GraphView::Temporal);
+        assert_eq!(GraphView::from_str("entity"), GraphView::Entity);
+        assert_eq!(GraphView::from_str("hybrid"), GraphView::Hybrid);
+        assert_eq!(GraphView::from_str("HYBRID"), GraphView::Hybrid);
+        // Unknown → default semantic
+        assert_eq!(GraphView::from_str("garbage"), GraphView::Semantic);
+        assert_eq!(GraphView::default(), GraphView::Semantic);
+    }
+
+    #[tokio::test]
+    async fn search_entities_order_by_whitelist_rejects_injection() {
+        let service = create_test_service().await;
+        populate_test_graph(&service).await;
+        // Inject a malicious order clause — must fall back to default and succeed.
+        let result = service.storage.search_entities_order_by(
+            "agent1",
+            "a",
+            "name; DROP TABLE kg_entities --",
+            10,
+        );
+        assert!(result.is_ok(), "injection should fall back, not fail");
+        // Graph still intact.
+        let stats = service.get_stats("agent1").await.unwrap();
+        assert_eq!(stats.entity_count, 3);
+    }
+
+    #[tokio::test]
+    async fn count_relationships_for_counts_both_directions() {
+        let service = create_test_service().await;
+        let (_alice, rust, _project) = populate_test_graph(&service).await;
+        // Rust is target of Alice->Rust and source of Rust->ProjectX (2 edges total).
+        let count = service.storage.count_relationships_for(&rust.id).unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[tokio::test]
+    async fn search_entities_view_temporal_orders_by_last_seen() {
+        let service = create_test_service().await;
+        populate_test_graph(&service).await;
+
+        // Bump Alice's last_seen by re-ingesting her (after a short delay).
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        let alice = Entity::new(
+            "agent1".to_string(),
+            EntityType::Person,
+            "Alice".to_string(),
+        );
+        let knowledge = ExtractedKnowledge {
+            entities: vec![alice],
+            relationships: vec![],
+        };
+        service
+            .storage
+            .store_knowledge("agent1", knowledge)
+            .unwrap();
+
+        let results = service
+            .search_entities_view("agent1", "", GraphView::Temporal, 10)
+            .await
+            .unwrap();
+        assert!(!results.is_empty());
+        assert_eq!(results[0].name, "Alice");
+    }
+
+    #[tokio::test]
+    async fn search_entities_view_entity_orders_by_connections() {
+        let service = create_test_service().await;
+        populate_test_graph(&service).await;
+        // Rust has 2 edges; Alice and ProjectX each have 1.
+        let results = service
+            .search_entities_view("agent1", "", GraphView::Entity, 10)
+            .await
+            .unwrap();
+        assert_eq!(results[0].name, "Rust");
     }
 
     #[tokio::test]

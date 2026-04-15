@@ -29,7 +29,7 @@ impl OpenAiEmbeddingClient {
             api_key,
             model,
             dimensions,
-            http_client: reqwest::Client::new(),
+            http_client: reqwest::Client::builder().build().expect("reqwest client"),
         }
     }
 }
@@ -118,8 +118,8 @@ impl EmbeddingClient for OpenAiEmbeddingClient {
         self.dimensions
     }
 
-    fn model_name(&self) -> &str {
-        &self.model
+    fn model_name(&self) -> String {
+        self.model.clone()
     }
 }
 

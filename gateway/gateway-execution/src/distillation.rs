@@ -26,11 +26,11 @@ use agent_runtime::llm::openai::OpenAiClient;
 use agent_runtime::types::ChatMessage;
 use gateway_database::{
     ConversationRepository, DistillationRepository, DistillationRun, EpisodeRepository, MemoryFact,
-    MemoryRepository, SessionEpisode,
+    MemoryRepository, ProcedureRepository, SessionEpisode, WardWikiRepository,
 };
 use gateway_services::{ProviderService, SettingsService, VaultPaths};
 use knowledge_graph::{Entity, EntityType, GraphStorage, Relationship, RelationshipType};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Distills completed sessions into structured memory facts.
 pub struct SessionDistiller {
@@ -43,6 +43,8 @@ pub struct SessionDistiller {
     episode_repo: Option<Arc<EpisodeRepository>>,
     paths: Arc<VaultPaths>,
     settings_service: Option<Arc<SettingsService>>,
+    pub wiki_repo: Option<Arc<WardWikiRepository>>,
+    pub procedure_repo: Option<Arc<ProcedureRepository>>,
 }
 
 /// A single fact extracted by the distillation LLM call.
@@ -53,6 +55,10 @@ struct ExtractedFact {
     content: String,
     #[serde(default = "default_confidence")]
     confidence: f64,
+    /// Optional epistemic classification (archival|current|convention|procedural).
+    /// Defaults to "current" when omitted by the LLM.
+    #[serde(default)]
+    epistemic_class: Option<String>,
 }
 
 /// An entity extracted by the distillation LLM call.
@@ -84,7 +90,31 @@ struct ExtractedEpisode {
     key_learnings: Option<String>,
 }
 
-/// Full distillation response including facts, entities, relationships, and episode.
+/// A procedure extracted by the distillation LLM call.
+#[derive(Debug, Clone, Deserialize)]
+struct ExtractedProcedure {
+    name: String,
+    description: String,
+    steps: Vec<ProcedureStep>,
+    #[serde(default)]
+    parameters: Option<Vec<String>>,
+    #[serde(default)]
+    trigger_pattern: Option<String>,
+}
+
+/// A single step within an extracted procedure.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+struct ProcedureStep {
+    action: String,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    agent: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    task_template: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    note: Option<String>,
+}
+
+/// Full distillation response including facts, entities, relationships, episode, and procedure.
 #[derive(Debug, Clone, Deserialize)]
 struct DistillationResponse {
     #[serde(default)]
@@ -95,6 +125,8 @@ struct DistillationResponse {
     relationships: Vec<ExtractedRelationship>,
     #[serde(default)]
     episode: Option<ExtractedEpisode>,
+    #[serde(default)]
+    procedure: Option<ExtractedProcedure>,
 }
 
 fn default_confidence() -> f64 {
@@ -186,7 +218,19 @@ impl SessionDistiller {
             episode_repo,
             paths,
             settings_service,
+            wiki_repo: None,
+            procedure_repo: None,
         }
+    }
+
+    /// Set the ward wiki repository for post-distillation wiki compilation.
+    pub fn set_wiki_repo(&mut self, repo: Arc<WardWikiRepository>) {
+        self.wiki_repo = Some(repo);
+    }
+
+    /// Set the procedure repository for storing extracted procedures.
+    pub fn set_procedure_repo(&mut self, repo: Arc<ProcedureRepository>) {
+        self.procedure_repo = Some(repo);
     }
 
     /// Resolve the target provider ID and model for distillation.
@@ -390,11 +434,21 @@ impl SessionDistiller {
             // Embed the fact content
             let embedding = self.embed_text(&ef.content).await;
 
+            let scope = "agent";
+            let ward_id = "__global__";
+
+            // Check if an active fact with the same key exists and has different content
+            let existing_fact = self
+                .memory_repo
+                .get_fact_by_key(agent_id, scope, ward_id, &ef.key)
+                .ok()
+                .flatten();
+
             let fact = MemoryFact {
-                id: fact_id,
+                id: fact_id.clone(),
                 session_id: Some(session_id.to_string()),
                 agent_id: agent_id.to_string(),
-                scope: "agent".to_string(),
+                scope: scope.to_string(),
                 category: ef.category.clone(),
                 key: ef.key.clone(),
                 content: ef.content.clone(),
@@ -402,13 +456,43 @@ impl SessionDistiller {
                 mention_count: 1,
                 source_summary: Some(format!("Distilled from session {}", session_id)),
                 embedding,
-                ward_id: "__global__".to_string(),
+                ward_id: ward_id.to_string(),
                 contradicted_by: None,
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
+                valid_from: Some(now.clone()),
+                valid_until: None,
+                superseded_by: None,
                 pinned: false,
+                epistemic_class: ef
+                    .epistemic_class
+                    .clone()
+                    .or_else(|| Some("current".to_string())),
+                source_episode_id: None,
+                source_ref: None,
             };
+
+            // Supersede the old fact if content differs
+            if let Some(ref existing) = existing_fact {
+                if existing.content != ef.content && !existing.pinned {
+                    if let Err(e) = self.memory_repo.supersede_fact(&existing.id, &fact_id) {
+                        tracing::warn!(
+                            key = %ef.key,
+                            old_id = %existing.id,
+                            error = %e,
+                            "Failed to supersede old fact"
+                        );
+                    } else {
+                        tracing::debug!(
+                            key = %ef.key,
+                            old_id = %existing.id,
+                            new_id = %fact_id,
+                            "Superseded old fact with new content"
+                        );
+                    }
+                }
+            }
 
             if let Err(e) = self.memory_repo.upsert_memory_fact(&fact) {
                 tracing::warn!(
@@ -429,10 +513,10 @@ impl SessionDistiller {
 
             for ee in &response.entities {
                 // Check if entity already exists (dedup by name, case-insensitive)
-                match graph.find_entity_by_name(agent_id, &ee.name).await {
+                match graph.find_entity_by_name(agent_id, &ee.name) {
                     Ok(Some(existing_id)) => {
                         // Entity already exists — bump mention count and reuse ID
-                        if let Err(e) = graph.bump_entity_mention(&existing_id).await {
+                        if let Err(e) = graph.bump_entity_mention(&existing_id) {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to bump entity mention");
                         }
                         entity_map.insert(ee.name.clone(), existing_id);
@@ -451,14 +535,23 @@ impl SessionDistiller {
                             entities: vec![entity],
                             relationships: vec![],
                         };
-                        if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
+                        if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
                             tracing::warn!(entity = %ee.name, error = %e, "Failed to store entity");
                         }
                     }
                 }
             }
 
-            for er in &response.relationships {
+            // Canonicalize relationships before storage: fix common direction
+            // errors from the LLM (passive voice inversions, agent/ward confusion).
+            // See `canonicalize_relationship` for the rules.
+            let canonicalized: Vec<_> = response
+                .relationships
+                .iter()
+                .filter_map(|er| canonicalize_relationship(er, &response.entities))
+                .collect();
+
+            for er in &canonicalized {
                 // Resolve entity names to IDs (or use names as IDs if not found)
                 let source_id = entity_map
                     .get(&er.source)
@@ -480,7 +573,7 @@ impl SessionDistiller {
                     entities: vec![],
                     relationships: vec![relationship],
                 };
-                if let Err(e) = graph.store_knowledge(agent_id, knowledge).await {
+                if let Err(e) = graph.store_knowledge(agent_id, knowledge) {
                     tracing::warn!(
                         source = %er.source, target = %er.target,
                         error = %e, "Failed to store relationship"
@@ -520,6 +613,47 @@ impl SessionDistiller {
             }
         }
 
+        // 6b. Store extracted procedure (if any)
+        if let Some(ref procedure) = response.procedure {
+            if let Some(ref procedure_repo) = self.procedure_repo {
+                let ward_id = self
+                    .conversation_repo
+                    .get_session_ward_id(session_id)
+                    .unwrap_or(None);
+
+                let steps_json = serde_json::to_string(&procedure.steps).unwrap_or_default();
+                let params_json = procedure
+                    .parameters
+                    .as_ref()
+                    .map(|p| serde_json::to_string(p).unwrap_or_default());
+
+                let proc = gateway_database::Procedure {
+                    id: format!("proc-{}", uuid::Uuid::new_v4()),
+                    agent_id: agent_id.to_string(),
+                    ward_id: ward_id.or_else(|| Some("__global__".to_string())),
+                    name: procedure.name.clone(),
+                    description: procedure.description.clone(),
+                    trigger_pattern: procedure.trigger_pattern.clone(),
+                    steps: steps_json,
+                    parameters: params_json,
+                    success_count: 1,
+                    failure_count: 0,
+                    avg_duration_ms: None,
+                    avg_token_cost: None,
+                    last_used: Some(chrono::Utc::now().to_rfc3339()),
+                    embedding: None,
+                    created_at: chrono::Utc::now().to_rfc3339(),
+                    updated_at: chrono::Utc::now().to_rfc3339(),
+                };
+
+                if let Err(e) = procedure_repo.upsert_procedure(&proc) {
+                    tracing::warn!(name = %procedure.name, error = %e, "Failed to store procedure");
+                } else {
+                    tracing::info!(name = %procedure.name, "Stored procedure from session");
+                }
+            }
+        }
+
         let duration_ms = started.elapsed().as_millis() as i64;
 
         // 7. Record success in distillation_runs
@@ -540,22 +674,53 @@ impl SessionDistiller {
             "Session distillation complete"
         );
 
-        // 8. Sync ward knowledge file (best-effort)
+        // Ward memory-bank/ward.md is curated manually; distillation no longer
+        // writes an auto-generated summary. Facts remain in the memory_facts DB.
         let ward_id = self
             .conversation_repo
             .get_session_ward_id(session_id)
             .unwrap_or(None);
 
-        if let Some(ref wid) = ward_id {
+        // 9. Compile ward wiki from extracted facts (best-effort)
+        if let (Some(wiki_repo), Some(ref wid)) = (&self.wiki_repo, &ward_id) {
             if wid != "__global__" && wid != "scratch" {
-                let ward_path = self.paths.wards_dir().join(wid);
-                if ward_path.exists() {
-                    if let Err(e) = crate::ward_sync::generate_ward_knowledge_file(
-                        &ward_path,
-                        wid,
-                        &self.memory_repo,
-                    ) {
-                        tracing::warn!(ward = %wid, error = %e, "Ward file sync failed");
+                let fact_summaries: Vec<crate::ward_wiki::FactSummary> = response
+                    .facts
+                    .iter()
+                    .map(|f| crate::ward_wiki::FactSummary {
+                        category: f.category.clone(),
+                        key: f.key.clone(),
+                        content: f.content.clone(),
+                    })
+                    .collect();
+
+                if !fact_summaries.is_empty() {
+                    match self.build_llm_client() {
+                        Ok(client) => {
+                            let emb = self.embedding_client.as_deref();
+                            match crate::ward_wiki::compile_ward_wiki(
+                                wid,
+                                agent_id,
+                                &fact_summaries,
+                                wiki_repo,
+                                &*client,
+                                emb,
+                            )
+                            .await
+                            {
+                                Ok(count) => tracing::info!(
+                                    ward = %wid, articles = count,
+                                    "Wiki compilation complete"
+                                ),
+                                Err(e) => tracing::warn!(
+                                    ward = %wid, error = %e,
+                                    "Wiki compilation failed"
+                                ),
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!(ward = %wid, error = %e, "Wiki compilation skipped — no LLM client");
+                        }
                     }
                 }
             }
@@ -634,6 +799,49 @@ impl SessionDistiller {
         }
     }
 
+    /// Build an LLM client for wiki compilation using the distillation provider.
+    fn build_llm_client(&self) -> Result<Arc<dyn LlmClient>, String> {
+        let providers = self
+            .provider_service
+            .list()
+            .map_err(|e| format!("Failed to list providers: {e}"))?;
+
+        if providers.is_empty() {
+            return Err("No providers configured".to_string());
+        }
+
+        let (target_provider_id, target_model) = self.resolve_distillation_target();
+
+        // Pick target provider, or default, or first
+        let provider = target_provider_id
+            .as_ref()
+            .and_then(|tid| {
+                providers
+                    .iter()
+                    .find(|p| p.id.as_deref() == Some(tid.as_str()))
+            })
+            .or_else(|| providers.iter().find(|p| p.is_default))
+            .or_else(|| providers.first())
+            .ok_or_else(|| "No suitable provider found".to_string())?;
+
+        let model = target_model.unwrap_or_else(|| provider.default_model().to_string());
+        let provider_id = provider.id.clone().unwrap_or_else(|| "default".to_string());
+
+        let config = LlmConfig::new(
+            provider.base_url.clone(),
+            provider.api_key.clone(),
+            model,
+            provider_id,
+        )
+        .with_temperature(0.3)
+        .with_max_tokens(4096);
+
+        let client =
+            OpenAiClient::new(config).map_err(|e| format!("Failed to create LLM client: {e}"))?;
+
+        Ok(Arc::new(client) as Arc<dyn LlmClient>)
+    }
+
     /// Call the LLM to extract facts, entities, and relationships.
     ///
     /// Implements a provider fallback chain: tries the default provider first,
@@ -650,8 +858,14 @@ impl SessionDistiller {
 
         // Load prompt once (shared across attempts)
         let system = self.load_distillation_prompt();
+
+        // Compute session metrics to help the LLM decide on procedure extraction
+        let metrics = compute_session_metrics(transcript);
         let user = format!(
-            "## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, and an episode assessment. Respond with ONLY the JSON object, nothing else.",
+            "## Session Metrics\n\n- Delegations: {}\n- Tool actions: {}\n- Distinct agents involved: {}\n\nProcedure extraction is REQUIRED if delegations >= 2 OR tool actions >= 3.\n\n## Session Transcript\n\n{}\n\n---\nExtract durable facts, entities, relationships, an episode assessment, AND a reusable procedure. Respond with ONLY the JSON object, nothing else.",
+            metrics.delegations,
+            metrics.tool_actions,
+            metrics.distinct_agents,
             transcript
         );
 
@@ -746,8 +960,26 @@ impl SessionDistiller {
                                 entities = parsed.entities.len(),
                                 relationships = parsed.relationships.len(),
                                 has_episode = parsed.episode.is_some(),
+                                has_procedure = parsed.procedure.is_some(),
                                 "Distillation parsed successfully"
                             );
+
+                            // Diagnostic: if no procedure was extracted, log a preview of the
+                            // raw response so we can see why. Procedure extraction is a major
+                            // feature and silent failures are hard to debug otherwise.
+                            if parsed.procedure.is_none() {
+                                let preview = if content.len() > 1200 {
+                                    &content[..1200]
+                                } else {
+                                    content.as_str()
+                                };
+                                tracing::warn!(
+                                    provider = %provider.name,
+                                    response_preview = %preview,
+                                    "No procedure extracted — LLM did not include procedure field or returned null"
+                                );
+                            }
+
                             return Ok(parsed);
                         }
                         Err(parse_err) => {
@@ -930,14 +1162,23 @@ impl SessionDistiller {
         );
 
         // Upsert the strategy as a memory fact
+        let strategy_fact_id = format!("fact-{}", uuid::Uuid::new_v4());
+
+        // Check for existing strategy fact to supersede
+        let existing_strategy = self
+            .memory_repo
+            .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+            .ok()
+            .flatten();
+
         let fact = MemoryFact {
-            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            id: strategy_fact_id.clone(),
             session_id: Some(episode.session_id.clone()),
             agent_id: agent_id.to_string(),
             scope: "agent".to_string(),
             category: "strategy".to_string(),
-            key: fact_key,
-            content: strategy_description,
+            key: fact_key.clone(),
+            content: strategy_description.clone(),
             confidence: 0.92,
             mention_count: 1,
             source_summary: Some(format!(
@@ -951,8 +1192,37 @@ impl SessionDistiller {
             created_at: now.to_string(),
             updated_at: now.to_string(),
             expires_at: None,
+            valid_from: Some(now.to_string()),
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
+            epistemic_class: Some("procedural".to_string()),
+            source_episode_id: None,
+            source_ref: None,
         };
+
+        // Supersede old strategy if content differs
+        if let Some(ref existing) = existing_strategy {
+            if existing.content != strategy_description && !existing.pinned {
+                if let Err(e) = self
+                    .memory_repo
+                    .supersede_fact(&existing.id, &strategy_fact_id)
+                {
+                    tracing::warn!(
+                        key = %fact_key,
+                        error = %e,
+                        "Failed to supersede old strategy fact"
+                    );
+                } else {
+                    tracing::debug!(
+                        key = %fact_key,
+                        old_id = %existing.id,
+                        new_id = %strategy_fact_id,
+                        "Superseded old strategy fact"
+                    );
+                }
+            }
+        }
 
         self.memory_repo.upsert_memory_fact(&fact)?;
 
@@ -1026,17 +1296,27 @@ impl SessionDistiller {
         );
 
         // Upsert the correction as a memory fact
+        let correction_fact_id = format!("fact-{}", uuid::Uuid::new_v4());
+        let correction_content = format!(
+            "Recurring failure ({} episodes): {}",
+            cluster_size, latest_key_learning
+        );
+
+        // Check for existing correction fact to supersede
+        let existing_correction = self
+            .memory_repo
+            .get_fact_by_key(agent_id, "agent", ward_id, &fact_key)
+            .ok()
+            .flatten();
+
         let fact = MemoryFact {
-            id: format!("fact-{}", uuid::Uuid::new_v4()),
+            id: correction_fact_id.clone(),
             session_id: Some(episode.session_id.clone()),
             agent_id: agent_id.to_string(),
             scope: "agent".to_string(),
             category: "correction".to_string(),
-            key: fact_key,
-            content: format!(
-                "Recurring failure ({} episodes): {}",
-                cluster_size, latest_key_learning
-            ),
+            key: fact_key.clone(),
+            content: correction_content.clone(),
             confidence: (0.85 + 0.02 * cluster_size as f64).min(0.98),
             mention_count: cluster_size as i32,
             source_summary: Some("Clustered from repeated failures".to_string()),
@@ -1044,10 +1324,39 @@ impl SessionDistiller {
             ward_id: ward_id.to_string(),
             contradicted_by: None,
             created_at: now.clone(),
-            updated_at: now,
+            updated_at: now.clone(),
             expires_at: None,
+            valid_from: Some(now),
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
+            epistemic_class: Some("convention".to_string()),
+            source_episode_id: None,
+            source_ref: None,
         };
+
+        // Supersede old correction if content differs
+        if let Some(ref existing) = existing_correction {
+            if existing.content != correction_content && !existing.pinned {
+                if let Err(e) = self
+                    .memory_repo
+                    .supersede_fact(&existing.id, &correction_fact_id)
+                {
+                    tracing::warn!(
+                        key = %fact_key,
+                        error = %e,
+                        "Failed to supersede old correction fact"
+                    );
+                } else {
+                    tracing::debug!(
+                        key = %fact_key,
+                        old_id = %existing.id,
+                        new_id = %correction_fact_id,
+                        "Superseded old correction fact"
+                    );
+                }
+            }
+        }
 
         self.memory_repo.upsert_memory_fact(&fact)?;
 
@@ -1086,6 +1395,116 @@ impl SessionDistiller {
     }
 }
 
+/// Canonicalize a relationship extracted by the LLM — fix common direction
+/// errors before persisting to the knowledge graph.
+///
+/// The LLM is instructed in the distillation prompt about directional
+/// semantics, but it still makes mistakes. This function applies rule-based
+/// fixes that catch the common patterns:
+///
+/// 1. **Passive voice normalization**: `analyzed_by`, `used_by`, `created_by`
+///    must have the agent entity as TARGET (object of the passive verb), not
+///    source. If the LLM inverts, we swap source and target.
+///
+/// 2. **Agent-ticker confusion**: Agents (ending in `-agent`) don't analyze
+///    tickers or projects directly — wards/workspaces do. If we see
+///    `agent --analyzed_by--> ticker`, we drop it rather than store garbage.
+///
+/// 3. **Bidirectional redundancy**: If a relationship has both `uses` and
+///    `used_by` between the same pair, keep only `uses` (we canonicalize
+///    `used_by` → inverse `uses`).
+///
+/// Returns `None` to drop the relationship, `Some(canonical)` to keep it.
+fn canonicalize_relationship(
+    er: &ExtractedRelationship,
+    entities: &[ExtractedEntity],
+) -> Option<ExtractedRelationship> {
+    let rel = er.relationship_type.to_lowercase();
+    let rel = rel.trim();
+
+    // Rule 2: drop nonsensical agent-is-analyzed-by-ticker relationships.
+    // These appear when the LLM confuses who is acting on whom.
+    if (rel == "analyzed_by" || rel == "analyzedby") && is_agent_name(&er.source) {
+        tracing::debug!(
+            source = %er.source,
+            target = %er.target,
+            "Dropping nonsensical agent--analyzed_by--> relationship"
+        );
+        return None;
+    }
+
+    // Rule 3: canonicalize `used_by` / `usedby` into inverse `uses`.
+    // `A used_by B` means `B uses A` — swap source/target and normalize type.
+    if rel == "used_by" || rel == "usedby" || rel == "usedfor" || rel == "used_for" {
+        return Some(ExtractedRelationship {
+            source: er.target.clone(),
+            target: er.source.clone(),
+            relationship_type: "uses".to_string(),
+        });
+    }
+
+    // Rule 3b: canonicalize `created_by` / `createdby` into inverse `created`.
+    if rel == "created_by" || rel == "createdby" {
+        return Some(ExtractedRelationship {
+            source: er.target.clone(),
+            target: er.source.clone(),
+            relationship_type: "created".to_string(),
+        });
+    }
+
+    // Rule 1: for `analyzed_by`, ensure target is the analyzer (ward/workspace),
+    // not the analyzed thing. If source is a workspace-like entity and target
+    // is a ticker/person/organization, swap them — the LLM inverted.
+    if rel == "analyzed_by" || rel == "analyzedby" {
+        let source_type = entity_type_for(&er.source, entities);
+        let target_type = entity_type_for(&er.target, entities);
+
+        // Ticker/person/org analyzed_by ward/project — correct direction.
+        let source_is_subject = matches!(
+            source_type.as_deref(),
+            Some("organization") | Some("person") | Some("concept")
+        );
+        let target_is_analyzer = matches!(target_type.as_deref(), Some("project") | Some("ward"));
+
+        // If inverted (analyzer is source), swap.
+        let source_is_analyzer = matches!(source_type.as_deref(), Some("project") | Some("ward"));
+        let target_is_subject = matches!(
+            target_type.as_deref(),
+            Some("organization") | Some("person") | Some("concept")
+        );
+
+        if !source_is_subject && !target_is_analyzer && source_is_analyzer && target_is_subject {
+            return Some(ExtractedRelationship {
+                source: er.target.clone(),
+                target: er.source.clone(),
+                relationship_type: "analyzed_by".to_string(),
+            });
+        }
+    }
+
+    // Default: keep as-is, normalize type name.
+    Some(ExtractedRelationship {
+        source: er.source.clone(),
+        target: er.target.clone(),
+        relationship_type: rel.to_string(),
+    })
+}
+
+/// Heuristic: does the name look like an agent? (e.g. "planner-agent", "code-agent")
+fn is_agent_name(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.ends_with("-agent") || lower.ends_with("_agent") || lower == "agent"
+}
+
+/// Look up the entity type for a name from the extracted entities list.
+fn entity_type_for(name: &str, entities: &[ExtractedEntity]) -> Option<String> {
+    let lower = name.to_lowercase();
+    entities
+        .iter()
+        .find(|e| e.name.to_lowercase() == lower)
+        .map(|e| e.entity_type.to_lowercase())
+}
+
 /// Derive a sanitized task type from a task summary for use as a fact key.
 ///
 /// Takes the first few words, lowercases them, replaces spaces and dots with
@@ -1102,6 +1521,51 @@ fn sanitize_task_type(task_summary: &str) -> String {
         .filter(|c| c.is_alphanumeric() || *c == '_')
         .take(40)
         .collect()
+}
+
+/// Session metrics used to inform the LLM about procedure extraction gating.
+struct SessionMetrics {
+    delegations: usize,
+    tool_actions: usize,
+    distinct_agents: usize,
+}
+
+/// Compute basic metrics from a compiled transcript to help the LLM decide
+/// whether a procedure should be extracted.
+fn compute_session_metrics(transcript: &str) -> SessionMetrics {
+    let mut delegations = 0usize;
+    let mut tool_actions = 0usize;
+    let mut agents: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for line in transcript.lines() {
+        let lower = line.to_lowercase();
+
+        // Count delegation markers
+        if lower.contains("delegate_to_agent") || line.contains("## From ") {
+            delegations += 1;
+        }
+
+        // Count explicit tool invocations
+        if line.contains("[called:") {
+            tool_actions += 1;
+        }
+
+        // Track distinct agents mentioned (planner-agent, code-agent, etc.)
+        for word in line.split_whitespace() {
+            if word.ends_with("-agent") || word.ends_with("-agent,") {
+                let clean = word.trim_end_matches(',').trim_matches('"');
+                if clean.len() < 40 {
+                    agents.insert(clean.to_string());
+                }
+            }
+        }
+    }
+
+    SessionMetrics {
+        delegations,
+        tool_actions,
+        distinct_agents: agents.len(),
+    }
 }
 
 /// Build a compact transcript from session messages.
@@ -1266,6 +1730,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
             entities: Vec::new(),
             relationships: Vec::new(),
             episode: None,
+            procedure: None,
         });
     }
 
@@ -1282,6 +1747,7 @@ fn parse_distillation_response(content: &str) -> Result<DistillationResponse, St
             entities: Vec::new(),
             relationships: Vec::new(),
             episode: None,
+            procedure: None,
         });
     }
 
@@ -1326,6 +1792,10 @@ fn parse_distillation_from_value(val: &serde_json::Value) -> Result<Distillation
         .get("episode")
         .and_then(|v| serde_json::from_value(v.clone()).ok());
 
+    let procedure: Option<ExtractedProcedure> = obj
+        .get("procedure")
+        .and_then(|v| serde_json::from_value(v.clone()).ok());
+
     if facts.is_empty() && entities.is_empty() && episode.is_none() {
         // The JSON parsed but all arrays were empty or had incompatible fields
         // Log what was actually in the JSON to help debug
@@ -1341,6 +1811,7 @@ fn parse_distillation_from_value(val: &serde_json::Value) -> Result<Distillation
         entities,
         relationships,
         episode,
+        procedure,
     })
 }
 
@@ -1384,15 +1855,15 @@ fn extract_json_from_content(content: &str) -> String {
 /// The distillation prompt sent as a system message.
 /// The default distillation prompt (embedded fallback).
 /// Can be overridden by creating `config/distillation_prompt.md` in the vault.
-const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, and an episode assessment worth remembering for FUTURE sessions.
+const DEFAULT_DISTILLATION_PROMPT: &str = r#"You are a memory extraction system. Analyze the session transcript and extract durable facts, entities, relationships, an episode assessment, and a reusable procedure worth remembering for FUTURE sessions.
 
 IMPORTANT: Respond with ONLY a valid JSON object. No explanation, no markdown, no text before or after the JSON. Your entire response must be parseable JSON.
 
-Return a JSON object with three arrays and one optional episode object:
+Return a JSON object with EXACTLY these five fields:
 
 {
   "facts": [
-    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0}
+    {"category": "...", "key": "category.subdomain.topic", "content": "1-2 sentence fact", "confidence": 0.0-1.0, "epistemic_class": "archival|current|convention|procedural"}
   ],
   "entities": [
     {"name": "entity name", "type": "person|organization|project|tool|concept|file", "properties": {}}
@@ -1405,6 +1876,36 @@ Return a JSON object with three arrays and one optional episode object:
     "outcome": "success|partial|failed",
     "strategy_used": "What approach was taken (e.g., 'delegated to data-analyst for technicals')",
     "key_learnings": "What went well or poorly (1-2 sentences)"
+  },
+  "procedure": {
+    "name": "short_snake_case_name",
+    "description": "what this procedure accomplishes (1-2 sentences)",
+    "steps": [
+      {"action": "delegate|shell|ward|respond|write_file", "agent": "agent-id", "task_template": "...", "note": "..."}
+    ],
+    "parameters": ["param1", "param2"],
+    "trigger_pattern": "when to use this procedure (user request patterns)"
+  }
+}
+
+## EXAMPLE procedure (for a multi-step analysis task)
+
+{
+  "procedure": {
+    "name": "build_portfolio_dashboard",
+    "description": "Builds an interactive HTML dashboard for a set of stock tickers with risk analysis.",
+    "steps": [
+      {"action": "ward", "note": "enter portfolio-analysis ward"},
+      {"action": "delegate", "agent": "planner-agent", "task_template": "Plan portfolio risk dashboard for {tickers}"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Create project structure under task/{project_name}"},
+      {"action": "delegate", "agent": "research-agent", "task_template": "Fetch historical prices for {tickers} via yfinance"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Build core analysis functions: correlation, VaR, drawdown"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Generate charts with plotly"},
+      {"action": "delegate", "agent": "code-agent", "task_template": "Assemble HTML dashboard"},
+      {"action": "respond", "note": "provide dashboard link"}
+    ],
+    "parameters": ["tickers", "project_name"],
+    "trigger_pattern": "user requests portfolio risk dashboard, stock analysis report, or multi-asset risk assessment"
   }
 }
 
@@ -1427,6 +1928,28 @@ If the session is too short or unclear to assess, omit the episode field.
 - `correction` — corrections to agent behavior (e.g., "don't suggest X because Y", mistakes and lessons learned)
 - `strategy` — successful approaches for recurring task types (e.g., "for data analysis tasks, delegate to data-analyst subagent")
 
+## Epistemic Classification (REQUIRED per fact)
+
+Every fact has a lifecycle class that determines how it ages:
+
+- `archival` — Historical record of what happened or was stated in a primary source.
+  NEVER DECAYS. Examples: birthdates, historical events, quotes from documents.
+  Choose this when the fact describes something that happened and won't change
+  (only be corrected if it was wrong).
+
+- `current` — Observed state at a point in time that can change.
+  DECAYS when superseded. Examples: stock prices, API states, "current X".
+
+- `convention` — Standing rules, preferences, standing orders.
+  STABLE, replaced only on explicit policy change. Examples: user preferences,
+  coding standards.
+
+- `procedural` — Reusable action sequences reinforced by outcomes.
+  EVOLVES via success/failure counts.
+
+Default when unsure: `archival` if the fact comes from a document/book/URL,
+otherwise `current`.
+
 ## Key Format
 
 Use dot-notation hierarchy: `{category}.{subdomain}.{topic}`
@@ -1436,33 +1959,103 @@ If a fact updates something already known, use the SAME key so it overwrites.
 
 ## Entity Types
 
-- `person` — people mentioned by name
-- `organization` — companies and organizations (use "organization", NOT "company")
-- `project` — software projects, repos, products
-- `tool` — tools, libraries, frameworks, technologies
-- `concept` — abstract concepts, topics, methodologies
-- `file` — important ward files (core modules, config files, data files)
+Choose the most specific type that fits:
 
-Include `properties` where relevant:
-- Organizations: sector, ticker, industry
-- Projects: language, framework, ward (workspace path)
-- Files: ward (workspace path), exports, purpose
-- Tools: version, usage context
+- `person` — individuals by name. Properties: {birth_date, death_date, nationality, occupation}
+- `organization` — companies, parties, groups. Properties: {founding_date, dissolution_date, type, location}
+- `location` — countries, cities, regions, coordinates. Properties: {country, region, type}
+- `event` — historical events, meetings, conferences, sessions. Properties: {start_date, end_date, location, outcome}
+- `time_period` — years, eras, date ranges. Properties: {start, end, era}
+- `document` — books, articles, PDFs, URLs. Properties: {author, publisher, publication_date, source_url}
+- `role` — position title held by a person at a time. Properties: {organization, start_date, end_date}
+- `artifact` — generated files, reports, data outputs. Properties: {format, generator}
+- `ward` — workspace/container. Properties: {purpose}
+- `concept` — abstract ideas, methodologies, topics. Properties: {domain}
+- `tool` — libraries, frameworks, technologies. Properties: {version, language}
+- `project` — software projects or initiatives. Properties: {language, framework}
+- `file` — important ward files. Properties: {path, exports, purpose}
 
-## Relationship Types
+Include `properties` populated appropriately for the type. Use ISO 8601 for dates when available.
 
-`related_to`, `uses`, `created`, `part_of`, `is_in`, `has_module`, `exports`, `prefers`, `analyzed_by`
+## Relationship Types (directional — `source --type--> target`)
+
+**Temporal**:
+- `before(A, B)`, `after(A, B)`, `during(A, B)`, `concurrent_with(A, B)`, `succeeded_by(A, B)`, `preceded_by(A, B)`
+
+**Role-based**:
+- `president_of(P, O)` — P is/was president of O
+- `founder_of(P, O)` — P founded O
+- `member_of(P, O)` — P is a member of O
+- `author_of(P, D)` — P authored document D
+- `held_role(P, R)`, `employed_by(P, O)`
+
+**Spatial**:
+- `located_in(X, L)` — X is located in L
+- `held_at(E, L)` — event E was held at L
+- `born_in(P, L)`, `died_in(P, L)`
+
+**Causal**:
+- `caused(A, B)`, `enabled(A, B)`, `prevented(A, B)`, `triggered_by(A, B)`
+
+**Hierarchical**:
+- `part_of(A, B)`, `contains(A, B)`, `instance_of(A, T)`, `subtype_of(T1, T2)`
+
+**Generic** (fallback): `uses, created, related_to, exports, has_module, analyzed_by, prefers, mentions`
+
+## Relationship Rules
+
+- ALWAYS use the most specific relationship type that fits.
+- NEVER use both `A uses B` and `B uses A` for the same pair.
+- For role/presidency: emit `PersonX president_of OrgY`, NOT the reverse.
+- Date-qualified relationships: mention the time range in the entity's properties (Role entity's start_date/end_date).
+
+## Example Extraction (for grounding)
+
+Given this transcript snippet:
+> "Ada Lovelace served as chief researcher at Acme Research from 1843 to 1852, during which time the Cambridge Symposium of 1843 was held."
+
+A high-quality extraction looks like:
+
+{
+  "facts": [
+    {"category": "domain", "key": "acme_research.lovelace.tenure",
+     "content": "Ada Lovelace served as chief researcher at Acme Research from 1843 to 1852",
+     "confidence": 0.95, "epistemic_class": "archival"}
+  ],
+  "entities": [
+    {"name": "Ada Lovelace", "type": "person", "properties": {"role": "Computing pioneer"}},
+    {"name": "Acme Research", "type": "organization", "properties": {"type": "research_lab", "founding_date": "1830"}},
+    {"name": "Cambridge Symposium 1843", "type": "event", "properties": {"start_date": "1843", "location": "Cambridge"}},
+    {"name": "Cambridge", "type": "location", "properties": {"country": "UK", "type": "city"}}
+  ],
+  "relationships": [
+    {"source": "Ada Lovelace", "target": "Acme Research", "type": "member_of"},
+    {"source": "Cambridge Symposium 1843", "target": "Cambridge", "type": "held_at"},
+    {"source": "Cambridge Symposium 1843", "target": "Acme Research", "type": "part_of"}
+  ]
+}
 
 ## Ward File Summaries
 
 When a session analyzes or works with files in a ward (workspace), include a `domain.{subdomain}.data_available` fact summarizing what data/files are available (e.g., `domain.finance.portfolio_data_available`).
+
+## Procedure Extraction (REQUIRED)
+
+ALWAYS extract a procedure when the session had 2+ delegations OR 3+ distinct tool actions. Procedures are the most valuable output of this extraction — they let future sessions skip the fumbling and go straight to a proven approach.
+
+- Look at the actual sequence of delegations and tool calls in the transcript.
+- Generalize: replace specific values (ticker names, project names, file paths) with `{parameter}` placeholders.
+- Include ALL significant steps, not just delegations. Ward entry, file writes, and respond calls are all valid steps.
+- Steps should be in execution order.
+- `trigger_pattern`: describe what kinds of user requests would match this procedure (3-5 example phrasings or a pattern description).
+- Set `"procedure": null` ONLY if the session had fewer than 2 tool calls (trivial sessions). A first-time execution is NOT a reason to skip — the WHOLE POINT is to capture it for future reuse.
 
 ## Rules
 
 - Maximum 20 facts, 20 entities, 20 relationships per session.
 - Only extract facts useful in FUTURE sessions. Skip ephemeral details (one-off questions, transient errors, session-specific data).
 - Confidence: 0.9+ = explicitly stated, 0.7-0.9 = strongly implied, 0.5-0.7 = inferred from context.
-- If nothing worth remembering, return {"facts": [], "entities": [], "relationships": []}.
+- If nothing worth remembering, return empty arrays but STILL try to extract a procedure if the session had multiple steps.
 - Prefer fewer high-quality extractions over many low-value ones.
 
 ## Output Format
@@ -1644,5 +2237,131 @@ mod tests {
     #[test]
     fn test_sanitize_task_type_empty() {
         assert_eq!(sanitize_task_type(""), "");
+    }
+
+    // ========================================================================
+    // Relationship canonicalization tests
+    // ========================================================================
+
+    fn make_entity(name: &str, entity_type: &str) -> ExtractedEntity {
+        ExtractedEntity {
+            name: name.to_string(),
+            entity_type: entity_type.to_string(),
+            properties: std::collections::HashMap::new(),
+        }
+    }
+
+    fn make_rel(source: &str, rel: &str, target: &str) -> ExtractedRelationship {
+        ExtractedRelationship {
+            source: source.to_string(),
+            target: target.to_string(),
+            relationship_type: rel.to_string(),
+        }
+    }
+
+    #[test]
+    fn canonicalize_drops_agent_analyzed_by_ticker() {
+        // The LLM sometimes emits `planner-agent analyzed_by PTON` which is
+        // nonsense. These should be dropped entirely.
+        let entities = vec![
+            make_entity("planner-agent", "tool"),
+            make_entity("PTON", "organization"),
+        ];
+        let rel = make_rel("planner-agent", "analyzed_by", "PTON");
+        assert!(canonicalize_relationship(&rel, &entities).is_none());
+    }
+
+    #[test]
+    fn canonicalize_inverts_used_by_to_uses() {
+        // `A used_by B` should become `B uses A`.
+        let entities = vec![
+            make_entity("code-agent", "tool"),
+            make_entity("portfolio-analysis", "project"),
+        ];
+        let rel = make_rel("code-agent", "used_by", "portfolio-analysis");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "portfolio-analysis");
+        assert_eq!(result.target, "code-agent");
+        assert_eq!(result.relationship_type, "uses");
+    }
+
+    #[test]
+    fn canonicalize_inverts_usedfor_to_uses() {
+        // `A usedfor B` → `B uses A` (same rule as used_by).
+        let entities = vec![
+            make_entity("planner-agent", "tool"),
+            make_entity("portfolio-analysis", "project"),
+        ];
+        let rel = make_rel("planner-agent", "usedfor", "portfolio-analysis");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "portfolio-analysis");
+        assert_eq!(result.target, "planner-agent");
+        assert_eq!(result.relationship_type, "uses");
+    }
+
+    #[test]
+    fn canonicalize_inverts_created_by_to_created() {
+        // `A created_by B` → `B created A`.
+        let entities = vec![
+            make_entity("financial_analysis.py", "file"),
+            make_entity("code-agent", "tool"),
+        ];
+        let rel = make_rel("financial_analysis.py", "created_by", "code-agent");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "code-agent");
+        assert_eq!(result.target, "financial_analysis.py");
+        assert_eq!(result.relationship_type, "created");
+    }
+
+    #[test]
+    fn canonicalize_preserves_correct_direction() {
+        // `PTON analyzed_by portfolio-analysis` is correct — keep as is.
+        let entities = vec![
+            make_entity("PTON", "organization"),
+            make_entity("portfolio-analysis", "project"),
+        ];
+        let rel = make_rel("PTON", "analyzed_by", "portfolio-analysis");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "PTON");
+        assert_eq!(result.target, "portfolio-analysis");
+        assert_eq!(result.relationship_type, "analyzed_by");
+    }
+
+    #[test]
+    fn canonicalize_swaps_inverted_analyzed_by() {
+        // `portfolio-analysis analyzed_by AAPL` is inverted — swap to
+        // `AAPL analyzed_by portfolio-analysis`.
+        let entities = vec![
+            make_entity("portfolio-analysis", "project"),
+            make_entity("AAPL", "organization"),
+        ];
+        let rel = make_rel("portfolio-analysis", "analyzed_by", "AAPL");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "AAPL");
+        assert_eq!(result.target, "portfolio-analysis");
+    }
+
+    #[test]
+    fn canonicalize_keeps_generic_relationships() {
+        // Relationships without special rules pass through unchanged.
+        let entities = vec![
+            make_entity("yfinance", "tool"),
+            make_entity("pandas", "tool"),
+        ];
+        let rel = make_rel("yfinance", "uses", "pandas");
+        let result = canonicalize_relationship(&rel, &entities).unwrap();
+        assert_eq!(result.source, "yfinance");
+        assert_eq!(result.target, "pandas");
+        assert_eq!(result.relationship_type, "uses");
+    }
+
+    #[test]
+    fn is_agent_name_detects_agent_suffixes() {
+        assert!(is_agent_name("planner-agent"));
+        assert!(is_agent_name("code-agent"));
+        assert!(is_agent_name("research_agent"));
+        assert!(is_agent_name("Planner-Agent")); // case insensitive
+        assert!(!is_agent_name("portfolio-analysis"));
+        assert!(!is_agent_name("yfinance"));
     }
 }

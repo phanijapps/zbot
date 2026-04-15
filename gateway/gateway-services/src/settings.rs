@@ -62,6 +62,10 @@ pub struct ExecutionSettings {
     /// Persistent chat session configuration.
     #[serde(default)]
     pub chat: ChatConfig,
+    /// Experimental UI feature flags. Free-form bag persisted verbatim so
+    /// we can gate beta surfaces without schema churn.
+    #[serde(default)]
+    pub feature_flags: std::collections::HashMap<String, bool>,
 }
 
 /// Root agent (orchestrator) configuration.
@@ -181,6 +185,7 @@ impl Default for ExecutionSettings {
             distillation: DistillationConfig::default(),
             multimodal: MultimodalConfig::default(),
             chat: ChatConfig::default(),
+            feature_flags: std::collections::HashMap::new(),
         }
     }
 }

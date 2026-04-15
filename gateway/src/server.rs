@@ -24,8 +24,7 @@ pub struct GatewayServer {
     ws_handler: Arc<WebSocketHandler>,
     shutdown_tx: Option<broadcast::Sender<()>>,
     bridge_retry_handle: Option<tokio::task::JoinHandle<()>>,
-    skills_watcher: Option<FileWatcher>,
-    agents_watcher: Option<FileWatcher>,
+    file_watcher: Option<FileWatcher>,
 }
 
 impl GatewayServer {
@@ -43,8 +42,7 @@ impl GatewayServer {
             ws_handler,
             shutdown_tx: None,
             bridge_retry_handle: None,
-            skills_watcher: None,
-            agents_watcher: None,
+            file_watcher: None,
         }
     }
 
@@ -108,6 +106,10 @@ impl GatewayServer {
             self.state.plugin_manager.set_bus(bus.clone()).await;
             self.state.bridge_bus = Some(bus);
         }
+
+        // Reconcile embedding backend: preflight Ollama, reindex on
+        // dim/model mismatch, spawn periodic health loop.
+        self.state.reconcile_embeddings_at_boot().await;
 
         // Seed default agents and other initial data (starts plugins)
         self.state.seed_defaults().await;
@@ -187,11 +189,8 @@ impl GatewayServer {
         // Pause all running sessions before shutting down
         self.pause_running_sessions();
 
-        // Stop file watchers
-        if let Some(ref mut w) = self.skills_watcher {
-            w.stop();
-        }
-        if let Some(ref mut w) = self.agents_watcher {
+        // Stop file watcher
+        if let Some(ref mut w) = self.file_watcher {
             w.stop();
         }
 
@@ -245,39 +244,34 @@ impl GatewayServer {
         }
     }
 
-    /// Start file watchers for hot-reloading skills and agents.
+    /// Start a single consolidated file watcher for skills + agents.
+    ///
+    /// One inotify instance shared across both directories; falls back to
+    /// polling if inotify is unavailable (e.g. kernel `fs.inotify.max_user_instances`
+    /// cap hit). Either way the daemon starts successfully and hot-reload works.
     fn start_file_watchers(&mut self) {
-        // Skills watcher
+        let mut watcher = FileWatcher::new(WatchConfig::default());
+
         let skills = self.state.skills.clone();
-        let mut watcher = FileWatcher::new(WatchConfig {
-            path: self.state.paths.skills_dir(),
-            debounce_ms: 500,
-            name: "skills".to_string(),
-        });
-        watcher.start(move |path| {
+        watcher.add_watch(self.state.paths.skills_dir(), "skills", move |path| {
             tracing::info!("Skills changed: {:?}, invalidating cache", path);
             let skills = skills.clone();
             tokio::spawn(async move {
                 skills.invalidate_cache().await;
             });
         });
-        self.skills_watcher = Some(watcher);
 
-        // Agents watcher
         let agents = self.state.agents.clone();
-        let mut watcher = FileWatcher::new(WatchConfig {
-            path: self.state.paths.agents_dir(),
-            debounce_ms: 500,
-            name: "agents".to_string(),
-        });
-        watcher.start(move |path| {
+        watcher.add_watch(self.state.paths.agents_dir(), "agents", move |path| {
             tracing::info!("Agents changed: {:?}, invalidating cache", path);
             let agents = agents.clone();
             tokio::spawn(async move {
                 agents.invalidate_cache().await;
             });
         });
-        self.agents_watcher = Some(watcher);
+
+        watcher.start();
+        self.file_watcher = Some(watcher);
     }
 
     /// Initialize the cron scheduler.

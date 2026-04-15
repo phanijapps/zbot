@@ -256,6 +256,33 @@ const Card = ({ size }) => (
 
 ---
 
+### Memory Tab — Command Deck
+
+Three-column layout under `apps/ui/src/features/memory/command-deck/`:
+
+- **Top bar:** `SearchBar` (FTS/HYBRID/SEMANTIC mode toggle, auto-fts for quoted phrases) + `ScopeChips` (per-type filter).
+- **Left (`WardRail`):** wards list with counts, global (`__*`) wards grouped separately.
+- **Center (`ContentDeck`):** tabs Facts / Wiki / Procedures / Episodes (+ Graph ↗ passthrough). Facts rendered via `ContentList` grouped by age bucket (TODAY / LAST 7 DAYS / HISTORICAL) with opacity decay.
+- **Right (`WriteRail` + `AddDrawer`):** `+ Fact / + Instruction / + Policy` presets (`+ Policy` maps to `instruction` category because the `MemoryCategory` union has no `policy` value).
+
+**Gating:** behind feature flag `memory_tab_command_deck` (see `useFeatureFlag.ts`). The `MemoryTabGate` component picks legacy vs command-deck. Barrel `features/memory/index.ts` re-exports the gate as `MemoryTab`, so future consumers of the symbol get the gated version transparently.
+
+**Data sources:**
+- `GET /api/wards/:ward_id/content` → aggregated ward content with server-stamped `age_bucket`
+- `POST /api/memory/search` → unified hybrid search across 4 types with `match_source` provenance
+- `GET /api/wards` → ward id + fact-count list for the rail
+- Existing `createMemory` transport → write-rail saves
+
+**Recency decay** uses `gateway-database::age_bucket` (server-side classifier). The UI maps buckets to CSS classes `.memory-item.decay-1` (last_7_days), `.memory-item.decay-2` (historical); "today" gets full opacity. The opacity curve lives entirely in CSS — no JS tick.
+
+**Search mode semantics:**
+- `hybrid` (default) — FTS5 + sqlite-vec with reciprocal-rank fusion, degrades to FTS-only when embedding backend unavailable
+- `fts` — never calls the embedding backend
+- `semantic` — requires embedding, bubbles 400 on failure
+- Quoted phrases (`"exact phrase"`) force FTS regardless of selected mode
+
+---
+
 ## Adding New Components
 
 1. Define CSS class in `components.css`

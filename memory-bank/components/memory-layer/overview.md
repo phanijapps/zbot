@@ -1,191 +1,200 @@
-# Memory Layer — The Brain
+# Memory Layer — v22 Overview
 
 ## Purpose
 
-The memory layer is z-Bot's cognitive system. It stores, retrieves, and applies knowledge across sessions so agents learn from experience, avoid past mistakes, and reuse existing work instead of rediscovering it.
+The memory layer gives every agent long-term, cross-session recall and a
+compact working set of what matters right now. It turns raw transcripts,
+distillations, and ingested documents into structured facts, a typed
+knowledge graph, ward-scoped wikis, reusable procedures, and tracked goals —
+all retrievable through one unified scored API.
 
-## Design Principles
+## Two-database split
 
-1. **Every recalled fact saves tokens** — a fact recalled is a fact the agent doesn't rediscover via tool calls
-2. **Corrections > strategies > domain** — priority ordering ensures rules are followed first
-3. **Accuracy over volume** — 10 verified facts beat 100 hallucinated ones
-4. **Ward-scoped + global** — facts belong to a ward or apply everywhere
-5. **Write everywhere, read smart** — distillation writes facts/entities/episodes after every session; recall surfaces only what's relevant
+Memory is split across two SQLite files so operational churn never drags on
+long-term durability:
 
-## When It Runs
+- **`conversations.db`** — operational state (sessions, agent executions,
+  messages, execution logs, artifacts, bridge outbox, recall log,
+  distillation runs). Pruned aggressively as sessions complete.
+  Schema: `gateway/gateway-database/src/schema.rs:357`.
+- **`knowledge.db`** — long-term memory (facts, KG entities/aliases/
+  relationships, wiki, procedures, session episodes, goals, compactions,
+  ingestion episodes + payloads, embedding cache). `sqlite-vec` loaded;
+  contains all five `vec0` virtual tables. Portable — back it up without
+  touching `conversations.db`.
+  Schema: `gateway/gateway-database/src/knowledge_schema.rs:24`.
 
-| Phase | What Happens | Trigger |
-|-------|-------------|---------|
-| **Session start** | `recall_with_graph()` injects recalled facts as system message | First message in `invoke_with_callback()` |
-| **Intent analysis** | `recall_for_intent()` enriches the intent prompt with memory context | Before intent LLM call |
-| **Ward entry** | Ward-scoped facts loaded when agent enters a ward | `WardTool` execution |
-| **Subagent spawn** | `recall_for_delegation()` primes subagent with corrections, skills, context | `spawn_delegated_agent()` |
-| **Mid-session** | `RecallHook` injects new facts every N turns | Executor loop (configurable) |
-| **Session end** | Distillation extracts facts, entities, relationships, episodes | Fire-and-forget after completion |
-| **Post-distillation** | ward.md and core_docs.md auto-regenerated | `auto_update_memory_bank()` |
+Both DBs carry schema version 22 (`SCHEMA_VERSION` constants in the same
+files). `knowledge_schema.rs` is applied idempotently on daemon boot: there
+are no migrations, only `CREATE TABLE IF NOT EXISTS`. Routing to
+`KnowledgeDatabase` vs the conversations pool is enforced by the repository
+layer.
 
-## Architecture
+## Six cognitive layers
+
+### Layer 0 — Facts
+Atomic propositions keyed by `(agent_id, scope, ward_id, key)`. Stored in
+`memory_facts` with an FTS5 shadow (`memory_facts_fts`) kept in sync via
+three triggers, and embeddings in the `memory_facts_index` vec0 table.
+Hybrid recall = BM25 (FTS) + cosine (vec0) merged per configured weights
+(`MemoryRepository::search_memory_facts_hybrid`,
+`gateway/gateway-database/src/memory_repository.rs:634`).
+Contradicted facts are tombstoned via `contradicted_by`/`superseded_by`;
+archival facts are copied to `memory_facts_archive` by
+`MemoryRepository::archive_fact`.
+
+### Layer 1 — Knowledge graph
+Typed entities (`kg_entities`), directional relationships
+(`kg_relationships`), surface-form aliases (`kg_aliases`), causal edges
+(`kg_causal_edges`), and per-extraction provenance via `kg_episodes` +
+`kg_episode_payloads`. Name embeddings live in `kg_name_index` (vec0).
+The resolver cascade (`services/knowledge-graph/src/resolver.rs:36`)
+dedups on write; the sleep-time compactor collapses near-duplicates on a
+schedule.
+
+### Layer 2 — Ward wiki
+Compiled per-ward articles unique on `(ward_id, title)` with a vec0
+index (`wiki_articles_index`) for similarity search. Written by the
+wiki compiler, queried via `WikiRepository::search_by_similarity`
+(`gateway/gateway-database/src/wiki_repository.rs`).
+
+### Layer 3 — Procedures
+Reusable multi-step workflows with JSON `steps`, success/failure
+counters, and `avg_duration_ms`/`avg_token_cost` for cost-aware
+selection. Backed by `procedures` + `procedures_index` (vec0),
+`ProcedureRepository::search_by_similarity`.
+
+### Layer 4 — Goals (Phase 3, new in v22)
+Intent lifecycle with slot tracking: `kg_goals(state, slots,
+filled_slots, parent_goal_id)`. Active goals drive intent-boost in
+recall (1.3× multiplier when a recalled item's content contains an
+unfilled slot name). See `GoalRepository::list_active`
+(`gateway/gateway-database/src/goal_repository.rs:116`) and
+`scored_item::intent_boost`
+(`gateway/gateway-execution/src/recall/scored_item.rs:81`).
+
+### Layer 5 — Sleep-time maintenance (Phase 4, new in v22)
+Hourly tokio task: `Compactor` → `DecayEngine` → `Pruner`. Runs
+per-agent, emits one `run_id` per cycle, records every merge and prune
+in `kg_compactions`. See `SleepTimeWorker::start`
+(`gateway/gateway-execution/src/sleep/worker.rs:28`).
+
+## sqlite-vec: one similarity mechanism
+
+Every vector search goes through a `vec0` virtual table. No hand-rolled
+cosine loops in the recall path, no BLOB columns duplicating embeddings
+on base rows (see the structural assertion at
+`gateway/gateway-database/src/knowledge_schema.rs:434`). The five vec0
+tables, all 384-dim:
+
+| Table | Partner table |
+|---|---|
+| `kg_name_index` | `kg_entities` |
+| `memory_facts_index` | `memory_facts` |
+| `wiki_articles_index` | `ward_wiki_articles` |
+| `procedures_index` | `procedures` |
+| `session_episodes_index` | `session_episodes` |
+
+Five `AFTER DELETE` triggers
+(`gateway/gateway-database/src/knowledge_schema.rs:315`) keep vec0 in
+lockstep with the base rows.
+
+## Streaming ingestion pipeline
 
 ```
-                    ┌─────────────────────────────────┐
-                    │         USER MESSAGE              │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │     SYSTEM-LEVEL RECALL           │
-                    │  recall_with_graph()              │
-                    │  → FTS5 (OR-joined terms)         │
-                    │  → Vector cosine similarity       │
-                    │  → Episode similarity search      │
-                    │  → Graph entity expansion         │
-                    │  → Predictive boost               │
-                    │  → Priority scoring               │
-                    │  ↓ Injected as system message     │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │     INTENT ANALYSIS + MEMORY      │
-                    │  recall_for_intent()              │
-                    │  → Corrections, strategies        │
-                    │  → Graph entities                 │
-                    │  → Similar past episodes          │
-                    │  ↓ Injected into intent prompt    │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │     AGENT EXECUTION               │
-                    │  WardTool → ward-entry recall     │
-                    │  MemoryTool → agent self-recall   │
-                    │  GrepTool → code discovery        │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │     SESSION DISTILLATION          │
-                    │  LLM extracts from transcript:    │
-                    │  → Facts (verified against tools) │
-                    │  → Entities (normalized names)    │
-                    │  → Relationships (deduped)        │
-                    │  → Episodes (with outcome)        │
-                    │  ↓ Stored in SQLite + KG          │
-                    └──────────┬──────────────────────┘
-                               │
-                    ┌──────────▼──────────────────────┐
-                    │     WARD KNOWLEDGE SYNC           │
-                    │  ward.md — curated rules (≤1KB)   │
-                    │  core_docs.md — all code sigs     │
-                    │  structure.md — directory tree     │
-                    └─────────────────────────────────┘
+HTTP POST /api/memory/ingest
+    │
+    ▼
+chunker      (ingest/chunker.rs:37 — paragraph-aware, 1000 tok ±100 overlap)
+    │
+    ▼
+for each chunk:
+    KgEpisodeRepository::upsert_pending   (content_hash dedup)
+    KgEpisodeRepository::set_payload      (full chunk text)
+    IngestionQueue::notify                (wake workers)
+    │
+    ▼                                     <-- HTTP returns 202 here
+queue worker (ingest/queue.rs:64)
+    │
+    ▼
+Extractor::process                        (ingest/extractor.rs:16)
+    pass 1: entities
+    pass 2: relationships (conditioned on entity list)
+    GraphStorage::store_knowledge → resolver cascade
+    │
+    ▼
+KgEpisodeRepository::mark_done | mark_failed
 ```
 
-## Storage
+Backpressure (`ingest/backpressure.rs:28`) gates both global queue depth
+(default 5000) and per-source pending count (default 500) before
+enqueue. Violations return `Err` → HTTP 429.
 
-| Store | Location | What |
-|-------|----------|------|
-| `memory_facts` | `conversations.db` | 238+ facts with embeddings, categories, confidence, ward scoping |
-| `embedding_cache` | `conversations.db` | SHA-256 hash → embedding vector cache |
-| `session_episodes` | `conversations.db` | Session outcomes with strategy, learnings, embeddings |
-| `recall_log` | `conversations.db` | Which facts were recalled per session (for predictive recall) |
-| `distillation_runs` | `conversations.db` | Tracking extraction runs (success/failed/skipped) |
-| `memory_facts_archive` | `conversations.db` | Pruned/archived facts |
-| `kg_entities` | `knowledge_graph.db` | Entities (persons, files, projects, tools) with mention counts |
-| `kg_relationships` | `knowledge_graph.db` | Entity relationships (created, part_of, related_to) |
-| `ward.md` | `wards/{id}/memory-bank/` | Curated rules: max 5 corrections, 3 strategies, 2 warnings |
-| `core_docs.md` | `wards/{id}/memory-bank/` | Code inventory: all files with function signatures |
-| `structure.md` | `wards/{id}/memory-bank/` | Directory tree with file purposes |
+## Unified scored recall
 
-## Recall Scoring Pipeline
+`MemoryRecall::recall_unified`
+(`gateway/gateway-execution/src/recall/mod.rs:826`) pulls from five
+sources, adapts each row into `ScoredItem` (`recall/adapters.rs`), applies
+`intent_boost` against active goals, and fuses the ranked lists via
+Reciprocal Rank Fusion (`k = 60.0`,
+`recall/scored_item.rs:41`):
 
-```
-base_score = (0.7 × vector_cosine) + (0.3 × BM25_score)
-    × category_weight    (correction: 1.5, strategy: 1.4, user: 1.3, instruction: 1.2, domain: 1.0)
-    × ward_affinity      (1.3x if fact matches current ward)
-    × temporal_decay      (exponential decay with per-category half-lives)
-    × mention_boost       (1.0 + log2(mention_count))
-    × contradiction_penalty (0.7x if contradicted)
-    × predictive_boost    (1.3x if recalled in similar past sessions)
-```
+1. Facts — `MemoryRepository::search_memory_facts_hybrid` (BM25 + cosine)
+2. Wiki — `WikiRepository::search_by_similarity` (ward-scoped)
+3. Procedures — `ProcedureRepository::search_by_similarity`
+4. Graph — `GraphStorage::search_entities_by_name_embedding` (ANN via
+   `kg_name_index`)
+5. Goals — projected directly from `GoalRepository::list_active`
 
-## Recall Output Format
+Missing subsystems are silently skipped — the caller gets whatever
+sources are wired.
 
-```markdown
-## Rules (from past corrections — ALWAYS follow these)
-- NEVER rely on LLM training data for factual content...
-- Always use duckduckgo-search skill for web research...
+## Sleep-time maintenance
 
-### Warnings (past failures — avoid these approaches)
-- FAILED: Built inflation app without research — no real data.
+`SleepTimeWorker` spawns one background tokio task per agent. Each cycle:
 
-### Preferences & Instructions
-- User prefers visual, ADHD-friendly content with 3-minute sections
+1. **Compactor** (`sleep/compactor.rs:57`) — for each of 5 entity types
+   (Person, Organization, Location, Event, Concept), fetches duplicate
+   candidates at cosine ≥ 0.92 and calls
+   `GraphStorage::merge_entity_into` (up to 50 pairs per type).
+   `PairwiseVerifier` trait is defined but not wired in Phase 4.
+2. **DecayEngine** (`sleep/decay.rs:45`) — surfaces orphan entities with
+   no relationships and `last_seen_at` older than `min_age_days` (default
+   30). Archival entities are excluded at the SQL level.
+3. **Pruner** (`sleep/pruner.rs:28`) — calls `GraphStorage::mark_pruned`,
+   which sets `compressed_into = '__pruned__'` and deletes the row from
+   `kg_name_index`. Recall queries filter on `compressed_into IS NULL`.
 
-### Past Experiences
-- SPY analysis (2026-04-05): SUCCESS — planner→code→data-analyst, 300K tokens
+Cycles can be forced via `POST /api/memory/consolidate`
+(`SleepTimeWorker::trigger`, `sleep/worker.rs:73`). One `run_id` per
+cycle is recorded across all merge and prune rows in `kg_compactions`
+for audit.
 
-### Domain Knowledge
-- [domain] Portfolio: PTON, NVDA, TSLA, AAPL, SPY at 20% each
+## Observability
 
-### Related Entities
-- PTON (organization) — analyzed by data-analyst, code-agent
-```
+- `GET /api/memory/stats` — counts per fact/entity/relationship/wiki/
+  procedure; last sleep-time run summary.
+- `GET /api/memory/health` — ingestion queue depth, status counts,
+  consolidator liveness.
+- `POST /api/memory/consolidate` — force an immediate sleep-time cycle.
 
-## Policies, Instructions & About Me
+Wired in `gateway/src/http/memory.rs`.
 
-Three types of user-managed memory entries, all stored as regular memory facts with different categories:
+## Performance (baseline)
 
-| Type | Category | Confidence | Weight | Purpose |
-|------|----------|------------|--------|---------|
-| **Policy** | `correction` | 1.0 | 1.5x | Hard rules agents MUST follow |
-| **Instruction** | `instruction` | 0.9 | 1.2x | Soft preferences that guide behavior |
-| **About Me** | `user` | 0.95 | 1.3x | Personal context for personalization |
+All three Phase 4 budgets met by ≥1000× margin on a consumer-grade dev
+box. Full numbers in
+`docs/memory-v2-performance-baseline.md`:
 
-All user-created entries are **pinned** (protected from distillation overwrite).
+- Resolver p95: **2.15 ms** vs 20 ms budget (9.3× under).
+- Reader p95 under ingest load: **140 µs** vs 200 ms budget (1400× under).
+- Sleep-time cycle: well within the hourly interval even under load.
 
-### Reserved Key Prefixes
+## Further reading
 
-Keys starting with `policy.`, `instruction.`, or `user.profile` are **reserved** — distillation skips them entirely. Only the user can create/edit/delete these via the Memory UI or setup wizard.
-
-### Default Policies (shipped in template)
-
-8 policies + 2 instructions + 1 about-me seeded on first run from `gateway/templates/default_policies.json`:
-- Research first (never rely on training data)
-- Code modularity (files < 3KB, import existing)
-- Web research tools (use skills, not shell curl)
-- Atomic delegation (one file per step)
-- Ward first (enter ward, read docs)
-- Planner discovers agents (call list_agents)
-- Update docs after code (core_docs.md mandatory)
-- Full delegation spec (include goal, input, output, acceptance)
-- Output format preference (interactive HTML, Tailwind)
-- Documentation quality (SDK-level core_docs.md)
-- Default about-me ("I am a private person, just call me Mr Z.")
-
-### Protection Layers
-
-1. **Reserved key prefixes** — distillation skips `policy.*`, `instruction.*`, `user.profile*`
-2. **Pinned flag** — SQL guards prevent content/confidence overwrite on pinned facts
-3. **Content dedup** — 60% word overlap check prevents near-duplicate facts under different keys
-
-### UI
-
-Memory page → "Add" button → Slideover with:
-- Type selector: Policy (shield), Instruction (lightbulb), About Me (user)
-- New entry textarea with contextual placeholder
-- Existing entries for selected type (view + remove)
-
-Setup wizard Step 1 includes "About You" textarea alongside agent name.
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `gateway/gateway-database/src/memory_repository.rs` | MemoryFact CRUD, FTS5 search, vector search, hybrid search |
-| `gateway/gateway-database/src/episode_repository.rs` | SessionEpisode storage, similarity search |
-| `gateway/gateway-database/src/recall_log_repository.rs` | Tracks which facts recalled per session |
-| `gateway/gateway-execution/src/recall.rs` | MemoryRecall service: recall(), recall_with_graph(), recall_for_intent(), recall_for_delegation() |
-| `gateway/gateway-execution/src/distillation.rs` | SessionDistiller: LLM fact/entity/episode extraction with verification |
-| `gateway/gateway-execution/src/ward_sync.rs` | Generates curated ward.md from facts (deduped, capped) |
-| `gateway/gateway-execution/src/runner.rs` | auto_update_memory_bank(): generates core_docs.md + structure.md |
-| `gateway/gateway-services/src/recall_config.rs` | RecallConfig with deep-merge JSON overrides |
-| `gateway/gateway-database/src/memory_fact_store.rs` | MemoryFactStore trait impl with contradiction detection |
-| `services/knowledge-graph/src/storage.rs` | GraphStorage: entities, relationships, dedup, normalization |
-| `runtime/agent-tools/src/tools/memory.rs` | MemoryTool: agent-facing save_fact/recall actions |
+- [`data-model.md`](./data-model.md) — full v22 schema, table by table.
+- [`knowledge-graph.md`](./knowledge-graph.md) — resolver cascade,
+  compactor, pruner, merge semantics.
+- [`backlog.md`](./backlog.md) — known gaps and deferred work.
+- `docs/superpowers/specs/2026-04-12-memory-layer-redesign-design.md` —
+  umbrella design spec (trust the code when the spec diverges).

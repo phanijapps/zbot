@@ -16,16 +16,18 @@ use crate::services::{
     SharedVaultPaths, SkillService, VaultPaths,
 };
 use agent_runtime::llm::EmbeddingClient;
-use agent_runtime::llm::LocalEmbeddingClient;
 use agent_tools::MemoryEntry;
 use agent_tools::MemoryStore;
 use api_logs::LogService;
 use chrono::Utc;
 use execution_state::StateService;
+use gateway_database::vector_index::{SqliteVecIndex, VectorIndex};
 use gateway_database::{
-    DistillationRepository, EpisodeRepository, MemoryRepository, RecallLogRepository,
+    DistillationRepository, EpisodeRepository, KgEpisodeRepository, KnowledgeDatabase,
+    MemoryRepository, ProcedureRepository, RecallLogRepository, WardWikiRepository,
 };
-use knowledge_graph::{GraphService, GraphStorage, SqliteGraphTraversal};
+use gateway_services::EmbeddingService;
+use knowledge_graph::{GraphService, GraphStorage};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -60,6 +62,9 @@ pub struct AppState {
     /// Conversation repository for message persistence.
     pub conversations: Arc<ConversationRepository>,
 
+    /// Knowledge database — memory facts, graph, vec0 indexes.
+    pub knowledge_db: Arc<KnowledgeDatabase>,
+
     /// Settings service for application configuration.
     pub settings: Arc<SettingsService>,
 
@@ -84,6 +89,9 @@ pub struct AppState {
     /// Memory repository for accessing agent memory facts.
     pub memory_repo: Option<Arc<MemoryRepository>>,
 
+    /// Goal repository — active goals used for intent boost in unified recall.
+    pub goal_repo: Option<Arc<gateway_database::GoalRepository>>,
+
     /// Distillation repository for tracking distillation run outcomes.
     pub distillation_repo: Option<Arc<DistillationRepository>>,
 
@@ -93,8 +101,17 @@ pub struct AppState {
     /// Episode repository for accessing session episodes.
     pub episode_repo: Option<Arc<EpisodeRepository>>,
 
+    /// Knowledge graph episode repository (Phase 6a+).
+    pub kg_episode_repo: Option<Arc<KgEpisodeRepository>>,
+
     /// Graph service for knowledge graph operations.
     pub graph_service: Option<Arc<GraphService>>,
+
+    /// Streaming ingestion queue (Phase 2) — None when graph is unavailable.
+    pub ingestion_queue: Option<Arc<gateway_execution::ingest::IngestionQueue>>,
+
+    /// Per-source + global backpressure gate for `/api/graph/ingest`.
+    pub ingestion_backpressure: Option<Arc<gateway_execution::ingest::Backpressure>>,
 
     /// Cron scheduler for scheduled agent triggers.
     /// Optional because it requires async initialization with GatewayBus.
@@ -106,8 +123,19 @@ pub struct AppState {
     /// Session archiver for offloading old transcripts to compressed files.
     pub session_archiver: Option<Arc<SessionArchiver>>,
 
+    /// Sleep-time worker — triggers graph compaction/consolidation cycles.
+    /// Set by server.start() in Phase 4 Task 10; `None` until then.
+    pub sleep_time_worker: Option<Arc<gateway_execution::sleep::SleepTimeWorker>>,
+
+    /// Compaction repository — read-model for the last compaction run.
+    /// Set by server.start() in Phase 4 Task 10; `None` until then.
+    pub compaction_repo: Option<Arc<gateway_database::CompactionRepository>>,
+
     /// Model capabilities registry (bundled + local overrides).
     pub model_registry: Arc<ModelRegistry>,
+
+    /// Embedding service — owns live EmbeddingClient, supports backend swap.
+    pub embedding_service: Arc<EmbeddingService>,
 
     /// Cached workspace context (shared with ExecutionRunner).
     workspace_cache: WorkspaceCache,
@@ -153,6 +181,11 @@ impl AppState {
         );
         let conversation_repo = Arc::new(ConversationRepository::new(db_manager.clone()));
 
+        // Initialize knowledge database (memory facts, graph, vec0 indexes)
+        let knowledge_db = Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        );
+
         // Create log service for execution tracing
         let log_service = Arc::new(LogService::new(db_manager.clone()));
 
@@ -170,14 +203,25 @@ impl AppState {
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
 
-        // Initialize memory evolution services
-        let memory_repo = Arc::new(MemoryRepository::new(db_manager.clone()));
+        // Initialize memory evolution services — repositories that need vector
+        // similarity get a SqliteVecIndex over their vec0 partner table.
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
+        let goal_repo = Arc::new(gateway_database::GoalRepository::new(knowledge_db.clone()));
         let distillation_repo = Arc::new(DistillationRepository::new(db_manager.clone()));
-        let episode_repo = Arc::new(EpisodeRepository::new(db_manager.clone()));
+        let episode_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "session_episodes_index", "episode_id")
+                .expect("vec index init"),
+        );
+        let episode_repo = Arc::new(EpisodeRepository::new(knowledge_db.clone(), episode_vec));
+        let kg_episode_repo = Arc::new(KgEpisodeRepository::new(knowledge_db.clone()));
 
         // Initialize knowledge graph service and storage
         let (graph_service, graph_storage): (Option<Arc<GraphService>>, Option<Arc<GraphStorage>>) =
-            match GraphStorage::new(paths.knowledge_graph_db()) {
+            match GraphStorage::new(knowledge_db.clone()) {
                 Ok(storage) => {
                     let storage = Arc::new(storage);
                     let service = Arc::new(GraphService::new(storage.clone()));
@@ -190,14 +234,38 @@ impl AppState {
                 }
             };
 
-        let embedding_client: Option<Arc<dyn EmbeddingClient>> = {
-            let client = LocalEmbeddingClient::new();
-            tracing::info!(
-                "Local embedding client created (lazy, {}d)",
-                client.dimensions()
-            );
-            Some(Arc::new(client))
+        // EmbeddingService — owns the live EmbeddingClient and supports
+        // hot-swap between internal (fastembed) and Ollama backends.
+        // Phase 1 of embedding-backend-selection: boot succeeds even if the
+        // configured Ollama endpoint is unreachable; consumers continue
+        // holding their Arc<dyn EmbeddingClient> cloned from service.client().
+        let embedding_service = match EmbeddingService::from_config(paths.clone()) {
+            Ok(svc) => Arc::new(svc),
+            Err(e) => {
+                tracing::warn!(
+                    "EmbeddingService init failed ({e}); falling back to internal/384d default"
+                );
+                Arc::new(
+                    EmbeddingService::with_config(paths.clone(), Default::default())
+                        .expect("default EmbeddingService must build"),
+                )
+            }
         };
+        // Best-effort boot-time reindex. Non-fatal.
+        if let Err(e) = embedding_service.ensure_indexed_blocking() {
+            tracing::warn!("EmbeddingService ensure_indexed_blocking failed: {e}");
+        }
+        // Hand downstream (distillation, recall, memory_fact_store, etc.) a
+        // LiveEmbeddingClient wrapper so they follow ArcSwap backend changes
+        // instead of caching the boot-time client (which would still be the
+        // Noop / Unconfigured client after the user later picks Ollama).
+        let embedding_client: Option<Arc<dyn EmbeddingClient>> = Some(Arc::new(
+            gateway_services::LiveEmbeddingClient::new(embedding_service.clone()),
+        ));
+        tracing::info!(
+            "Embedding client ready (lazy, {}d)",
+            embedding_service.dimensions()
+        );
 
         // Load recall configuration (compiled defaults merged with optional user overrides)
         let recall_config = Arc::new(gateway_services::RecallConfig::load_from_path(
@@ -230,14 +298,27 @@ impl AppState {
         let recall_log = Arc::new(RecallLogRepository::new(db_manager.clone()));
         memory_recall_inner.set_recall_log(recall_log);
 
-        // Wire graph traversal engine for graph-driven expansion in recall
-        if let Some(ref gs) = graph_storage {
-            let traversal = Arc::new(SqliteGraphTraversal::new(
-                gs.clone(),
-                recall_config.graph_traversal.hop_decay,
-            ));
-            memory_recall_inner.set_traversal(traversal);
-        }
+        // Wire ward wiki repository for wiki-first recall
+        let wiki_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "wiki_articles_index", "article_id")
+                .expect("vec index init"),
+        );
+        let wiki_repo = Arc::new(WardWikiRepository::new(
+            knowledge_db.clone(),
+            wiki_vec.clone(),
+        ));
+        memory_recall_inner.set_wiki_repo(wiki_repo);
+
+        // Wire procedure repository for procedure recall during intent analysis
+        let procedure_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("vec index init"),
+        );
+        let procedure_repo = Arc::new(ProcedureRepository::new(
+            knowledge_db.clone(),
+            procedure_vec,
+        ));
+        memory_recall_inner.set_procedure_repo(procedure_repo.clone());
 
         let memory_recall = Arc::new(memory_recall_inner);
 
@@ -245,14 +326,20 @@ impl AppState {
         // also needs it so the memory fact store can generate embeddings.
         let runner_embedding_client = embedding_client.clone();
 
+        // Clone graph_storage before it's moved into the distiller — the runner
+        // also needs it for the graph_query tool.
+        let runner_graph_storage = graph_storage.clone();
+
         let episode_repo_ref = episode_repo.clone();
 
         // Create settings service (before distiller & runtime, so we can read execution settings)
         let settings = Arc::new(SettingsService::new(paths.clone()));
 
-        let distiller = Arc::new(SessionDistiller::new(
+        let wiki_repo = Arc::new(WardWikiRepository::new(knowledge_db.clone(), wiki_vec));
+
+        let mut distiller_inner = SessionDistiller::new(
             provider_service.clone(),
-            embedding_client,
+            embedding_client.clone(),
             conversation_repo.clone(),
             memory_repo.clone(),
             graph_storage,
@@ -260,7 +347,10 @@ impl AppState {
             Some(episode_repo),
             paths.clone(), // For loading distillation_prompt.md
             Some(settings.clone()),
-        ));
+        );
+        distiller_inner.set_wiki_repo(wiki_repo);
+        distiller_inner.set_procedure_repo(procedure_repo.clone());
+        let distiller = Arc::new(distiller_inner);
 
         // Keep a handle for on-demand distillation (backfill, trigger)
         let distiller_ref = distiller.clone();
@@ -269,6 +359,49 @@ impl AppState {
             .map(|s| s.max_parallel_agents)
             .unwrap_or(2);
         tracing::info!(max_parallel_agents, "Execution settings loaded");
+
+        // Create streaming ingestion queue + backpressure BEFORE the runtime so the
+        // runner can be wired with an IngestionAdapter.
+        // Requires graph_storage — if the graph failed to initialize, we skip.
+        let (ingestion_queue, ingestion_backpressure) = match runner_graph_storage.as_ref().cloned()
+        {
+            Some(gs) => {
+                let extractor = Arc::new(gateway_execution::ingest::extractor::LlmExtractor::new(
+                    provider_service.clone(),
+                    "root".to_string(),
+                ));
+                let queue = Arc::new(gateway_execution::ingest::IngestionQueue::start(
+                    2,
+                    kg_episode_repo.clone(),
+                    gs,
+                    extractor,
+                ));
+                let bp = Arc::new(gateway_execution::ingest::Backpressure::new(
+                    gateway_execution::ingest::BackpressureConfig::default(),
+                    kg_episode_repo.clone(),
+                ));
+                (
+                    Some(queue) as Option<Arc<gateway_execution::ingest::IngestionQueue>>,
+                    Some(bp) as Option<Arc<gateway_execution::ingest::Backpressure>>,
+                )
+            }
+            None => (None, None),
+        };
+
+        // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
+        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> =
+            ingestion_queue.as_ref().map(|q| {
+                Arc::new(
+                    gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
+                        q.clone(),
+                        kg_episode_repo.clone(),
+                    ),
+                ) as Arc<dyn agent_tools::IngestionAccess>
+            });
+        let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = Some(Arc::new(
+            gateway_execution::invoke::goal_adapter::GoalAdapter::new(goal_repo.clone()),
+        )
+            as Arc<dyn agent_tools::GoalAccess>);
 
         // Create runtime with execution runner and connector registry
         let runtime = Arc::new(RuntimeService::with_runner_and_connectors(
@@ -290,7 +423,103 @@ impl AppState {
             Some(bridge_outbox.clone()),
             runner_embedding_client,
             max_parallel_agents,
+            runner_graph_storage.clone(),
+            Some(kg_episode_repo.clone()),
+            ingestion_adapter,
+            goal_adapter,
         ));
+
+        // Phase 4: CompactionRepository + SleepTimeWorker (background maintenance).
+        let compaction_repo = Arc::new(gateway_database::CompactionRepository::new(
+            knowledge_db.clone(),
+        ));
+
+        // One-shot backfill: populate legacy kg_entities / kg_relationships
+        // rows with the richer metadata introduced in commits b816702,
+        // 1bc21f6, 5bf3013. Marker row in kg_compactions gates this so
+        // subsequent daemon starts are a no-op. Non-fatal on failure —
+        // a backfill bug must never prevent the daemon from booting.
+        {
+            let backfiller = gateway_execution::sleep::KgBackfiller::new(knowledge_db.clone());
+            match backfiller.run_once_blocking() {
+                Ok(stats) if stats.already_done => {
+                    tracing::debug!("kg_backfill: marker present, skipping");
+                }
+                Ok(stats) => {
+                    tracing::info!(
+                        entities_scanned = stats.entities_scanned,
+                        entities_updated = stats.entities_updated,
+                        relationships_scanned = stats.relationships_scanned,
+                        relationships_updated = stats.relationships_updated,
+                        "kg_backfill: completed",
+                    );
+                }
+                Err(e) => {
+                    tracing::error!(error = %e, "kg_backfill: failed (non-fatal)");
+                }
+            }
+        }
+
+        let sleep_time_worker = runner_graph_storage.as_ref().cloned().map(|gs| {
+            let verifier: Option<Arc<dyn gateway_execution::sleep::compactor::PairwiseVerifier>> =
+                Some(Arc::new(
+                    gateway_execution::sleep::LlmPairwiseVerifier::new(provider_service.clone()),
+                ));
+            let compactor = Arc::new(gateway_execution::sleep::Compactor::new(
+                gs.clone(),
+                compaction_repo.clone(),
+                verifier,
+            ));
+            let decay = Arc::new(gateway_execution::sleep::DecayEngine::new(
+                gs.clone(),
+                gateway_execution::sleep::DecayConfig::default(),
+            ));
+            let pruner = Arc::new(gateway_execution::sleep::Pruner::new(
+                gs,
+                compaction_repo.clone(),
+            ));
+            // Synthesizer + PatternExtractor — both depend on a default LLM
+            // provider being configured. We construct them unconditionally;
+            // the ops themselves log+skip if provider listing fails at run
+            // time, so a bootless config never aborts the cycle.
+            let synth_llm = Arc::new(gateway_execution::sleep::LlmSynthesizer::new(
+                provider_service.clone(),
+            ));
+            let synthesizer = Arc::new(gateway_execution::sleep::Synthesizer::new(
+                knowledge_db.clone(),
+                memory_repo.clone(),
+                compaction_repo.clone(),
+                synth_llm,
+                embedding_client.clone(),
+            ));
+            let pattern_llm = Arc::new(gateway_execution::sleep::LlmPatternExtractor::new(
+                provider_service.clone(),
+            ));
+            let pattern_extractor = Arc::new(gateway_execution::sleep::PatternExtractor::new(
+                knowledge_db.clone(),
+                db_manager.clone(),
+                procedure_repo.clone(),
+                compaction_repo.clone(),
+                pattern_llm,
+            ));
+            let orphan_archiver = Arc::new(gateway_execution::sleep::OrphanArchiver::new(
+                knowledge_db.clone(),
+                compaction_repo.clone(),
+            ));
+            let ops = gateway_execution::sleep::SleepOps {
+                synthesizer: Some(synthesizer),
+                pattern_extractor: Some(pattern_extractor),
+                orphan_archiver: Some(orphan_archiver),
+            };
+            Arc::new(gateway_execution::sleep::SleepTimeWorker::start_with_ops(
+                compactor,
+                decay,
+                pruner,
+                ops,
+                std::time::Duration::from_secs(60 * 60),
+                "root".to_string(),
+            ))
+        });
 
         // Create hook registry
         let hook_registry = Arc::new(HookRegistry::new(event_bus.clone()));
@@ -316,6 +545,7 @@ impl AppState {
             hook_registry: Some(hook_registry),
             delegation_registry,
             conversations: conversation_repo,
+            knowledge_db,
             settings,
             log_service,
             state_service,
@@ -325,16 +555,23 @@ impl AppState {
             bridge_bus: None,     // Set by server.start() before router creation
             cron_scheduler: None, // Initialized by server.start()
             session_archiver: Some(session_archiver),
+            sleep_time_worker,
+            compaction_repo: Some(compaction_repo),
             plugin_manager,
             model_registry,
+            embedding_service,
             workspace_cache,
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            goal_repo: Some(goal_repo),
             distillation_repo: Some(distillation_repo),
             distiller: Some(distiller_ref),
             episode_repo: Some(episode_repo_ref),
+            kg_episode_repo: Some(kg_episode_repo),
             graph_service,
+            ingestion_queue,
+            ingestion_backpressure,
         }
     }
 
@@ -354,9 +591,14 @@ impl AppState {
         let log_service = Arc::new(LogService::new(db_manager.clone()));
         let bridge_outbox = Arc::new(gateway_bridge::OutboxRepository::new(db_manager.clone()));
         let state_service = Arc::new(StateService::new(db_manager));
-        let memory_repo = Arc::new(MemoryRepository::new(Arc::new(
-            DatabaseManager::new(paths.clone()).expect("Failed to initialize database for memory"),
-        )));
+        let knowledge_db = Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        );
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create connector registry
         let connector_service = ConnectorService::new(paths.clone());
@@ -383,6 +625,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations: conversation_repo,
+            knowledge_db,
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -392,16 +635,26 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             session_archiver: None,
+            sleep_time_worker: None,
+            compaction_repo: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
+            embedding_service: Arc::new(
+                EmbeddingService::with_config(paths.clone(), Default::default())
+                    .expect("default EmbeddingService must build"),
+            ),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            goal_repo: None,
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            kg_episode_repo: None,
             graph_service: None,
+            ingestion_queue: None,
+            ingestion_backpressure: None,
         }
     }
 
@@ -421,9 +674,14 @@ impl AppState {
         paths: SharedVaultPaths,
     ) -> Self {
         let config_dir = paths.vault_dir().clone();
-        let db =
-            Arc::new(DatabaseManager::new(paths.clone()).expect("Failed to initialize database"));
-        let memory_repo = Arc::new(MemoryRepository::new(db));
+        let knowledge_db = Arc::new(
+            KnowledgeDatabase::new(paths.clone()).expect("Failed to initialize knowledge database"),
+        );
+        let memory_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let memory_repo = Arc::new(MemoryRepository::new(knowledge_db.clone(), memory_vec));
 
         // Create bridge registry and outbox
         let bridge_registry = Arc::new(gateway_bridge::BridgeRegistry::new());
@@ -453,6 +711,7 @@ impl AppState {
             hook_registry: None,
             delegation_registry: Arc::new(DelegationRegistry::new()),
             conversations,
+            knowledge_db,
             settings: Arc::new(SettingsService::new(paths.clone())),
             log_service,
             state_service,
@@ -462,16 +721,26 @@ impl AppState {
             bridge_bus: None,
             cron_scheduler: None,
             session_archiver: None,
+            sleep_time_worker: None,
+            compaction_repo: None,
             model_registry: Arc::new(ModelRegistry::load(&[], paths.vault_dir())),
+            embedding_service: Arc::new(
+                EmbeddingService::with_config(paths.clone(), Default::default())
+                    .expect("default EmbeddingService must build"),
+            ),
             plugin_manager,
             workspace_cache: new_workspace_cache(),
             paths,
             config_dir,
             memory_repo: Some(memory_repo),
+            goal_repo: None,
             distillation_repo: None,
             distiller: None,
             episode_repo: None,
+            kg_episode_repo: None,
             graph_service: None,
+            ingestion_queue: None,
+            ingestion_backpressure: None,
         }
     }
 
@@ -479,6 +748,73 @@ impl AppState {
     pub fn with_hook_registry(mut self, hook_registry: Arc<HookRegistry>) -> Self {
         self.hook_registry = Some(hook_registry);
         self
+    }
+
+    /// Reconcile the indexed embedding dim against the current client dim.
+    ///
+    /// Runs at boot (from `GatewayServer::start`) and performs three things:
+    ///
+    /// 1. Pre-emptive Ollama ping — surfaces unreachability in `Health`
+    ///    immediately instead of waiting for the periodic health loop.
+    /// 2. If `needs_reindex()`, invokes
+    ///    [`gateway_execution::sleep::embedding_reindex::reindex_all`] against
+    ///    the live knowledge database, then writes the `.embedding-state`
+    ///    marker on success.
+    /// 3. Spawns the periodic health-check loop (60s tick).
+    ///
+    /// All failures are logged — embeddings-based recall degrades to FTS in
+    /// the existing `recall_unified` path if the reindex does not complete.
+    pub async fn reconcile_embeddings_at_boot(&self) {
+        // 1. Preflight.
+        self.embedding_service.preflight().await;
+
+        // 2. Reindex if the marker dim disagrees with the live dim.
+        if self.embedding_service.needs_reindex() {
+            let current_dim = self.embedding_service.dimensions();
+            tracing::info!(
+                dim = current_dim,
+                "Embedding dim/model mismatch vs marker — reindexing at boot"
+            );
+            let client = self.embedding_service.client();
+            let svc = self.embedding_service.clone();
+            let on_progress = move |table: &'static str, current: usize, total: usize| {
+                svc.publish_health(gateway_services::Health::Reindexing {
+                    table: table.to_string(),
+                    current,
+                    total,
+                });
+            };
+            match gateway_execution::sleep::embedding_reindex::reindex_all(
+                &self.knowledge_db,
+                client,
+                current_dim,
+                &on_progress,
+            )
+            .await
+            {
+                Ok(_) => {
+                    if let Err(e) = self.embedding_service.mark_indexed(current_dim) {
+                        tracing::warn!("mark_indexed failed after boot reindex: {e}");
+                    } else {
+                        tracing::info!("Boot reindex complete at dim={current_dim}");
+                    }
+                    self.embedding_service
+                        .publish_health(gateway_services::Health::Ready);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Boot reindex failed: {e} — embeddings will be stale until next reconfigure"
+                    );
+                    // Leave health as-is (preflight already set any Ollama state);
+                    // recall_unified falls back to FTS.
+                }
+            }
+        }
+
+        // 3. Start periodic health loop.
+        let _handle = self.embedding_service.clone().start_health_loop();
+        // JoinHandle intentionally dropped — loop lives for the process
+        // lifetime; daemon shutdown drops the runtime.
     }
 
     /// Seed default agents and other initial data.
@@ -681,7 +1017,13 @@ impl AppState {
                 created_at: now.clone(),
                 updated_at: now.clone(),
                 expires_at: None,
+                valid_from: None,
+                valid_until: None,
+                superseded_by: None,
                 pinned,
+                epistemic_class: Some("current".to_string()),
+                source_episode_id: None,
+                source_ref: None,
             };
 
             if memory_repo.upsert_memory_fact(&fact).is_ok() {

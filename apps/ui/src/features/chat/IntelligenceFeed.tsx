@@ -43,6 +43,7 @@ export interface IntelligenceFeedProps {
   plan: PlanStep[];
   intentAnalysis: IntentAnalysis | null;
   sessionId: string | null;
+  artifactsRefreshKey?: number;
   onArtifactClick: (artifact: Artifact) => void;
 }
 
@@ -71,6 +72,7 @@ export function IntelligenceFeed({
   plan,
   intentAnalysis,
   sessionId,
+  artifactsRefreshKey,
   onArtifactClick,
 }: IntelligenceFeedProps) {
   const [artifacts, setArtifacts] = useState<Artifact[]>([]);
@@ -85,7 +87,7 @@ export function IntelligenceFeed({
     }
     load();
     return () => { cancelled = true; };
-  }, [sessionId]);
+  }, [sessionId, artifactsRefreshKey]);
 
   return (
     <div>

@@ -44,6 +44,7 @@ tower-http = { version = "0.5", features = ["cors", "trace", "fs"] }
 # Async runtime
 tokio = { workspace = true }
 async-trait = { workspace = true }
+async-stream = { workspace = true }
 futures = { workspace = true }
 tokio-stream = { workspace = true }
 
@@ -70,6 +71,7 @@ dirs = "5"
 regex = "1"
 reqwest = { version = "0.12", features = ["json"] }
 rust-embed = { workspace = true }
+sha2 = "0.10"
 
 # Cron scheduling
 tokio-cron-scheduler = "0.13"

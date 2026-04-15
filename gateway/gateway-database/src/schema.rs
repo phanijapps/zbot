@@ -6,7 +6,7 @@
 use rusqlite::{Connection, Result};
 
 /// Current schema version
-const SCHEMA_VERSION: i32 = 17;
+const SCHEMA_VERSION: i32 = 22;
 
 /// Run migrations for existing databases.
 ///
@@ -235,6 +235,121 @@ fn migrate_database(conn: &Connection) -> Result<()> {
         let _ = conn.execute("ALTER TABLE sessions ADD COLUMN mode TEXT", []);
     }
 
+    // v17 → v18: Add temporal columns to memory_facts; add kg_causal_edges table
+    if version < 18 {
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN valid_from TEXT", []);
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN valid_until TEXT", []);
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN superseded_by TEXT", []);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_temporal ON memory_facts(valid_from, valid_until)",
+            [],
+        );
+
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kg_causal_edges (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                cause_entity_id TEXT NOT NULL,
+                effect_entity_id TEXT NOT NULL,
+                relationship TEXT NOT NULL,
+                confidence REAL DEFAULT 0.7,
+                session_id TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (cause_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE,
+                FOREIGN KEY (effect_entity_id) REFERENCES kg_entities(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_causal_cause ON kg_causal_edges(cause_entity_id);
+            CREATE INDEX IF NOT EXISTS idx_causal_effect ON kg_causal_edges(effect_entity_id);",
+        )?;
+    }
+
+    // v18 → v19: Add ward_wiki_articles table for compiled wiki knowledge per ward
+    if version < 19 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS ward_wiki_articles (
+                id TEXT PRIMARY KEY,
+                ward_id TEXT NOT NULL,
+                agent_id TEXT NOT NULL,
+                title TEXT NOT NULL,
+                content TEXT NOT NULL,
+                tags TEXT,
+                source_fact_ids TEXT,
+                embedding BLOB,
+                version INTEGER DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(ward_id, title)
+            );
+            CREATE INDEX IF NOT EXISTS idx_wiki_ward ON ward_wiki_articles(ward_id);",
+        )?;
+    }
+
+    // v19 → v20: Add procedures table for learned procedure patterns
+    if version < 20 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS procedures (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                ward_id TEXT DEFAULT '__global__',
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                trigger_pattern TEXT,
+                steps TEXT NOT NULL,
+                parameters TEXT,
+                success_count INTEGER DEFAULT 1,
+                failure_count INTEGER DEFAULT 0,
+                avg_duration_ms INTEGER,
+                avg_token_cost INTEGER,
+                last_used TEXT,
+                embedding BLOB,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_procedures_agent ON procedures(agent_id);
+            CREATE INDEX IF NOT EXISTS idx_procedures_ward ON procedures(ward_id);",
+        )?;
+    }
+
+    // v20 → v21: Add kg_episodes table and provenance columns on memory_facts
+    if version < 21 {
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS kg_episodes (
+                id TEXT PRIMARY KEY,
+                source_type TEXT NOT NULL,
+                source_ref TEXT NOT NULL,
+                content_hash TEXT NOT NULL,
+                session_id TEXT,
+                agent_id TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(content_hash, source_type)
+            );
+            CREATE INDEX IF NOT EXISTS idx_episodes_session ON kg_episodes(session_id);
+            CREATE INDEX IF NOT EXISTS idx_episodes_source ON kg_episodes(source_type, source_ref);",
+        )?;
+
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN epistemic_class TEXT DEFAULT 'current'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE memory_facts ADD COLUMN source_episode_id TEXT",
+            [],
+        );
+        let _ = conn.execute("ALTER TABLE memory_facts ADD COLUMN source_ref TEXT", []);
+        let _ = conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_facts_class ON memory_facts(agent_id, epistemic_class)",
+            [],
+        );
+    }
+
+    // v21 → v22: knowledge tables moved to knowledge.db (see knowledge_schema.rs)
+    if version < 22 {
+        // No-op: memory_facts, memory_facts_fts, memory_facts_archive, session_episodes,
+        // kg_episodes, ward_wiki_articles, procedures, and embedding_cache have been
+        // relocated to knowledge.db. Any pre-existing rows in conversations.db are
+        // orphaned and will be ignored; the repository layer routes to KnowledgeDatabase.
+    }
+
     Ok(())
 }
 
@@ -433,100 +548,6 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
-    // MEMORY FACTS
-    // Structured memory facts from session distillation or manual save
-    // =========================================================================
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS memory_facts (
-            id TEXT PRIMARY KEY,
-            session_id TEXT,
-            agent_id TEXT NOT NULL,
-            scope TEXT NOT NULL DEFAULT 'agent',
-            category TEXT NOT NULL,
-            key TEXT NOT NULL,
-            content TEXT NOT NULL,
-            confidence REAL NOT NULL DEFAULT 0.8,
-            mention_count INTEGER NOT NULL DEFAULT 1,
-            source_summary TEXT,
-            embedding BLOB,
-            ward_id TEXT NOT NULL DEFAULT '__global__',
-            contradicted_by TEXT,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-            expires_at TEXT,
-            pinned INTEGER NOT NULL DEFAULT 0,
-            UNIQUE(agent_id, scope, ward_id, key)
-        )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_memory_facts_agent ON memory_facts(agent_id, scope)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_memory_facts_category ON memory_facts(agent_id, category)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_memory_facts_updated ON memory_facts(updated_at)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_memory_facts_ward ON memory_facts(ward_id)",
-        [],
-    )?;
-
-    // FTS5 virtual table for BM25 keyword search over memory facts.
-    // content='' makes it an external-content table (we sync manually).
-    conn.execute_batch(
-        "CREATE VIRTUAL TABLE IF NOT EXISTS memory_facts_fts USING fts5(
-            key, content, category,
-            content='memory_facts',
-            content_rowid='rowid'
-        );",
-    )?;
-
-    // Triggers to keep FTS index in sync with memory_facts table.
-    // These fire on INSERT, UPDATE, and DELETE.
-    conn.execute_batch(
-        "CREATE TRIGGER IF NOT EXISTS memory_facts_ai AFTER INSERT ON memory_facts BEGIN
-            INSERT INTO memory_facts_fts(rowid, key, content, category)
-            VALUES (new.rowid, new.key, new.content, new.category);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS memory_facts_ad AFTER DELETE ON memory_facts BEGIN
-            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, key, content, category)
-            VALUES ('delete', old.rowid, old.key, old.content, old.category);
-        END;
-
-        CREATE TRIGGER IF NOT EXISTS memory_facts_au AFTER UPDATE ON memory_facts BEGIN
-            INSERT INTO memory_facts_fts(memory_facts_fts, rowid, key, content, category)
-            VALUES ('delete', old.rowid, old.key, old.content, old.category);
-            INSERT INTO memory_facts_fts(rowid, key, content, category)
-            VALUES (new.rowid, new.key, new.content, new.category);
-        END;",
-    )?;
-
-    // =========================================================================
-    // EMBEDDING CACHE
-    // Hash-based dedup to avoid re-embedding unchanged content
-    // =========================================================================
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS embedding_cache (
-            content_hash TEXT NOT NULL,
-            model TEXT NOT NULL,
-            embedding BLOB NOT NULL,
-            created_at TEXT NOT NULL DEFAULT (datetime('now')),
-            PRIMARY KEY (content_hash, model)
-        )",
-        [],
-    )?;
-
-    // =========================================================================
     // BRIDGE OUTBOX
     // Reliable delivery queue for outbound messages to bridge workers
     // =========================================================================
@@ -586,42 +607,6 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
     )?;
 
     // =========================================================================
-    // SESSION EPISODES
-    // Episodic memory with execution outcomes
-    // =========================================================================
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS session_episodes (
-            id TEXT PRIMARY KEY,
-            session_id TEXT NOT NULL,
-            agent_id TEXT NOT NULL,
-            ward_id TEXT NOT NULL DEFAULT '__global__',
-            task_summary TEXT NOT NULL,
-            outcome TEXT NOT NULL,
-            strategy_used TEXT,
-            key_learnings TEXT,
-            token_cost INTEGER,
-            embedding BLOB,
-            created_at TEXT NOT NULL
-        )",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_session_episodes_agent ON session_episodes(agent_id)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_session_episodes_ward ON session_episodes(ward_id)",
-        [],
-    )?;
-
-    conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_session_episodes_outcome ON session_episodes(outcome)",
-        [],
-    )?;
-
-    // =========================================================================
     // RECALL LOG
     // Tracks which facts were recalled per session for predictive recall
     // =========================================================================
@@ -637,31 +622,6 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
 
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_recall_log_session ON recall_log(session_id)",
-        [],
-    )?;
-
-    // =========================================================================
-    // MEMORY FACTS ARCHIVE
-    // Pruned facts preserved for audit trail
-    // =========================================================================
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS memory_facts_archive (
-            id TEXT PRIMARY KEY,
-            agent_id TEXT NOT NULL,
-            scope TEXT NOT NULL DEFAULT 'agent',
-            category TEXT NOT NULL,
-            key TEXT NOT NULL,
-            content TEXT NOT NULL,
-            confidence REAL NOT NULL DEFAULT 0.8,
-            ward_id TEXT NOT NULL DEFAULT '__global__',
-            mention_count INTEGER NOT NULL DEFAULT 1,
-            source_summary TEXT,
-            embedding BLOB,
-            contradicted_by TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            archived_at TEXT NOT NULL
-        )",
         [],
     )?;
 
@@ -691,6 +651,8 @@ pub fn initialize_database(conn: &Connection) -> Result<()> {
         "CREATE INDEX IF NOT EXISTS idx_artifacts_session ON artifacts(session_id)",
         [],
     )?;
+
+    // kg_causal_edges moved to knowledge.db (see knowledge_schema.rs) in v22
 
     // =========================================================================
     // SCHEMA VERSION
@@ -736,98 +698,14 @@ mod tests {
     }
 
     #[test]
-    fn test_migration_creates_session_episodes_table() {
-        let conn = setup_db();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session_episodes'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1, "session_episodes table should exist");
-    }
-
-    #[test]
-    fn test_memory_facts_has_ward_id_column() {
-        let conn = setup_db();
-        // Insert a row without specifying ward_id — it should default to '__global__'
-        conn.execute(
-            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, created_at, updated_at)
-             VALUES ('f1', 'agent1', 'agent', 'pref', 'color', 'blue', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert with default ward_id");
-
-        let ward_id: String = conn
-            .query_row(
-                "SELECT ward_id FROM memory_facts WHERE id = 'f1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            ward_id, "__global__",
-            "default ward_id should be '__global__'"
-        );
-    }
-
-    #[test]
-    fn test_different_ward_ids_allow_same_key() {
-        let conn = setup_db();
-        // Insert fact with ward_id = 'ward_a'
-        conn.execute(
-            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
-             VALUES ('f1', 'agent1', 'agent', 'pref', 'color', 'blue', 'ward_a', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert ward_a");
-
-        // Insert same agent_id/scope/key but with ward_id = 'ward_b' — should succeed
-        conn.execute(
-            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
-             VALUES ('f2', 'agent1', 'agent', 'pref', 'color', 'red', 'ward_b', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert ward_b with same key should succeed");
-
-        let count: i64 = conn
-            .query_row("SELECT COUNT(*) FROM memory_facts", [], |row| row.get(0))
-            .unwrap();
-        assert_eq!(count, 2, "two facts with different ward_ids should coexist");
-    }
-
-    #[test]
-    fn test_same_ward_id_same_key_conflicts() {
-        let conn = setup_db();
-        conn.execute(
-            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
-             VALUES ('f1', 'agent1', 'agent', 'pref', 'color', 'blue', 'ward_a', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert first");
-
-        // Same agent_id, scope, ward_id, key — should fail with UNIQUE constraint
-        let result = conn.execute(
-            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, ward_id, created_at, updated_at)
-             VALUES ('f2', 'agent1', 'agent', 'pref', 'color', 'red', 'ward_a', datetime('now'), datetime('now'))",
-            [],
-        );
-        assert!(
-            result.is_err(),
-            "duplicate (agent_id, scope, ward_id, key) should be rejected"
-        );
-    }
-
-    #[test]
-    fn test_schema_version_is_16() {
+    fn test_schema_version_is_current() {
         let conn = setup_db();
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version LIMIT 1", [], |row| {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 17, "schema version should be 17");
+        assert_eq!(version, 22, "schema version should be 22");
     }
 
     #[test]
@@ -860,36 +738,6 @@ mod tests {
     }
 
     #[test]
-    fn test_memory_facts_archive_table_exists() {
-        let conn = setup_db();
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_facts_archive'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(count, 1, "memory_facts_archive table should exist");
-
-        // Verify we can insert and query
-        conn.execute(
-            "INSERT INTO memory_facts_archive (id, agent_id, scope, category, key, content, confidence, ward_id, mention_count, created_at, updated_at, archived_at)
-             VALUES ('a1', 'agent1', 'agent', 'pref', 'color', 'blue', 0.9, '__global__', 3, datetime('now'), datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert into memory_facts_archive");
-
-        let content: String = conn
-            .query_row(
-                "SELECT content FROM memory_facts_archive WHERE id = 'a1'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(content, "blue");
-    }
-
-    #[test]
     fn test_sessions_has_archived_column() {
         let conn = setup_db();
         // Insert a session and verify archived defaults to 0
@@ -916,45 +764,5 @@ mod tests {
             })
             .unwrap();
         assert_eq!(archived, 1, "archived should be 1 after update");
-    }
-
-    #[test]
-    fn test_memory_facts_has_contradicted_by_column() {
-        let conn = setup_db();
-        // Insert a row — contradicted_by defaults to NULL
-        conn.execute(
-            "INSERT INTO memory_facts (id, agent_id, scope, category, key, content, created_at, updated_at)
-             VALUES ('f_contra', 'agent1', 'agent', 'pref', 'color', 'blue', datetime('now'), datetime('now'))",
-            [],
-        )
-        .expect("insert with default contradicted_by");
-
-        let contradicted_by: Option<String> = conn
-            .query_row(
-                "SELECT contradicted_by FROM memory_facts WHERE id = 'f_contra'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert!(
-            contradicted_by.is_none(),
-            "default contradicted_by should be NULL"
-        );
-
-        // Update contradicted_by
-        conn.execute(
-            "UPDATE memory_facts SET contradicted_by = 'other.key' WHERE id = 'f_contra'",
-            [],
-        )
-        .expect("update contradicted_by");
-
-        let contradicted_by: Option<String> = conn
-            .query_row(
-                "SELECT contradicted_by FROM memory_facts WHERE id = 'f_contra'",
-                [],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(contradicted_by, Some("other.key".to_string()));
     }
 }

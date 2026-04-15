@@ -1,0 +1,501 @@
+//! `POST /api/memory/search` — unified hybrid search across memory types.
+//!
+//! Fans out a single query to up to four content types (facts, wiki,
+//! procedures, episodes) in parallel and returns one block per type with
+//! `hits` and a `latency_ms` timer. Modes:
+//! - `hybrid` (default): FTS + vec with RRF where available; vec-only for
+//!   procedures (no FTS table); vec + LIKE fallback for episodes
+//! - `fts`: never embeds the query; procedures return empty; episodes use a
+//!   LIKE fallback over `task_summary`/`key_learnings`
+//! - `semantic`: embedding required (returns 400 if unavailable); vec-only
+//!   across all selected types
+//!
+//! The `filters` field is accepted but ignored in v1. `limit` applies
+//! per-type, not globally.
+
+use crate::state::AppState;
+use axum::{extract::State, http::StatusCode, Json};
+use gateway_database::{
+    vector_index::VectorIndex, EpisodeRepository, KnowledgeDatabase, ProcedureRepository,
+    SessionEpisode, SqliteVecIndex, WardWikiRepository,
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::sync::Arc;
+use std::time::Instant;
+
+/// Request body for unified search.
+#[derive(Debug, Deserialize)]
+pub struct SearchBody {
+    pub query: String,
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    #[serde(default = "default_types")]
+    pub types: Vec<String>,
+    #[serde(default)]
+    pub ward_ids: Vec<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub filters: Option<Value>,
+    #[serde(default = "default_limit")]
+    pub limit: usize,
+}
+
+fn default_mode() -> String {
+    "hybrid".into()
+}
+
+fn default_types() -> Vec<String> {
+    vec![
+        "facts".into(),
+        "wiki".into(),
+        "procedures".into(),
+        "episodes".into(),
+    ]
+}
+
+fn default_limit() -> usize {
+    10
+}
+
+/// One type's block in the response.
+#[derive(Debug, Serialize, Default)]
+pub struct TypeBlock {
+    pub hits: Vec<Value>,
+    pub latency_ms: u64,
+}
+
+/// Unified response with one block per content type.
+#[derive(Debug, Serialize, Default)]
+pub struct UnifiedResponse {
+    pub facts: TypeBlock,
+    pub wiki: TypeBlock,
+    pub procedures: TypeBlock,
+    pub episodes: TypeBlock,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErrorBody {
+    pub error: String,
+}
+
+pub type HandlerError = (StatusCode, Json<ErrorBody>);
+
+fn err(status: StatusCode, msg: impl Into<String>) -> HandlerError {
+    (status, Json(ErrorBody { error: msg.into() }))
+}
+
+fn build_wiki_repo(state: &AppState) -> Result<Arc<WardWikiRepository>, HandlerError> {
+    let idx = SqliteVecIndex::new(
+        state.knowledge_db.clone(),
+        "wiki_articles_index",
+        "article_id",
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("wiki vec: {e}")))?;
+    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
+    Ok(Arc::new(WardWikiRepository::new(
+        state.knowledge_db.clone(),
+        vec,
+    )))
+}
+
+fn build_procedure_repo(state: &AppState) -> Result<Arc<ProcedureRepository>, HandlerError> {
+    let idx = SqliteVecIndex::new(
+        state.knowledge_db.clone(),
+        "procedures_index",
+        "procedure_id",
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("proc vec: {e}")))?;
+    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
+    Ok(Arc::new(ProcedureRepository::new(
+        state.knowledge_db.clone(),
+        vec,
+    )))
+}
+
+fn build_episode_repo(state: &AppState) -> Result<Arc<EpisodeRepository>, HandlerError> {
+    let idx = SqliteVecIndex::new(
+        state.knowledge_db.clone(),
+        "session_episodes_index",
+        "episode_id",
+    )
+    .map_err(|e| err(StatusCode::INTERNAL_SERVER_ERROR, format!("ep vec: {e}")))?;
+    let vec: Arc<dyn VectorIndex> = Arc::new(idx);
+    Ok(Arc::new(EpisodeRepository::new(
+        state.knowledge_db.clone(),
+        vec,
+    )))
+}
+
+/// LIKE-based fallback for episode search when no embedding is available or
+/// `mode=fts`. Matches case-insensitively over `task_summary` and
+/// `key_learnings`.
+fn episodes_like_search(
+    db: &KnowledgeDatabase,
+    query: &str,
+    ward_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<SessionEpisode>, String> {
+    let pattern = format!("%{}%", query.replace(['%', '_'], ""));
+    db.with_connection(|conn| {
+        let sql_with = "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                        strategy_used, key_learnings, token_cost, created_at \
+                        FROM session_episodes \
+                        WHERE ward_id = ?1 AND (task_summary LIKE ?2 OR COALESCE(key_learnings,'') LIKE ?2) \
+                        ORDER BY created_at DESC LIMIT ?3";
+        let sql_no = "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                      strategy_used, key_learnings, token_cost, created_at \
+                      FROM session_episodes \
+                      WHERE task_summary LIKE ?1 OR COALESCE(key_learnings,'') LIKE ?1 \
+                      ORDER BY created_at DESC LIMIT ?2";
+        let row_to = |r: &rusqlite::Row| -> rusqlite::Result<SessionEpisode> {
+            Ok(SessionEpisode {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                agent_id: r.get(2)?,
+                ward_id: r.get(3)?,
+                task_summary: r.get(4)?,
+                outcome: r.get(5)?,
+                strategy_used: r.get(6)?,
+                key_learnings: r.get(7)?,
+                token_cost: r.get(8)?,
+                embedding: None,
+                created_at: r.get(9)?,
+            })
+        };
+        let rows: Vec<SessionEpisode> = if let Some(w) = ward_id {
+            let mut stmt = conn.prepare(sql_with)?;
+            let out: Vec<SessionEpisode> = stmt
+                .query_map(rusqlite::params![w, pattern, limit as i64], row_to)?
+                .filter_map(|r| r.ok())
+                .collect();
+            out
+        } else {
+            let mut stmt = conn.prepare(sql_no)?;
+            let out: Vec<SessionEpisode> = stmt
+                .query_map(rusqlite::params![pattern, limit as i64], row_to)?
+                .filter_map(|r| r.ok())
+                .collect();
+            out
+        };
+        Ok(rows)
+    })
+    .map_err(|e| e.to_string())
+}
+
+fn wiki_article_to_value(hit: gateway_database::WikiHit) -> Value {
+    let snippet: String = hit.article.content.chars().take(240).collect();
+    json!({
+        "id": hit.article.id,
+        "ward_id": hit.article.ward_id,
+        "title": hit.article.title,
+        "snippet": snippet,
+        "updated_at": hit.article.updated_at,
+        "score": hit.score,
+        "match_source": hit.match_source,
+    })
+}
+
+fn procedure_to_value(proc: gateway_database::Procedure, score: f64) -> Value {
+    json!({
+        "id": proc.id,
+        "agent_id": proc.agent_id,
+        "ward_id": proc.ward_id,
+        "name": proc.name,
+        "description": proc.description,
+        "success_count": proc.success_count,
+        "failure_count": proc.failure_count,
+        "last_used": proc.last_used,
+        "created_at": proc.created_at,
+        "updated_at": proc.updated_at,
+        "score": score,
+        "match_source": "vec",
+    })
+}
+
+fn episode_to_value(ep: SessionEpisode, score: Option<f64>, source: &str) -> Value {
+    let mut v = json!({
+        "id": ep.id,
+        "session_id": ep.session_id,
+        "agent_id": ep.agent_id,
+        "ward_id": ep.ward_id,
+        "task_summary": ep.task_summary,
+        "outcome": ep.outcome,
+        "strategy_used": ep.strategy_used,
+        "key_learnings": ep.key_learnings,
+        "token_cost": ep.token_cost,
+        "created_at": ep.created_at,
+        "match_source": source,
+    });
+    if let (Value::Object(ref mut m), Some(s)) = (&mut v, score) {
+        m.insert("score".into(), json!(s));
+    }
+    v
+}
+
+fn fact_to_value(fact: gateway_database::MemoryFact, source: &str, score: Option<f64>) -> Value {
+    let mut v = json!({
+        "id": fact.id,
+        "session_id": fact.session_id,
+        "agent_id": fact.agent_id,
+        "scope": fact.scope,
+        "category": fact.category,
+        "key": fact.key,
+        "content": fact.content,
+        "confidence": fact.confidence,
+        "mention_count": fact.mention_count,
+        "ward_id": fact.ward_id,
+        "created_at": fact.created_at,
+        "updated_at": fact.updated_at,
+        "pinned": fact.pinned,
+        "epistemic_class": fact.epistemic_class,
+        "match_source": source,
+    });
+    if let (Value::Object(ref mut m), Some(s)) = (&mut v, score) {
+        m.insert("score".into(), json!(s));
+    }
+    v
+}
+
+/// Single agent id used when scoping procedure / episode searches in v1.
+const DEFAULT_AGENT: &str = "agent:root";
+
+/// POST /api/memory/search — unified hybrid/fts/semantic search.
+pub async fn memory_search(
+    State(state): State<AppState>,
+    Json(req): Json<SearchBody>,
+) -> Result<Json<UnifiedResponse>, HandlerError> {
+    let memory_repo = state
+        .memory_repo
+        .as_ref()
+        .ok_or_else(|| err(StatusCode::SERVICE_UNAVAILABLE, "memory repo unavailable"))?
+        .clone();
+    let wiki_repo = build_wiki_repo(&state)?;
+    let proc_repo = build_procedure_repo(&state)?;
+    let episode_repo = build_episode_repo(&state)?;
+
+    let ward: Option<String> = req.ward_ids.first().cloned();
+    let ward_ref: Option<&str> = ward.as_deref();
+
+    // Single embedding attempt, mode-dependent.
+    let embedding: Option<Vec<f32>> = match req.mode.as_str() {
+        "fts" => None,
+        "semantic" => {
+            let v = state
+                .embedding_service
+                .client()
+                .embed(&[req.query.as_str()])
+                .await
+                .map_err(|e| {
+                    err(
+                        StatusCode::BAD_REQUEST,
+                        format!("embedding backend unavailable: {e}"),
+                    )
+                })?;
+            Some(v.into_iter().next().unwrap_or_default())
+        }
+        _ => match state
+            .embedding_service
+            .client()
+            .embed(&[req.query.as_str()])
+            .await
+        {
+            Ok(v) => v.into_iter().next(),
+            Err(e) => {
+                tracing::debug!("unified search: embedding unavailable ({e}); FTS-only");
+                None
+            }
+        },
+    };
+
+    let want_facts = req.types.iter().any(|t| t == "facts");
+    let want_wiki = req.types.iter().any(|t| t == "wiki");
+    let want_proc = req.types.iter().any(|t| t == "procedures");
+    let want_eps = req.types.iter().any(|t| t == "episodes");
+
+    let query = req.query.clone();
+    let mode = req.mode.clone();
+    let limit = req.limit;
+    let ward_owned = ward.clone();
+
+    let facts_fut = {
+        let memory_repo = memory_repo.clone();
+        let query = query.clone();
+        let mode = mode.clone();
+        let emb = embedding.clone();
+        let ward = ward_owned.clone();
+        async move {
+            if !want_facts {
+                return TypeBlock::default();
+            }
+            let t0 = Instant::now();
+            let hits = run_facts(
+                &memory_repo,
+                &query,
+                &mode,
+                emb.as_deref(),
+                ward.as_deref(),
+                limit,
+            );
+            TypeBlock {
+                hits,
+                latency_ms: t0.elapsed().as_millis() as u64,
+            }
+        }
+    };
+
+    let wiki_fut = {
+        let wiki_repo = wiki_repo.clone();
+        let query = query.clone();
+        let mode = mode.clone();
+        let emb = embedding.clone();
+        let ward = ward_owned.clone();
+        async move {
+            if !want_wiki {
+                return TypeBlock::default();
+            }
+            let t0 = Instant::now();
+            // In semantic-only mode, pass embedding but use a synthetic query
+            // the FTS arm won't match (search_hybrid still runs FTS with it —
+            // acceptable: no harm since RRF will favor vec hits).
+            let pass_query = if mode == "semantic" {
+                ""
+            } else {
+                query.as_str()
+            };
+            let hits = wiki_repo
+                .search_hybrid(pass_query, ward.as_deref(), emb.clone(), limit)
+                .unwrap_or_default()
+                .into_iter()
+                .map(wiki_article_to_value)
+                .collect();
+            TypeBlock {
+                hits,
+                latency_ms: t0.elapsed().as_millis() as u64,
+            }
+        }
+    };
+
+    let proc_fut = {
+        let proc_repo = proc_repo.clone();
+        let mode = mode.clone();
+        let emb = embedding.clone();
+        let ward = ward_owned.clone();
+        async move {
+            if !want_proc {
+                return TypeBlock::default();
+            }
+            let t0 = Instant::now();
+            let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
+                // No FTS table for procedures: fts mode returns empty.
+                ("fts", _) => Vec::new(),
+                (_, Some(emb)) => proc_repo
+                    .search_by_similarity(emb, DEFAULT_AGENT, ward.as_deref(), limit)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(p, s)| procedure_to_value(p, s))
+                    .collect(),
+                (_, None) => Vec::new(),
+            };
+            TypeBlock {
+                hits,
+                latency_ms: t0.elapsed().as_millis() as u64,
+            }
+        }
+    };
+
+    let eps_fut = {
+        let episode_repo = episode_repo.clone();
+        let db = state.knowledge_db.clone();
+        let query = query.clone();
+        let mode = mode.clone();
+        let emb = embedding.clone();
+        let ward = ward_owned.clone();
+        async move {
+            if !want_eps {
+                return TypeBlock::default();
+            }
+            let t0 = Instant::now();
+            let hits: Vec<Value> = match (mode.as_str(), emb.as_ref()) {
+                // Pure FTS path → LIKE fallback.
+                ("fts", _) => episodes_like_search(&db, &query, ward.as_deref(), limit)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|ep| episode_to_value(ep, None, "fts"))
+                    .collect(),
+                (_, Some(emb)) => episode_repo
+                    .search_by_similarity(DEFAULT_AGENT, emb, 0.0, limit)
+                    .unwrap_or_default()
+                    .into_iter()
+                    // Ward-scope filter in Rust since repo search_by_similarity
+                    // does not filter by ward.
+                    .filter(|(ep, _)| ward.as_deref().is_none_or(|w| ep.ward_id == w))
+                    .map(|(ep, s)| episode_to_value(ep, Some(s), "vec"))
+                    .collect(),
+                (_, None) => episodes_like_search(&db, &query, ward.as_deref(), limit)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|ep| episode_to_value(ep, None, "fts"))
+                    .collect(),
+            };
+            TypeBlock {
+                hits,
+                latency_ms: t0.elapsed().as_millis() as u64,
+            }
+        }
+    };
+
+    let _ = ward_ref; // silence unused if branches skip
+    let (facts, wiki, procedures, episodes) = tokio::join!(facts_fut, wiki_fut, proc_fut, eps_fut);
+
+    Ok(Json(UnifiedResponse {
+        facts,
+        wiki,
+        procedures,
+        episodes,
+    }))
+}
+
+/// Route a fact search through the memory repo according to mode. Returns
+/// JSON-ready hits.
+fn run_facts(
+    memory_repo: &gateway_database::MemoryRepository,
+    query: &str,
+    mode: &str,
+    embedding: Option<&[f32]>,
+    ward: Option<&str>,
+    limit: usize,
+) -> Vec<Value> {
+    match mode {
+        "fts" => memory_repo
+            .search_memory_facts_fts(query, DEFAULT_AGENT, limit, ward)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|sf| fact_to_value(sf.fact, "fts", Some(sf.score)))
+            .collect(),
+        "semantic" => {
+            let Some(emb) = embedding else {
+                return Vec::new();
+            };
+            memory_repo
+                .search_similar_facts(emb, DEFAULT_AGENT, 0.0, limit, ward)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|sf| fact_to_value(sf.fact, "vec", Some(sf.score)))
+                .collect()
+        }
+        _ => {
+            let (rows, sources) = memory_repo
+                .search_memory_facts_hybrid(query, embedding, DEFAULT_AGENT, limit, 0.7, 0.3, ward)
+                .unwrap_or_default();
+            let src_map: std::collections::HashMap<String, &'static str> =
+                sources.into_iter().collect();
+            rows.into_iter()
+                .map(|sf| {
+                    let src = src_map.get(&sf.fact.id).copied().unwrap_or("fts");
+                    fact_to_value(sf.fact, src, Some(sf.score))
+                })
+                .collect()
+        }
+    }
+}

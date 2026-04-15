@@ -124,7 +124,13 @@ impl MemoryFactStore for GatewayMemoryFactStore {
             created_at: now.clone(),
             updated_at: now,
             expires_at: None,
+            valid_from: None,
+            valid_until: None,
+            superseded_by: None,
             pinned: false,
+            epistemic_class: Some("current".to_string()),
+            source_episode_id: None,
+            source_ref: None,
         };
 
         self.memory_repo.upsert_memory_fact(&fact)?;
@@ -160,7 +166,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         // Generate embedding for the query
         let query_embedding = self.embed_text(query).await;
 
-        let results = self.memory_repo.search_memory_facts_hybrid(
+        let (results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
             agent_id,
@@ -202,7 +208,7 @@ impl MemoryFactStore for GatewayMemoryFactStore {
         let query_embedding = self.embed_text(query).await;
 
         // Fetch more results than needed so we can re-rank
-        let mut results = self.memory_repo.search_memory_facts_hybrid(
+        let (mut results, _sources) = self.memory_repo.search_memory_facts_hybrid(
             query,
             query_embedding.as_deref(),
             agent_id,
@@ -229,7 +235,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
                 .into_iter()
                 .filter(|fact| {
                     if let Some(ref fact_emb) = fact.embedding {
-                        let sim = crate::memory_repository::cosine_similarity(qe, fact_emb);
+                        let sim =
+                            crate::memory_repository::cosine_similarity_normalized(qe, fact_emb);
                         sim >= 0.15
                     } else {
                         true
@@ -393,7 +400,8 @@ impl MemoryFactStore for GatewayMemoryFactStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DatabaseManager;
+    use crate::vector_index::{SqliteVecIndex, VectorIndex};
+    use crate::KnowledgeDatabase;
     use tempfile::TempDir;
 
     fn create_test_store() -> GatewayMemoryFactStore {
@@ -402,8 +410,12 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let paths = Arc::new(VaultPaths::new(temp_dir.path().to_path_buf()));
         let _ = temp_dir.keep();
-        let db = Arc::new(DatabaseManager::new(paths).unwrap());
-        let repo = Arc::new(MemoryRepository::new(db));
+        let db = Arc::new(KnowledgeDatabase::new(paths).unwrap());
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
+        let repo = Arc::new(MemoryRepository::new(db, vec_index));
         GatewayMemoryFactStore::new(repo, None) // No embedding client in tests
     }
 

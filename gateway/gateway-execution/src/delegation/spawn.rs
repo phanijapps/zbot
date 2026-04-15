@@ -67,6 +67,9 @@ pub async fn spawn_delegated_agent(
             std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<String, String> {
     // Create a child session for subagent isolation
     let child_session =
@@ -293,6 +296,16 @@ pub async fn spawn_delegated_agent(
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
     }
+    let graph_storage_for_recall = graph_storage.clone();
+    if let Some(gs) = graph_storage {
+        builder = builder.with_graph_storage(gs);
+    }
+    if let Some(a) = ingestion_adapter {
+        builder = builder.with_ingestion_adapter(a);
+    }
+    if let Some(a) = goal_adapter {
+        builder = builder.with_goal_adapter(a);
+    }
 
     let executor = match builder
         .build(
@@ -317,20 +330,27 @@ pub async fn spawn_delegated_agent(
         }
     };
 
-    // Delegation recall: inject relevant knowledge for the child agent
+    // Delegation recall: prime the subagent with unified scored recall over
+    // facts, wiki, procedures, graph nodes, episodes, and goals.
+    let _ = graph_storage_for_recall; // retained for future wiring
     let initial_history = if let Some(recall) = &memory_recall {
         let ward_id = session_ward_id.as_deref();
         match recall
-            .recall_for_delegation(&request.child_agent_id, &request.task, ward_id, 8)
+            .recall_unified(&request.child_agent_id, &request.task, ward_id, &[], 10)
             .await
         {
-            Ok(context) if !context.is_empty() => {
-                tracing::info!(
-                    agent = %request.child_agent_id,
-                    context_len = context.len(),
-                    "Primed subagent with recalled memory context"
-                );
-                vec![ChatMessage::system(context)]
+            Ok(items) if !items.is_empty() => {
+                let formatted = crate::recall::format_scored_items(&items);
+                if formatted.is_empty() {
+                    Vec::new()
+                } else {
+                    tracing::info!(
+                        agent = %request.child_agent_id,
+                        count = items.len(),
+                        "Primed subagent with unified recalled context"
+                    );
+                    vec![ChatMessage::system(formatted)]
+                }
             }
             Ok(_) => Vec::new(),
             Err(e) => {

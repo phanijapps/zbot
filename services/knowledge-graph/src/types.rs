@@ -23,6 +23,18 @@ pub enum EntityType {
     Project,
     /// File (e.g., "main.rs", "config.toml")
     File,
+    /// Event (e.g., "World War II", "Product Launch")
+    Event,
+    /// Time period (e.g., "1945", "Renaissance")
+    TimePeriod,
+    /// Document (e.g., "Declaration of Independence")
+    Document,
+    /// Role/Title (e.g., "CEO", "President")
+    Role,
+    /// Artifact (e.g., "Mona Lisa", "Constitution")
+    Artifact,
+    /// Ward (internal AgentZero concept)
+    Ward,
     /// Custom entity type
     Custom(String),
 }
@@ -59,6 +71,13 @@ impl EntityType {
             "tool" | "technology" => EntityType::Tool,
             "project" => EntityType::Project,
             "file" => EntityType::File,
+            "event" => EntityType::Event,
+            "timeperiod" | "time_period" | "time period" | "year" | "era" => EntityType::TimePeriod,
+            "document" | "doc" => EntityType::Document,
+            "role" | "title" => EntityType::Role,
+            "artifact" => EntityType::Artifact,
+            "ward" => EntityType::Ward,
+            "company" => EntityType::Organization,
             other => EntityType::Custom(other.to_string()),
         }
     }
@@ -73,6 +92,12 @@ impl EntityType {
             EntityType::Tool => "tool",
             EntityType::Project => "project",
             EntityType::File => "file",
+            EntityType::Event => "event",
+            EntityType::TimePeriod => "time_period",
+            EntityType::Document => "document",
+            EntityType::Role => "role",
+            EntityType::Artifact => "artifact",
+            EntityType::Ward => "ward",
             EntityType::Custom(s) => s,
         }
     }
@@ -95,6 +120,55 @@ pub enum RelationshipType {
     PartOf,
     /// Mentions
     Mentions,
+    // --- Temporal ---
+    /// Occurs before another event/period
+    Before,
+    /// Occurs after another event/period
+    After,
+    /// Occurs during another event/period
+    During,
+    /// Occurs at the same time as another event
+    ConcurrentWith,
+    /// Is succeeded by another event/person/role
+    SucceededBy,
+    /// Is preceded by another event/person/role
+    PrecededBy,
+    // --- Role-based ---
+    /// Is president of an organization/country
+    PresidentOf,
+    /// Is founder of an organization
+    FounderOf,
+    /// Is a member of a group/organization
+    MemberOf,
+    /// Is author of a document/work
+    AuthorOf,
+    /// Held a role/title
+    HeldRole,
+    /// Is/was employed by an organization
+    EmployedBy,
+    // --- Spatial ---
+    /// Event held at a location
+    HeldAt,
+    /// Born in a location
+    BornIn,
+    /// Died in a location
+    DiedIn,
+    // --- Causal ---
+    /// Caused another event/outcome
+    Caused,
+    /// Enabled another event/outcome
+    Enabled,
+    /// Prevented another event/outcome
+    Prevented,
+    /// Was triggered by another event
+    TriggeredBy,
+    // --- Hierarchical ---
+    /// Contains another entity
+    Contains,
+    /// Is an instance of a concept/type
+    InstanceOf,
+    /// Is a subtype of a concept/type
+    SubtypeOf,
     /// Custom relationship type
     Custom(String),
 }
@@ -131,6 +205,33 @@ impl RelationshipType {
             "uses" => RelationshipType::Uses,
             "partof" => RelationshipType::PartOf,
             "mentions" => RelationshipType::Mentions,
+            // Temporal
+            "before" => RelationshipType::Before,
+            "after" => RelationshipType::After,
+            "during" => RelationshipType::During,
+            "concurrentwith" => RelationshipType::ConcurrentWith,
+            "succeededby" => RelationshipType::SucceededBy,
+            "precededby" => RelationshipType::PrecededBy,
+            // Role-based
+            "presidentof" => RelationshipType::PresidentOf,
+            "founderof" => RelationshipType::FounderOf,
+            "memberof" => RelationshipType::MemberOf,
+            "authorof" => RelationshipType::AuthorOf,
+            "heldrole" => RelationshipType::HeldRole,
+            "employedby" => RelationshipType::EmployedBy,
+            // Spatial
+            "heldat" => RelationshipType::HeldAt,
+            "bornin" => RelationshipType::BornIn,
+            "diedin" => RelationshipType::DiedIn,
+            // Causal
+            "caused" => RelationshipType::Caused,
+            "enabled" => RelationshipType::Enabled,
+            "prevented" => RelationshipType::Prevented,
+            "triggeredby" => RelationshipType::TriggeredBy,
+            // Hierarchical
+            "contains" => RelationshipType::Contains,
+            "instanceof" => RelationshipType::InstanceOf,
+            "subtypeof" => RelationshipType::SubtypeOf,
             other => RelationshipType::Custom(other.to_string()),
         }
     }
@@ -145,6 +246,28 @@ impl RelationshipType {
             RelationshipType::Uses => "uses",
             RelationshipType::PartOf => "part_of",
             RelationshipType::Mentions => "mentions",
+            RelationshipType::Before => "before",
+            RelationshipType::After => "after",
+            RelationshipType::During => "during",
+            RelationshipType::ConcurrentWith => "concurrent_with",
+            RelationshipType::SucceededBy => "succeeded_by",
+            RelationshipType::PrecededBy => "preceded_by",
+            RelationshipType::PresidentOf => "president_of",
+            RelationshipType::FounderOf => "founder_of",
+            RelationshipType::MemberOf => "member_of",
+            RelationshipType::AuthorOf => "author_of",
+            RelationshipType::HeldRole => "held_role",
+            RelationshipType::EmployedBy => "employed_by",
+            RelationshipType::HeldAt => "held_at",
+            RelationshipType::BornIn => "born_in",
+            RelationshipType::DiedIn => "died_in",
+            RelationshipType::Caused => "caused",
+            RelationshipType::Enabled => "enabled",
+            RelationshipType::Prevented => "prevented",
+            RelationshipType::TriggeredBy => "triggered_by",
+            RelationshipType::Contains => "contains",
+            RelationshipType::InstanceOf => "instance_of",
+            RelationshipType::SubtypeOf => "subtype_of",
             RelationshipType::Custom(s) => s,
         }
     }
@@ -169,6 +292,12 @@ pub struct Entity {
     pub last_seen_at: DateTime<Utc>,
     /// Number of times this entity appears
     pub mention_count: i64,
+    /// Optional name embedding used for stage 2 (ANN) resolver.
+    /// When set, this vector is written to `kg_name_index` on store so that
+    /// subsequent resolves can match this entity by semantic similarity even
+    /// if the surface-form alias lookup misses.
+    #[serde(default)]
+    pub name_embedding: Option<Vec<f32>>,
 }
 
 /// Knowledge graph relationship
@@ -209,6 +338,7 @@ impl Entity {
             first_seen_at: now,
             last_seen_at: now,
             mention_count: 1,
+            name_embedding: None,
         }
     }
 
@@ -565,6 +695,125 @@ mod tests {
         assert_eq!(parsed.id, relationship.id);
         assert_eq!(parsed.source_entity_id, "source");
         assert_eq!(parsed.target_entity_id, "target");
+    }
+
+    #[test]
+    fn entity_type_roundtrip_new_variants() {
+        assert_eq!(EntityType::from_str("event"), EntityType::Event);
+        assert_eq!(EntityType::from_str("time_period"), EntityType::TimePeriod);
+        assert_eq!(EntityType::from_str("year"), EntityType::TimePeriod);
+        assert_eq!(EntityType::from_str("document"), EntityType::Document);
+        assert_eq!(EntityType::from_str("role"), EntityType::Role);
+        assert_eq!(EntityType::from_str("artifact"), EntityType::Artifact);
+        assert_eq!(EntityType::from_str("ward"), EntityType::Ward);
+        assert_eq!(EntityType::from_str("company"), EntityType::Organization);
+
+        // as_str round-trip
+        assert_eq!(EntityType::Event.as_str(), "event");
+        assert_eq!(EntityType::TimePeriod.as_str(), "time_period");
+        assert_eq!(EntityType::Document.as_str(), "document");
+        assert_eq!(EntityType::Role.as_str(), "role");
+        assert_eq!(EntityType::Artifact.as_str(), "artifact");
+        assert_eq!(EntityType::Ward.as_str(), "ward");
+
+        // Confirm none fall through to Custom
+        for s in [
+            "event",
+            "time_period",
+            "document",
+            "role",
+            "artifact",
+            "ward",
+        ] {
+            assert!(
+                !matches!(EntityType::from_str(s), EntityType::Custom(_)),
+                "'{}' unexpectedly parsed as Custom",
+                s
+            );
+        }
+    }
+
+    #[test]
+    fn relationship_type_roundtrip_temporal() {
+        assert_eq!(
+            RelationshipType::from_str("before"),
+            RelationshipType::Before
+        );
+        assert_eq!(RelationshipType::from_str("after"), RelationshipType::After);
+        assert_eq!(
+            RelationshipType::from_str("during"),
+            RelationshipType::During
+        );
+        assert_eq!(
+            RelationshipType::from_str("concurrent_with"),
+            RelationshipType::ConcurrentWith
+        );
+        assert_eq!(
+            RelationshipType::from_str("succeeded_by"),
+            RelationshipType::SucceededBy
+        );
+        assert_eq!(
+            RelationshipType::from_str("preceded_by"),
+            RelationshipType::PrecededBy
+        );
+
+        assert_eq!(RelationshipType::ConcurrentWith.as_str(), "concurrent_with");
+        assert_eq!(RelationshipType::SucceededBy.as_str(), "succeeded_by");
+    }
+
+    #[test]
+    fn relationship_type_roundtrip_role_based() {
+        assert_eq!(
+            RelationshipType::from_str("president_of"),
+            RelationshipType::PresidentOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("founder_of"),
+            RelationshipType::FounderOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("member_of"),
+            RelationshipType::MemberOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("author_of"),
+            RelationshipType::AuthorOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("held_role"),
+            RelationshipType::HeldRole
+        );
+        assert_eq!(
+            RelationshipType::from_str("employed_by"),
+            RelationshipType::EmployedBy
+        );
+
+        assert_eq!(RelationshipType::PresidentOf.as_str(), "president_of");
+        assert_eq!(RelationshipType::AuthorOf.as_str(), "author_of");
+    }
+
+    #[test]
+    fn relationship_type_case_insensitive() {
+        assert_eq!(
+            RelationshipType::from_str("PresidentOf"),
+            RelationshipType::PresidentOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("president_of"),
+            RelationshipType::PresidentOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("PRESIDENT_OF"),
+            RelationshipType::PresidentOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("FounderOf"),
+            RelationshipType::FounderOf
+        );
+        assert_eq!(
+            RelationshipType::from_str("TRIGGERED_BY"),
+            RelationshipType::TriggeredBy
+        );
     }
 
     #[test]

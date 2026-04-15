@@ -215,6 +215,12 @@ pub struct ErrorResponse {
 // HANDLERS
 // ============================================================================
 
+/// Strip the `agent:` prefix from UI-supplied agent ids so the graph service
+/// (which stores the bare name) finds rows. Both forms are accepted.
+fn normalize_agent_id(id: &str) -> &str {
+    id.strip_prefix("agent:").unwrap_or(id)
+}
+
 /// GET /api/graph/:agent_id/stats
 /// Get graph statistics for an agent.
 pub async fn get_graph_stats(
@@ -233,7 +239,7 @@ pub async fn get_graph_stats(
         }
     };
 
-    match graph_service.get_stats(&agent_id).await {
+    match graph_service.get_stats(normalize_agent_id(&agent_id)).await {
         Ok(stats) => Ok(Json(GraphStatsResponse::from(stats))),
         Err(e) => Err((
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -265,7 +271,7 @@ pub async fn list_entities(
 
     match graph_service
         .list_entities(
-            &agent_id,
+            normalize_agent_id(&agent_id),
             query.entity_type.as_deref(),
             query.limit,
             query.offset,
@@ -307,9 +313,11 @@ pub async fn list_relationships(
         }
     };
 
+    let normalized = normalize_agent_id(&agent_id);
+
     match graph_service
         .list_relationships(
-            &agent_id,
+            normalized,
             query.relationship_type.as_deref(),
             query.limit,
             query.offset,
@@ -363,7 +371,12 @@ pub async fn get_entity_neighbors(
 
     // Get neighbors through GraphService
     match graph_service
-        .get_neighbors(&agent_id, &entity_id, direction, query.limit)
+        .get_neighbors(
+            normalize_agent_id(&agent_id),
+            &entity_id,
+            direction,
+            query.limit,
+        )
         .await
     {
         Ok(neighbors) => {
@@ -414,7 +427,7 @@ pub async fn get_entity_subgraph(
     };
 
     match graph_service
-        .get_subgraph(&agent_id, &entity_id, query.max_hops)
+        .get_subgraph(normalize_agent_id(&agent_id), &entity_id, query.max_hops)
         .await
     {
         Ok(subgraph) => Ok(Json(SubgraphResponse::from(subgraph))),
@@ -447,7 +460,11 @@ pub async fn search_entities(
     };
 
     match graph_service
-        .search_entities(&agent_id, &query.q, query.limit.unwrap_or(20))
+        .search_entities(
+            normalize_agent_id(&agent_id),
+            &query.q,
+            query.limit.unwrap_or(20),
+        )
         .await
     {
         Ok(entities) => {
@@ -749,4 +766,64 @@ pub async fn all_entities(
             }),
         )),
     }
+}
+
+/// Response body for the reindex endpoint.
+#[derive(Debug, Serialize)]
+pub struct ReindexResponse {
+    pub wards_processed: usize,
+    pub entities_created: usize,
+}
+
+/// POST /api/graph/reindex — force re-indexing of every ward on disk.
+/// Idempotent: relationships upsert via UNIQUE(source, target, type).
+pub async fn reindex_all_wards(
+    State(state): State<AppState>,
+) -> Result<Json<ReindexResponse>, StatusCode> {
+    use gateway_execution::ward_artifact_indexer::{index_ward_with_options, IndexOptions};
+
+    let episode_repo = state
+        .kg_episode_repo
+        .clone()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let graph_service = state
+        .graph_service
+        .clone()
+        .ok_or(StatusCode::SERVICE_UNAVAILABLE)?;
+    let graph = graph_service.storage().clone();
+
+    let wards_dir = state.paths.wards_dir();
+    let Ok(read) = std::fs::read_dir(&wards_dir) else {
+        return Ok(Json(ReindexResponse {
+            wards_processed: 0,
+            entities_created: 0,
+        }));
+    };
+
+    let mut total_entities = 0_usize;
+    let mut wards_processed = 0_usize;
+    for entry in read.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+        let n = index_ward_with_options(
+            &path,
+            "admin-reindex",
+            "root",
+            &episode_repo,
+            &graph,
+            IndexOptions {
+                force_reindex: true,
+            },
+        )
+        .await;
+        total_entities += n;
+        wards_processed += 1;
+    }
+
+    Ok(Json(ReindexResponse {
+        wards_processed,
+        entities_created: total_entities,
+    }))
 }

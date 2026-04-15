@@ -1,4 +1,7 @@
-export { MemoryTab } from "./MemoryTab";
+export { MemoryTabGate as MemoryTab } from "./MemoryTabGate";
+export { MemoryTabGate } from "./MemoryTabGate";
+export { MemoryTabLegacy } from "./MemoryTabLegacy";
 export { MemoryFactCard } from "./MemoryFactCard";
 export { WebMemoryPanel } from "./WebMemoryPanel";
-export { GraphView } from "./GraphView";
+export { MemoryPage } from "./MemoryPage";
+export { useFeatureFlag } from "./useFeatureFlag";

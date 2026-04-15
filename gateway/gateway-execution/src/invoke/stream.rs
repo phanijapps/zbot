@@ -452,13 +452,8 @@ pub fn process_stream_event(
                     }
                 }
 
-                // Auto-update AGENTS.md so the agent sees conventions immediately
-                let lang_configs_dir = ctx.vault_dir.join("config").join("wards");
-                crate::runner::auto_update_agents_md_with_lang_configs(
-                    &ctx.vault_dir,
-                    ward_id,
-                    &lang_configs_dir,
-                );
+                // AGENTS.md is curated manually by the agent after ward creation;
+                // the runtime no longer auto-rewrites it here.
             }
         }
         StreamEvent::SessionTitleChanged { ref title, .. } => {

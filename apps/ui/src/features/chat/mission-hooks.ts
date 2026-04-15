@@ -147,7 +147,12 @@ interface EventHandlerCtx {
   startDurationTimer: () => void;
   stopDurationTimer: () => void;
   generateFallbackTitle: (message: string) => string;
+  bumpArtifactsRefresh: () => void;
+  activeSessionIdRef: React.MutableRefObject<string | null>;
 }
+
+// Export for unit tests.
+export type { EventHandlerCtx };
 
 // ============================================================================
 // Extracted event handlers
@@ -289,9 +294,10 @@ function handleToolCallUpdatePlan(args: Record<string, unknown>, ctx: EventHandl
   upsertPlanBlock(steps, ctx);
 }
 
-function handleToolCallRespond(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
+export function handleToolCallRespond(args: Record<string, unknown>, ctx: EventHandlerCtx): void {
   const respondMsg = (args.message ?? "") as string;
   if (respondMsg) {
+    // Mark as streaming so turn_complete updates this block instead of duplicating.
     ctx.setBlocks((prev) => [
       ...prev,
       {
@@ -299,7 +305,7 @@ function handleToolCallRespond(args: Record<string, unknown>, ctx: EventHandlerC
         type: "response",
         timestamp: now(),
         data: { content: respondMsg, timestamp: now() },
-        isStreaming: false,
+        isStreaming: true,
       },
     ]);
   }
@@ -587,11 +593,12 @@ function handleSessionTitleChanged(event: StreamEvent, ctx: EventHandlerCtx): vo
   }
 }
 
-function handleWardChanged(event: StreamEvent, ctx: EventHandlerCtx): void {
+export function handleWardChanged(event: StreamEvent, ctx: EventHandlerCtx): void {
   const wardId = (event.ward_id ?? "") as string;
-  if (wardId) {
-    ctx.setActiveWard({ name: wardId, content: "" });
-  }
+  if (!wardId) return;
+  // Backend WardChanged event carries only ward_id. If intent analysis or a
+  // prior ward tool_result already populated a richer name, keep it.
+  ctx.setActiveWard((prev) => (prev?.name ? prev : { name: wardId, content: "" }));
 }
 
 function handleIntentAnalysisStarted(ctx: EventHandlerCtx): void {
@@ -670,7 +677,7 @@ function flushAndCancelRaf(ctx: EventHandlerCtx): void {
   ctx.flushTokenBuffer();
 }
 
-function handleTurnComplete(event: StreamEvent, ctx: EventHandlerCtx): void {
+export function handleTurnComplete(event: StreamEvent, ctx: EventHandlerCtx): void {
   flushAndCancelRaf(ctx);
 
   const finalMessage = event.final_message as string | undefined;
@@ -698,7 +705,7 @@ function handleTurnComplete(event: StreamEvent, ctx: EventHandlerCtx): void {
   }
 }
 
-function handleAgentCompleted(event: StreamEvent, ctx: EventHandlerCtx): void {
+export function handleAgentCompleted(event: StreamEvent, ctx: EventHandlerCtx): void {
   flushAndCancelRaf(ctx);
 
   const result = event.result as string | undefined;
@@ -723,6 +730,10 @@ function handleAgentCompleted(event: StreamEvent, ctx: EventHandlerCtx): void {
   ctx.setPhase("completed");
   ctx.stopDurationTimer();
   ctx.setBlocks((prev) => prev.map((b) => (b.isStreaming ? { ...b, isStreaming: false } : b)));
+
+  // Trigger artifacts re-fetch in IntelligenceFeed (bug: artifacts generated
+  // during the turn don't appear until the user navigates away and back).
+  ctx.bumpArtifactsRefresh();
 }
 
 function handleErrorEvent(ctx: EventHandlerCtx): void {
@@ -806,6 +817,18 @@ export function useMissionControl() {
 
   // -- Load flag to prevent double-load --
   const hasLoadedSessionRef = useRef(false);
+
+  // -- Stable ref for event handlers to read activeSessionId without stale closure --
+  const activeSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeSessionIdRef.current = activeSessionId;
+  }, [activeSessionId]);
+
+  // -- Artifacts refresh signal (bumped on agent_completed; IntelligenceFeed re-fetches) --
+  const [artifactsRefreshKey, setArtifactsRefreshKey] = useState(0);
+  const bumpArtifactsRefresh = useCallback(() => {
+    setArtifactsRefreshKey((k) => k + 1);
+  }, []);
 
   // -- Timing --
   const startTimeRef = useRef<number | null>(null);
@@ -932,6 +955,7 @@ export function useMissionControl() {
       setActiveSessionId, toolCallBlockMapRef, executionAgentMapRef,
       titleFallbackTimerRef, lastUserMessageRef, streamingBufferRef, rafIdRef,
       flushTokenBuffer, startDurationTimer, stopDurationTimer, generateFallbackTitle,
+      bumpArtifactsRefresh, activeSessionIdRef,
     };
 
     switch (event.type) {
@@ -1075,6 +1099,8 @@ export function useMissionControl() {
     userMessage: string | undefined,
     response: string | undefined,
     startedAt: string,
+    subagents: SubagentStateData[] = [],
+    plan: PlanStep[] = [],
   ): NarrativeBlock[] => {
     const blocks: NarrativeBlock[] = [];
     if (userMessage) {
@@ -1083,6 +1109,26 @@ export function useMissionControl() {
         type: "user",
         timestamp: startedAt,
         data: { content: userMessage, timestamp: startedAt },
+      });
+    }
+    // Reconstruct delegation blocks from persisted subagents so reopening the
+    // session surfaces the narrative history (completed/active children).
+    for (const sa of subagents) {
+      const status = sa.status === "running" ? "active" : (sa.status as "active" | "completed" | "error");
+      blocks.push({
+        id: "delegation-" + sa.executionId,
+        type: "delegation",
+        timestamp: startedAt,
+        data: { agentId: sa.agentId, task: sa.task, status },
+      });
+    }
+    // Reconstruct plan block if the session had one.
+    if (plan.length > 0) {
+      blocks.push({
+        id: "plan-" + sessionId,
+        type: "plan",
+        timestamp: startedAt,
+        data: { steps: plan },
       });
     }
     if (response) {
@@ -1172,8 +1218,19 @@ export function useMissionControl() {
           }
         }
 
-        // Center — build minimal blocks (user message + response only)
-        const loadedBlocks = buildSessionBlocks(sessionToLoad, s.userMessage ?? undefined, s.response ?? undefined, s.session.startedAt);
+        // Center — rebuild blocks from persisted state: user + delegations + plan + response.
+        const restoredPlan: PlanStep[] = (s.plan ?? []).map((p) => ({
+          text: p.text,
+          status: (p.status === "completed" ? "done" : p.status === "in_progress" ? "active" : "pending") as StepStatus,
+        }));
+        const loadedBlocks = buildSessionBlocks(
+          sessionToLoad,
+          s.userMessage ?? undefined,
+          s.response ?? undefined,
+          s.session.startedAt,
+          s.subagents ?? [],
+          restoredPlan,
+        );
         if (loadedBlocks.length > 0) setBlocks(loadedBlocks);
 
       } catch (err) {
@@ -1308,7 +1365,7 @@ export function useMissionControl() {
     intentAnalysis,
   };
 
-  return { state, sendMessage, stopAgent, startNewSession };
+  return { state, sendMessage, stopAgent, startNewSession, artifactsRefreshKey };
 }
 
 // ============================================================================

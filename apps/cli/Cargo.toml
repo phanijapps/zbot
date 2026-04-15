@@ -11,6 +11,9 @@ name = "zero"
 path = "src/main.rs"
 
 [dependencies]
+# Shared
+zero-core = { path = "../../framework/zero-core" }
+
 # TUI framework
 ratatui = "0.29"
 crossterm = "0.28"

@@ -172,8 +172,15 @@ impl GraphTraversal for SqliteGraphTraversal {
         max_hops: u8,
         limit: usize,
     ) -> Result<Vec<TraversalNode>, String> {
-        let conn = self.storage.conn.lock().await;
-        self.traverse_inner(&conn, entity_id, max_hops, limit)
+        self.storage
+            .db
+            .with_connection(|conn| {
+                self.traverse_inner(conn, entity_id, max_hops, limit)
+                    .map_err(|e| {
+                        rusqlite::Error::InvalidColumnType(0, e, rusqlite::types::Type::Null)
+                    })
+            })
+            .map_err(|e| format!("traverse: {e}"))
     }
 
     async fn connected_entities(
@@ -182,51 +189,56 @@ impl GraphTraversal for SqliteGraphTraversal {
         max_hops: u8,
         limit: usize,
     ) -> Result<Vec<TraversalNode>, String> {
-        let conn = self.storage.conn.lock().await;
+        self.storage
+            .db
+            .with_connection(|conn| {
+                // Resolve each name to an entity ID (case-insensitive)
+                let mut seed_ids: Vec<String> = Vec::new();
+                for name in names {
+                    let mut stmt = conn.prepare(
+                        "SELECT id FROM kg_entities WHERE name COLLATE NOCASE = ?1 LIMIT 1",
+                    )?;
 
-        // Resolve each name to an entity ID (case-insensitive)
-        let mut seed_ids: Vec<String> = Vec::new();
-        for name in names {
-            let mut stmt = conn
-                .prepare("SELECT id FROM kg_entities WHERE name COLLATE NOCASE = ?1 LIMIT 1")
-                .map_err(|e| format!("prepare name lookup: {e}"))?;
+                    let mut rows = stmt.query_map(params![*name], |row| row.get::<_, String>(0))?;
 
-            let mut rows = stmt
-                .query_map(params![*name], |row| row.get::<_, String>(0))
-                .map_err(|e| format!("query name lookup: {e}"))?;
-
-            if let Some(Ok(id)) = rows.next() {
-                seed_ids.push(id);
-            }
-        }
-
-        // BFS from each seed, merge keeping shortest hop per entity
-        let mut best: HashMap<String, TraversalNode> = HashMap::new();
-        for seed_id in &seed_ids {
-            let nodes = self.traverse_inner(&conn, seed_id, max_hops, limit)?;
-            for node in nodes {
-                // Also skip if the node is one of the other seed entities
-                if seed_ids.contains(&node.entity_id) {
-                    continue;
+                    if let Some(Ok(id)) = rows.next() {
+                        seed_ids.push(id);
+                    }
                 }
-                best.entry(node.entity_id.clone())
-                    .and_modify(|existing| {
-                        if node.hop_distance < existing.hop_distance {
-                            *existing = node.clone();
-                        }
-                    })
-                    .or_insert(node);
-            }
-        }
 
-        let mut results: Vec<TraversalNode> = best.into_values().collect();
-        results.sort_by(|a, b| {
-            a.hop_distance
-                .cmp(&b.hop_distance)
-                .then_with(|| b.mention_count.cmp(&a.mention_count))
-        });
-        results.truncate(limit);
-        Ok(results)
+                // BFS from each seed, merge keeping shortest hop per entity
+                let mut best: HashMap<String, TraversalNode> = HashMap::new();
+                for seed_id in &seed_ids {
+                    let nodes = self
+                        .traverse_inner(conn, seed_id, max_hops, limit)
+                        .map_err(|e| {
+                            rusqlite::Error::InvalidColumnType(0, e, rusqlite::types::Type::Null)
+                        })?;
+                    for node in nodes {
+                        // Also skip if the node is one of the other seed entities
+                        if seed_ids.contains(&node.entity_id) {
+                            continue;
+                        }
+                        best.entry(node.entity_id.clone())
+                            .and_modify(|existing| {
+                                if node.hop_distance < existing.hop_distance {
+                                    *existing = node.clone();
+                                }
+                            })
+                            .or_insert(node);
+                    }
+                }
+
+                let mut results: Vec<TraversalNode> = best.into_values().collect();
+                results.sort_by(|a, b| {
+                    a.hop_distance
+                        .cmp(&b.hop_distance)
+                        .then_with(|| b.mention_count.cmp(&a.mention_count))
+                });
+                results.truncate(limit);
+                Ok(results)
+            })
+            .map_err(|e| format!("connected_entities: {e}"))
     }
 }
 
@@ -241,10 +253,13 @@ mod tests {
     use tempfile::tempdir;
 
     /// Spin up an in-memory-ish test storage and return it wrapped in Arc.
-    async fn create_test_storage() -> Arc<GraphStorage> {
+    fn create_test_storage() -> Arc<GraphStorage> {
         let dir = tempdir().unwrap();
-        let db_path = dir.keep().join("test_traversal.db");
-        Arc::new(GraphStorage::new(db_path).unwrap())
+        let tmp_path = dir.keep();
+        let paths = Arc::new(gateway_services::VaultPaths::new(tmp_path));
+        std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
+        let db = Arc::new(gateway_database::KnowledgeDatabase::new(paths).unwrap());
+        Arc::new(GraphStorage::new(db).unwrap())
     }
 
     /// Build a small graph: Alice --uses--> Rust --part_of--> Systems
@@ -274,24 +289,21 @@ mod tests {
             entities: vec![alice, rust, systems],
             relationships: vec![rel_uses, rel_part_of],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         // IDs may have been remapped by dedup; look them up by name
         let alice_actual = storage
             .get_entity_by_name("agent1", "Alice")
-            .await
             .unwrap()
             .unwrap()
             .id;
         let rust_actual = storage
             .get_entity_by_name("agent1", "Rust")
-            .await
             .unwrap()
             .unwrap()
             .id;
         let systems_actual = storage
             .get_entity_by_name("agent1", "Systems")
-            .await
             .unwrap()
             .unwrap()
             .id;
@@ -301,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_traverse_2_hops() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
         let (alice_id, _rust_id, _systems_id) = seed_graph(&storage).await;
 
         let traversal = SqliteGraphTraversal::new(storage, 0.7);
@@ -324,7 +336,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_traverse_max_hops_1() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
         let (alice_id, _rust_id, _systems_id) = seed_graph(&storage).await;
 
         let traversal = SqliteGraphTraversal::new(storage, 0.7);
@@ -338,7 +350,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connected_entities_by_name() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
         let (_alice_id, _rust_id, _systems_id) = seed_graph(&storage).await;
 
         let traversal = SqliteGraphTraversal::new(storage, 0.7);
@@ -357,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_connected_entities_case_insensitive() {
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
         seed_graph(&storage).await;
 
         let traversal = SqliteGraphTraversal::new(storage, 0.7);
@@ -377,7 +389,7 @@ mod tests {
     #[tokio::test]
     async fn test_traverse_cycle_detection() {
         // Build a cycle: A -> B -> C -> A
-        let storage = create_test_storage().await;
+        let storage = create_test_storage();
 
         let a = Entity::new("agent1".into(), EntityType::Concept, "NodeA".into());
         let b = Entity::new("agent1".into(), EntityType::Concept, "NodeB".into());
@@ -406,11 +418,10 @@ mod tests {
             entities: vec![a, b, c],
             relationships: vec![rel_ab, rel_bc, rel_ca],
         };
-        storage.store_knowledge("agent1", knowledge).await.unwrap();
+        storage.store_knowledge("agent1", knowledge).unwrap();
 
         let a_id = storage
             .get_entity_by_name("agent1", "NodeA")
-            .await
             .unwrap()
             .unwrap()
             .id;

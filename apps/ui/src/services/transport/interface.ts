@@ -61,6 +61,9 @@ import type {
   MemoryFact,
   MemoryFilter,
   MemoryListResponse,
+  WardContent,
+  HybridSearchRequest,
+  HybridSearchResponse,
   // Graph types
   GraphStatsResponse,
   GraphEntityListResponse,
@@ -74,6 +77,10 @@ import type {
   SetupStatus,
   SessionState,
   Artifact,
+  EmbeddingsHealth,
+  CuratedModel,
+  EmbeddingConfig,
+  ConfigureProgressEvent,
 } from "./types";
 
 // ============================================================================
@@ -414,6 +421,15 @@ export interface Transport {
   /** Search ALL memory facts across all agents (server-side FTS5) */
   searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>>;
 
+  /** List all wards with their fact counts (GET /api/wards) */
+  listWards(): Promise<TransportResult<{ id: string; count: number }[]>>;
+
+  /** Get full content (facts, wiki, procedures, episodes) for a single ward */
+  getWardContent(wardId: string): Promise<TransportResult<WardContent>>;
+
+  /** Unified hybrid search across memory types (POST /api/memory/search) */
+  searchMemoryHybrid(req: HybridSearchRequest): Promise<TransportResult<HybridSearchResponse>>;
+
   /** Get a single memory fact */
   getMemory(agentId: string, factId: string): Promise<TransportResult<MemoryFact>>;
 
@@ -479,4 +495,24 @@ export interface Transport {
 
   /** Get the URL to fetch artifact content */
   getArtifactContentUrl(artifactId: string): string;
+
+  // =========================================================================
+  // Embedding Backend Operations
+  // =========================================================================
+
+  /** Get current embedding backend health + indexed count */
+  getEmbeddingsHealth(): Promise<TransportResult<EmbeddingsHealth>>;
+
+  /** Fetch curated Ollama embedding model list */
+  getEmbeddingsModels(): Promise<TransportResult<CuratedModel[]>>;
+
+  /**
+   * Configure (switch) embedding backend. Streams SSE progress events
+   * via `onProgress`. Resolves with the final health snapshot on success.
+   */
+  configureEmbeddings(
+    config: EmbeddingConfig,
+    onProgress: (event: ConfigureProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<TransportResult<EmbeddingsHealth>>;
 }

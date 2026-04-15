@@ -71,6 +71,9 @@ import type {
   MemoryFact,
   MemoryFilter,
   MemoryListResponse,
+  WardContent,
+  HybridSearchRequest,
+  HybridSearchResponse,
   // Graph types
   GraphStatsResponse,
   GraphEntityListResponse,
@@ -84,6 +87,10 @@ import type {
   SetupStatus,
   SessionState,
   Artifact,
+  EmbeddingsHealth,
+  CuratedModel,
+  EmbeddingConfig,
+  ConfigureProgressEvent,
 } from "./types";
 
 // ============================================================================
@@ -1415,6 +1422,22 @@ export class HttpTransport implements Transport {
     return this.get(`/api/memory/search?${params.toString()}`);
   }
 
+  async listWards(): Promise<TransportResult<{ id: string; count: number }[]>> {
+    return this.get<{ id: string; count: number }[]>("/api/wards");
+  }
+
+  async getWardContent(wardId: string): Promise<TransportResult<WardContent>> {
+    return this.get<WardContent>(
+      `/api/wards/${encodeURIComponent(wardId)}/content`
+    );
+  }
+
+  async searchMemoryHybrid(
+    req: HybridSearchRequest
+  ): Promise<TransportResult<HybridSearchResponse>> {
+    return this.post<HybridSearchResponse>("/api/memory/search", req);
+  }
+
   async createMemory(agentId: string, fact: {
     category: string;
     key: string;
@@ -1530,6 +1553,51 @@ export class HttpTransport implements Transport {
   }
 
   // ─────────────────────────────────────────────────────────────────────────
+  // Embedding Backend Operations
+  // ─────────────────────────────────────────────────────────────────────────
+
+  async getEmbeddingsHealth(): Promise<TransportResult<EmbeddingsHealth>> {
+    return this.get<EmbeddingsHealth>("/api/embeddings/health");
+  }
+
+  async getEmbeddingsModels(): Promise<TransportResult<CuratedModel[]>> {
+    return this.get<CuratedModel[]>("/api/embeddings/models");
+  }
+
+  async configureEmbeddings(
+    config: EmbeddingConfig,
+    onProgress: (event: ConfigureProgressEvent) => void,
+    signal?: AbortSignal,
+  ): Promise<TransportResult<EmbeddingsHealth>> {
+    if (!this.config) {
+      return { success: false, error: "Transport not initialized" };
+    }
+
+    try {
+      const response = await fetch(`${this.config.httpUrl}/api/embeddings/configure`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "text/event-stream",
+        },
+        body: JSON.stringify(config),
+        signal,
+      });
+
+      if (!response.ok || !response.body) {
+        return { success: false, error: `HTTP ${response.status}: ${response.statusText}` };
+      }
+
+      return await consumeConfigureStream(response.body, onProgress);
+    } catch (error) {
+      if (error instanceof Error && error.name === "AbortError") {
+        return { success: false, error: "Aborted" };
+      }
+      return { success: false, error: String(error) };
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
   // HTTP Helpers
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1639,4 +1707,123 @@ export class HttpTransport implements Transport {
       return { success: false, error: String(error) };
     }
   }
+}
+
+// =============================================================================
+// SSE stream helper for /api/embeddings/configure
+// =============================================================================
+
+interface ReadyPayload {
+  backend: string;
+  model?: string;
+  dim: number;
+}
+
+function parseEventData(eventName: string, dataRaw: string): ConfigureProgressEvent | null {
+  try {
+    const data = JSON.parse(dataRaw) as Record<string, unknown>;
+    if (eventName === "pulling") {
+      return {
+        kind: "pulling",
+        mb_done: Number(data.mb_done ?? 0),
+        mb_total: Number(data.mb_total ?? 0),
+      };
+    }
+    if (eventName === "reindexing") {
+      return {
+        kind: "reindexing",
+        table: String(data.table ?? ""),
+        current: Number(data.current ?? 0),
+        total: Number(data.total ?? 0),
+      };
+    }
+    if (eventName === "ready") {
+      return {
+        kind: "ready",
+        backend: String(data.backend ?? ""),
+        model: typeof data.model === "string" ? data.model : undefined,
+        dim: Number(data.dim ?? 0),
+      };
+    }
+    if (eventName === "error") {
+      return {
+        kind: "error",
+        reason: String(data.reason ?? "Unknown error"),
+        rollback: typeof data.rollback === "string" ? data.rollback : undefined,
+      };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+function readySnapshot(ready: ReadyPayload): EmbeddingsHealth {
+  return {
+    backend: (ready.backend === "ollama" ? "ollama" : "internal") as EmbeddingsHealth["backend"],
+    model: ready.model,
+    dim: ready.dim,
+    status: "ready",
+    indexed_count: 0,
+  };
+}
+
+async function consumeConfigureStream(
+  body: ReadableStream<Uint8Array>,
+  onProgress: (event: ConfigureProgressEvent) => void,
+): Promise<TransportResult<EmbeddingsHealth>> {
+  const reader = body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let lastError: string | null = null;
+  let ready: ReadyPayload | null = null;
+
+  try {
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      let sepIdx = buffer.indexOf("\n\n");
+      while (sepIdx !== -1) {
+        const raw = buffer.slice(0, sepIdx);
+        buffer = buffer.slice(sepIdx + 2);
+        const parsed = parseSseFrame(raw);
+        if (parsed) {
+          const evt = parseEventData(parsed.event, parsed.data);
+          if (evt) {
+            onProgress(evt);
+            if (evt.kind === "ready") {
+              ready = { backend: evt.backend, model: evt.model, dim: evt.dim };
+            } else if (evt.kind === "error") {
+              lastError = evt.reason;
+            }
+          }
+        }
+        sepIdx = buffer.indexOf("\n\n");
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  if (ready) {
+    return { success: true, data: readySnapshot(ready) };
+  }
+  return { success: false, error: lastError ?? "Stream ended without ready event" };
+}
+
+function parseSseFrame(raw: string): { event: string; data: string } | null {
+  let event = "message";
+  const dataLines: string[] = [];
+  for (const line of raw.split("\n")) {
+    if (line.startsWith("event:")) {
+      event = line.slice(6).trim();
+    } else if (line.startsWith("data:")) {
+      dataLines.push(line.slice(5).trimStart());
+    }
+  }
+  if (dataLines.length === 0) return null;
+  return { event, data: dataLines.join("\n") };
 }

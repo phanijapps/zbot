@@ -14,16 +14,30 @@ mod tools;
 pub use tools::{
     ApplyPatchTool,
     EditFileTool,
+    // Knowledge graph query types
+    EntityInfo,
     GlobTool,
+    // Goal tool (agent intent lifecycle)
+    GoalAccess,
+    GoalSummary,
+    GoalTool,
+    GraphQueryTool,
+    GraphStorageAccess,
     GrepTool,
+    // Ingestion tool (enqueue text for background extraction)
+    IngestTool,
+    IngestionAccess,
     // Composite re-exports
     ListAgentsTool,
+    ListMcpsTool,
+    ListSkillsTool,
     LoadSkillTool,
     MemoryEntry,
     MemoryStore,
     MemoryTool,
     // Multimodal vision fallback
     MultimodalAnalyzeTool,
+    NeighborInfo,
     QueryResourceTool,
     ReadTool,
     SetSessionTitleTool,

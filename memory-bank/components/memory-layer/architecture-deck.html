@@ -1,0 +1,1443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Memory Layer · v22 · Architecture</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght,SOFT,WONK@9..144,300;9..144,400;9..144,500;9..144,600;9..144,700&family=IBM+Plex+Sans:ital,wght@0,300;0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  :root {
+    --paper:        #F3EEE4;
+    --paper-deep:   #E9E2D2;
+    --ink:          #1A1814;
+    --ink-muted:    #4F473B;
+    --pencil:       #8A7F6B;
+    --accent:       #005F5F;
+    --accent-dim:   #B9CDCB;
+    --retired:      #A53D2A;
+    --ok:           #3E6B3A;
+
+    --s-display: "Fraunces", "Times New Roman", serif;
+    --s-body:    "IBM Plex Sans", system-ui, sans-serif;
+    --s-mono:    "JetBrains Mono", ui-monospace, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--s-body);
+    font-weight: 300;
+    font-size: 17px;
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background-image:
+      radial-gradient(at 20% 0%, rgba(0, 95, 95, 0.025), transparent 50%),
+      radial-gradient(at 80% 100%, rgba(165, 61, 42, 0.02), transparent 50%),
+      linear-gradient(to right, rgba(26, 24, 20, 0.04) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(26, 24, 20, 0.04) 1px, transparent 1px);
+    background-size: 100% 100%, 100% 100%, 32px 32px, 32px 32px;
+    background-position: 0 0, 0 0, -1px -1px, -1px -1px;
+    scroll-snap-type: y mandatory;
+    overflow-y: scroll;
+    height: 100vh;
+  }
+
+  /* Noise/grain overlay */
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 9999;
+    opacity: 0.35;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='180' height='180'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' /><feColorMatrix values='0 0 0 0 0.1 0 0 0 0 0.09 0 0 0 0 0.08 0 0 0 0.06 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
+    mix-blend-mode: multiply;
+  }
+
+  /* --- slides --- */
+  .slide {
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+    min-height: 100vh;
+    padding: 7vh clamp(3rem, 8vw, 7rem) 7vh;
+    position: relative;
+    display: flex; flex-direction: column;
+  }
+
+  /* slide label (top-left) */
+  .slide-label {
+    position: absolute;
+    top: 2.5rem; left: clamp(3rem, 8vw, 7rem);
+    display: flex; gap: 1rem; align-items: baseline;
+    font-family: var(--s-mono);
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--pencil);
+  }
+  .slide-label .num {
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .slide-label .title-tag {
+    padding-left: 1rem;
+    border-left: 1px solid var(--pencil);
+  }
+
+  /* eyebrow */
+  .eyebrow {
+    font-family: var(--s-mono);
+    font-size: 11px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: var(--accent);
+    margin-bottom: 1.2rem;
+  }
+
+  h1, h2, h3 {
+    font-family: var(--s-display);
+    font-weight: 500;
+    line-height: 1.02;
+    letter-spacing: -0.02em;
+    font-variation-settings: "opsz" 144, "SOFT" 50, "WONK" 0;
+  }
+  h1 { font-size: clamp(3.5rem, 8vw, 7rem); font-weight: 400; }
+  h2 { font-size: clamp(2.2rem, 4.5vw, 3.8rem); font-weight: 500; }
+  h3 { font-size: clamp(1.1rem, 1.8vw, 1.5rem); font-weight: 600; letter-spacing: -0.01em; }
+
+  em { font-style: italic; color: var(--accent); font-weight: 400; }
+  strong { font-weight: 500; color: var(--ink); }
+  code {
+    font-family: var(--s-mono);
+    font-size: 0.88em;
+    background: rgba(0, 95, 95, 0.08);
+    padding: 0.12em 0.38em;
+    border-radius: 2px;
+  }
+
+  .mono { font-family: var(--s-mono); }
+  .muted { color: var(--ink-muted); }
+  .small { font-size: 13px; }
+  .line-after::after {
+    content: '';
+    display: block;
+    width: 3rem; height: 1px;
+    background: var(--ink);
+    margin-top: 2rem;
+  }
+
+  /* page number (bottom-right) */
+  .folio {
+    position: absolute;
+    right: clamp(3rem, 8vw, 7rem);
+    bottom: 2.5rem;
+    font-family: var(--s-mono);
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    color: var(--pencil);
+  }
+  .folio strong { color: var(--accent); font-weight: 500; }
+
+  /* fixed progress rail (left) */
+  .rail {
+    position: fixed;
+    left: 2rem; top: 0; bottom: 0;
+    width: 2px;
+    background: rgba(26, 24, 20, 0.08);
+    z-index: 1000;
+  }
+  .rail-dots {
+    position: fixed;
+    left: 1.65rem; top: 50%;
+    transform: translateY(-50%);
+    display: flex; flex-direction: column; gap: 0.85rem;
+    z-index: 1001;
+  }
+  .rail-dot {
+    width: 9px; height: 9px;
+    border: 1px solid var(--pencil);
+    background: var(--paper);
+    border-radius: 50%;
+    cursor: pointer;
+    transition: all .3s ease;
+  }
+  .rail-dot.active {
+    background: var(--accent);
+    border-color: var(--accent);
+    transform: scale(1.3);
+  }
+  .rail-dot:hover { border-color: var(--accent); }
+
+  /* staggered reveal */
+  .reveal > * { opacity: 0; transform: translateY(14px); }
+  .slide.in-view .reveal > * {
+    animation: rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) forwards;
+  }
+  .slide.in-view .reveal > *:nth-child(1) { animation-delay: 0.05s; }
+  .slide.in-view .reveal > *:nth-child(2) { animation-delay: 0.15s; }
+  .slide.in-view .reveal > *:nth-child(3) { animation-delay: 0.25s; }
+  .slide.in-view .reveal > *:nth-child(4) { animation-delay: 0.35s; }
+  .slide.in-view .reveal > *:nth-child(5) { animation-delay: 0.45s; }
+  .slide.in-view .reveal > *:nth-child(6) { animation-delay: 0.55s; }
+  .slide.in-view .reveal > *:nth-child(7) { animation-delay: 0.65s; }
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+
+  /* --- COVER --- */
+  .cover {
+    padding-top: 8vh;
+    justify-content: space-between;
+  }
+  .cover-top {
+    display: flex; justify-content: space-between; align-items: flex-start;
+    font-family: var(--s-mono);
+    font-size: 11px; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--pencil);
+  }
+  .cover h1 {
+    font-style: italic;
+    font-weight: 300;
+    font-variation-settings: "opsz" 144, "SOFT" 100, "WONK" 1;
+    letter-spacing: -0.04em;
+  }
+  .cover h1 em {
+    font-style: normal;
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .cover-meta {
+    display: grid;
+    grid-template-columns: 1fr 1fr 1fr 1fr;
+    gap: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--ink);
+  }
+  .cover-meta div > span:first-child {
+    display: block;
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.25em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin-bottom: 0.35rem;
+  }
+  .cover-meta strong {
+    font-family: var(--s-display);
+    font-size: 1.25rem;
+    font-weight: 400;
+    font-style: italic;
+  }
+
+  /* --- TWO-COLUMN LAYOUT --- */
+  .two-col {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: clamp(2rem, 5vw, 5rem);
+    align-items: start;
+    flex: 1;
+    padding-top: 3vh;
+  }
+  .two-col.align-center { align-items: center; }
+
+  .stat-row { display: flex; gap: 3rem; flex-wrap: wrap; margin-top: 2rem; }
+  .stat {
+    display: flex; flex-direction: column; gap: 0.2rem;
+  }
+  .stat .n {
+    font-family: var(--s-display);
+    font-style: italic;
+    font-size: 2.8rem;
+    font-weight: 400;
+    line-height: 1;
+    color: var(--accent);
+  }
+  .stat .n.retired { color: var(--retired); text-decoration: line-through; text-decoration-thickness: 1px; }
+  .stat .l {
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--pencil);
+  }
+
+  /* --- SCHEMATIC BOXES --- */
+  .schema-svg { width: 100%; height: auto; display: block; }
+  .schema-svg .node {
+    fill: var(--paper);
+    stroke: var(--ink);
+    stroke-width: 1.3;
+  }
+  .schema-svg .node-accent {
+    fill: var(--paper);
+    stroke: var(--accent);
+    stroke-width: 1.5;
+  }
+  .schema-svg .line {
+    stroke: var(--ink);
+    stroke-width: 1;
+    fill: none;
+  }
+  .schema-svg .line.accent { stroke: var(--accent); stroke-width: 1.4; }
+  .schema-svg .line.dashed { stroke-dasharray: 4 4; }
+  .schema-svg .label {
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    fill: var(--ink);
+    text-transform: uppercase;
+  }
+  .schema-svg .label-mini {
+    font-family: var(--s-mono);
+    font-size: 9px;
+    fill: var(--ink-muted);
+  }
+  .schema-svg .label-title {
+    font-family: var(--s-display);
+    font-size: 14px;
+    font-style: italic;
+    fill: var(--ink);
+    font-weight: 500;
+  }
+
+  /* self-drawing lines */
+  .draw-line {
+    stroke-dasharray: 1000;
+    stroke-dashoffset: 1000;
+  }
+  .slide.in-view .draw-line {
+    animation: draw 1.4s cubic-bezier(0.5, 0, 0.2, 1) forwards;
+    animation-delay: 0.4s;
+  }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+
+  /* pulse along path */
+  .pulse-path {
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    fill: none;
+    stroke-dasharray: 6 180;
+    opacity: 0;
+  }
+  .slide.in-view .pulse-path {
+    opacity: 1;
+    animation: pulse-along 3.2s linear infinite;
+    animation-delay: 1.8s;
+  }
+  @keyframes pulse-along {
+    from { stroke-dashoffset: 186; }
+    to   { stroke-dashoffset: 0; }
+  }
+
+  /* --- TABLES --- */
+  .tbl {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 14px;
+    font-family: var(--s-body);
+  }
+  .tbl th {
+    text-align: left;
+    font-family: var(--s-mono);
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    padding: 0.5rem 1rem 0.5rem 0;
+    border-bottom: 1px solid var(--ink);
+  }
+  .tbl td {
+    padding: 0.7rem 1rem 0.7rem 0;
+    border-bottom: 1px solid rgba(26, 24, 20, 0.08);
+    vertical-align: top;
+  }
+  .tbl td code { background: none; padding: 0; color: var(--accent); font-weight: 500; }
+
+  /* lists */
+  .stripe {
+    list-style: none;
+  }
+  .stripe li {
+    padding: 0.55rem 0;
+    border-bottom: 1px dashed rgba(26, 24, 20, 0.18);
+    display: grid;
+    grid-template-columns: 2.5rem 1fr;
+    gap: 1rem;
+  }
+  .stripe li .i {
+    font-family: var(--s-mono);
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    color: var(--accent);
+    padding-top: 0.12em;
+  }
+
+  /* pills */
+  .pill {
+    display: inline-block;
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid currentColor;
+    border-radius: 1px;
+    margin-right: 0.3rem;
+  }
+  .pill.ok { color: var(--ok); }
+  .pill.accent { color: var(--accent); }
+
+  /* code block */
+  pre {
+    font-family: var(--s-mono);
+    font-size: 12.5px;
+    line-height: 1.55;
+    background: rgba(26, 24, 20, 0.045);
+    border-left: 2px solid var(--accent);
+    padding: 1rem 1.2rem;
+    overflow-x: auto;
+    color: var(--ink);
+  }
+  pre .k { color: var(--accent); font-weight: 500; }
+  pre .s { color: var(--retired); }
+  pre .c { color: var(--pencil); font-style: italic; }
+
+  /* keyboard hint */
+  .hint {
+    position: fixed;
+    bottom: 1.5rem;
+    left: 50%; transform: translateX(-50%);
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    opacity: 0.6;
+    pointer-events: none;
+  }
+  .hint kbd {
+    display: inline-block;
+    font-family: inherit;
+    font-size: 10px;
+    padding: 0.12rem 0.4rem;
+    border: 1px solid var(--pencil);
+    border-radius: 2px;
+    margin: 0 0.15rem;
+  }
+
+  /* perf dial */
+  .dials {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: clamp(1.5rem, 3vw, 3rem);
+    margin-top: 2rem;
+  }
+  .dial {
+    padding: 1.8rem;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    position: relative;
+  }
+  .dial::before {
+    content: '';
+    position: absolute;
+    top: -1px; left: -1px; right: -1px; bottom: -1px;
+    border: 1px solid var(--ink);
+    transform: translate(5px, 5px);
+    z-index: -1;
+    opacity: 0.25;
+  }
+  .dial-h {
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.24em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin-bottom: 0.8rem;
+  }
+  .dial-v {
+    font-family: var(--s-display);
+    font-style: italic;
+    font-size: clamp(2.2rem, 4vw, 3.2rem);
+    font-weight: 400;
+    line-height: 1;
+    color: var(--accent);
+  }
+  .dial-v .unit {
+    font-size: 0.5em;
+    color: var(--pencil);
+    margin-left: 0.3em;
+    font-style: normal;
+  }
+  .dial-b {
+    margin-top: 0.8rem;
+    font-family: var(--s-mono);
+    font-size: 11px;
+    color: var(--ink-muted);
+  }
+  .dial-b .budget {
+    color: var(--ok);
+    font-weight: 500;
+  }
+  .dial-bar {
+    margin-top: 1.2rem;
+    height: 2px;
+    background: rgba(26, 24, 20, 0.1);
+    position: relative;
+  }
+  .dial-bar::after {
+    content: '';
+    position: absolute;
+    left: 0; top: 0; bottom: 0;
+    width: 0;
+    background: var(--accent);
+    transition: width 1.2s ease;
+  }
+  .slide.in-view .dial-bar::after {
+    width: var(--bar);
+  }
+
+  /* resolver cascade */
+  .cascade {
+    display: flex; flex-direction: column; gap: 0.8rem;
+    font-family: var(--s-mono);
+    font-size: 12px;
+  }
+  .cascade-step {
+    padding: 1rem 1.2rem;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    display: grid;
+    grid-template-columns: 2rem 1fr auto;
+    gap: 1rem;
+    align-items: center;
+  }
+  .cascade-step.decision {
+    border-style: dashed;
+    border-color: var(--accent);
+  }
+  .cascade-step.exit {
+    background: rgba(62, 107, 58, 0.08);
+    border-color: var(--ok);
+  }
+  .cascade-step .n {
+    font-family: var(--s-display);
+    font-style: italic;
+    font-size: 1.4rem;
+    color: var(--accent);
+  }
+  .cascade-step .big {
+    font-family: var(--s-body);
+    font-size: 14px;
+    font-weight: 500;
+  }
+  .cascade-step .d {
+    font-size: 11px;
+    color: var(--pencil);
+  }
+  .cascade-step .cost {
+    font-family: var(--s-mono);
+    font-size: 10px;
+    padding: 0.25rem 0.5rem;
+    border: 1px solid var(--accent);
+    color: var(--accent);
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+  }
+  .cascade-arrow {
+    align-self: center;
+    justify-self: center;
+    font-family: var(--s-mono);
+    color: var(--pencil);
+    padding-left: 1rem;
+    font-size: 14px;
+  }
+
+  /* pipeline */
+  .pipeline {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 0.8rem;
+    margin-top: 2rem;
+    position: relative;
+  }
+  .pipeline-stage {
+    padding: 1rem;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    text-align: center;
+    position: relative;
+  }
+  .pipeline-stage.pulse {
+    animation: pulse-box 2.6s ease-in-out infinite;
+  }
+  @keyframes pulse-box {
+    0%, 100% { background: var(--paper); border-color: var(--ink); }
+    50%      { background: rgba(0, 95, 95, 0.08); border-color: var(--accent); }
+  }
+  .pipeline-stage .n {
+    font-family: var(--s-mono);
+    font-size: 9px;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin-bottom: 0.4rem;
+  }
+  .pipeline-stage .t {
+    font-family: var(--s-display);
+    font-style: italic;
+    font-size: 1rem;
+    font-weight: 500;
+  }
+  .pipeline-stage .d {
+    font-size: 11px;
+    color: var(--ink-muted);
+    margin-top: 0.3rem;
+    line-height: 1.3;
+  }
+
+  /* connector arrows between pipeline stages */
+  .pipeline-stage:not(:last-child)::after {
+    content: '→';
+    position: absolute;
+    right: -0.85rem; top: 50%;
+    transform: translateY(-50%);
+    color: var(--accent);
+    font-family: var(--s-mono);
+    font-size: 14px;
+    z-index: 2;
+    background: var(--paper);
+    padding: 0 2px;
+  }
+
+  /* phase cards (close slide) */
+  .phases {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 0.7rem;
+    margin-top: 2rem;
+  }
+  .phase {
+    padding: 1rem 0.8rem;
+    border: 1px solid var(--ink);
+    background: var(--paper);
+    position: relative;
+  }
+  .phase .p-n {
+    font-family: var(--s-display);
+    font-style: italic;
+    font-weight: 400;
+    font-size: 1.5rem;
+    color: var(--accent);
+  }
+  .phase .p-t {
+    font-family: var(--s-mono);
+    font-size: 10px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--pencil);
+    margin: 0.35rem 0;
+  }
+  .phase .p-b {
+    font-size: 12px;
+    line-height: 1.4;
+  }
+  .phase::after {
+    content: '✓';
+    position: absolute;
+    top: 0.6rem; right: 0.8rem;
+    color: var(--ok);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  /* responsive */
+  @media (max-width: 900px) {
+    .two-col, .dials, .pipeline, .phases {
+      grid-template-columns: 1fr;
+    }
+    .pipeline-stage:not(:last-child)::after {
+      content: '↓';
+      right: 50%; top: auto; bottom: -0.85rem;
+      transform: translateX(50%);
+    }
+  }
+
+  /* print / no-motion fallback */
+  @media (prefers-reduced-motion: reduce) {
+    * { animation-duration: 0s !important; transition-duration: 0s !important; }
+    .reveal > * { opacity: 1; transform: none; }
+    .draw-line { stroke-dashoffset: 0; }
+  }
+</style>
+</head>
+<body>
+
+<aside class="rail" aria-hidden="true"></aside>
+<nav class="rail-dots" aria-label="slides">
+  <!-- filled by JS -->
+</nav>
+
+<div class="hint">
+  <kbd>↑</kbd><kbd>↓</kbd> navigate &nbsp;·&nbsp; <kbd>scroll</kbd>
+</div>
+
+<!-- ========== 01 · COVER ========== -->
+<section class="slide cover" data-slide="1" data-title="Cover">
+  <div class="cover-top">
+    <span>memory-bank · components · memory-layer</span>
+    <span>v22 · schema</span>
+  </div>
+
+  <div class="reveal" style="margin-top: 5vh;">
+    <p class="eyebrow">An illustrated architecture · 2026-04-13</p>
+    <h1>The memory<br><em>layer</em>,<br>reconstructed.</h1>
+    <p style="max-width: 38rem; margin-top: 2rem; color: var(--ink-muted); font-size: 1.15rem; line-height: 1.6;">
+      A <em>goal-oriented</em> agent's long-term cognition —
+      rebuilt from first principles around streaming ingestion,
+      bitemporal provenance, and unified scored recall.
+    </p>
+  </div>
+
+  <div class="cover-meta reveal" style="margin-top: auto;">
+    <div><span>scope</span><strong>5 phases</strong></div>
+    <div><span>tests</span><strong>1,204 green</strong></div>
+    <div><span>resolver p95</span><strong>2.15 ms</strong></div>
+    <div><span>cold-boot · 10k</strong></span><strong>6.1 ms</strong></div>
+  </div>
+
+  <span class="folio"><strong>01</strong> / 10</span>
+</section>
+
+
+<!-- ========== 02 · THE PROBLEM ========== -->
+<section class="slide" data-slide="2" data-title="The problem">
+  <div class="slide-label">
+    <span class="num">02</span>
+    <span class="title-tag">The problem</span>
+  </div>
+
+  <div class="two-col align-center" style="flex:1;">
+    <div class="reveal">
+      <p class="eyebrow">Before</p>
+      <h2>The graph<br>
+        <span style="font-style:italic;">remembered</span>
+        almost<br>nothing.</h2>
+      <p style="margin-top: 1.5rem; max-width: 32rem;" class="muted">
+        561 entities and 28 relationships after months of use.
+        97% orphan ratio. Wards ingested but <em>never queried</em>.
+        Distillation fired at session-end only; books, PDFs, and
+        long conversations waited hours for extraction.
+      </p>
+
+      <div class="stat-row reveal">
+        <div class="stat">
+          <span class="n retired">561</span>
+          <span class="l">entities · v21</span>
+        </div>
+        <div class="stat">
+          <span class="n retired">28</span>
+          <span class="l">relationships</span>
+        </div>
+        <div class="stat">
+          <span class="n retired">97%</span>
+          <span class="l">orphan ratio</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="reveal">
+      <svg class="schema-svg" viewBox="0 0 400 400" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+        <!-- scattered islands -->
+        <g>
+          <!-- central tiny cluster -->
+          <circle class="node-accent" cx="200" cy="200" r="28"/>
+          <circle class="node" cx="165" cy="175" r="10"/>
+          <circle class="node" cx="240" cy="185" r="10"/>
+          <circle class="node" cx="210" cy="240" r="10"/>
+          <circle class="node" cx="170" cy="225" r="10"/>
+          <line class="line accent" x1="200" y1="200" x2="165" y2="175"/>
+          <line class="line accent" x1="200" y1="200" x2="240" y2="185"/>
+          <line class="line accent" x1="200" y1="200" x2="210" y2="240"/>
+          <line class="line accent" x1="200" y1="200" x2="170" y2="225"/>
+
+          <!-- many orphans -->
+          <g style="opacity: 0.6;">
+            <circle class="node" cx="60" cy="80" r="6"/>
+            <circle class="node" cx="100" cy="60" r="6"/>
+            <circle class="node" cx="140" cy="90" r="6"/>
+            <circle class="node" cx="80" cy="120" r="6"/>
+            <circle class="node" cx="40" cy="170" r="6"/>
+            <circle class="node" cx="70" cy="240" r="6"/>
+            <circle class="node" cx="50" cy="310" r="6"/>
+            <circle class="node" cx="110" cy="330" r="6"/>
+            <circle class="node" cx="180" cy="350" r="6"/>
+            <circle class="node" cx="250" cy="340" r="6"/>
+            <circle class="node" cx="310" cy="300" r="6"/>
+            <circle class="node" cx="350" cy="250" r="6"/>
+            <circle class="node" cx="370" cy="180" r="6"/>
+            <circle class="node" cx="330" cy="110" r="6"/>
+            <circle class="node" cx="280" cy="70" r="6"/>
+            <circle class="node" cx="220" cy="50" r="6"/>
+            <circle class="node" cx="150" cy="290" r="6"/>
+            <circle class="node" cx="295" cy="170" r="6"/>
+            <circle class="node" cx="90" cy="280" r="6"/>
+            <circle class="node" cx="300" cy="220" r="6"/>
+            <circle class="node" cx="360" cy="340" r="6"/>
+            <circle class="node" cx="45" cy="130" r="6"/>
+          </g>
+
+          <text x="200" y="395" text-anchor="middle" class="label">observed: apr 2026</text>
+        </g>
+      </svg>
+    </div>
+  </div>
+
+  <span class="folio"><strong>02</strong> / 10</span>
+</section>
+
+
+<!-- ========== 03 · TWO-DB SPLIT ========== -->
+<section class="slide" data-slide="3" data-title="Storage split">
+  <div class="slide-label">
+    <span class="num">03</span>
+    <span class="title-tag">Storage</span>
+  </div>
+
+  <div class="reveal">
+    <p class="eyebrow">Principle I · separate lifecycles</p>
+    <h2>Two databases.<br>
+      <em>Different</em> cadences.</h2>
+    <p style="margin-top: 1rem; max-width: 48rem;" class="muted">
+      Ephemeral operational state is pruned aggressively.
+      Long-term memory is backed up, portable, vec-enabled.
+      Soft references cross the boundary — deleting a session
+      never erases what you learned.
+    </p>
+  </div>
+
+  <div class="reveal" style="margin-top: 3rem; flex:1;">
+    <svg class="schema-svg" viewBox="0 0 1000 420" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <!-- conversations.db -->
+      <g>
+        <rect class="node" x="40" y="60" width="420" height="320" rx="2"/>
+        <text x="60" y="94" class="label-title">conversations.db</text>
+        <text x="60" y="112" class="label-mini">— operational, wipe-safe, no extension —</text>
+
+        <g style="font-family: var(--s-mono); font-size: 11px; fill: var(--ink);">
+          <text x="60" y="145">sessions</text>
+          <text x="60" y="170">agent_executions</text>
+          <text x="60" y="195">messages</text>
+          <text x="60" y="220">artifacts</text>
+          <text x="60" y="245">execution_logs</text>
+          <text x="60" y="270">recall_log</text>
+          <text x="60" y="295">distillation_runs</text>
+          <text x="60" y="320">bridge_outbox</text>
+        </g>
+
+        <text x="60" y="360" class="label-mini" style="fill: var(--pencil);">pruned nightly · plain SQLite</text>
+      </g>
+
+      <!-- knowledge.db -->
+      <g>
+        <rect class="node-accent" x="540" y="60" width="420" height="320" rx="2"/>
+        <text x="560" y="94" class="label-title" style="fill: var(--accent);">knowledge.db</text>
+        <text x="560" y="112" class="label-mini">— long-term, portable, sqlite-vec —</text>
+
+        <g style="font-family: var(--s-mono); font-size: 11px; fill: var(--ink);">
+          <text x="560" y="145">memory_facts</text>
+          <text x="560" y="170">ward_wiki_articles</text>
+          <text x="560" y="195">procedures</text>
+          <text x="560" y="220">session_episodes</text>
+          <text x="560" y="245">kg_entities  ·  kg_aliases</text>
+          <text x="560" y="270">kg_relationships</text>
+          <text x="560" y="295">kg_episodes + payloads</text>
+          <text x="560" y="320">kg_goals  ·  kg_compactions</text>
+        </g>
+
+        <text x="560" y="360" class="label-mini" style="fill: var(--accent);">5× vec0 virtual tables · WAL + r2d2 pool</text>
+      </g>
+
+      <!-- soft reference arrow -->
+      <path class="line dashed draw-line" d="M 461 220 Q 500 220 539 220" stroke-dasharray="3 3"/>
+      <text x="500" y="210" text-anchor="middle" class="label-mini" style="font-size: 10px; fill: var(--pencil);">soft refs</text>
+    </svg>
+  </div>
+
+  <span class="folio"><strong>03</strong> / 10</span>
+</section>
+
+
+<!-- ========== 04 · STREAMING INGESTION ========== -->
+<section class="slide" data-slide="4" data-title="Streaming ingestion">
+  <div class="slide-label">
+    <span class="num">04</span>
+    <span class="title-tag">Ingestion</span>
+  </div>
+
+  <div class="reveal">
+    <p class="eyebrow">Principle II · never wait for end-of-session</p>
+    <h2>A book indexes<br>
+      <em>while you read.</em></h2>
+    <p style="margin-top: 1rem; max-width: 50rem;" class="muted">
+      <code>POST /api/graph/ingest</code> returns <strong>202 Accepted</strong> in under 100&nbsp;ms.
+      Work drains in the background through two workers; unrelated reads
+      stay responsive because SQLite runs in WAL mode and writes pool
+      through r2d2.
+    </p>
+  </div>
+
+  <div class="pipeline reveal" style="margin-top: 3rem;">
+    <div class="pipeline-stage pulse">
+      <div class="n">01</div>
+      <div class="t">Chunker</div>
+      <div class="d">paragraph-aware · 1000 tok · 100 tok overlap</div>
+    </div>
+    <div class="pipeline-stage pulse">
+      <div class="n">02</div>
+      <div class="t">Episode</div>
+      <div class="d">content-hash dedup · pending status</div>
+    </div>
+    <div class="pipeline-stage pulse">
+      <div class="n">03</div>
+      <div class="t">Queue</div>
+      <div class="d">tokio mpsc · Notify fan-out · N workers</div>
+    </div>
+    <div class="pipeline-stage pulse">
+      <div class="n">04</div>
+      <div class="t">Extractor</div>
+      <div class="d">pass 1 entities → pass 2 relations</div>
+    </div>
+    <div class="pipeline-stage pulse">
+      <div class="n">05</div>
+      <div class="t">Resolver + Writer</div>
+      <div class="d">alias match · ANN · merge or create</div>
+    </div>
+  </div>
+
+  <div class="reveal" style="margin-top: 2.5rem; display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 2rem; font-size: 13.5px;">
+    <div>
+      <h3 style="margin-bottom: 0.4rem;">Non-blocking</h3>
+      <p class="muted">Work lives in the DB, not the channel. Worker restarts naturally recover in-flight pending episodes.</p>
+    </div>
+    <div>
+      <h3 style="margin-bottom: 0.4rem;">Backpressure</h3>
+      <p class="muted">Global queue depth &gt; 5,000 or per-source &gt; 500 → <code>429</code> with retry-after. Books never starve chat.</p>
+    </div>
+    <div>
+      <h3 style="margin-bottom: 0.4rem;">Verified</h3>
+      <p class="muted">500-chunk stress test: reader <span class="pill ok" style="font-size: 9px;">140µs p95</span> while ingestion drains.</p>
+    </div>
+  </div>
+
+  <span class="folio"><strong>04</strong> / 10</span>
+</section>
+
+
+<!-- ========== 05 · RESOLVER CASCADE ========== -->
+<section class="slide" data-slide="5" data-title="Resolver cascade">
+  <div class="slide-label">
+    <span class="num">05</span>
+    <span class="title-tag">Entity resolver</span>
+  </div>
+
+  <div class="two-col" style="flex:1;">
+    <div class="reveal">
+      <p class="eyebrow">Principle III · cheapest first</p>
+      <h2>Same entity,<br>
+        <em>any</em> spelling.</h2>
+      <p class="muted" style="margin-top: 1.2rem; max-width: 32rem;">
+        Every <code>store_entity</code> call seeds a self-alias row.
+        Every mention of the same surface form short-circuits at stage one.
+        Semantic variants fall through to vector ANN.
+        Write once, match forever.
+      </p>
+
+      <p style="margin-top: 2rem;" class="small muted">
+        <span class="pill accent" style="font-size: 9px;">p95 · 1000 entities</span>
+        <strong class="mono" style="color: var(--accent); font-weight: 500;">2.15&nbsp;ms</strong>
+        — budget was 20 ms.
+      </p>
+    </div>
+
+    <div class="reveal">
+      <div class="cascade">
+        <div class="cascade-step">
+          <div class="n">1</div>
+          <div>
+            <div class="big">Alias lookup</div>
+            <div class="d">SELECT entity_id FROM kg_aliases WHERE normalized_form = ?1</div>
+          </div>
+          <div class="cost">O(1) index</div>
+        </div>
+        <div class="cascade-arrow">miss ↓</div>
+
+        <div class="cascade-step">
+          <div class="n">2</div>
+          <div>
+            <div class="big">Embedding ANN</div>
+            <div class="d">kg_name_index MATCH · cosine ≥ 0.87 · same type</div>
+          </div>
+          <div class="cost">sqlite-vec</div>
+        </div>
+        <div class="cascade-arrow">miss ↓</div>
+
+        <div class="cascade-step decision">
+          <div class="n">3</div>
+          <div>
+            <div class="big">LLM pairwise verify</div>
+            <div class="d">trait defined · wiring deferred · only on compactor side</div>
+          </div>
+          <div class="cost">off in v22</div>
+        </div>
+        <div class="cascade-arrow">miss ↓</div>
+
+        <div class="cascade-step exit">
+          <div class="n">—</div>
+          <div>
+            <div class="big">Create new entity</div>
+            <div class="d">insert + seed self-alias + populate kg_name_index</div>
+          </div>
+          <div class="cost" style="border-color: var(--ok); color: var(--ok);">fresh</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <span class="folio"><strong>05</strong> / 10</span>
+</section>
+
+
+<!-- ========== 06 · VEC0 & SIMILARITY ========== -->
+<section class="slide" data-slide="6" data-title="sqlite-vec">
+  <div class="slide-label">
+    <span class="num">06</span>
+    <span class="title-tag">One mechanism</span>
+  </div>
+
+  <div class="reveal">
+    <p class="eyebrow">Principle IV · stop writing cosine by hand</p>
+    <h2>Every similarity query<br>
+      goes through <em>one</em> index.</h2>
+    <p class="muted" style="margin-top: 1rem; max-width: 50rem;">
+      Phase 1b deleted six hand-rolled <code>cosine_similarity</code> functions and
+      replaced them with <code>sqlite-vec</code> <code>vec0</code> virtual tables — one per retrieval source.
+      Embeddings live <em>only</em> in their vec partner. No dual storage. No drift.
+    </p>
+  </div>
+
+  <div class="reveal" style="margin-top: 3rem;">
+    <table class="tbl">
+      <thead>
+        <tr>
+          <th>vec0 index</th>
+          <th>partner table</th>
+          <th>dim</th>
+          <th>written on</th>
+          <th>queried by</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>kg_name_index</code></td>
+          <td>kg_entities</td>
+          <td>384</td>
+          <td>store_entity · name_embedding Some</td>
+          <td>resolver stage 2 · compactor</td>
+        </tr>
+        <tr>
+          <td><code>memory_facts_index</code></td>
+          <td>memory_facts</td>
+          <td>384</td>
+          <td>upsert_memory_fact · embedding Some</td>
+          <td>MemoryRepository::search_similar_facts</td>
+        </tr>
+        <tr>
+          <td><code>wiki_articles_index</code></td>
+          <td>ward_wiki_articles</td>
+          <td>384</td>
+          <td>upsert_article · embedding Some</td>
+          <td>WardWikiRepository::search_by_similarity</td>
+        </tr>
+        <tr>
+          <td><code>procedures_index</code></td>
+          <td>procedures</td>
+          <td>384</td>
+          <td>upsert_procedure · embedding Some</td>
+          <td>ProcedureRepository::search_by_similarity</td>
+        </tr>
+        <tr>
+          <td><code>session_episodes_index</code></td>
+          <td>session_episodes</td>
+          <td>384</td>
+          <td>upsert_episode · embedding Some</td>
+          <td>EpisodeRepository::search_by_similarity</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="reveal" style="margin-top: 2rem;">
+    <pre><span class="c">// L2 normalized embeddings → cosine ≥ 0.87 ⇔ distance ≤ 0.26</span>
+<span class="k">SELECT</span> entity_id, distance <span class="k">FROM</span> kg_name_index
+ <span class="k">WHERE</span> name_embedding <span class="k">MATCH</span> ?1
+ <span class="k">ORDER BY</span> distance
+ <span class="k">LIMIT</span> 10<span class="s">;</span></pre>
+  </div>
+
+  <span class="folio"><strong>06</strong> / 10</span>
+</section>
+
+
+<!-- ========== 07 · UNIFIED RECALL ========== -->
+<section class="slide" data-slide="7" data-title="Unified recall">
+  <div class="slide-label">
+    <span class="num">07</span>
+    <span class="title-tag">Recall</span>
+  </div>
+
+  <div class="reveal">
+    <p class="eyebrow">Principle V · compete, don't append</p>
+    <h2>Five sources.<br>
+      <em>One</em> scored pool.</h2>
+    <p class="muted" style="margin-top: 1rem; max-width: 50rem;">
+      Facts, wiki articles, procedures, graph neighborhoods,
+      and active goals all project to <code>ScoredItem</code> and merge via
+      <em>Reciprocal Rank Fusion</em> — <code>k = 60</code>, same item across lists
+      naturally rises.
+    </p>
+  </div>
+
+  <div class="reveal" style="margin-top: 3rem; flex: 1;">
+    <svg class="schema-svg" viewBox="0 0 1000 380" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+      <!-- five source columns -->
+      <g style="font-family: var(--s-mono); font-size: 11px;">
+        <rect class="node" x="40"  y="40" width="140" height="100" rx="2"/>
+        <text x="110" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">Fact</text>
+        <text x="110" y="92" text-anchor="middle" class="label-mini">memory_facts</text>
+        <text x="110" y="108" text-anchor="middle" class="label-mini">hybrid FTS + vec</text>
+
+        <rect class="node" x="200" y="40" width="140" height="100" rx="2"/>
+        <text x="270" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">Wiki</text>
+        <text x="270" y="92" text-anchor="middle" class="label-mini">ward articles</text>
+        <text x="270" y="108" text-anchor="middle" class="label-mini">ANN ward-scoped</text>
+
+        <rect class="node" x="360" y="40" width="140" height="100" rx="2"/>
+        <text x="430" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">Procedure</text>
+        <text x="430" y="92" text-anchor="middle" class="label-mini">learned workflows</text>
+        <text x="430" y="108" text-anchor="middle" class="label-mini">ANN · success ≥ 2</text>
+
+        <rect class="node" x="520" y="40" width="140" height="100" rx="2"/>
+        <text x="590" y="72" text-anchor="middle" class="label-title" style="font-size: 13px;">GraphNode</text>
+        <text x="590" y="92" text-anchor="middle" class="label-mini">kg_entities</text>
+        <text x="590" y="108" text-anchor="middle" class="label-mini">ANN · 1-hop context</text>
+
+        <rect class="node-accent" x="680" y="40" width="140" height="100" rx="2"/>
+        <text x="750" y="72" text-anchor="middle" class="label-title" style="font-size: 13px; fill: var(--accent);">Goal</text>
+        <text x="750" y="92" text-anchor="middle" class="label-mini">active intents</text>
+        <text x="750" y="108" text-anchor="middle" class="label-mini">unfilled slots</text>
+      </g>
+
+      <!-- lines to RRF -->
+      <g>
+        <path class="line draw-line" d="M 110 141 L 500 220"/>
+        <path class="line draw-line" d="M 270 141 L 500 220"/>
+        <path class="line draw-line" d="M 430 141 L 500 220"/>
+        <path class="line draw-line" d="M 590 141 L 500 220"/>
+        <path class="line draw-line" d="M 750 141 L 500 220"/>
+      </g>
+
+      <!-- RRF box -->
+      <rect class="node-accent" x="380" y="220" width="240" height="60" rx="2" style="stroke-width: 2;"/>
+      <text x="500" y="244" text-anchor="middle" class="label-title" style="font-size: 15px; fill: var(--accent);">Reciprocal Rank Fusion</text>
+      <text x="500" y="264" text-anchor="middle" class="label-mini" style="fill: var(--pencil);">intent-boost · 1.3× when slots match</text>
+
+      <!-- output -->
+      <path class="line accent draw-line" d="M 500 281 L 500 330" marker-end="none"/>
+      <rect class="node" x="360" y="330" width="280" height="40" rx="2"/>
+      <text x="500" y="356" text-anchor="middle" class="label">Vec&lt;ScoredItem&gt; → system message</text>
+
+      <!-- pulse -->
+      <path class="pulse-path" d="M 110 141 L 500 220 L 500 330"/>
+      <path class="pulse-path" d="M 270 141 L 500 220 L 500 330" style="animation-delay: 2.2s;"/>
+      <path class="pulse-path" d="M 750 141 L 500 220 L 500 330" style="animation-delay: 1.2s;"/>
+    </svg>
+  </div>
+
+  <span class="folio"><strong>07</strong> / 10</span>
+</section>
+
+
+<!-- ========== 08 · SLEEP-TIME WORKER ========== -->
+<section class="slide" data-slide="8" data-title="Sleep-time worker">
+  <div class="slide-label">
+    <span class="num">08</span>
+    <span class="title-tag">Sleep-time</span>
+  </div>
+
+  <div class="two-col" style="flex: 1;">
+    <div class="reveal">
+      <p class="eyebrow">Principle VI · never hard-delete</p>
+      <h2>The graph<br>
+        stays <em>lean</em>,<br>
+        <em>forever</em>.</h2>
+      <p class="muted" style="margin-top: 1rem; max-width: 32rem;">
+        Hourly <code>tokio</code> task or on-demand via
+        <code>POST /api/memory/consolidate</code>.
+        Every op records to <code>kg_compactions</code>.
+        Archival entities (<code>epistemic_class = 'archival'</code>) are
+        exempt — <em>historical facts never decay</em>.
+      </p>
+
+      <p style="margin-top: 1.5rem; font-size: 13px;" class="muted">
+        Soft-delete via <code>compressed_into = '__pruned__'</code> sentinel.
+        Every recall query filters <code>compressed_into IS NULL</code>.
+        Nothing is ever gone.
+      </p>
+    </div>
+
+    <div class="reveal">
+      <ul class="stripe" style="margin-top: 0;">
+        <li>
+          <span class="i">op·1</span>
+          <div>
+            <strong>Compactor</strong><br>
+            <span class="muted small">
+              find_duplicate_candidates(cosine ≥ 0.92, same type) → merge_entity_into
+            </span>
+          </div>
+        </li>
+        <li>
+          <span class="i">op·2</span>
+          <div>
+            <strong>DecayEngine</strong><br>
+            <span class="muted small">
+              orphan + age &gt; 30d + mention_count low → prune candidate
+            </span>
+          </div>
+        </li>
+        <li>
+          <span class="i">op·3</span>
+          <div>
+            <strong>Pruner</strong><br>
+            <span class="muted small">
+              mark_pruned · remove from kg_name_index · write audit
+            </span>
+          </div>
+        </li>
+        <li>
+          <span class="i">op·4</span>
+          <div>
+            <strong>Cross-session synthesis</strong>
+            <span class="pill" style="color: var(--pencil); font-size: 9px; margin-left: 0.5rem;">deferred</span><br>
+            <span class="muted small">
+              strong-subgraph LLM summarization → strategy facts — Phase 6
+            </span>
+          </div>
+        </li>
+      </ul>
+    </div>
+  </div>
+
+  <span class="folio"><strong>08</strong> / 10</span>
+</section>
+
+
+<!-- ========== 09 · PERFORMANCE ========== -->
+<section class="slide" data-slide="9" data-title="Baseline">
+  <div class="slide-label">
+    <span class="num">09</span>
+    <span class="title-tag">Baseline</span>
+  </div>
+
+  <div class="reveal">
+    <p class="eyebrow">The numbers · 2026-04-13</p>
+    <h2>Three budgets, three<br>
+      orders of magnitude <em>under</em>.</h2>
+    <p class="muted" style="margin-top: 1rem; max-width: 48rem;">
+      Every benchmark lives as a real test that asserts its budget.
+      CI rerunning the suite is the perf-regression guard.
+    </p>
+  </div>
+
+  <div class="dials reveal">
+    <div class="dial" style="--bar: 11%;">
+      <div class="dial-h">Resolver</div>
+      <div class="dial-v">2.15 <span class="unit">ms · p95</span></div>
+      <div class="dial-b">budget <span class="budget">&lt; 20 ms</span> · 9.3× headroom</div>
+      <div class="dial-bar"></div>
+      <div class="small muted" style="margin-top: 0.8rem;">1,000 entities · 100 resolutions</div>
+    </div>
+
+    <div class="dial" style="--bar: 0.07%;">
+      <div class="dial-h">Reader under load</div>
+      <div class="dial-v">140 <span class="unit">µs · p95</span></div>
+      <div class="dial-b">budget <span class="budget">&lt; 200 ms</span> · 1400× headroom</div>
+      <div class="dial-bar"></div>
+      <div class="small muted" style="margin-top: 0.8rem;">500 chunks draining · WAL + pool</div>
+    </div>
+
+    <div class="dial" style="--bar: 0.06%;">
+      <div class="dial-h">Cold-boot · 10k</div>
+      <div class="dial-v">6.1 <span class="unit">ms</span></div>
+      <div class="dial-b">budget <span class="budget">&lt; 10 s</span> · 1640× headroom</div>
+      <div class="dial-bar"></div>
+      <div class="small muted" style="margin-top: 0.8rem;">schema init + pool + first query</div>
+    </div>
+  </div>
+
+  <p class="reveal muted small" style="margin-top: 3rem; max-width: 38rem;">
+    The memory layer is not the bottleneck in any realistic workload.
+    Network round-trips and LLM inference dominate every end-to-end latency.
+    At least <strong>100× data growth</strong> fits within these budgets.
+  </p>
+
+  <span class="folio"><strong>09</strong> / 10</span>
+</section>
+
+
+<!-- ========== 10 · CLOSE ========== -->
+<section class="slide" data-slide="10" data-title="Shipped">
+  <div class="slide-label">
+    <span class="num">10</span>
+    <span class="title-tag">Shipped</span>
+  </div>
+
+  <div class="reveal">
+    <p class="eyebrow">v22 · delivered</p>
+    <h2>Six phases,<br>
+      <em>one</em> foundation.</h2>
+  </div>
+
+  <div class="phases reveal">
+    <div class="phase">
+      <div class="p-n">1a</div>
+      <div class="p-t">infra</div>
+      <div class="p-b">two-DB split · sqlite-vec · v22 schema</div>
+    </div>
+    <div class="phase">
+      <div class="p-n">1b</div>
+      <div class="p-t">repos</div>
+      <div class="p-b">migrated to knowledge.db · cosine deleted</div>
+    </div>
+    <div class="phase">
+      <div class="p-n">1c</div>
+      <div class="p-t">resolver</div>
+      <div class="p-b">alias-first · ANN · 2 ms p95 @ 1k</div>
+    </div>
+    <div class="phase">
+      <div class="p-n">2</div>
+      <div class="p-t">streaming</div>
+      <div class="p-b">chunker · queue · two-pass LLM · 202 Accepted</div>
+    </div>
+    <div class="phase">
+      <div class="p-n">3</div>
+      <div class="p-t">unified recall</div>
+      <div class="p-b">ScoredItem · RRF · goals · intent-boost</div>
+    </div>
+    <div class="phase">
+      <div class="p-n">4 · 5</div>
+      <div class="p-t">ops + docs</div>
+      <div class="p-b">compactor · pruner · stats · perf baseline</div>
+    </div>
+  </div>
+
+  <div class="reveal" style="margin-top: 4rem; display: grid; grid-template-columns: 1fr 1fr; gap: 3rem; align-items: end;">
+    <div>
+      <h3 style="margin-bottom: 0.8rem;">What's next, deliberately</h3>
+      <p class="muted small">
+        Cross-session synthesis · LLM pairwise verifier · Observatory memory tab ·
+        Full legacy-recall retirement · architecture SVG.
+        None blocking daily use.
+      </p>
+    </div>
+    <div style="text-align: right;">
+      <p class="mono small muted" style="line-height: 1.8;">
+        spec · <code style="background:none;padding:0;">docs/superpowers/specs/2026-04-12-memory-layer-redesign-design.md</code><br>
+        plans · <code style="background:none;padding:0;">docs/superpowers/plans/2026-04-12-memory-v2-phase-*.md</code><br>
+        baseline · <code style="background:none;padding:0;">docs/memory-v2-performance-baseline.md</code><br>
+        reference · <code style="background:none;padding:0;">memory-bank/components/memory-layer/*.md</code>
+      </p>
+    </div>
+  </div>
+
+  <span class="folio"><strong>10</strong> / 10</span>
+</section>
+
+
+<script>
+  // build rail dots
+  const slides = document.querySelectorAll('.slide');
+  const dots = document.querySelector('.rail-dots');
+  slides.forEach((s, i) => {
+    const d = document.createElement('a');
+    d.className = 'rail-dot';
+    d.title = s.dataset.title || `Slide ${i + 1}`;
+    d.addEventListener('click', e => {
+      e.preventDefault();
+      s.scrollIntoView({ behavior: 'smooth' });
+    });
+    dots.appendChild(d);
+  });
+
+  // observe slides for in-view animations + active dot
+  const railDots = document.querySelectorAll('.rail-dot');
+  const io = new IntersectionObserver(
+    entries => {
+      entries.forEach(e => {
+        if (e.isIntersecting) {
+          e.target.classList.add('in-view');
+          const idx = +e.target.dataset.slide - 1;
+          railDots.forEach((d, i) => d.classList.toggle('active', i === idx));
+        }
+      });
+    },
+    { threshold: 0.5 }
+  );
+  slides.forEach(s => io.observe(s));
+
+  // keyboard navigation
+  function currentSlide() {
+    const y = window.scrollY + window.innerHeight / 2;
+    let best = slides[0], bestD = Infinity;
+    slides.forEach(s => {
+      const c = s.offsetTop + s.offsetHeight / 2;
+      if (Math.abs(c - y) < bestD) { bestD = Math.abs(c - y); best = s; }
+    });
+    return best;
+  }
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === 'PageDown' || e.key === ' ') {
+      e.preventDefault();
+      const cur = currentSlide();
+      const next = cur.nextElementSibling;
+      if (next && next.classList.contains('slide')) next.scrollIntoView({ behavior: 'smooth' });
+    } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft' || e.key === 'PageUp') {
+      e.preventDefault();
+      const cur = currentSlide();
+      const prev = cur.previousElementSibling;
+      if (prev && prev.classList.contains('slide')) prev.scrollIntoView({ behavior: 'smooth' });
+    } else if (e.key === 'Home') {
+      e.preventDefault();
+      slides[0].scrollIntoView({ behavior: 'smooth' });
+    } else if (e.key === 'End') {
+      e.preventDefault();
+      slides[slides.length - 1].scrollIntoView({ behavior: 'smooth' });
+    }
+  });
+
+  // hide hint after first interaction
+  let hinted = false;
+  function hideHint() {
+    if (hinted) return;
+    hinted = true;
+    document.querySelector('.hint').style.opacity = 0;
+  }
+  window.addEventListener('scroll', hideHint, { once: true });
+  document.addEventListener('keydown', hideHint, { once: true });
+</script>
+
+</body>
+</html>

@@ -46,7 +46,11 @@ pub trait EmbeddingClient: Send + Sync {
     fn dimensions(&self) -> usize;
 
     /// Return the model name for logging and cache keys.
-    fn model_name(&self) -> &str;
+    ///
+    /// Returns `String` (not `&str`) so wrapper clients like
+    /// `LiveEmbeddingClient` can forward the current backend's name without
+    /// fighting the borrow checker over temporary `Arc` guards.
+    fn model_name(&self) -> String;
 }
 
 /// Configuration for the embedding system.

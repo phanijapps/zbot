@@ -84,6 +84,7 @@ rust-embed = { version = "8", features = ["debug-embed"] }
 lazy_static = "1.5"
 base64 = "0.22"
 once_cell = "1.21"
+indexmap = "2"
 
 [workspace.lints.clippy]
 missing_docs_in_private_items = "allow"

@@ -27,7 +27,7 @@ import type { Artifact } from "@/services/transport/types";
  *   - ChatInput (bottom input area)
  */
 export function MissionControl() {
-  const { state, sendMessage, stopAgent, startNewSession } = useMissionControl();
+  const { state, sendMessage, stopAgent, startNewSession, artifactsRefreshKey } = useMissionControl();
   const { sessions: recentSessions } = useRecentSessions();
 
   // Artifact slide-out state (must be before any early returns — hooks rule)
@@ -96,6 +96,7 @@ export function MissionControl() {
             plan={state.plan}
             intentAnalysis={state.intentAnalysis}
             sessionId={currentSessionId}
+            artifactsRefreshKey={artifactsRefreshKey}
             onArtifactClick={(art) => setViewingArtifact(art)}
           />
         </div>

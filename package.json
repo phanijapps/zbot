@@ -7,7 +7,8 @@
     "build": "npm --prefix apps/ui run build",
     "preview": "npm --prefix apps/ui run preview",
     "lint": "npm --prefix apps/ui run lint",
-    "daemon": "cargo watch -s \"cargo run -p daemon -- --static-dir ./dist\""
+    "daemon": "cargo run -p daemon -- --static-dir ./dist",
+    "daemon:watch": "watchexec -r --poll 2s -w gateway/gateway-execution/src -w gateway/gateway-database/src -w gateway/src -w runtime/agent-tools/src -w runtime/agent-runtime/src -w services/knowledge-graph/src -w apps/daemon/src -e rs -- cargo run -p daemon -- --static-dir ./dist"
   },
   "dependencies": {
     "playwright": "^1.58.2"

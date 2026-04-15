@@ -484,6 +484,8 @@ export interface ExecutionSettings {
   distillation?: DistillationConfig;
   /** Default multimodal (vision) model for the multimodal_analyze tool */
   multimodal?: MultimodalConfig;
+  /** Opt-in feature flags (gate beta UI surfaces and experimental behavior) */
+  featureFlags?: Record<string, boolean>;
 }
 
 export interface ExecutionSettingsResponse {
@@ -963,6 +965,8 @@ export interface MemoryFact {
   updated_at: string;
   /** Pinned facts can't be overwritten by distillation. User-authored facts are pinned. */
   pinned?: boolean;
+  /** Ward scope when set (e.g. "literature-library"); facts default to "__global__" when null on the server. */
+  ward_id?: string;
 }
 
 /** Filter options for listing memory facts */
@@ -1072,4 +1076,147 @@ export interface GraphNeighborOptions {
 /** Options for subgraph queries */
 export interface GraphSubgraphOptions {
   max_hops?: number;
+}
+
+// ============================================================================
+// Embedding Backend Types
+// ============================================================================
+
+export type EmbeddingsBackend = "internal" | "ollama";
+
+export type EmbeddingsStatus =
+  | "ready"
+  | "ollama_unreachable"
+  | "model_missing"
+  | "misconfigured";
+
+export interface EmbeddingsHealth {
+  backend: EmbeddingsBackend;
+  model?: string;
+  dim: number;
+  status: EmbeddingsStatus;
+  indexed_count: number;
+}
+
+export interface CuratedModel {
+  tag: string;
+  dim: number;
+  size_mb: number;
+  mteb: number;
+}
+
+export interface EmbeddingConfig {
+  backend: EmbeddingsBackend;
+  dimensions: number;
+  ollama?: { base_url: string; model: string };
+}
+
+export type ConfigureProgressEvent =
+  | { kind: "pulling"; mb_done: number; mb_total: number }
+  | { kind: "reindexing"; table: string; current: number; total: number }
+  | { kind: "ready"; backend: string; model?: string; dim: number }
+  | { kind: "error"; reason: string; rollback?: string };
+
+// ============================================================================
+// Memory v2 — Ward Content + Unified Hybrid Search
+// ============================================================================
+
+/** Coarse age bucket assigned by backend ward content handler. */
+export type AgeBucket = "today" | "last_7_days" | "historical";
+
+/** How a hybrid search hit was matched. */
+export type MatchSource = "hybrid" | "fts" | "vec" | "title";
+
+/** Minimal wiki article fields for ward content / search results. */
+export interface WikiArticle {
+  id: string;
+  ward_id: string;
+  title: string;
+  content: string;
+  updated_at: string;
+}
+
+/** Minimal procedure fields for ward content / search results. */
+export interface Procedure {
+  id: string;
+  ward_id: string;
+  name: string;
+  description?: string;
+  last_used?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Minimal session episode fields for ward content / search results. */
+export interface SessionEpisode {
+  id: string;
+  ward_id: string;
+  title: string;
+  content: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Summary block for a ward (lightweight header). */
+export interface WardContentSummary {
+  title: string;
+  description?: string;
+  updated_at?: string;
+}
+
+/** Counts per memory type in a ward. */
+export interface WardContentCounts {
+  facts: number;
+  wiki: number;
+  procedures: number;
+  episodes: number;
+}
+
+/** Response for GET /api/wards/:ward_id/content */
+export interface WardContent {
+  ward_id: string;
+  summary: WardContentSummary;
+  facts: Array<MemoryFact & { age_bucket: AgeBucket }>;
+  wiki: Array<WikiArticle & { age_bucket: AgeBucket }>;
+  procedures: Array<Procedure & { age_bucket: AgeBucket }>;
+  episodes: Array<SessionEpisode & { age_bucket: AgeBucket }>;
+  counts: WardContentCounts;
+}
+
+/** Request body for POST /api/memory/search (unified hybrid search). */
+export interface HybridSearchRequest {
+  query: string;
+  mode?: "hybrid" | "fts" | "semantic";
+  types?: Array<"facts" | "wiki" | "procedures" | "episodes">;
+  ward_ids?: string[];
+  filters?: {
+    category?: MemoryCategory;
+    confidence_gte?: number;
+  };
+  limit?: number;
+}
+
+/** Hybrid search result block for a single memory type. */
+export interface HybridSearchTypeBlock<T> {
+  hits: T[];
+  latency_ms: number;
+}
+
+/** Wiki search hit (snippet-based, includes score). */
+export interface WikiSearchHit {
+  id: string;
+  ward_id: string;
+  title: string;
+  snippet: string;
+  updated_at: string;
+  score: number;
+  match_source: MatchSource;
+}
+
+/** Response for POST /api/memory/search (unified hybrid search). */
+export interface HybridSearchResponse {
+  facts: HybridSearchTypeBlock<MemoryFact & { match_source?: MatchSource; score?: number }>;
+  wiki: HybridSearchTypeBlock<WikiSearchHit>;
+  procedures: HybridSearchTypeBlock<Procedure & { match_source?: MatchSource }>;
+  episodes: HybridSearchTypeBlock<SessionEpisode & { match_source?: MatchSource }>;
 }

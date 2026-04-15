@@ -13,10 +13,12 @@
 
 pub mod agent_registry;
 pub mod agents;
+pub mod embedding_service;
 pub mod lang_config;
 pub mod logging;
 pub mod mcp;
 pub mod models;
+pub mod ollama_client;
 pub mod paths;
 pub mod plugin_service;
 pub mod providers;
@@ -27,10 +29,15 @@ pub mod watcher;
 
 pub use agent_registry::AgentRegistry;
 pub use agents::AgentService;
+pub use embedding_service::{
+    curated_lookup, CuratedModel, EmbeddingBackend, EmbeddingConfig, EmbeddingService, Health,
+    LiveEmbeddingClient, OllamaConfig, CURATED_MODELS,
+};
 pub use lang_config::{load_all_lang_configs, load_lang_config, LangConfig};
 pub use logging::LogSettings;
 pub use mcp::McpService;
 pub use models::ModelRegistry;
+pub use ollama_client::OllamaClient;
 pub use paths::{SharedVaultPaths, VaultPaths};
 pub use plugin_service::PluginService;
 pub use providers::ProviderService;

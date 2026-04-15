@@ -29,6 +29,10 @@ pub struct MemoryFactResponse {
     pub source_summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    /// Which search arm matched this fact: `"fts"`, `"vec"`, or `"hybrid"`.
+    /// Only populated on search responses; `None` elsewhere and omitted from JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub match_source: Option<String>,
 }
 
 impl From<MemoryFact> for MemoryFactResponse {
@@ -45,6 +49,7 @@ impl From<MemoryFact> for MemoryFactResponse {
             source_summary: fact.source_summary,
             created_at: fact.created_at,
             updated_at: fact.updated_at,
+            match_source: None,
         }
     }
 }
@@ -83,6 +88,11 @@ pub struct MemorySearchQuery {
     pub category: Option<String>,
     #[serde(default = "default_search_limit")]
     pub limit: usize,
+    /// `"hybrid"` (default), `"fts"`, or `"semantic"`.
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub ward_id: Option<String>,
 }
 
 fn default_search_limit() -> usize {
@@ -168,35 +178,105 @@ pub async fn search_memory_facts(
         }
     };
 
-    // Use FTS5 search (hybrid requires embeddings which we don't have in HTTP API)
-    let results = memory_repo
-        .search_memory_facts_fts(&query.q, &agent_id, query.limit, None)
-        .map_err(|e| {
-            tracing::error!("Failed to search memory facts: {}", e);
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse {
-                    error: format!("Failed to search memory facts: {}", e),
-                }),
-            )
-        })?;
+    let mode = query.mode.as_deref().unwrap_or("hybrid");
+    let ward_id = query.ward_id.as_deref();
 
-    // Filter by category if specified
-    let facts: Vec<MemoryFactResponse> = results
+    // Build (fact, source) pairs according to the requested mode.
+    let scored: Vec<(MemoryFact, &'static str)> = match mode {
+        "fts" => {
+            let rows = memory_repo
+                .search_memory_facts_fts(&query.q, &agent_id, query.limit, ward_id)
+                .map_err(|e| search_err("Failed to search memory facts (fts)", e))?;
+            rows.into_iter().map(|sf| (sf.fact, "fts")).collect()
+        }
+        "semantic" => {
+            // Bubble embedding errors as 400 — caller asked for a mode that
+            // requires an embedding backend.
+            let emb = state
+                .embedding_service
+                .client()
+                .embed(&[query.q.as_str()])
+                .await
+                .map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ErrorResponse {
+                            error: format!("Embedding backend unavailable: {}", e),
+                        }),
+                    )
+                })?;
+            let qe = emb.into_iter().next().unwrap_or_default();
+            let rows = memory_repo
+                .search_similar_facts(&qe, &agent_id, 0.0, query.limit, ward_id)
+                .map_err(|e| search_err("Failed to search memory facts (semantic)", e))?;
+            rows.into_iter().map(|sf| (sf.fact, "vec")).collect()
+        }
+        // Default: hybrid. If embedding fails, degrade to FTS-only (embedding=None).
+        _ => {
+            let qe_opt: Option<Vec<f32>> = match state
+                .embedding_service
+                .client()
+                .embed(&[query.q.as_str()])
+                .await
+            {
+                Ok(v) => v.into_iter().next(),
+                Err(e) => {
+                    tracing::debug!("hybrid search: embedding unavailable ({e}); FTS-only");
+                    None
+                }
+            };
+            let (rows, sources) = memory_repo
+                .search_memory_facts_hybrid(
+                    &query.q,
+                    qe_opt.as_deref(),
+                    &agent_id,
+                    query.limit,
+                    0.7,
+                    0.3,
+                    ward_id,
+                )
+                .map_err(|e| search_err("Failed to search memory facts (hybrid)", e))?;
+            let src_map: std::collections::HashMap<String, &'static str> =
+                sources.into_iter().collect();
+            rows.into_iter()
+                .map(|sf| {
+                    let src = src_map.get(&sf.fact.id).copied().unwrap_or("fts");
+                    (sf.fact, src)
+                })
+                .collect()
+        }
+    };
+
+    // Filter by category if specified; attach match_source.
+    let facts: Vec<MemoryFactResponse> = scored
         .into_iter()
-        .filter(|sf| {
+        .filter(|(fact, _)| {
             query
                 .category
                 .as_ref()
-                .map(|c| sf.fact.category == *c)
+                .map(|c| fact.category == *c)
                 .unwrap_or(true)
         })
-        .map(|sf| MemoryFactResponse::from(sf.fact))
+        .map(|(fact, src)| {
+            let mut r = MemoryFactResponse::from(fact);
+            r.match_source = Some(src.to_string());
+            r
+        })
         .collect();
 
     let total = facts.len();
 
     Ok(Json(MemoryListResponse { facts, total }))
+}
+
+fn search_err(context: &str, e: String) -> (StatusCode, Json<ErrorResponse>) {
+    tracing::error!("{}: {}", context, e);
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(ErrorResponse {
+            error: format!("{}: {}", context, e),
+        }),
+    )
 }
 
 /// GET /api/memory/:agent_id/facts/:fact_id - Get a single memory fact.
@@ -365,7 +445,13 @@ pub async fn create_memory_fact(
         created_at: now.clone(),
         updated_at: now,
         expires_at: None,
+        valid_from: None,
+        valid_until: None,
+        superseded_by: None,
         pinned: request.pinned,
+        epistemic_class: Some("current".to_string()),
+        source_episode_id: None,
+        source_ref: None,
     };
 
     memory_repo.upsert_memory_fact(&fact).map_err(|e| {
@@ -472,4 +558,131 @@ pub async fn list_all_memory_facts(
         facts: facts.into_iter().map(MemoryFactResponse::from).collect(),
         total,
     }))
+}
+
+// ============================================================================
+// PHASE 4: CONSOLIDATE / STATS / HEALTH
+// ============================================================================
+
+/// Response for `POST /api/memory/consolidate`.
+#[derive(Debug, Serialize)]
+pub struct ConsolidateResponse {
+    pub status: &'static str,
+}
+
+/// Trigger a sleep-time consolidation cycle.
+///
+/// Returns `503 Service Unavailable` when the worker has not been wired
+/// into `AppState` yet.
+pub async fn consolidate(
+    State(state): State<AppState>,
+) -> Result<(StatusCode, Json<ConsolidateResponse>), (StatusCode, String)> {
+    let worker = state.sleep_time_worker.as_ref().ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "sleep-time worker not initialized".to_string(),
+    ))?;
+    worker.trigger();
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(ConsolidateResponse {
+            status: "triggered",
+        }),
+    ))
+}
+
+/// Memory subsystem stats response.
+#[derive(Debug, Serialize, Default)]
+pub struct MemoryStats {
+    pub entities: i64,
+    pub relationships: i64,
+    pub facts: i64,
+    pub episodes: i64,
+    pub procedures: i64,
+    pub wiki_articles: i64,
+    pub goals_active: i64,
+    pub db_size_mb: f64,
+}
+
+fn count_row(conn: &rusqlite::Connection, sql: &str) -> i64 {
+    conn.query_row(sql, [], |r| r.get::<_, i64>(0)).unwrap_or(0)
+}
+
+/// `GET /api/memory/stats` — aggregate counts across memory subsystems.
+pub async fn stats(State(state): State<AppState>) -> Json<MemoryStats> {
+    let mut stats = MemoryStats::default();
+
+    if let Some(graph_service) = state.graph_service.as_ref() {
+        let storage = graph_service.storage();
+        if let Ok(entities) = storage.get_entities("root") {
+            stats.entities = entities.len() as i64;
+        }
+        if let Ok(rels) = storage.get_relationships("root") {
+            stats.relationships = rels.len() as i64;
+        }
+    }
+
+    let _ = state.knowledge_db.with_connection(|conn| {
+        stats.facts = count_row(conn, "SELECT COUNT(*) FROM memory_facts");
+        stats.episodes = count_row(conn, "SELECT COUNT(*) FROM kg_episodes");
+        stats.procedures = count_row(conn, "SELECT COUNT(*) FROM procedures");
+        stats.wiki_articles = count_row(conn, "SELECT COUNT(*) FROM ward_wiki_articles");
+        stats.goals_active =
+            count_row(conn, "SELECT COUNT(*) FROM kg_goals WHERE state = 'active'");
+        Ok(())
+    });
+
+    let knowledge_path = state.paths.knowledge_db();
+    if let Ok(meta) = std::fs::metadata(&knowledge_path) {
+        // Safe: file sizes fit in f64 precision well within petabyte range.
+        stats.db_size_mb = (meta.len() as f64) / (1024.0 * 1024.0);
+    }
+
+    Json(stats)
+}
+
+/// Memory subsystem health response.
+#[derive(Debug, Serialize, Default)]
+pub struct MemoryHealth {
+    pub ingestion_queue_pending: u64,
+    pub ingestion_queue_running: u64,
+    pub failed_episodes_recent: u64,
+    pub last_compaction_run_id: Option<String>,
+    pub last_compaction_merges: u64,
+    pub last_compaction_prunes: u64,
+    pub last_compaction_at: Option<String>,
+}
+
+/// `GET /api/memory/health` — queue depth, recent failures, last compaction.
+pub async fn health(State(state): State<AppState>) -> Json<MemoryHealth> {
+    let mut health = MemoryHealth::default();
+
+    if let Some(repo) = state.kg_episode_repo.as_ref() {
+        if let Ok(n) = repo.count_pending_global() {
+            health.ingestion_queue_pending = n;
+        }
+        let _ = state.knowledge_db.with_connection(|conn| {
+            let failed = count_row(
+                conn,
+                "SELECT COUNT(*) FROM kg_episodes WHERE status = 'failed'",
+            );
+            let running = count_row(
+                conn,
+                "SELECT COUNT(*) FROM kg_episodes WHERE status = 'running'",
+            );
+            health.failed_episodes_recent = failed.max(0) as u64;
+            health.ingestion_queue_running = running.max(0) as u64;
+            Ok(())
+        });
+    }
+
+    if let Some(compaction_repo) = state.compaction_repo.as_ref() {
+        if let Ok(Some(summary)) = compaction_repo.latest_run_summary() {
+            health.last_compaction_run_id = Some(summary.run_id);
+            health.last_compaction_merges = summary.merges;
+            health.last_compaction_prunes = summary.prunes;
+            health.last_compaction_at = Some(summary.latest_at);
+        }
+    }
+
+    Json(health)
 }

@@ -29,6 +29,8 @@ pub mod delegation;
 pub mod distillation;
 pub mod events;
 pub mod handle;
+pub mod indexer;
+pub mod ingest;
 pub mod invoke;
 pub mod lifecycle;
 pub mod middleware;
@@ -37,7 +39,10 @@ pub mod recall;
 pub mod resource_provider;
 pub mod runner;
 pub mod session_state;
-pub mod ward_sync;
+pub mod sleep;
+pub mod tool_result_extractor;
+pub mod ward_artifact_indexer;
+pub mod ward_wiki;
 
 // Re-export public types
 pub use archiver::SessionArchiver;
@@ -56,10 +61,7 @@ pub use lifecycle::{
     complete_execution, crash_execution, emit_agent_started, emit_delegation_completed,
     emit_delegation_started, get_or_create_session, start_execution, stop_execution, SessionSetup,
 };
-pub use recall::{
-    format_combined_recall, format_prioritized_recall, format_recalled_facts, GraphContext,
-    MemoryRecall, RecallResult,
-};
+pub use recall::{format_scored_items, MemoryRecall};
 pub use resource_provider::GatewayResourceProvider;
 pub use runner::{ExecutionRunner, OnSessionReady};
 pub use session_state::{SessionState, SessionStateBuilder};

@@ -10,7 +10,11 @@ use agent_runtime::{
 use agent_tools::{
     EditFileTool,
     GlobTool,
+    // Knowledge graph query tool
+    GraphQueryTool,
     GrepTool,
+    ListMcpsTool,
+    ListSkillsTool,
     LoadSkillTool,
     // Root orchestrator tools
     MemoryTool,
@@ -36,7 +40,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use zero_core::{ConnectorResourceProvider, FileSystemContext, MemoryFactStore};
 
+use super::graph_adapter::GraphStorageAdapter;
 use crate::config::GatewayFileSystem;
+use knowledge_graph::GraphStorage;
 
 /// Workspace context cache type — same pattern as SkillService/ConnectorRegistry.
 pub type WorkspaceCache = Arc<tokio::sync::RwLock<Option<HashMap<String, serde_json::Value>>>>;
@@ -64,8 +70,11 @@ pub struct ExecutorBuilder {
     model_registry: Option<Arc<ModelRegistry>>,
     is_delegated: bool,
     subagent_non_streaming: bool,
+    graph_storage: Option<Arc<GraphStorage>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
     extra_initial_state: Option<Vec<(String, serde_json::Value)>>,
-    fast_mode: bool,
+    chat_mode: bool,
 }
 
 impl ExecutorBuilder {
@@ -81,8 +90,11 @@ impl ExecutorBuilder {
             model_registry: None,
             is_delegated: false,
             subagent_non_streaming: true,
+            graph_storage: None,
+            ingestion_adapter: None,
+            goal_adapter: None,
             extra_initial_state: None,
-            fast_mode: false,
+            chat_mode: false,
         }
     }
 
@@ -131,9 +143,31 @@ impl ExecutorBuilder {
         self
     }
 
-    /// Enable fast chat mode (disables single_action_mode for multi-tool turns).
-    pub fn with_fast_mode(mut self, fast_mode: bool) -> Self {
-        self.fast_mode = fast_mode;
+    /// Set the knowledge graph storage for the graph_query tool.
+    pub fn with_graph_storage(mut self, storage: Arc<GraphStorage>) -> Self {
+        self.graph_storage = Some(storage);
+        self
+    }
+
+    /// Set the ingestion access adapter for the `ingest` tool.
+    pub fn with_ingestion_adapter(
+        mut self,
+        adapter: Arc<dyn agent_tools::IngestionAccess>,
+    ) -> Self {
+        self.ingestion_adapter = Some(adapter);
+        self
+    }
+
+    /// Set the goal access adapter for the `goal` tool.
+    pub fn with_goal_adapter(mut self, adapter: Arc<dyn agent_tools::GoalAccess>) -> Self {
+        self.goal_adapter = Some(adapter);
+        self
+    }
+
+    /// Enable chat mode (disables single_action_mode for multi-tool turns, larger
+    /// middleware keep window, higher compaction warn threshold).
+    pub fn with_chat_mode(mut self, chat_mode: bool) -> Self {
+        self.chat_mode = chat_mode;
         self
     }
 
@@ -396,7 +430,7 @@ impl ExecutorBuilder {
         let middleware_pipeline = {
             let pipeline = MiddlewarePipeline::new();
             let pipeline = if executor_config.context_window_tokens > 0 {
-                let (trigger_pct, keep_results) = if self.fast_mode {
+                let (trigger_pct, keep_results) = if self.chat_mode {
                     (80, 5) // Chat: 80% trigger, keep 5 recent tool results
                 } else {
                     (70, 8) // Deep: 70% trigger, keep 8 recent tool results
@@ -421,13 +455,13 @@ impl ExecutorBuilder {
             Arc::new(pipeline)
         };
 
-        // Root is an orchestrator — enforce single action per turn (except fast chat mode)
-        if !self.is_delegated && !self.fast_mode {
+        // Root is an orchestrator — enforce single action per turn (except chat mode)
+        if !self.is_delegated && !self.chat_mode {
             executor_config.single_action_mode = true;
         }
 
         // Chat mode: nudge at 70% so agent saves facts before 80% middleware prune
-        if self.fast_mode {
+        if self.chat_mode {
             executor_config.compaction_warn_pct = 70;
         }
 
@@ -499,6 +533,8 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(WriteFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(EditFileTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(LoadSkillTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(ListSkillsTool::new(fs_context.clone())));
+            tool_registry.register(Arc::new(ListMcpsTool::new(fs_context.clone())));
             tool_registry.register(Arc::new(GrepTool));
             tool_registry.register(Arc::new(WardTool::new(
                 fs_context.clone(),
@@ -510,6 +546,22 @@ impl ExecutorBuilder {
             )));
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+
+            // Knowledge graph query (if storage available)
+            if let Some(ref gs) = self.graph_storage {
+                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
+                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            }
+
+            // Ingestion (if adapter wired)
+            if let Some(ref a) = self.ingestion_adapter {
+                tool_registry.register(Arc::new(agent_tools::IngestTool::new(a.clone())));
+            }
+
+            // Goal management (if adapter wired)
+            if let Some(ref a) = self.goal_adapter {
+                tool_registry.register(Arc::new(agent_tools::GoalTool::new(a.clone())));
+            }
         } else {
             // Root agent: orchestrator tools only.
             // Root delegates — it doesn't do specialist work.
@@ -533,6 +585,22 @@ impl ExecutorBuilder {
             tool_registry.register(Arc::new(RespondTool::new()));
             tool_registry.register(Arc::new(DelegateTool::new()));
             tool_registry.register(Arc::new(MultimodalAnalyzeTool::new()));
+
+            // Knowledge graph query (if storage available)
+            if let Some(ref gs) = self.graph_storage {
+                let adapter = Arc::new(GraphStorageAdapter::new(gs.clone()));
+                tool_registry.register(Arc::new(GraphQueryTool::new(adapter)));
+            }
+
+            // Ingestion (if adapter wired)
+            if let Some(ref a) = self.ingestion_adapter {
+                tool_registry.register(Arc::new(agent_tools::IngestTool::new(a.clone())));
+            }
+
+            // Goal management (if adapter wired)
+            if let Some(ref a) = self.goal_adapter {
+                tool_registry.register(Arc::new(agent_tools::GoalTool::new(a.clone())));
+            }
 
             // Optional file reading (root may need to review delegation results)
             if self.tool_settings.file_tools {

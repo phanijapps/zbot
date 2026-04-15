@@ -9,12 +9,15 @@ mod chat;
 mod connectors;
 mod conversations;
 mod cron;
+mod embeddings;
 mod events;
 mod gateway_bus;
 mod graph;
 mod health;
+mod ingest;
 mod mcps;
 mod memory;
+mod memory_search;
 mod models;
 mod openapi;
 mod plugins;
@@ -25,6 +28,7 @@ mod setup;
 mod skills;
 mod tools;
 mod upload;
+mod ward_content;
 mod webhooks;
 
 use crate::config::GatewayConfig;
@@ -173,9 +177,19 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         // Setup wizard endpoints
         .route("/api/setup/status", get(setup::get_setup_status))
         .route("/api/setup/mcp-defaults", get(setup::get_mcp_defaults))
+        // Embedding backend selection (Phase 1)
+        .route("/api/embeddings/health", get(embeddings::get_health))
+        .route("/api/embeddings/models", get(embeddings::list_models))
+        .route("/api/embeddings/configure", post(embeddings::configure))
         // Memory endpoints
         .route("/api/memory", get(memory::list_all_memory_facts))
-        .route("/api/memory/search", get(memory::search_all_memory_facts))
+        .route(
+            "/api/memory/search",
+            get(memory::search_all_memory_facts).post(memory_search::memory_search),
+        )
+        .route("/api/memory/consolidate", post(memory::consolidate))
+        .route("/api/memory/stats", get(memory::stats))
+        .route("/api/memory/health", get(memory::health))
         .route(
             "/api/memory/:agent_id",
             get(memory::list_memory_facts).post(memory::create_memory_fact),
@@ -191,6 +205,13 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route(
             "/api/memory/:agent_id/facts/:fact_id",
             delete(memory::delete_memory_fact),
+        )
+        // Ward listing (Memory Tab Command Deck — Task 9)
+        .route("/api/wards", get(ward_content::list_wards))
+        // Ward content aggregator (Memory Tab Command Deck — Task 5)
+        .route(
+            "/api/wards/:ward_id/content",
+            get(ward_content::get_ward_content),
         )
         // Upload endpoint
         .route(
@@ -237,6 +258,13 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route(
             "/api/graph/:agent_id/entities/:entity_id/subgraph",
             get(graph::get_entity_subgraph),
+        )
+        .route("/api/graph/reindex", post(graph::reindex_all_wards))
+        // Streaming ingestion endpoints
+        .route("/api/graph/ingest", post(ingest::ingest))
+        .route(
+            "/api/graph/ingest/:source_id/progress",
+            get(ingest::progress),
         )
         // Distillation endpoints
         .route("/api/distillation/status", get(graph::distillation_status))

@@ -5,13 +5,21 @@
 // ============================================================================
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use fastembed::{EmbeddingModel, InitOptions, TextEmbedding};
 
 use super::embedding::{EmbeddingClient, EmbeddingError};
+
+/// Fields the idle watcher needs access to. Held as `Arc<Shared>` by the
+/// client and `Weak<Shared>` by the watcher, so the watcher exits cleanly
+/// when the client is dropped (e.g., on ArcSwap backend switch).
+struct Shared {
+    model: Mutex<Option<TextEmbedding>>,
+    last_used: AtomicU64,
+}
 
 /// Local embedding client using fastembed (ONNX Runtime).
 ///
@@ -21,18 +29,30 @@ use super::embedding::{EmbeddingClient, EmbeddingError};
 /// The model is loaded lazily on first `embed()` call and unloaded
 /// after `idle_timeout_secs` of inactivity to free memory.
 pub struct LocalEmbeddingClient {
-    model: Mutex<Option<TextEmbedding>>,
+    shared: Arc<Shared>,
     model_id: EmbeddingModel,
     model_name: String,
     dimensions: usize,
-    last_used: AtomicU64,
     idle_timeout_secs: u64,
     unload_handle: Mutex<Option<tokio::task::JoinHandle<()>>>,
 }
 
+impl Drop for LocalEmbeddingClient {
+    fn drop(&mut self) {
+        if let Ok(guard) = self.unload_handle.lock() {
+            if let Some(handle) = guard.as_ref() {
+                handle.abort();
+            }
+        }
+    }
+}
+
 impl Default for LocalEmbeddingClient {
     fn default() -> Self {
-        Self::with_model(EmbeddingModel::AllMiniLML6V2, 600)
+        // BGE-small-en-v1.5 (384d, ~130MB) — higher MTEB than AllMiniLML6V2
+        // while keeping the same dimension, so no reindex required when
+        // migrating from the old default.
+        Self::with_model(EmbeddingModel::BGESmallENV15, 600)
     }
 }
 
@@ -55,11 +75,13 @@ impl LocalEmbeddingClient {
             idle_timeout_secs
         );
         Self {
-            model: Mutex::new(None),
+            shared: Arc::new(Shared {
+                model: Mutex::new(None),
+                last_used: AtomicU64::new(0),
+            }),
             model_id,
             model_name: name.to_string(),
             dimensions: dims,
-            last_used: AtomicU64::new(0),
             idle_timeout_secs,
             unload_handle: Mutex::new(None),
         }
@@ -70,6 +92,7 @@ impl LocalEmbeddingClient {
         &self,
     ) -> Result<std::sync::MutexGuard<'_, Option<TextEmbedding>>, EmbeddingError> {
         let mut guard = self
+            .shared
             .model
             .lock()
             .map_err(|e| EmbeddingError::ModelError(format!("Mutex poisoned: {e}")))?;
@@ -88,7 +111,7 @@ impl LocalEmbeddingClient {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        self.last_used.store(now, Ordering::Relaxed);
+        self.shared.last_used.store(now, Ordering::Relaxed);
 
         Ok(guard)
     }
@@ -108,22 +131,20 @@ impl LocalEmbeddingClient {
         }
 
         let timeout_secs = self.idle_timeout_secs;
-        let last_used = &raw const self.last_used as usize;
-        let model_ptr = &raw const self.model as usize;
+        let weak: Weak<Shared> = Arc::downgrade(&self.shared);
         let model_name = self.model_name.clone();
 
-        // SAFETY: The watcher only runs while `self` is alive because:
-        // - LocalEmbeddingClient is stored in Arc<dyn EmbeddingClient> in AppState
-        // - AppState lives for the entire application lifetime
-        // - The watcher exits when the model is already None (client dropped)
+        // Safe under ArcSwap: the watcher upgrades the Weak each tick and
+        // exits the loop cleanly when the client has been dropped.
         let handle = tokio::spawn(async move {
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
 
-                let last_used = unsafe { &*(last_used as *const AtomicU64) };
-                let model_mutex = unsafe { &*(model_ptr as *const Mutex<Option<TextEmbedding>>) };
+                let Some(shared) = weak.upgrade() else {
+                    break;
+                };
 
-                let last = last_used.load(Ordering::Relaxed);
+                let last = shared.last_used.load(Ordering::Relaxed);
                 if last == 0 {
                     continue;
                 }
@@ -134,7 +155,7 @@ impl LocalEmbeddingClient {
                     .as_secs();
 
                 if now.saturating_sub(last) >= timeout_secs {
-                    if let Ok(mut guard) = model_mutex.lock() {
+                    if let Ok(mut guard) = shared.model.lock() {
                         if guard.is_some() {
                             *guard = None;
                             tracing::info!(
@@ -186,8 +207,8 @@ impl EmbeddingClient for LocalEmbeddingClient {
         self.dimensions
     }
 
-    fn model_name(&self) -> &str {
-        &self.model_name
+    fn model_name(&self) -> String {
+        self.model_name.clone()
     }
 }
 
@@ -226,8 +247,8 @@ mod tests {
     fn test_lazy_construction() {
         let client = LocalEmbeddingClient::new();
         assert_eq!(client.dimensions(), 384);
-        assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
-        let guard = client.model.lock().unwrap();
+        assert_eq!(client.model_name(), "bge-small-en-v1.5");
+        let guard = client.shared.model.lock().unwrap();
         assert!(
             guard.is_none(),
             "Model should be lazy — not loaded at construction"
@@ -248,7 +269,7 @@ mod tests {
     fn test_local_embedding_end_to_end() {
         let client = LocalEmbeddingClient::new();
         assert_eq!(client.dimensions(), 384);
-        assert_eq!(client.model_name(), "all-MiniLM-L6-v2");
+        assert_eq!(client.model_name(), "bge-small-en-v1.5");
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(client.embed(&["hello world", "test embedding"]));
@@ -257,7 +278,7 @@ mod tests {
         assert_eq!(embeddings[0].len(), 384);
         assert_eq!(embeddings[1].len(), 384);
 
-        let guard = client.model.lock().unwrap();
+        let guard = client.shared.model.lock().unwrap();
         assert!(guard.is_some(), "Model should be loaded after embed()");
     }
 }

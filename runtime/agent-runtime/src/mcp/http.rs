@@ -37,7 +37,7 @@ impl HttpMcpClient {
             name,
             url,
             headers,
-            client: reqwest::Client::new(),
+            client: reqwest::Client::builder().build().expect("reqwest client"),
         }
     }
 

@@ -34,10 +34,12 @@ use crate::middleware::intent_analysis::{
 pub use super::config::ExecutionConfig;
 use super::delegation::{spawn_delegated_agent, DelegationRegistry, DelegationRequest};
 pub use super::handle::ExecutionHandle;
+use super::invoke::micro_recall::MicroRecallContext;
+use super::invoke::working_memory_middleware;
 use super::invoke::{
     broadcast_event, collect_agents_summary, collect_skills_summary, process_stream_event,
     spawn_batch_writer_with_repo, AgentLoader, ExecutorBuilder, ResponseAccumulator, StreamContext,
-    ToolCallAccumulator, WorkspaceCache,
+    ToolCallAccumulator, WorkingMemory, WorkspaceCache,
 };
 use super::lifecycle::{
     complete_execution, crash_execution, emit_agent_started, get_or_create_session,
@@ -106,6 +108,14 @@ pub struct ExecutionRunner {
             std::collections::HashMap<String, std::sync::Arc<agent_runtime::ProviderRateLimiter>>,
         >,
     >,
+    /// Knowledge graph storage for the graph_query tool.
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    /// KG episode repository for ward artifact indexing after distillation.
+    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    /// Adapter for the `ingest` agent tool. Wired via [`Self::set_ingestion_adapter`].
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    /// Adapter for the `goal` agent tool. Wired via [`Self::set_goal_adapter`].
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 }
 
 impl ExecutionRunner {
@@ -198,6 +208,10 @@ impl ExecutionRunner {
             rate_limiters: std::sync::Arc::new(std::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            graph_storage: None,
+            kg_episode_repo: None,
+            ingestion_adapter: None,
+            goal_adapter: None,
         };
 
         // Spawn delegation handler task
@@ -212,6 +226,26 @@ impl ExecutionRunner {
     /// Set the model capabilities registry.
     pub fn set_model_registry(&mut self, registry: Arc<gateway_services::models::ModelRegistry>) {
         self.model_registry = Some(registry);
+    }
+
+    /// Set the knowledge graph storage for the graph_query tool.
+    pub fn set_graph_storage(&mut self, storage: Arc<knowledge_graph::GraphStorage>) {
+        self.graph_storage = Some(storage);
+    }
+
+    /// Set the KG episode repository used by post-distillation ward indexing.
+    pub fn set_kg_episode_repo(&mut self, repo: Arc<gateway_database::KgEpisodeRepository>) {
+        self.kg_episode_repo = Some(repo);
+    }
+
+    /// Set the ingestion adapter so the `ingest` agent tool is registered.
+    pub fn set_ingestion_adapter(&mut self, adapter: Arc<dyn agent_tools::IngestionAccess>) {
+        self.ingestion_adapter = Some(adapter);
+    }
+
+    /// Set the goal adapter so the `goal` agent tool is registered.
+    pub fn set_goal_adapter(&mut self, adapter: Arc<dyn agent_tools::GoalAccess>) {
+        self.goal_adapter = Some(adapter);
     }
 
     /// Get or create a shared rate limiter for a provider.
@@ -270,6 +304,9 @@ impl ExecutionRunner {
         let embedding_client = self.embedding_client.clone();
         let memory_recall = self.memory_recall.clone();
         let rate_limiters = self.rate_limiters.clone();
+        let graph_storage_for_delegation = self.graph_storage.clone();
+        let ingestion_adapter_for_delegation = self.ingestion_adapter.clone();
+        let goal_adapter_for_delegation = self.goal_adapter.clone();
 
         tokio::spawn(async move {
             // Per-session tracking: only one delegation active per session at a time
@@ -313,6 +350,9 @@ impl ExecutionRunner {
                         std::collections::HashMap<String, Arc<agent_runtime::ProviderRateLimiter>>,
                     >,
                 >,
+                graph_storage: &Option<Arc<knowledge_graph::GraphStorage>>,
+                ingestion_adapter: &Option<Arc<dyn agent_tools::IngestionAccess>>,
+                goal_adapter: &Option<Arc<dyn agent_tools::GoalAccess>>,
                 done_tx: mpsc::UnboundedSender<String>,
             ) {
                 let session_id = request.session_id.clone();
@@ -336,6 +376,9 @@ impl ExecutionRunner {
                 let embedding_client = embedding_client.clone();
                 let memory_recall = memory_recall.clone();
                 let rate_limiters = rate_limiters.clone();
+                let graph_storage = graph_storage.clone();
+                let ingestion_adapter = ingestion_adapter.clone();
+                let goal_adapter = goal_adapter.clone();
 
                 tokio::spawn(async move {
                     let semaphore = delegation_semaphore.clone();
@@ -361,6 +404,9 @@ impl ExecutionRunner {
                         embedding_client,
                         memory_recall,
                         rate_limiters,
+                        graph_storage,
+                        ingestion_adapter,
+                        goal_adapter,
                     )
                     .await;
 
@@ -399,6 +445,9 @@ impl ExecutionRunner {
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
                                 &memory_recall, &rate_limiters,
+                                &graph_storage_for_delegation,
+                                &ingestion_adapter_for_delegation,
+                                &goal_adapter_for_delegation,
                                 done_tx.clone(),
                             );
                         } else if active_sessions.contains(&session_id) {
@@ -429,6 +478,9 @@ impl ExecutionRunner {
                                 &workspace_cache, &delegation_semaphore,
                                 &memory_repo, &embedding_client,
                                 &memory_recall, &rate_limiters,
+                                &graph_storage_for_delegation,
+                                &ingestion_adapter_for_delegation,
+                                &goal_adapter_for_delegation,
                                 done_tx.clone(),
                             );
                         }
@@ -456,6 +508,9 @@ impl ExecutionRunner {
                                     &workspace_cache, &delegation_semaphore,
                                     &memory_repo, &embedding_client,
                                     &memory_recall, &rate_limiters,
+                                    &graph_storage_for_delegation,
+                                    &ingestion_adapter_for_delegation,
+                                    &goal_adapter_for_delegation,
                                     done_tx.clone(),
                                 );
                             }
@@ -493,6 +548,10 @@ impl ExecutionRunner {
         let distiller = self.distiller.clone();
         let memory_recall = self.memory_recall.clone();
         let model_registry = self.model_registry.clone();
+        let graph_storage = self.graph_storage.clone();
+        let kg_episode_repo = self.kg_episode_repo.clone();
+        let ingestion_adapter = self.ingestion_adapter.clone();
+        let goal_adapter = self.goal_adapter.clone();
 
         // Subscribe to all events to catch SessionContinuationReady
         let mut event_rx = event_bus.subscribe_all();
@@ -540,6 +599,10 @@ impl ExecutionRunner {
                             distiller.clone(),
                             memory_recall.clone(),
                             model_registry.clone(),
+                            graph_storage.clone(),
+                            kg_episode_repo.clone(),
+                            ingestion_adapter.clone(),
+                            goal_adapter.clone(),
                         )
                         .await
                         {
@@ -670,7 +733,7 @@ impl ExecutionRunner {
             self.paths.clone(),
         )
         .with_settings(&settings_for_loader)
-        .with_fast_mode(config.is_fast_mode());
+        .with_chat_mode(config.is_chat_mode());
         let (agent, provider) = match agent_loader.load_or_create_root(&config.agent_id).await {
             Ok(result) => result,
             Err(e) => {
@@ -692,75 +755,49 @@ impl ExecutionRunner {
 
         // Graph-powered recall for first message — inject remembered facts, episodes, and
         // entity context before the agent sees the user's message.
-        // Skipped in fast mode for speed — chat_protocol instructs the agent to skip recall.
-        if !config.is_fast_mode() {
-            if let Some(recall) = &self.memory_recall {
-                match recall
-                    .recall_with_graph(
-                        &config.agent_id,
-                        &message,
-                        5,
-                        setup.ward_id.as_deref(),
-                        Some(&session_id),
-                    )
-                    .await
-                {
-                    Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
-                        history.insert(0, ChatMessage::system(result.formatted));
-                        tracing::info!(
-                            facts = result.facts.len(),
-                            episodes = result.episodes.len(),
-                            "Recalled memory context for first message"
-                        );
+        // Runs in BOTH chat and research modes (Phase 7): only the pipeline depth is
+        // gated on mode; memory must reach every session. Chat mode uses a smaller budget
+        // to keep latency low.
+        if let Some(recall) = &self.memory_recall {
+            let _ = session_id; // retained for future recall-log wiring
+            let top_k = if config.is_chat_mode() { 5 } else { 10 };
+            match recall
+                .recall_unified(
+                    &config.agent_id,
+                    &message,
+                    setup.ward_id.as_deref(),
+                    &[],
+                    top_k,
+                )
+                .await
+            {
+                Ok(items) if !items.is_empty() => {
+                    let formatted = crate::recall::format_scored_items(&items);
+                    if !formatted.is_empty() {
+                        history.insert(0, ChatMessage::system(formatted));
                     }
-                    Ok(_) => {
-                        tracing::debug!(
-                            "First-message recall returned empty — no relevant facts/episodes"
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            "First-message graph recall failed: {}, falling back to basic recall",
-                            e
-                        );
-                        // Fallback: try basic recall without graph
-                        match recall
-                            .recall(&config.agent_id, &message, 5, setup.ward_id.as_deref())
-                            .await
-                        {
-                            Ok(facts) if !facts.is_empty() => {
-                                let formatted: Vec<String> = facts
-                                    .iter()
-                                    .map(|f| format!("- [{}] {}", f.fact.category, f.fact.content))
-                                    .collect();
-                                history.insert(
-                                    0,
-                                    ChatMessage::system(format!(
-                                        "## Recalled Context\n{}",
-                                        formatted.join("\n")
-                                    )),
-                                );
-                                tracing::info!(
-                                    facts = facts.len(),
-                                    "Fallback recall injected facts"
-                                );
-                            }
-                            Ok(_) => {}
-                            Err(e2) => tracing::warn!("Fallback recall also failed: {}", e2),
-                        }
-                    }
+                    tracing::info!(
+                        agent_id = %config.agent_id,
+                        count = items.len(),
+                        "Recalled unified context for first message"
+                    );
+                }
+                Ok(_) => {
+                    tracing::debug!(
+                        "First-message unified recall returned empty — no relevant items"
+                    );
+                }
+                Err(e) => {
+                    // Surface the failure so the agent can drill manually instead
+                    // of assuming memory was silently empty. Empty results (Ok case
+                    // above) stay quiet — only genuine errors are reported.
+                    tracing::warn!("First-message unified recall failed: {}", e);
+                    history.insert(
+                        0,
+                        ChatMessage::system(crate::recall::format_recall_failure_message(&e)),
+                    );
                 }
             }
-        } // end !is_fast_mode recall gate
-
-        // Nudge the agent to use memory.recall tool at session start (visible, agent-driven)
-        // Skipped in fast mode — fast chat starts working immediately.
-        if !config.is_fast_mode() && history.is_empty() {
-            history.push(ChatMessage::system(
-                "Before starting this task, use the memory tool to recall relevant knowledge \
-                 — corrections, past strategies, and domain context."
-                    .to_string(),
-            ));
         }
 
         // Create executor (restore ward_id from existing session if available)
@@ -853,7 +890,7 @@ impl ExecutionRunner {
         message: String,
         session_id: String,
         execution_id: String,
-        history: Vec<ChatMessage>,
+        mut history: Vec<ChatMessage>,
         recommended_skills: Vec<String>,
     ) {
         let event_bus = self.event_bus.clone();
@@ -873,6 +910,9 @@ impl ExecutionRunner {
         let delegation_registry = self.delegation_registry.clone();
         let handles = self.handles.clone();
         let _skill_service = self.skill_service.clone();
+        let memory_repo = self.memory_repo.clone();
+        let graph_storage = self.graph_storage.clone();
+        let kg_episode_repo = self.kg_episode_repo.clone();
 
         tokio::spawn(async move {
             // Create batch writer for non-blocking DB writes (with conversation repo for session messages)
@@ -912,6 +952,43 @@ impl ExecutionRunner {
             // Track accumulated text for the current assistant turn
             let mut turn_text = String::new();
 
+            // Initialize working memory and seed from recalled corrections
+            let mut working_memory = WorkingMemory::new(1500);
+            for msg in &history {
+                if msg.role == "system" {
+                    let content = msg.text_content();
+                    if content.contains("Recalled") || content.contains("correction") {
+                        for line in content.lines() {
+                            let trimmed = line.trim().trim_start_matches("- ");
+                            if trimmed.starts_with("[correction]")
+                                || trimmed.starts_with("[pattern]")
+                            {
+                                working_memory.add_correction(trimmed);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Inject working memory into history if it has content
+            if !working_memory.is_empty() {
+                history.push(ChatMessage::system(working_memory.format_for_prompt()));
+            }
+
+            // Track current tool name for working memory middleware
+            let mut current_tool_name = String::new();
+
+            // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
+            let kg_episode_repo_inner = kg_episode_repo.clone();
+            let graph_storage_inner = graph_storage.clone();
+            let agent_id_inner = agent_id.clone();
+
+            // Collect micro-recall triggers during stream (sync closure cannot run async)
+            let mut pending_recall_triggers: Vec<(
+                super::invoke::micro_recall::MicroRecallTrigger,
+                u32,
+            )> = Vec::new();
+
             // Execute with streaming
             let result = executor
                 .execute_stream(&message, &history, |event| {
@@ -931,6 +1008,7 @@ impl ExecutionRunner {
                             ..
                         } => {
                             tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                            current_tool_name = tool_name.clone();
                             // Accumulate tool call for the current assistant message
                             turn_tool_calls.push(serde_json::json!({
                                 "tool_id": tool_id,
@@ -980,6 +1058,54 @@ impl ExecutionRunner {
                                 None,
                                 Some(tool_id),
                             );
+
+                            // Update working memory from tool result
+                            working_memory_middleware::process_tool_result(
+                                &mut working_memory,
+                                &current_tool_name,
+                                result,
+                                error.as_deref(),
+                                handle.current_iteration(),
+                            );
+
+                            // Phase 6d: real-time graph extraction from tool output.
+                            // Non-blocking — fires in a background task so the
+                            // execution loop never waits.
+                            if let (Some(ref ep_repo), Some(ref graph)) =
+                                (&kg_episode_repo_inner, &graph_storage_inner)
+                            {
+                                let tool_name_cl = current_tool_name.clone();
+                                let tool_id_cl = tool_id.clone();
+                                let result_cl = result.clone();
+                                let session_id_cl = session_id_inner.clone();
+                                let agent_id_cl = agent_id_inner.clone();
+                                let ep_repo_cl = ep_repo.clone();
+                                let graph_cl = graph.clone();
+                                tokio::spawn(async move {
+                                    crate::tool_result_extractor::extract_and_persist(
+                                        &tool_name_cl,
+                                        &tool_id_cl,
+                                        &result_cl,
+                                        &session_id_cl,
+                                        &agent_id_cl,
+                                        ep_repo_cl.as_ref(),
+                                        &graph_cl,
+                                    )
+                                    .await;
+                                });
+                            }
+
+                            // Detect micro-recall triggers (sync) — executed after stream completes
+                            let triggers = working_memory_middleware::detect_recall_triggers(
+                                &working_memory,
+                                &current_tool_name,
+                                result,
+                                error.as_deref(),
+                            );
+                            let iter = handle.current_iteration();
+                            for trigger in triggers {
+                                pending_recall_triggers.push((trigger, iter));
+                            }
                         }
                         agent_runtime::StreamEvent::Token { content, .. } => {
                             turn_text.push_str(content);
@@ -1001,6 +1127,24 @@ impl ExecutionRunner {
                     }
                 })
                 .await;
+
+            // Execute micro-recall triggers collected during the stream
+            if !pending_recall_triggers.is_empty() {
+                let recall_ctx = MicroRecallContext {
+                    memory_repo: memory_repo.clone(),
+                    graph_storage: graph_storage.clone(),
+                    agent_id: agent_id.clone(),
+                };
+                for (trigger, iter) in &pending_recall_triggers {
+                    working_memory_middleware::execute_micro_recall_triggers(
+                        &mut working_memory,
+                        std::slice::from_ref(trigger),
+                        &recall_ctx,
+                        *iter,
+                    )
+                    .await;
+                }
+            }
 
             let accumulated_response = response_acc.into_response();
 
@@ -1086,27 +1230,36 @@ impl ExecutionRunner {
                         .await;
                     }
 
-                    // Auto-update ward AGENTS.md after root execution completes
-                    // (scaffolding now happens at ward creation time in the WardChanged handler)
+                    // Ward AGENTS.md and memory-bank/ are curated manually by agents;
+                    // the runtime no longer rewrites them post-execution.
                     let session_ward = state_service
                         .get_session(&session_id)
                         .ok()
                         .flatten()
                         .and_then(|s| s.ward_id);
-                    if let Some(ref ward_id) = session_ward {
-                        auto_update_agents_md(paths.vault_dir(), ward_id);
-                        auto_update_memory_bank(paths.vault_dir(), ward_id);
-                    }
 
-                    // Fire-and-forget session distillation
+                    // Fire-and-forget session distillation, followed by ward artifact indexing.
                     if let Some(distiller) = distiller.as_ref() {
                         let distiller = distiller.clone();
                         let sid = session_id.clone();
                         let aid = agent_id.clone();
+                        let ward_id_for_indexer = session_ward.clone();
+                        let kg_episode_repo_for_indexer = kg_episode_repo.clone();
+                        let graph_storage_for_indexer = graph_storage.clone();
+                        let paths_for_indexer = paths.clone();
                         tokio::spawn(async move {
                             if let Err(e) = distiller.distill(&sid, &aid).await {
                                 tracing::warn!("Session distillation failed: {}", e);
                             }
+                            run_ward_artifact_indexer(
+                                &ward_id_for_indexer,
+                                &sid,
+                                &aid,
+                                kg_episode_repo_for_indexer.as_ref(),
+                                graph_storage_for_indexer.as_ref(),
+                                &paths_for_indexer,
+                            )
+                            .await;
                         });
                     }
                 }
@@ -1329,6 +1482,9 @@ impl ExecutionRunner {
             self.embedding_client.clone(),
             self.memory_recall.clone(),
             self.rate_limiters.clone(),
+            self.graph_storage.clone(),
+            self.ingestion_adapter.clone(),
+            self.goal_adapter.clone(),
         )
         .await?;
 
@@ -1544,7 +1700,7 @@ impl ExecutionRunner {
         let mut builder = ExecutorBuilder::new(self.paths.vault_dir().clone(), tool_settings)
             .with_workspace_cache(self.workspace_cache.clone())
             .with_rate_limiter(rate_limiter)
-            .with_fast_mode(config.is_fast_mode());
+            .with_chat_mode(config.is_chat_mode());
         if let Some(ref registry) = self.model_registry {
             builder = builder.with_model_registry(registry.clone());
         }
@@ -1553,6 +1709,15 @@ impl ExecutionRunner {
         }
         if let Some(cp) = connector_provider {
             builder = builder.with_connector_provider(cp);
+        }
+        if let Some(ref gs) = self.graph_storage {
+            builder = builder.with_graph_storage(gs.clone());
+        }
+        if let Some(ref a) = self.ingestion_adapter {
+            builder = builder.with_ingestion_adapter(a.clone());
+        }
+        if let Some(ref a) = self.goal_adapter {
+            builder = builder.with_goal_adapter(a.clone());
         }
 
         // Intent analysis for root agent first turns only.
@@ -1565,8 +1730,8 @@ impl ExecutionRunner {
         } else {
             false
         };
-        let is_fast_mode = config.is_fast_mode();
-        if is_root && already_analyzed && !is_fast_mode {
+        let is_chat_mode = config.is_chat_mode();
+        if is_root && already_analyzed && !is_chat_mode {
             // Notify UI that intent analysis was skipped (continuation turn)
             self.event_bus
                 .publish(gateway_events::GatewayEvent::IntentAnalysisSkipped {
@@ -1576,7 +1741,7 @@ impl ExecutionRunner {
                 .await;
             tracing::debug!("Intent analysis skipped (already analyzed for this execution)");
         }
-        if is_root && !already_analyzed && !is_fast_mode {
+        if is_root && !already_analyzed && !is_chat_mode {
             if let Some(ref fs) = fact_store_for_indexing {
                 // Index resources (fast DB upsert — no LLM call)
                 index_resources(
@@ -1613,11 +1778,16 @@ impl ExecutionRunner {
                                 agent_runtime::RetryPolicy::default(),
                             );
 
+                            let system_prompt =
+                                crate::middleware::intent_analysis::load_intent_analysis_prompt(
+                                    &self.paths,
+                                );
                             match analyze_intent(
                                 &retrying,
                                 msg,
                                 fs.as_ref(),
                                 self.memory_recall.as_ref().map(|r| r.as_ref()),
+                                &system_prompt,
                             )
                             .await
                             {
@@ -1897,6 +2067,10 @@ async fn invoke_continuation(
     distiller: Option<Arc<super::distillation::SessionDistiller>>,
     memory_recall: Option<Arc<super::recall::MemoryRecall>>,
     model_registry: Option<Arc<gateway_services::models::ModelRegistry>>,
+    graph_storage: Option<Arc<knowledge_graph::GraphStorage>>,
+    kg_episode_repo: Option<Arc<gateway_database::KgEpisodeRepository>>,
+    ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>>,
+    goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>>,
 ) -> Result<(), String> {
     // Generate a new conversation ID for this continuation turn
     let conversation_id = format!(
@@ -1973,21 +2147,23 @@ async fn invoke_continuation(
 
     if let Some(recall) = &memory_recall {
         match recall
-            .recall_with_graph(
+            .recall_unified(
                 root_agent_id,
                 &continuation_recall_query,
-                5,
                 session_ward_id.as_deref(),
-                Some(session_id),
+                &[],
+                10,
             )
             .await
         {
-            Ok(result) if !result.facts.is_empty() || !result.episodes.is_empty() => {
-                history.insert(0, ChatMessage::system(result.formatted));
+            Ok(items) if !items.is_empty() => {
+                let formatted = crate::recall::format_scored_items(&items);
+                if !formatted.is_empty() {
+                    history.insert(0, ChatMessage::system(formatted));
+                }
                 tracing::info!(
-                    fact_count = result.facts.len(),
-                    episode_count = result.episodes.len(),
-                    "Recalled facts and episodes for continuation"
+                    item_count = items.len(),
+                    "Recalled unified context for continuation"
                 );
             }
             Ok(_) => {}
@@ -2010,11 +2186,8 @@ async fn invoke_continuation(
     let available_agents = collect_agents_summary(&agent_service).await;
     let available_skills = collect_skills_summary(&skill_service).await;
 
-    // Auto-update ward AGENTS.md before continuation
-    if let Some(ref ward_id) = session_ward_id {
-        auto_update_agents_md(paths.vault_dir(), ward_id);
-        auto_update_memory_bank(paths.vault_dir(), ward_id);
-    }
+    // Ward AGENTS.md and memory-bank/ are curated manually by agents;
+    // the runtime no longer rewrites them before continuation.
 
     // Build executor
     let mut builder = ExecutorBuilder::new(paths.vault_dir().clone(), tool_settings)
@@ -2033,6 +2206,16 @@ async fn invoke_continuation(
         });
     if let Some(fs) = fact_store {
         builder = builder.with_fact_store(fs);
+    }
+    let graph_storage_for_indexer = graph_storage.clone();
+    if let Some(gs) = graph_storage {
+        builder = builder.with_graph_storage(gs);
+    }
+    if let Some(a) = ingestion_adapter {
+        builder = builder.with_ingestion_adapter(a);
+    }
+    if let Some(a) = goal_adapter {
+        builder = builder.with_goal_adapter(a);
     }
 
     let mut executor = builder
@@ -2174,6 +2357,13 @@ async fn invoke_continuation(
         let mut turn_tool_calls: Vec<serde_json::Value> = Vec::new();
         let mut turn_text = String::new();
 
+        // Phase 6d: clones for real-time tool-result extraction (fire-and-forget).
+        let kg_episode_repo_inner = kg_episode_repo.clone();
+        let graph_storage_inner = graph_storage_for_indexer.clone();
+        let agent_id_inner = agent_id_clone.clone();
+        // Track current tool name so the extractor can dispatch by name.
+        let mut current_tool_name = String::new();
+
         let result = executor
             .execute_stream(&continuation_message, &history, |event| {
                 if handle.is_stop_requested() {
@@ -2191,6 +2381,7 @@ async fn invoke_continuation(
                         ..
                     } => {
                         tool_acc.start_call(tool_id.clone(), tool_name.clone(), args.clone());
+                        current_tool_name = tool_name.clone();
                         turn_tool_calls.push(serde_json::json!({
                             "tool_id": tool_id,
                             "tool_name": tool_name,
@@ -2239,6 +2430,33 @@ async fn invoke_continuation(
                             None,
                             Some(tool_id),
                         );
+
+                        // Phase 6d: real-time graph extraction from tool output.
+                        // Non-blocking — fires in a background task so the
+                        // execution loop never waits.
+                        if let (Some(ref ep_repo), Some(ref graph)) =
+                            (&kg_episode_repo_inner, &graph_storage_inner)
+                        {
+                            let tool_name_cl = current_tool_name.clone();
+                            let tool_id_cl = tool_id.clone();
+                            let result_cl = result.clone();
+                            let session_id_cl = session_id_inner.clone();
+                            let agent_id_cl = agent_id_inner.clone();
+                            let ep_repo_cl = ep_repo.clone();
+                            let graph_cl = graph.clone();
+                            tokio::spawn(async move {
+                                crate::tool_result_extractor::extract_and_persist(
+                                    &tool_name_cl,
+                                    &tool_id_cl,
+                                    &result_cl,
+                                    &session_id_cl,
+                                    &agent_id_cl,
+                                    ep_repo_cl.as_ref(),
+                                    &graph_cl,
+                                )
+                                .await;
+                            });
+                        }
                     }
                     agent_runtime::StreamEvent::Token { content, .. } => {
                         turn_text.push_str(content);
@@ -2315,14 +2533,31 @@ async fn invoke_continuation(
                     .await;
                 }
 
-                // Fire-and-forget session distillation
+                // Fire-and-forget session distillation, followed by ward artifact indexing.
                 if let Some(distiller) = distiller {
                     let sid = session_id_clone.clone();
                     let aid = agent_id_clone.clone();
+                    let ward_id_for_indexer = state_service
+                        .get_session(&sid)
+                        .ok()
+                        .flatten()
+                        .and_then(|s| s.ward_id);
+                    let kg_episode_repo_for_indexer = kg_episode_repo.clone();
+                    let graph_storage_for_indexer = graph_storage_for_indexer.clone();
+                    let paths_for_indexer = paths.clone();
                     tokio::spawn(async move {
                         if let Err(e) = distiller.distill(&sid, &aid).await {
                             tracing::warn!("Continuation distillation failed: {}", e);
                         }
+                        run_ward_artifact_indexer(
+                            &ward_id_for_indexer,
+                            &sid,
+                            &aid,
+                            kg_episode_repo_for_indexer.as_ref(),
+                            graph_storage_for_indexer.as_ref(),
+                            &paths_for_indexer,
+                        )
+                        .await;
                     });
                 }
             }
@@ -2460,828 +2695,38 @@ fn find_latest_plan(specs_dir: &std::path::Path) -> Option<String> {
     }
 }
 
-/// Called by the system after delegations complete, before continuation.
-/// Extract Python function signatures from a .py file.
-/// Returns lines like `def fetch_ohlcv(ticker: str, period: str = "1y") -> pd.DataFrame`
-/// stripped of the trailing colon.
-fn extract_function_signatures(file_path: &std::path::Path) -> Vec<String> {
-    let content = match std::fs::read_to_string(file_path) {
-        Ok(c) => c,
-        Err(_) => return vec![],
-    };
-
-    let mut signatures = Vec::new();
-    let mut in_def = false;
-    let mut current_def = String::new();
-
-    for line in content.lines() {
-        let trimmed = line.trim();
-        if trimmed.starts_with("def ") {
-            // Start of a function definition
-            in_def = true;
-            current_def = trimmed.to_string();
-            if current_def.contains(')') {
-                // Single-line def — strip trailing `:` or ` -> ...:` keeping the return annotation
-                if let Some(pos) = current_def.rfind("):") {
-                    // e.g. `def foo(x: int) -> str:` — keep up to `)` then check for return annotation
-                    let after_paren = &current_def[pos + 1..];
-                    if after_paren.contains("->") {
-                        // Include the return annotation, strip the final `:`
-                        let full = format!(
-                            "{}{}",
-                            &current_def[..pos + 1],
-                            after_paren[..after_paren.len()]
-                                .trim_end_matches(':')
-                                .trim_end()
-                        );
-                        signatures.push(full);
-                    } else {
-                        signatures.push(current_def[..pos + 1].trim().to_string());
-                    }
-                } else if let Some(pos) = current_def.find(':') {
-                    signatures.push(current_def[..pos].trim().to_string());
-                } else {
-                    signatures.push(current_def.clone());
-                }
-                in_def = false;
-                current_def.clear();
-            }
-        } else if in_def {
-            current_def.push(' ');
-            current_def.push_str(trimmed);
-            if current_def.contains(')') {
-                if let Some(pos) = current_def.rfind("):") {
-                    let after_paren = &current_def[pos + 1..];
-                    if after_paren.contains("->") {
-                        let full = format!(
-                            "{}{}",
-                            &current_def[..pos + 1],
-                            after_paren.trim_end_matches(':').trim_end()
-                        );
-                        signatures.push(full);
-                    } else {
-                        signatures.push(current_def[..pos + 1].trim().to_string());
-                    }
-                } else if let Some(pos) = current_def.find(':') {
-                    signatures.push(current_def[..pos].trim().to_string());
-                } else {
-                    signatures.push(current_def.clone());
-                }
-                in_def = false;
-                current_def.clear();
-            }
-        }
-    }
-
-    signatures
-}
-
-/// Extract the first-line docstring from a Python file.
-fn extract_first_docstring(file_path: &std::path::Path) -> String {
-    std::fs::read_to_string(file_path)
-        .ok()
-        .and_then(|content| {
-            content
-                .lines()
-                .find(|l| l.starts_with("\"\"\"") || l.starts_with("'''"))
-                .map(|l| {
-                    l.trim_start_matches("\"\"\"")
-                        .trim_start_matches("'''")
-                        .trim_end_matches("\"\"\"")
-                        .trim_end_matches("'''")
-                        .trim()
-                        .to_string()
-                })
-        })
-        .unwrap_or_default()
-}
-
-/// Preserve the `## Purpose` section from an existing AGENTS.md, falling back to a default.
-fn extract_purpose_section(agents_md_path: &std::path::Path, ward_id: &str) -> String {
-    if let Ok(existing) = std::fs::read_to_string(agents_md_path) {
-        let mut in_purpose = false;
-        let mut purpose_lines = Vec::new();
-        for line in existing.lines() {
-            if line.starts_with("## Purpose") {
-                in_purpose = true;
-                continue;
-            }
-            if in_purpose {
-                if line.starts_with("## ") {
-                    break;
-                }
-                purpose_lines.push(line.to_string());
-            }
-        }
-        // Trim leading/trailing blank lines
-        let text: String = purpose_lines.join("\n");
-        let text = text.trim().to_string();
-        if !text.is_empty() {
-            return text;
-        }
-    }
-    format!("Domain workspace for {} projects.", ward_id)
-}
-
-fn extract_conventions_section(agents_md_path: &std::path::Path) -> Option<Vec<String>> {
-    let content = std::fs::read_to_string(agents_md_path).ok()?;
-    let mut in_conventions = false;
-    let mut conventions = Vec::new();
-    for line in content.lines() {
-        if line.starts_with("## Conventions") {
-            in_conventions = true;
-            continue;
-        }
-        if in_conventions {
-            if line.starts_with("## ") {
-                break;
-            }
-            let trimmed = line.trim();
-            if trimmed.starts_with("- ") {
-                conventions.push(trimmed.to_string());
-            }
-        }
-    }
-    if conventions.is_empty() {
-        None
-    } else {
-        Some(conventions)
-    }
-}
-
-/// Format a byte count as a human-readable size string (e.g. "125 KB", "8 KB", "1.2 MB").
-fn format_file_size(bytes: u64) -> String {
-    if bytes >= 1_048_576 {
-        format!("{:.1} MB", bytes as f64 / 1_048_576.0)
-    } else if bytes >= 1024 {
-        format!("{} KB", bytes / 1024)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-/// Collect data files (.csv, .json, .txt, .html, .parquet) recursively under a directory.
-/// Returns `(relative_path, size_in_bytes)` pairs, relative to `base_dir`.
-fn collect_data_files(dir: &std::path::Path, base_dir: &std::path::Path) -> Vec<(String, u64)> {
-    let data_extensions = ["csv", "json", "txt", "html", "parquet", "xlsx", "pkl"];
-    let mut result = Vec::new();
-    collect_data_files_recursive(dir, base_dir, &data_extensions, &mut result);
-    result.sort_by(|a, b| a.0.cmp(&b.0));
-    result
-}
-
-fn collect_data_files_recursive(
-    dir: &std::path::Path,
-    base_dir: &std::path::Path,
-    extensions: &[&str],
-    result: &mut Vec<(String, u64)>,
-) {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let path = entry.path();
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') || name == "__pycache__" {
-            continue;
-        }
-        if path.is_dir() {
-            collect_data_files_recursive(&path, base_dir, extensions, result);
-        } else if path.is_file() {
-            let matches_ext = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .map(|ext| extensions.contains(&ext))
-                .unwrap_or(false);
-            if matches_ext {
-                let rel = path
-                    .strip_prefix(base_dir)
-                    .unwrap_or(&path)
-                    .to_string_lossy()
-                    .replace('\\', "/");
-                let size = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-                result.push((rel, size));
-            }
-        }
-    }
-}
-
-/// Auto-update AGENTS.md using language configs for core module indexing.
+/// Phase 6a: index structured ward artifacts into the knowledge graph after distillation.
 ///
-/// This is the primary implementation. It accepts a `lang_configs_dir` path so that
-/// callers (and integration tests) can supply a custom config directory. Language
-/// configs are loaded from that directory; files whose extension matches a config use
-/// the config's `extract_signatures` / `extract_first_docstring` methods. Files with
-/// no matching config fall back to the hardcoded Python extraction helpers.
-pub fn auto_update_agents_md_with_lang_configs(
-    vault_dir: &std::path::Path,
-    ward_id: &str,
-    lang_configs_dir: &std::path::Path,
+/// Skips when the session has no ward (scratch), the KG episode repo is not wired,
+/// graph storage is unavailable, or the ward path does not exist on disk. All errors
+/// from the indexer are logged and never propagate — this must not crash the pipeline.
+async fn run_ward_artifact_indexer(
+    ward_id: &Option<String>,
+    session_id: &str,
+    agent_id: &str,
+    kg_episode_repo: Option<&Arc<gateway_database::KgEpisodeRepository>>,
+    graph_storage: Option<&Arc<knowledge_graph::GraphStorage>>,
+    paths: &SharedVaultPaths,
 ) {
-    let ward_dir = vault_dir.join("wards").join(ward_id);
-    let agents_md_path = ward_dir.join("AGENTS.md");
-
-    if !ward_dir.exists() || ward_id == "scratch" {
+    let (Some(wid), Some(ep_repo), Some(graph)) = (ward_id, kg_episode_repo, graph_storage) else {
+        return;
+    };
+    let ward_path = paths.vault_dir().join("wards").join(wid);
+    if !ward_path.exists() {
         return;
     }
-
-    let lang_configs = {
-        let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
-            .unwrap_or_default();
-        gateway_services::lang_config::compile_all(&raw)
-    };
-
-    let mut sections = Vec::new();
-
-    // ── Title ──
-    sections.push(format!("# {}\n", ward_id));
-
-    // ── Purpose (preserved from existing AGENTS.md) ──
-    let purpose = extract_purpose_section(&agents_md_path, ward_id);
-    sections.push(format!("\n## Purpose\n{}\n", purpose));
-
-    // ── Read These First ──
-    let memory_bank_exists = ward_dir.join("memory-bank").exists();
-    if memory_bank_exists {
-        sections.push("## Read These First\n".to_string());
-        sections.push(
-            "Before writing any code, read these files to understand the ward:\n".to_string(),
-        );
-
-        sections.push("- [memory-bank/ward.md](memory-bank/ward.md) — Domain knowledge, patterns, and session learnings\n".to_string());
-
-        if ward_dir.join("memory-bank").join("structure.md").exists() {
-            sections.push("- [memory-bank/structure.md](memory-bank/structure.md) — Directory layout and tech stack\n".to_string());
-        }
-
-        if ward_dir.join("memory-bank").join("core_docs.md").exists() {
-            sections.push("- [memory-bank/core_docs.md](memory-bank/core_docs.md) — Core module functions and usage\n".to_string());
-        }
-
-        // List any other docs in memory-bank/
-        if let Ok(entries) = std::fs::read_dir(ward_dir.join("memory-bank")) {
-            let mut docs: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    let name = e.file_name().to_string_lossy().to_string();
-                    e.path().is_file()
-                        && name.ends_with(".md")
-                        && name != "ward.md"
-                        && name != "structure.md"
-                        && name != "core_docs.md"
-                })
-                .collect();
-            docs.sort_by_key(|e| e.file_name());
-            for entry in &docs {
-                let name = entry.file_name().to_string_lossy().to_string();
-                sections.push(format!("- [memory-bank/{}](memory-bank/{}) \n", name, name));
-            }
-        }
-        sections.push("\n".to_string());
-    }
-
-    // ── Core Modules with function signatures ──
-    let core_dir = ward_dir.join("core");
-    if core_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&core_dir) {
-            let mut modules: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| {
-                    let path = e.path();
-                    if !path.is_file() {
-                        return false;
-                    }
-                    let name = e.file_name().to_string_lossy().to_string();
-                    if name.starts_with('.') || name == "__init__.py" {
-                        return false;
-                    }
-                    let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
-                    // Accept if any lang config matches, or if it's .py (hardcoded fallback)
-                    gateway_services::lang_config::CompiledLangConfig::find_for_extension(
-                        &lang_configs,
-                        ext,
-                    )
-                    .is_some()
-                        || ext == "py"
-                })
-                .collect();
-            modules.sort_by_key(|e| e.file_name());
-
-            if !modules.is_empty() {
-                sections.push("\n## Core Modules\n".to_string());
-                for entry in &modules {
-                    let path = entry.path();
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    let ext = path.extension().and_then(|ex| ex.to_str()).unwrap_or("");
-
-                    sections.push(format!("### core/{}\n", name));
-
-                    if let Some(config) =
-                        gateway_services::lang_config::CompiledLangConfig::find_for_extension(
-                            &lang_configs,
-                            ext,
-                        )
-                    {
-                        // Language config path: use config's extraction methods
-                        let desc = config.extract_first_docstring(&path).unwrap_or_default();
-                        if !desc.is_empty() {
-                            sections.push(format!("{}\n", desc));
-                        }
-                        for sig in config.extract_signatures(&path) {
-                            sections.push(format!("- `{}`\n", sig));
-                        }
-                    } else {
-                        // Fallback: hardcoded Python extraction (only reached for .py without a lang config)
-                        let desc = extract_first_docstring(&path);
-                        if !desc.is_empty() {
-                            sections.push(format!("{}\n", desc));
-                        }
-                        for sig in extract_function_signatures(&path) {
-                            let display = sig.strip_prefix("def ").unwrap_or(&sig).to_string();
-                            sections.push(format!("- `{}`\n", display));
-                        }
-                    }
-                    sections.push("\n".to_string());
-                }
-            }
-        }
-    }
-
-    // ── Conventions (preserved from existing AGENTS.md) ──
-    if let Some(conventions) = extract_conventions_section(&agents_md_path) {
-        sections.push("\n## Conventions\n".to_string());
-        for item in &conventions {
-            sections.push(format!("{}\n", item));
-        }
-    }
-
-    // ── Available Data (scan task dirs + output for data files) ──
-    let mut data_files = Vec::new();
-
-    // Scan task directories for data files
-    if let Ok(entries) = std::fs::read_dir(&ward_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if path.is_dir()
-                && !["core", "output", "__pycache__", ".git"].contains(&name.as_str())
-                && !name.starts_with('.')
-            {
-                let mut found = collect_data_files(&path, &ward_dir);
-                data_files.append(&mut found);
-            }
-        }
-    }
-
-    // Also scan output/ for data files
-    let output_dir = ward_dir.join("output");
-    if output_dir.exists() {
-        let mut found = collect_data_files(&output_dir, &ward_dir);
-        data_files.append(&mut found);
-    }
-
-    data_files.sort_by(|a, b| a.0.cmp(&b.0));
-    data_files.dedup_by(|a, b| a.0 == b.0);
-
-    if !data_files.is_empty() {
-        sections.push("## Available Data\n".to_string());
-        for (rel_path, size) in &data_files {
-            sections.push(format!("- `{}` ({})\n", rel_path, format_file_size(*size)));
-        }
-        sections.push("\n".to_string());
-    }
-
-    // ── Task Directories ──
-    let mut task_dirs = Vec::new();
-    if let Ok(entries) = std::fs::read_dir(&ward_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if path.is_dir()
-                && !["core", "output", "__pycache__", ".git"].contains(&name.as_str())
-                && !name.starts_with('.')
-            {
-                // Recurse one level to find task subdirs
-                if let Ok(sub_entries) = std::fs::read_dir(&path) {
-                    for sub in sub_entries.filter_map(|e| e.ok()) {
-                        if sub.path().is_dir() {
-                            let sub_name = sub.file_name().to_string_lossy().to_string();
-                            if !sub_name.starts_with('.') && sub_name != "__pycache__" {
-                                task_dirs.push(format!("{}/{}", name, sub_name));
-                            }
-                        }
-                    }
-                }
-                // Also include the first-level dir itself if it has files
-                let has_files = std::fs::read_dir(&path)
-                    .ok()
-                    .map(|rd| rd.filter_map(|e| e.ok()).any(|e| e.path().is_file()))
-                    .unwrap_or(false);
-                if has_files {
-                    task_dirs.push(name);
-                }
-            }
-        }
-    }
-    if !task_dirs.is_empty() {
-        task_dirs.sort();
-        sections.push("## Task Directories\n".to_string());
-        for dir in &task_dirs {
-            sections.push(format!("- `{}/`\n", dir));
-        }
-        sections.push("\n".to_string());
-    }
-
-    // ── Output ──
-    if output_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&output_dir) {
-            let mut files: Vec<_> = entries
-                .filter_map(|e| e.ok())
-                .filter(|e| e.path().is_file())
-                .collect();
-            files.sort_by_key(|e| e.file_name());
-            if !files.is_empty() {
-                sections.push("## Output\n".to_string());
-                for entry in &files {
-                    let name = entry.file_name().to_string_lossy().to_string();
-                    sections.push(format!("- `output/{}`\n", name));
-                }
-                sections.push("\n".to_string());
-            }
-        }
-    }
-
-    // ── Specs & Plans ──
-    let has_specs = ward_dir.join("specs").exists();
-    let has_plans = ward_dir.join("plans").exists();
-    if has_specs || has_plans {
-        sections.push("## Specs & Plans\n".to_string());
-        // List spec directories
-        if has_specs {
-            if let Ok(entries) = std::fs::read_dir(ward_dir.join("specs")) {
-                let mut spec_topics: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir())
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .collect();
-                spec_topics.sort();
-                for topic in &spec_topics {
-                    let spec_count = std::fs::read_dir(ward_dir.join("specs").join(topic))
-                        .ok()
-                        .map(|entries| {
-                            entries
-                                .filter_map(|e| e.ok())
-                                .filter(|e| e.path().is_file())
-                                .count()
-                        })
-                        .unwrap_or(0);
-                    if spec_count > 0 {
-                        sections.push(format!("- `specs/{}/` — {} spec(s)\n", topic, spec_count));
-                    }
-                }
-            }
-        }
-        if has_plans {
-            if let Ok(entries) = std::fs::read_dir(ward_dir.join("plans")) {
-                let mut plan_topics: Vec<_> = entries
-                    .filter_map(|e| e.ok())
-                    .filter(|e| e.path().is_dir())
-                    .map(|e| e.file_name().to_string_lossy().to_string())
-                    .collect();
-                plan_topics.sort();
-                for topic in &plan_topics {
-                    let plan_count = std::fs::read_dir(ward_dir.join("plans").join(topic))
-                        .ok()
-                        .map(|entries| {
-                            entries
-                                .filter_map(|e| e.ok())
-                                .filter(|e| e.path().is_file())
-                                .count()
-                        })
-                        .unwrap_or(0);
-                    if plan_count > 0 {
-                        sections.push(format!("- `plans/{}/` — {} plan(s)\n", topic, plan_count));
-                    }
-                }
-            }
-        }
-        sections.push("\n".to_string());
-    }
-
-    // ── How to Code ──
-    // Determine an example module name for the import example
-    let example_import = std::fs::read_dir(&core_dir).ok().and_then(|mut entries| {
-        entries.find_map(|e| {
-            let e = e.ok()?;
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.ends_with(".py") && name != "__init__.py" {
-                let module = name.trim_end_matches(".py").to_string();
-                let first_fn = extract_function_signatures(&e.path())
-                    .first()
-                    .and_then(|sig| {
-                        // Extract just the function name from `def func_name(...)`
-                        sig.strip_prefix("def ")
-                            .and_then(|rest| rest.split('(').next())
-                            .map(|s| s.to_string())
-                    });
-                Some((module, first_fn))
-            } else {
-                None
-            }
-        })
-    });
-
-    let _import_example = match example_import {
-        Some((module, Some(func))) => format!("`from core.{} import {}`", module, func),
-        Some((module, None)) => format!("`from core.{} import ...`", module),
-        None => "`from core.<module> import <function>`".to_string(),
-    };
-
-    // Determine an example task dir prefix for the coding guide
-    let _task_dir_hint = task_dirs
-        .first()
-        .map(|d| {
-            // Use the top-level portion, e.g. "stocks/spy" -> "stocks/{ticker}"
-            if let Some(slash) = d.find('/') {
-                format!("{}/{{name}}", &d[..slash])
-            } else {
-                format!("{}/", d)
-            }
-        })
-        .unwrap_or_else(|| "tasks/{name}/".to_string());
-
-    // ── Task Runner ──
-    let ralph_exists = ward_dir.join("ralph.py").exists();
-    if ralph_exists {
-        sections.push("## Task Runner (ralph.py)\n".to_string());
-        sections.push("Use `ralph.py` to process `tasks.json` files in specs/:\n".to_string());
-        sections.push("```\n".to_string());
-        sections
-            .push("python3 ralph.py next <tasks.json>       # Get next pending task\n".to_string());
-        sections
-            .push("python3 ralph.py complete <tasks.json> N  # Mark task N complete\n".to_string());
-        sections
-            .push("python3 ralph.py fail <tasks.json> N msg  # Mark task N failed\n".to_string());
-        sections.push(
-            "python3 ralph.py status <tasks.json>      # Show progress summary\n".to_string(),
-        );
-        sections.push("```\n\n".to_string());
-    }
-
-    // ── How to Code ──
-    sections.push("## How to Code\n".to_string());
-    sections
-        .push("1. Reusable functions → core/. Task scripts → task subdirectories.\n".to_string());
-    sections.push("2. Import from core/ — never duplicate existing modules.\n".to_string());
-    sections.push(
-        "3. Use write_file to create files, edit_file for changes. Keep files under 3KB.\n"
-            .to_string(),
+    let n = crate::ward_artifact_indexer::index_ward(
+        &ward_path,
+        session_id,
+        agent_id,
+        ep_repo.as_ref(),
+        graph,
+    )
+    .await;
+    tracing::info!(
+        ward = %wid,
+        indexed_entities = n,
+        session = %session_id,
+        "Ward artifact indexing complete"
     );
-    sections.push("4. Update memory-bank/core_docs.md with full function signatures after creating core modules.\n".to_string());
-
-    // ── Timestamp ──
-    sections.push(format!(
-        "\n*Auto-updated: {}*\n",
-        chrono::Utc::now().format("%Y-%m-%d %H:%M UTC")
-    ));
-
-    let content = sections.join("");
-    if let Err(e) = std::fs::write(&agents_md_path, &content) {
-        tracing::warn!(ward = %ward_id, error = %e, "Failed to auto-update AGENTS.md");
-    } else {
-        tracing::info!(ward = %ward_id, "Auto-updated AGENTS.md");
-    }
-}
-
-fn auto_update_agents_md(vault_dir: &std::path::Path, ward_id: &str) {
-    let lang_configs_dir = vault_dir.join("config").join("wards");
-    auto_update_agents_md_with_lang_configs(vault_dir, ward_id, &lang_configs_dir);
-}
-
-/// Auto-generate memory-bank/structure.md and core_docs.md for a ward.
-pub fn auto_update_memory_bank(vault_dir: &std::path::Path, ward_id: &str) {
-    let ward_dir = vault_dir.join("wards").join(ward_id);
-    let memory_bank_dir = ward_dir.join("memory-bank");
-
-    if !ward_dir.exists() || ward_id == "scratch" {
-        return;
-    }
-
-    let _ = std::fs::create_dir_all(&memory_bank_dir);
-    generate_structure_md(&ward_dir, &memory_bank_dir.join("structure.md"));
-
-    let lang_configs_dir = vault_dir.join("config").join("wards");
-    generate_core_docs_md(
-        &ward_dir,
-        &memory_bank_dir.join("core_docs.md"),
-        &lang_configs_dir,
-    );
-}
-
-fn generate_structure_md(ward_dir: &std::path::Path, output_path: &std::path::Path) {
-    let mut content = String::from("# Ward Structure\n\n## Directory Layout\n\n```\n");
-    generate_tree(ward_dir, ward_dir, 0, 3, &mut content);
-    content.push_str("```\n");
-
-    // Tech stack detection
-    let mut tech = Vec::new();
-    if ward_dir.join("requirements.txt").exists() {
-        tech.push("Python (requirements.txt)");
-    }
-    if ward_dir.join("package.json").exists() {
-        tech.push("Node.js (package.json)");
-    }
-    if ward_dir.join("Cargo.toml").exists() {
-        tech.push("Rust (Cargo.toml)");
-    }
-
-    let core_dir = ward_dir.join("core");
-    if core_dir.exists() {
-        if let Ok(entries) = std::fs::read_dir(&core_dir) {
-            for entry in entries.filter_map(|e| e.ok()) {
-                if entry.path().extension().and_then(|e| e.to_str()) == Some("py") {
-                    if let Ok(src) = std::fs::read_to_string(entry.path()) {
-                        if src.contains("import yfinance") && !tech.contains(&"yfinance") {
-                            tech.push("yfinance");
-                        }
-                        if src.contains("import pandas") && !tech.contains(&"pandas") {
-                            tech.push("pandas");
-                        }
-                        if src.contains("import numpy") && !tech.contains(&"numpy") {
-                            tech.push("numpy");
-                        }
-                    }
-                }
-            }
-        }
-    }
-    if !tech.is_empty() {
-        content.push_str(&format!("\n## Tech Stack\n\n{}\n", tech.join(", ")));
-    }
-
-    if let Err(e) = std::fs::write(output_path, &content) {
-        tracing::warn!("Failed to write structure.md: {}", e);
-    }
-}
-
-#[allow(clippy::only_used_in_recursion)]
-fn generate_tree(
-    dir: &std::path::Path,
-    base: &std::path::Path,
-    depth: usize,
-    max_depth: usize,
-    output: &mut String,
-) {
-    if depth > max_depth {
-        return;
-    }
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    let mut items: Vec<_> = entries.filter_map(|e| e.ok()).collect();
-    items.sort_by_key(|e| e.file_name());
-
-    for entry in &items {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.')
-            || name == "__pycache__"
-            || name == "node_modules"
-            || name == ".venv"
-            || name == "data"
-        {
-            continue;
-        }
-        let indent = "  ".repeat(depth);
-        let path = entry.path();
-        if path.is_dir() {
-            output.push_str(&format!("{}{}/ \n", indent, name));
-            generate_tree(&path, base, depth + 1, max_depth, output);
-        } else if depth < 2
-            || name.ends_with(".py")
-            || name.ends_with(".md")
-            || name.ends_with(".json")
-            || name.ends_with(".yaml")
-        {
-            output.push_str(&format!("{}{}\n", indent, name));
-        }
-    }
-}
-
-fn generate_core_docs_md(
-    ward_dir: &std::path::Path,
-    output_path: &std::path::Path,
-    lang_configs_dir: &std::path::Path,
-) {
-    let lang_configs = {
-        let raw = gateway_services::lang_config::load_all_lang_configs(lang_configs_dir)
-            .unwrap_or_default();
-        gateway_services::lang_config::compile_all(&raw)
-    };
-
-    // Scan ALL code files in the ward (not just core/) — recursively
-    let code_extensions = ["py", "js", "ts", "rs", "go", "rb", "sh"];
-    let skip_dirs = [
-        "node_modules",
-        ".venv",
-        "__pycache__",
-        ".git",
-        "memory-bank",
-        "specs",
-    ];
-
-    let mut all_files: Vec<std::path::PathBuf> = Vec::new();
-    fn walk_dir(
-        dir: &std::path::Path,
-        files: &mut Vec<std::path::PathBuf>,
-        exts: &[&str],
-        skip: &[&str],
-    ) {
-        let entries = match std::fs::read_dir(dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                if !skip.contains(&name.as_str()) {
-                    walk_dir(&path, files, exts, skip);
-                }
-            } else if path.is_file() {
-                if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                    if exts.contains(&ext) && name != "__init__.py" {
-                        files.push(path);
-                    }
-                }
-            }
-        }
-    }
-    walk_dir(ward_dir, &mut all_files, &code_extensions, &skip_dirs);
-    all_files.sort();
-
-    if all_files.is_empty() {
-        return;
-    }
-
-    let mut content = String::from(
-        "# Code Inventory\n\n*Auto-generated. Lists all code files with function signatures.*\n\n",
-    );
-
-    for path in &all_files {
-        let relative = path.strip_prefix(ward_dir).unwrap_or(path);
-        let rel_str = relative.to_string_lossy();
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-
-        // File size
-        let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
-        let size_str = if size > 1024 {
-            format!("{:.1}KB", size as f64 / 1024.0)
-        } else {
-            format!("{}B", size)
-        };
-
-        content.push_str(&format!("## {} ({})\n\n", rel_str, size_str));
-
-        // Extract signatures
-        if let Some(config) = gateway_services::lang_config::CompiledLangConfig::find_for_extension(
-            &lang_configs,
-            ext,
-        ) {
-            let desc = config.extract_first_docstring(path).unwrap_or_default();
-            if !desc.is_empty() {
-                content.push_str(&format!("{}\n\n", desc));
-            }
-            let sigs = config.extract_signatures(path);
-            if !sigs.is_empty() {
-                content.push_str("**Functions:**\n");
-                for sig in &sigs {
-                    content.push_str(&format!("- `{}`\n", sig));
-                }
-                content.push('\n');
-            }
-        } else {
-            let desc = extract_first_docstring(path);
-            if !desc.is_empty() {
-                content.push_str(&format!("{}\n\n", desc));
-            }
-            let sigs = extract_function_signatures(path);
-            if !sigs.is_empty() {
-                content.push_str("**Functions:**\n");
-                for sig in &sigs {
-                    let display = sig.strip_prefix("def ").unwrap_or(sig);
-                    content.push_str(&format!("- `{}`\n", display));
-                }
-                content.push('\n');
-            }
-        }
-    }
-
-    if let Err(e) = std::fs::write(output_path, &content) {
-        tracing::warn!("Failed to write core_docs.md: {}", e);
-    }
 }
