@@ -1,19 +1,23 @@
-//! Schema v22 for `knowledge.db`.
+//! Schema v23 for `knowledge.db`.
 //!
 //! All long-term memory + graph + vector indexes live here.
 //! Applied idempotently on daemon boot. No migrations — clean slate.
 
 use rusqlite::Connection;
 
-const SCHEMA_VERSION: i32 = 22;
+const SCHEMA_VERSION: i32 = 23;
 
-/// Initialize the knowledge database schema (v22).
+/// v23 delta: full-text search over `ward_wiki_articles` with sync triggers.
+const V23_WIKI_FTS_SQL: &str = include_str!("../migrations/v23_wiki_fts.sql");
+
+/// Initialize the knowledge database schema (v23).
 ///
 /// Creates all tables and indexes if they don't exist. Records the
 /// schema version in `schema_version` table. Safe to call on an
 /// already-initialized DB.
 pub fn initialize_knowledge_database(conn: &Connection) -> Result<(), rusqlite::Error> {
     conn.execute_batch(SCHEMA_SQL)?;
+    conn.execute_batch(V23_WIKI_FTS_SQL)?;
     conn.execute(
         "INSERT OR IGNORE INTO schema_version (version, applied_at) VALUES (?1, datetime('now'))",
         rusqlite::params![SCHEMA_VERSION],
@@ -457,7 +461,7 @@ mod tests {
         let version: i32 = conn
             .query_row("SELECT version FROM schema_version", [], |r| r.get(0))
             .expect("version");
-        assert_eq!(version, 22);
+        assert_eq!(version, 23);
 
         // Regular tables.
         for table in [
