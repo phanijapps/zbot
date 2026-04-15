@@ -421,6 +421,9 @@ export interface Transport {
   /** Search ALL memory facts across all agents (server-side FTS5) */
   searchAllMemory(query: string, limit?: number, category?: string): Promise<TransportResult<MemoryListResponse>>;
 
+  /** List all wards with their fact counts (GET /api/wards) */
+  listWards(): Promise<TransportResult<{ id: string; count: number }[]>>;
+
   /** Get full content (facts, wiki, procedures, episodes) for a single ward */
   getWardContent(wardId: string): Promise<TransportResult<WardContent>>;
 

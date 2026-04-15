@@ -1422,6 +1422,10 @@ export class HttpTransport implements Transport {
     return this.get(`/api/memory/search?${params.toString()}`);
   }
 
+  async listWards(): Promise<TransportResult<{ id: string; count: number }[]>> {
+    return this.get<{ id: string; count: number }[]>("/api/wards");
+  }
+
   async getWardContent(wardId: string): Promise<TransportResult<WardContent>> {
     return this.get<WardContent>(
       `/api/wards/${encodeURIComponent(wardId)}/content`
