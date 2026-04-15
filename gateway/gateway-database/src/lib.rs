@@ -5,6 +5,7 @@
 //! Provides `DatabaseManager` with r2d2 connection pooling, WAL mode,
 //! and performance pragmas applied to every connection.
 
+pub mod age_bucket;
 pub mod compaction_repository;
 mod connection;
 pub mod distillation_repository;
@@ -22,6 +23,7 @@ mod schema;
 pub mod sqlite_vec_loader;
 pub mod wiki_repository;
 
+pub use age_bucket::age_bucket;
 pub use compaction_repository::{Compaction, CompactionRepository, RunSummary};
 pub use connection::DatabaseManager;
 pub use distillation_repository::{
