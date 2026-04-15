@@ -4,13 +4,20 @@ import type { WardContent } from "@/services/transport/types";
 
 type Tab = "facts" | "wiki" | "procedures" | "episodes";
 const TABS: Tab[] = ["facts", "wiki", "procedures", "episodes"];
+const TAB_LABELS: Record<Tab, string> = {
+  facts: "Facts",
+  wiki: "Wiki",
+  procedures: "Procedures",
+  episodes: "Episodes",
+};
 
 interface Props {
   data: WardContent | null;
   onOpenGraph: () => void;
+  timewarpDays?: number;
 }
 
-export function ContentDeck({ data, onOpenGraph }: Props) {
+export function ContentDeck({ data, onOpenGraph, timewarpDays }: Props) {
   const [tab, setTab] = useState<Tab>("facts");
   if (!data)
     return (
@@ -40,7 +47,7 @@ export function ContentDeck({ data, onOpenGraph }: Props) {
               className={tab === t ? "is-active" : ""}
               onClick={() => setTab(t)}
             >
-              {t}{" "}
+              <span>{TAB_LABELS[t]}</span>
               <span className="memory-deck__tab-count">{counts[t]}</span>
             </button>
           ))}
@@ -55,7 +62,7 @@ export function ContentDeck({ data, onOpenGraph }: Props) {
       </header>
       <div className="memory-deck__body">
         {tab === "facts" ? (
-          <ContentList items={data.facts} />
+          <ContentList items={data.facts} timewarpDays={timewarpDays} />
         ) : tab === "wiki" ? (
           <WikiList items={data.wiki} />
         ) : tab === "procedures" ? (

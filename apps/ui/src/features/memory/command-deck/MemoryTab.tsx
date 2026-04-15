@@ -4,7 +4,7 @@ import { ScopeChips, type ContentType } from "./ScopeChips";
 import { WardRail } from "./WardRail";
 import { ContentDeck } from "./ContentDeck";
 import { WriteRail } from "./WriteRail";
-import { useWards, useWardContent, useHybridSearch } from "./hooks";
+import { useWards, useWardContent, useHybridSearch, useTimewarp } from "./hooks";
 import { getTransport } from "@/services/transport";
 import type { MemoryCategory } from "@/services/transport/types";
 
@@ -44,6 +44,7 @@ export function MemoryTab({ agentId }: Props) {
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>("hybrid");
   const [types, setTypes] = useState<ContentType[]>(["facts", "wiki"]);
+  const { days, setDays } = useTimewarp();
 
   // Instantiated but not rendered yet — results UI is a v2 concern.
   // Keeping the hook active wires it for observability and primes cache.
@@ -74,7 +75,10 @@ export function MemoryTab({ agentId }: Props) {
             setMode(v.mode);
           }}
         />
-        <ScopeChips types={types} onChange={(v) => setTypes(v.types)} />
+        <div className="memory-tab-deck__row">
+          <ScopeChips types={types} onChange={(v) => setTypes(v.types)} />
+          <TimewarpSlider days={days} onChange={setDays} />
+        </div>
       </div>
       <div className="memory-tab-deck__grid">
         <WardRail
@@ -87,6 +91,7 @@ export function MemoryTab({ agentId }: Props) {
           onOpenGraph={() => {
             /* wired in a follow-up */
           }}
+          timewarpDays={days}
         />
         <WriteRail
           wardId={activeId}
@@ -99,5 +104,23 @@ export function MemoryTab({ agentId }: Props) {
         />
       </div>
     </div>
+  );
+}
+
+function TimewarpSlider({ days, onChange }: { days: number; onChange: (d: number) => void }) {
+  return (
+    <label className="memory-timewarp" aria-label="Time range">
+      <span className="memory-timewarp__tick">NOW</span>
+      <input
+        type="range"
+        min={0}
+        max={30}
+        step={1}
+        value={days}
+        onChange={(e) => onChange(Number.parseInt(e.target.value, 10))}
+        className="memory-timewarp__slider"
+      />
+      <span className="memory-timewarp__tick">{days === 0 ? "0d" : `${days}d`}</span>
+    </label>
   );
 }

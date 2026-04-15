@@ -5258,3 +5258,99 @@
     grid-template-columns: 1fr;
   }
 }
+
+/* Polish pass — command deck visual rhythm */
+
+/* Row wrapping scope chips + timewarp */
+.memory-tab-deck__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--spacing-3);
+  flex-wrap: wrap;
+}
+
+/* Timewarp slider */
+.memory-timewarp {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-2);
+  background: var(--color-background-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--spacing-1) var(--spacing-3);
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.6875rem;
+  color: var(--color-muted-foreground);
+}
+.memory-timewarp__tick { letter-spacing: 0.04em; }
+.memory-timewarp__slider {
+  width: 120px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+/* Search focus glow */
+.memory-search { transition: border-color .15s ease, box-shadow .15s ease; }
+.memory-search:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgba(14, 165, 233, 0.15);
+}
+
+/* Mode pill active contrast bump */
+.memory-search__mode button.is-active {
+  background: rgba(14, 165, 233, 0.22);
+  color: var(--color-primary);
+  font-weight: 600;
+}
+
+/* Breadcrumb bump */
+.memory-deck__crumb {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+/* Active tab — thicker underline, bolder label */
+.memory-deck__tabs button.is-active {
+  font-weight: 600;
+  border-bottom-width: 2.5px;
+}
+.memory-deck__tab-count {
+  font-family: ui-monospace, "SF Mono", monospace;
+  font-size: 0.625rem;
+  background: rgba(148, 163, 184, 0.12);
+  padding: 0.0625rem 0.375rem;
+  border-radius: var(--radius-full);
+  color: var(--color-muted-foreground);
+}
+.memory-deck__tabs button.is-active .memory-deck__tab-count {
+  background: rgba(14, 165, 233, 0.18);
+  color: var(--color-primary);
+}
+
+/* Group label spacing tune */
+.memory-list__group { margin-bottom: var(--spacing-1); }
+.memory-list__label { font-weight: 600; }
+
+/* WriteRail kbd polish */
+.memory-write__btn kbd {
+  border: 1px solid var(--color-border);
+  background: var(--color-background-elevated, var(--color-background-surface));
+  color: var(--color-foreground);
+  font-weight: 500;
+  min-width: 1.25rem;
+  text-align: center;
+}
+
+/* WriteRail stats separator + ward color */
+.memory-write__stats {
+  border-top: 1px dashed var(--color-border);
+  margin-top: var(--spacing-2);
+  padding-top: var(--spacing-3);
+}
+.memory-write__ward {
+  font-weight: 600;
+  font-size: 0.75rem;
+  margin-bottom: var(--spacing-1);
+}
