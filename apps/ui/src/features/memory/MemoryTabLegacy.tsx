@@ -16,11 +16,11 @@ const CATEGORIES: MemoryCategory[] = [
   "correction",
 ];
 
-interface MemoryTabProps {
+interface MemoryTabLegacyProps {
   agentId: string;
 }
 
-export function MemoryTab({ agentId }: MemoryTabProps) {
+export function MemoryTabLegacy({ agentId }: MemoryTabLegacyProps) {
   const [facts, setFacts] = useState<MemoryFact[]>([]);
   const [filter, setFilter] = useState<MemoryFilter>({});
   const [searchQuery, setSearchQuery] = useState("");
