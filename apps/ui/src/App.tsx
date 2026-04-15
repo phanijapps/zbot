@@ -28,7 +28,7 @@ import { WebSettingsPanel } from "./features/settings/WebSettingsPanel";
 import { WebIntegrationsPanel } from "./features/integrations/WebIntegrationsPanel";
 import { WebLogsPanel } from "./features/logs/WebLogsPanel";
 import { WebOpsDashboard } from "./features/ops/WebOpsDashboard";
-import { WebMemoryPanel } from "./features/memory";
+import { MemoryPage } from "./features/memory";
 import { ObservatoryPage } from "./features/observatory";
 import { FastChat } from "./features/chat/FastChat";
 // ChatSlider removed — chat is now the home route, no longer in a slide-over
@@ -179,7 +179,7 @@ function App() {
                   <Route path="/" element={<WebChatPanel />} />
                   <Route path="/dashboard" element={<WebOpsDashboard />} />
                   <Route path="/logs" element={<WebLogsPanel />} />
-                  <Route path="/memory" element={<WebMemoryPanel />} />
+                  <Route path="/memory" element={<MemoryPage />} />
                   <Route path="/observatory" element={<ObservatoryPage />} />
                   <Route path="/agents" element={<WebAgentsPanel />} />
                   <Route path="/integrations" element={<WebIntegrationsPanel />} />
