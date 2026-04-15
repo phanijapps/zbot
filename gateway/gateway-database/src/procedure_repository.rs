@@ -152,6 +152,27 @@ impl ProcedureRepository {
         })
     }
 
+    /// List procedures for a ward across all agents (ordered by `name`).
+    ///
+    /// Used by the ward content aggregator.
+    pub fn list_by_ward(&self, ward_id: &str, limit: usize) -> Result<Vec<Procedure>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, agent_id, ward_id, name, description, trigger_pattern, steps, \
+                 parameters, success_count, failure_count, avg_duration_ms, avg_token_cost, \
+                 last_used, created_at, updated_at \
+                 FROM procedures WHERE ward_id = ?1 ORDER BY name LIMIT ?2",
+            )?;
+            let procs = stmt
+                .query_map(params![ward_id, limit as i64], |row| {
+                    Ok(Self::row_to_procedure(row))
+                })?
+                .filter_map(|r| r.ok())
+                .collect();
+            Ok(procs)
+        })
+    }
+
     /// Search procedures by embedding similarity for an agent/ward.
     ///
     /// Performs a nearest-neighbor query through `VectorIndex`, then loads the

@@ -214,6 +214,23 @@ impl EpisodeRepository {
         })
     }
 
+    /// List all episodes for a ward (any outcome), newest first, capped at
+    /// `limit`. Used by the ward content aggregator.
+    pub fn list_by_ward(&self, ward_id: &str, limit: usize) -> Result<Vec<SessionEpisode>, String> {
+        self.db.with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT id, session_id, agent_id, ward_id, task_summary, outcome, \
+                        strategy_used, key_learnings, token_cost, created_at \
+                 FROM session_episodes \
+                 WHERE ward_id = ?1 \
+                 ORDER BY created_at DESC \
+                 LIMIT ?2",
+            )?;
+            let rows = stmt.query_map(params![ward_id, limit as i64], row_to_episode)?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     // =========================================================================
     // SIMILARITY SEARCH
     // =========================================================================

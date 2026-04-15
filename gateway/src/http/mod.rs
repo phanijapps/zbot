@@ -27,6 +27,7 @@ mod setup;
 mod skills;
 mod tools;
 mod upload;
+mod ward_content;
 mod webhooks;
 
 use crate::config::GatewayConfig;
@@ -200,6 +201,11 @@ pub fn create_http_router(config: GatewayConfig, state: AppState) -> Router {
         .route(
             "/api/memory/:agent_id/facts/:fact_id",
             delete(memory::delete_memory_fact),
+        )
+        // Ward content aggregator (Memory Tab Command Deck — Task 5)
+        .route(
+            "/api/wards/:ward_id/content",
+            get(ward_content::get_ward_content),
         )
         // Upload endpoint
         .route(

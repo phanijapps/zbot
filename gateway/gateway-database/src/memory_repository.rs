@@ -401,6 +401,26 @@ impl MemoryRepository {
         })
     }
 
+    /// List memory facts for a ward (across all agents).
+    ///
+    /// Returns up to `limit` facts with `ward_id = ?1`, ordered by `updated_at`
+    /// descending. Used by the ward content aggregator (`GET
+    /// /api/wards/:ward_id/content`).
+    pub fn list_by_ward(&self, ward_id: &str, limit: usize) -> Result<Vec<MemoryFact>, String> {
+        self.db.with_connection(|conn| {
+            let sql = format!(
+                "SELECT {FACT_COLUMNS}
+                 FROM memory_facts
+                 WHERE ward_id = ?1
+                 ORDER BY updated_at DESC
+                 LIMIT ?2"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(params![ward_id, limit as i64], row_to_memory_fact)?;
+            rows.collect::<Result<Vec<_>, _>>()
+        })
+    }
+
     /// Decay confidence of stale facts.
     ///
     /// Facts not updated in `older_than_days` have their confidence multiplied
