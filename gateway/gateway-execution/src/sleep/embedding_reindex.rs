@@ -73,6 +73,24 @@ pub const REINDEX_TARGETS: &[ReindexTarget] = &[
         source_text_column: "task_summary",
         extra_filter: "task_summary IS NOT NULL",
     },
+    ReindexTarget {
+        table: "wiki_articles_index",
+        id_column: "article_id",
+        embedding_column: "embedding",
+        source_table: "ward_wiki_articles",
+        source_id_column: "id",
+        source_text_column: "content",
+        extra_filter: "content IS NOT NULL AND content != ''",
+    },
+    ReindexTarget {
+        table: "procedures_index",
+        id_column: "procedure_id",
+        embedding_column: "embedding",
+        source_table: "procedures",
+        source_id_column: "id",
+        source_text_column: "description",
+        extra_filter: "description IS NOT NULL AND description != ''",
+    },
 ];
 
 /// Summary returned by a single-table reindex.
@@ -389,8 +407,8 @@ mod tests {
             self.dim
         }
 
-        fn model_name(&self) -> &str {
-            "mock"
+        fn model_name(&self) -> String {
+            "mock".to_string()
         }
     }
 
@@ -514,7 +532,7 @@ mod tests {
             calls_ref.fetch_add(1, Ordering::SeqCst);
         };
         let out = reindex_all(&db, client, 384, &cb).await.unwrap();
-        assert_eq!(out.len(), 3);
+        assert_eq!(out.len(), REINDEX_TARGETS.len());
     }
 
     #[tokio::test]

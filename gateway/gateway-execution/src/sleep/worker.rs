@@ -250,19 +250,15 @@ mod tests {
         let convo = Arc::new(DatabaseManager::new(paths).unwrap());
         let graph = Arc::new(GraphStorage::new(db.clone()).unwrap());
         let compaction_repo = Arc::new(CompactionRepository::new(db.clone()));
-        let mem_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "memory_facts_index",
-            "fact_id",
-            384,
-        ));
+        let mem_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
         let memory_repo = Arc::new(MemoryRepository::new(db.clone(), mem_vec));
-        let proc_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "procedures_index",
-            "procedure_id",
-            384,
-        ));
+        let proc_vec: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "procedures_index", "procedure_id")
+                .expect("vec index init"),
+        );
         let procedure_repo = Arc::new(ProcedureRepository::new(db.clone(), proc_vec));
         Harness {
             _tmp: tmp,

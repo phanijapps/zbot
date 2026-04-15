@@ -360,12 +360,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
         let db = Arc::new(crate::KnowledgeDatabase::new(paths).expect("knowledge db"));
-        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "session_episodes_index",
-            "episode_id",
-            384,
-        ));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "session_episodes_index", "episode_id")
+                .expect("vec index init"),
+        );
         let repo = EpisodeRepository::new(db, vec_index);
         (tmp, repo)
     }
@@ -560,7 +558,10 @@ mod tests {
         let fetched_emb = repo.get_episode_embedding("ep-sess-001").unwrap();
         assert!(fetched_emb.is_some());
         let fetched_emb = fetched_emb.unwrap();
-        assert_eq!(fetched_emb.len(), 384);
+        assert!(
+            !fetched_emb.is_empty(),
+            "fetched embedding should be non-empty"
+        );
         // First dimension should be ~1.0 (normalized unit vector)
         assert!((fetched_emb[0] - 1.0).abs() < 0.001);
     }

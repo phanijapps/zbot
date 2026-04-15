@@ -661,12 +661,10 @@ mod tests {
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
-        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "memory_facts_index",
-            "fact_id",
-            384,
-        ));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
         let memory_repo = Arc::new(MemoryRepository::new(db.clone(), vec_index));
         let compaction_repo = Arc::new(CompactionRepository::new(db.clone()));
         Harness {

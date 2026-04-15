@@ -23,12 +23,9 @@ async fn recall_unified_returns_scored_items_from_facts() {
     std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
     let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
 
-    let fact_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-        db.clone(),
-        "memory_facts_index",
-        "fact_id",
-        384,
-    ));
+    let fact_vec: Arc<dyn VectorIndex> = Arc::new(
+        SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id").expect("vec index init"),
+    );
     let memory_repo = Arc::new(MemoryRepository::new(db.clone(), fact_vec));
     let config = Arc::new(RecallConfig::default());
 
@@ -79,20 +76,15 @@ async fn recall_unified_injects_previous_episodes_for_ward() {
     std::fs::create_dir_all(paths.conversations_db().parent().unwrap()).unwrap();
     let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
 
-    let fact_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-        db.clone(),
-        "memory_facts_index",
-        "fact_id",
-        384,
-    ));
+    let fact_vec: Arc<dyn VectorIndex> = Arc::new(
+        SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id").expect("vec index init"),
+    );
     let memory_repo = Arc::new(MemoryRepository::new(db.clone(), fact_vec));
 
-    let ep_vec: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-        db.clone(),
-        "session_episodes_index",
-        "episode_id",
-        384,
-    ));
+    let ep_vec: Arc<dyn VectorIndex> = Arc::new(
+        SqliteVecIndex::new(db.clone(), "session_episodes_index", "episode_id")
+            .expect("vec index init"),
+    );
     let episode_repo = Arc::new(EpisodeRepository::new(db.clone(), ep_vec));
 
     let ward = "finance";

@@ -313,12 +313,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(gateway_services::VaultPaths::new(tmp.path().to_path_buf()));
         let db = Arc::new(crate::KnowledgeDatabase::new(paths).expect("knowledge db"));
-        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "procedures_index",
-            "procedure_id",
-            384,
-        ));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "procedures_index", "procedure_id")
+                .expect("vec index init"),
+        );
         let repo = ProcedureRepository::new(db, vec_index);
         (tmp, repo)
     }

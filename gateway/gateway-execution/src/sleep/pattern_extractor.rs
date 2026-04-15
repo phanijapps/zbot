@@ -651,12 +651,10 @@ mod tests {
         std::fs::create_dir_all(paths.conversations_db().parent().expect("parent")).expect("mkdir");
         let knowledge_db = Arc::new(KnowledgeDatabase::new(paths.clone()).expect("knowledge db"));
         let conversations_db = Arc::new(DatabaseManager::new(paths).expect("convo db"));
-        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            knowledge_db.clone(),
-            "procedures_index",
-            "procedure_id",
-            384,
-        ));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(knowledge_db.clone(), "procedures_index", "procedure_id")
+                .expect("vec index init"),
+        );
         let procedure_repo = Arc::new(ProcedureRepository::new(knowledge_db.clone(), vec_index));
         let compaction_repo = Arc::new(CompactionRepository::new(knowledge_db.clone()));
         Harness {

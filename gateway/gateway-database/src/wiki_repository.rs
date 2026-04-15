@@ -260,12 +260,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
-        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "wiki_articles_index",
-            "article_id",
-            384,
-        ));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "wiki_articles_index", "article_id")
+                .expect("vec index init"),
+        );
         let repo = WardWikiRepository::new(db, vec_index);
         (tmp, repo)
     }

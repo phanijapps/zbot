@@ -1137,12 +1137,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
-        let vec_index: Arc<dyn VectorIndex> = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "memory_facts_index",
-            "fact_id",
-            384,
-        ));
+        let vec_index: Arc<dyn VectorIndex> = Arc::new(
+            SqliteVecIndex::new(db.clone(), "memory_facts_index", "fact_id")
+                .expect("vec index init"),
+        );
         let repo = MemoryRepository::new(db, vec_index);
         (tmp, repo)
     }
@@ -1324,7 +1322,7 @@ mod tests {
             .get_fact_embedding(&fact1.id)
             .expect("get emb")
             .expect("some emb");
-        assert_eq!(stored.len(), 384);
+        assert!(!stored.is_empty(), "stored embedding should be non-empty");
     }
 
     #[test]

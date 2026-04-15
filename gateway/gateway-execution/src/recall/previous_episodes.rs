@@ -80,12 +80,10 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let paths = Arc::new(VaultPaths::new(tmp.path().to_path_buf()));
         let db = Arc::new(KnowledgeDatabase::new(paths).expect("knowledge db"));
-        let vec_index = Arc::new(SqliteVecIndex::new(
-            db.clone(),
-            "session_episodes_index",
-            "episode_id",
-            384,
-        ));
+        let vec_index = Arc::new(
+            SqliteVecIndex::new(db.clone(), "session_episodes_index", "episode_id")
+                .expect("vec index init"),
+        );
         let repo = Arc::new(EpisodeRepository::new(db, vec_index));
         (tmp, repo)
     }
