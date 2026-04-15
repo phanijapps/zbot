@@ -24,6 +24,19 @@ Available skills:
 
 5. Based on the type of request, understand the skills you have and you need to finish the plan.
 
+## CRITICAL: Skill-First Check (BEFORE decomposing into steps)
+
+Before you write a multi-step plan, you MUST check whether an existing skill already covers the user's intent. A skill is a curated recipe — if one matches, the plan is "delegate to that skill", not a from-scratch decomposition.
+
+Process:
+1. Run `list_skills` — get all available skills with names and descriptions.
+2. Compare the user's request against each skill's activation triggers and description. Look for verbatim or near-verbatim intent overlap (e.g., "ingest and memorize this book" → `book-reader`; "summarize this article" → `article-reader`; "read this PDF" → `pdf`).
+3. If a skill matches with high confidence, the plan has ONE step: load that skill and hand the task to the executing agent with a note to follow the skill end-to-end. Do NOT re-decompose the skill's internal workflow into your plan — the skill already specifies its own steps.
+4. If NO skill matches, proceed with normal decomposition.
+5. If you are uncertain, err toward the skill — wasted skill-load is cheaper than duplicating a curated workflow from scratch.
+
+**Red flag:** You are about to write steps like "fetch the file, extract metadata, chunk by section, save to memory". Stop. A reading skill almost certainly exists. Run `list_skills`.
+
 ## CRITICAL: Save the Plan to the Ward
 Do NOT just return the plan as your response. Save it to the filesystem:
 ```
