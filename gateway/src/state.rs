@@ -389,15 +389,21 @@ impl AppState {
         };
 
         // Build agent-tool adapters so runner can register `ingest` + `goal` tools.
-        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> =
-            ingestion_queue.as_ref().map(|q| {
-                Arc::new(
-                    gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
-                        q.clone(),
-                        kg_episode_repo.clone(),
-                    ),
-                ) as Arc<dyn agent_tools::IngestionAccess>
-            });
+        // The adapter needs graph_storage so the structured-ingest path can
+        // call `store_knowledge` directly without going through LLM extraction.
+        let ingestion_adapter: Option<Arc<dyn agent_tools::IngestionAccess>> = match (
+            ingestion_queue.as_ref(),
+            runner_graph_storage.as_ref(),
+        ) {
+            (Some(q), Some(gs)) => Some(Arc::new(
+                gateway_execution::invoke::ingest_adapter::IngestionAdapter::new(
+                    q.clone(),
+                    kg_episode_repo.clone(),
+                    gs.clone(),
+                ),
+            ) as Arc<dyn agent_tools::IngestionAccess>),
+            _ => None,
+        };
         let goal_adapter: Option<Arc<dyn agent_tools::GoalAccess>> = Some(Arc::new(
             gateway_execution::invoke::goal_adapter::GoalAdapter::new(goal_repo.clone()),
         )

@@ -24,9 +24,12 @@ pub use tools::{
     GraphQueryTool,
     GraphStorageAccess,
     GrepTool,
-    // Ingestion tool (enqueue text for background extraction)
+    // Ingestion tool (enqueue text for background extraction + bulk structured)
     IngestTool,
     IngestionAccess,
+    StructuredCounts,
+    StructuredEntity,
+    StructuredRelationship,
     // Composite re-exports
     ListAgentsTool,
     ListMcpsTool,
