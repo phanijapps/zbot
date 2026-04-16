@@ -106,19 +106,36 @@ impl Tool for IngestTool {
     }
 
     fn description(&self) -> &str {
-        "Write knowledge to the graph. Two modes, usable together in a single call: \
-         (a) TEXT — pass `text` (and a `source_id` for provenance); a background \
-         LLM extractor will chunk, extract entities and relationships, and upsert \
-         asynchronously. \
-         (b) STRUCTURED — pass `entities[]` and/or `relationships[]` directly and \
-         they are bulk-upserted into the graph synchronously (no LLM). \
-         \
-         Entity shape: `{id, name, type, properties?}`. Use stable slug ids like \
-         'person:steve-jobs' so the same entity across sources merges into one \
-         node. Evidence arrays in properties append across ingests. \
-         Relationship shape: `{type, from, to, properties?}` where from/to are \
-         entity ids from the same payload or existing graph ids. \
-         All fields are arrays — send one item or many."
+        "Write to the knowledge graph. Single call can mix three modes:\n\
+         \n\
+         - `text`: prose; a background LLM extracts entities/relationships asynchronously.\n\
+         - `entities[]`: typed nodes bulk-upserted synchronously (no LLM).\n\
+         - `relationships[]`: typed edges bulk-upserted synchronously.\n\
+         \n\
+         Prefer structured over text when you already have entity-shaped data \
+         (from a tool result, a file, or your own analysis). Use text only for raw prose.\n\
+         \n\
+         Entity = {id, name, type, properties?}. Use stable slug ids: \
+         '<type>:<kebab-name>' e.g. 'person:steve-jobs', 'organization:apple-inc', \
+         'stock:aapl'. Same id across sources MERGES properties into one node \
+         (keys union; arrays inside properties concatenate without duplicates — \
+         so `evidence` accumulates across ingests). Types are free-form: person, \
+         character, company, hypothesis, concept — pick whatever fits the domain.\n\
+         \n\
+         Relationship = {type, from, to, properties?}. `from`/`to` reference \
+         entity ids from this payload or already in the graph. Types are free-form: \
+         founded, ceo_of, cites, spouse_of, has_ticker. Same (from,to,type) triple \
+         across ingests merges properties the same way entities do.\n\
+         \n\
+         Example:\n\
+         {\"entities\":[{\"id\":\"person:steve-jobs\",\"name\":\"Steve Jobs\",\"type\":\"person\"},\
+         {\"id\":\"organization:apple\",\"name\":\"Apple Inc.\",\"type\":\"organization\",\
+         \"properties\":{\"founded\":\"1976\"}}],\
+         \"relationships\":[{\"type\":\"founded\",\"from\":\"person:steve-jobs\",\
+         \"to\":\"organization:apple\",\"properties\":{\"evidence\":[{\"chunk\":\"bio/ch-05.md\",\"line\":123}],\
+         \"confidence\":0.98}}]}\n\
+         \n\
+         Returns counts of entities/relationships upserted and text chunks enqueued."
     }
 
     fn parameters_schema(&self) -> Option<Value> {
@@ -127,41 +144,65 @@ impl Tool for IngestTool {
             "properties": {
                 "source_id": {
                     "type": "string",
-                    "description": "Optional provenance tag for this batch (e.g., 'book-jobs-bio')."
+                    "description": "Provenance tag for the text path (e.g., 'book-jobs-bio', 'earnings-aapl-2024q1'). Used only when `text` is supplied."
                 },
                 "source_type": {
                     "type": "string",
-                    "description": "Optional tag — 'book', 'paper', 'earnings_call', etc. Defaults to 'document'.",
+                    "description": "Free-form category for the text path: 'book', 'paper', 'earnings_call', 'article', 'transcript'. Defaults to 'document'.",
                     "default": "document"
                 },
                 "text": {
                     "type": "string",
-                    "description": "Prose to enqueue for background LLM extraction. Optional."
+                    "description": "Raw prose to enqueue for async LLM extraction. Leave empty when you already have structured entities/relationships — prefer those."
                 },
                 "entities": {
                     "type": "array",
-                    "description": "Structured entities to bulk-upsert. Stable ids merge into existing nodes.",
+                    "description": "Typed graph nodes. Written synchronously on return. Each entity MERGES into an existing row with the same `id` (properties key-union; arrays inside properties concatenate).",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "id":   { "type": "string" },
-                            "name": { "type": "string" },
-                            "type": { "type": "string" },
-                            "properties": { "type": "object" }
+                            "id":   {
+                                "type": "string",
+                                "description": "Stable slug. Convention: '<type>:<kebab-name>'. Examples: 'person:steve-jobs', 'organization:apple-inc', 'stock:aapl', 'concept:quantum-entanglement'. Reuse the SAME id across sources so the same real-world entity collapses to one node."
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": "Human-readable surface form: 'Steve Jobs', 'Apple Inc.', 'AAPL'. Variants get recorded as aliases."
+                            },
+                            "type": {
+                                "type": "string",
+                                "description": "Free-form category: person, character, organization, company, place, event, concept, hypothesis, theme, stock, anything that fits. No registry — pick what describes the entity best in the current domain."
+                            },
+                            "properties": {
+                                "type": "object",
+                                "description": "Any JSON. Common keys: aliases (array), description (string), evidence (array of {chunk,line,text}). Domain-specific fields live here — chapter, founded, ticker, doi, first_appearance — and are preserved across merges."
+                            }
                         },
                         "required": ["id", "name", "type"]
                     }
                 },
                 "relationships": {
                     "type": "array",
-                    "description": "Typed edges. `from`/`to` reference entity ids.",
+                    "description": "Typed edges. Written synchronously. Merges on the (from, to, type) triple — same triple across sources concatenates evidence.",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "type": { "type": "string" },
-                            "from": { "type": "string" },
-                            "to":   { "type": "string" },
-                            "properties": { "type": "object" }
+                            "type": {
+                                "type": "string",
+                                "description": "Free-form verb slug: founded, ceo_of, cites, spouse_of, has_ticker, mentions, contradicts, part_of. Use the directed form even for conceptually undirected relations — record direction in `properties` if it matters."
+                            },
+                            "from": {
+                                "type": "string",
+                                "description": "Entity id of the source. Resolves against entities in THIS payload first, then against the existing graph."
+                            },
+                            "to": {
+                                "type": "string",
+                                "description": "Entity id of the target. Same resolution as `from`."
+                            },
+                            "properties": {
+                                "type": "object",
+                                "description": "Any JSON. Common keys: evidence (array of {chunk,line,text} citations), confidence (0..1), direction ('directed'|'undirected'), date_range, notes. Evidence arrays accumulate across ingests."
+                            }
                         },
                         "required": ["type", "from", "to"]
                     }
