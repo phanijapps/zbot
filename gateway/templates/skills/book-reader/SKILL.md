@@ -39,16 +39,33 @@ If it already exists, switch to retrieval behavior and do not ingest it again.
 
 ### 2. Identify the work
 
-Determine the best available title, author, publication info, language, source, and canonical book id.
-Do not trust the filename alone.
+Determine the best available title, author, publication info, language, source, and canonical book id by reading **the document's own metadata**, not the filename.
 
-Use the format guide that matches the source:
+- EPUB: parse Dublin Core fields (`<dc:title>`, `<dc:creator>`, `<dc:language>`, `<dc:source>`, `<dc:identifier>`) from the OPF inside the `.epub`. See `references/epub.md`.
+- PDF: read the PDF metadata dictionary (`/Title`, `/Author`). If empty, fall back to the first page text. See `references/pdf.md`.
+- TXT / MD: scan the first ~2KB for a title-like line (leading `#`, ALL CAPS title, Gutenberg header). See `references/txt.md`.
 
-- `references/txt.md`
-- `references/epub.md`
-- `references/pdf.md`
+Filenames like `pg30254.epub`, `untitled.pdf`, or random hashes are **never** a source of truth for title or author. If the document has no extractable title, leave it `null` and abort ingestion — do NOT guess "The Gold-Bug" from a filename.
 
-If metadata is uncertain, prefer `null` over guessing.
+### 2a. Derive the book slug + folder name
+
+Once you have the real title, generate a kebab-case slug from it:
+- Lowercase, replace spaces and punctuation with `-`, collapse runs of `-`, strip leading/trailing `-`.
+- Strip leading articles (`the`, `a`, `an`) to keep slugs stable across editions.
+- Cap at ~60 chars; if longer, truncate at a word boundary.
+
+Examples:
+- `"The Romance of Lust"` → `romance-of-lust`
+- `"Pride and Prejudice"` → `pride-and-prejudice`
+- `"The Gold-Bug and Other Tales"` → `gold-bug-and-other-tales`
+
+Use that slug as:
+- The folder name: `books/<slug>/`
+- The `book_id` field in all artifacts and entity ids (e.g. `book:<slug>`, `character:<slug>:elizabeth-bennet`)
+
+The folder name is NEVER the input filename. `books/pg30254/` is wrong; `books/romance-of-lust/` is right. If a folder for the same slug already exists, treat the book as already ingested (Step 1).
+
+If metadata is uncertain even after parsing the document, prefer `null` over guessing — and return the session with a note that the book could not be identified, rather than fabricating a title.
 
 ### 3. Find the reading skeleton
 
@@ -189,8 +206,8 @@ Structured `{entities, relationships}` payload, described in the "Knowledge grap
 
 ## Rules
 
-1. Always check for existing ingestion first.
-2. Never treat the filename as authoritative metadata.
+1. Always check for existing ingestion first — look up by title-derived slug.
+2. Never treat the filename as authoritative metadata. Extract title/author from the document's own metadata (EPUB OPF, PDF metadata dict, first-page scan). `books/<slug>/` uses the slugified title, not the input filename. If you catch yourself using `books/pg30254/` or `books/untitled/`, stop — go back to Step 2.
 3. Never load the whole book into working context if progressive reading is possible.
 4. Every quote must retain a recoverable source location.
 5. Chunk files must contain verbatim text, not just summaries.
