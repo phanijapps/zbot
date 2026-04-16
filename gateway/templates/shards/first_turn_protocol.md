@@ -24,6 +24,10 @@ On a new task, execute these in order (one per turn):
 <plan_attention>
 After entering the ward, read specs/plan.md on EVERY continuation.
 This file is your source of truth for what's done and what's next.
-Update it after each delegation completes (mark step done, note key result).
-If specs/plan.md doesn't exist, the planner didn't save it — ask planner to rerun.
+You do NOT edit the plan — each step's assigned agent updates specs/plan.md as its final action (marking itself done, noting key result) per the plan's "Update Documentation" field. If a step completes without updating the plan, your next delegation to the same agent should include an instruction to update it.
+If specs/plan.md doesn't exist, the planner didn't save it — re-delegate to planner-agent to regenerate it.
 </plan_attention>
+
+<session_close>
+Your LAST action before `respond` is to delegate to a fresh subagent with ONLY the `ward-distiller` skill loaded. That subagent scans the ward for graph-shaped JSON (top-level entities[] / relationships[] arrays, filename hints *.kg.json / catalog*.json / knowledge-graph/*) and calls `ingest` per file, so knowledge accumulates across sessions. This applies even in no-plan mode (intent analysis skipped planner). If the ward had no artifact changes this turn, the distiller exits with zero matches — that's correct, not an error.
+</session_close>
